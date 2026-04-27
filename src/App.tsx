@@ -10,8 +10,6 @@ import {
 	FolderOpen,
 	PanelLeftClose,
 	PanelLeftOpen,
-	PanelRightClose,
-	PanelRightOpen,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -622,10 +620,6 @@ function AppShell({
 	const leftSidebarToggleShortcut = getShortcut(
 		appSettings.shortcuts,
 		"sidebar.left.toggle",
-	);
-	const rightSidebarToggleShortcut = getShortcut(
-		appSettings.shortcuts,
-		"sidebar.right.toggle",
 	);
 	const handleOpenPreferredEditor = useCallback(() => {
 		if (!selectedWorkspaceId || !preferredEditor) return;
@@ -2470,53 +2464,6 @@ function AppShell({
 																	</DropdownMenu>
 																</div>
 															) : null}
-															<Tooltip>
-																<TooltipTrigger asChild>
-																	<Button
-																		aria-label={
-																			inspectorCollapsed
-																				? "Expand right sidebar"
-																				: "Collapse right sidebar"
-																		}
-																		onClick={() =>
-																			setInspectorCollapsed(
-																				(collapsed) => !collapsed,
-																			)
-																		}
-																		variant="ghost"
-																		size="icon-xs"
-																		className="text-muted-foreground hover:text-foreground"
-																	>
-																		{inspectorCollapsed ? (
-																			<PanelRightOpen
-																				className="size-4"
-																				strokeWidth={1.8}
-																			/>
-																		) : (
-																			<PanelRightClose
-																				className="size-4"
-																				strokeWidth={1.8}
-																			/>
-																		)}
-																	</Button>
-																</TooltipTrigger>
-																<TooltipContent
-																	side="bottom"
-																	className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-																>
-																	<span>
-																		{inspectorCollapsed
-																			? "Expand right sidebar"
-																			: "Collapse right sidebar"}
-																	</span>
-																	{rightSidebarToggleShortcut ? (
-																		<InlineShortcutDisplay
-																			hotkey={rightSidebarToggleShortcut}
-																			className="text-background/60"
-																		/>
-																	) : null}
-																</TooltipContent>
-															</Tooltip>
 														</div>
 													) : undefined
 												}
