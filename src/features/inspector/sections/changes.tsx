@@ -92,6 +92,7 @@ export function ChangesSection({
 	const [stagedOpen, setStagedOpen] = useState(true);
 	const [branchDiffOpen, setBranchDiffOpen] = useState(true);
 	const [isContinuingWorkspace, setIsContinuingWorkspace] = useState(false);
+	const [isRefreshingPr, setIsRefreshingPr] = useState(false);
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -332,6 +333,23 @@ export function ChangesSection({
 		workspaceId,
 	]);
 
+	const handleRefreshPr = useCallback(async () => {
+		if (!workspaceId || isRefreshingPr) return;
+		setIsRefreshingPr(true);
+		try {
+			await Promise.all([
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceChangeRequest(workspaceId),
+				}),
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+				}),
+			]);
+		} finally {
+			setIsRefreshingPr(false);
+		}
+	}, [workspaceId, isRefreshingPr, queryClient]);
+
 	// Header shimmer is owned by App: it knows when the change-request and
 	// forge-action-status queries are on their *first* cold fetch (vs. just a
 	// background refresh or a placeholder render).
@@ -359,6 +377,8 @@ export function ChangesSection({
 				}
 				onCommit={handleCommitButtonClick}
 				onContinueWorkspace={handleContinueWorkspace}
+				onRefreshPr={workspaceId ? handleRefreshPr : undefined}
+				isPrRefreshing={isRefreshingPr}
 			/>
 
 			<ScrollArea
