@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -18,7 +18,12 @@ use crate::forge::{
     ActionProvider, ActionStatusKind, ChangeRequestInfo, ForgeActionItem, ForgeActionStatus,
     RemoteState,
 };
-use crate::{auth, error::ErrorCode, git_ops, models::workspaces as workspace_models};
+use crate::{
+    auth,
+    error::ErrorCode,
+    git_ops,
+    models::{repos, workspaces as workspace_models},
+};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +73,238 @@ fn is_transient_network_error(err: &reqwest::Error) -> bool {
         || msg.contains("handshake eof")
         || msg.contains("connection reset")
         || msg.contains("connection closed")
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubPullRequestSummary {
+    pub number: i64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub is_merged: bool,
+    pub head_branch: String,
+    pub base_branch: String,
+}
+
+pub fn list_repository_pull_requests(repo_id: &str) -> Result<Vec<GithubPullRequestSummary>> {
+    let repository = repos::load_repository_by_id(repo_id)?
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+    let (owner, name) = resolve_github_repository(&repository)?;
+    let query = r#"
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: [OPEN], first: 30, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        url
+        number
+        state
+        title
+        merged
+        headRefName
+        baseRefName
+        headRepository { nameWithOwner }
+        baseRepository { nameWithOwner }
+      }
+    }
+  }
+}
+"#;
+    let envelope: RepositoryPullRequestListEnvelope = github_graphql_request(json!({
+        "query": query,
+        "variables": {
+            "owner": owner,
+            "name": name,
+        },
+    }))?;
+    ensure_no_graphql_errors(envelope.errors.as_deref())?;
+    let Some(data) = envelope.data else {
+        return Ok(Vec::new());
+    };
+    let Some(repository) = data.repository else {
+        return Ok(Vec::new());
+    };
+    let full_name = format!("{owner}/{name}");
+    repository
+        .pull_requests
+        .nodes
+        .into_iter()
+        .map(|node| pull_request_summary_from_node(node, &full_name))
+        .collect()
+}
+
+pub fn resolve_repository_pull_request(
+    repo_id: &str,
+    input: &str,
+) -> Result<GithubPullRequestSummary> {
+    let repository = repos::load_repository_by_id(repo_id)?
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+    let (owner, name) = resolve_github_repository(&repository)?;
+    let number = parse_pull_request_input(input, &owner, &name)?;
+    resolve_repository_pull_request_by_number(&repository, number)
+}
+
+pub(crate) fn resolve_repository_pull_request_by_number(
+    repository: &repos::RepositoryRecord,
+    number: i64,
+) -> Result<GithubPullRequestSummary> {
+    let (owner, name) = resolve_github_repository(repository)?;
+    let query = r#"
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      url
+      number
+      state
+      title
+      merged
+      headRefName
+      baseRefName
+      headRepository { nameWithOwner }
+      baseRepository { nameWithOwner }
+    }
+  }
+}
+"#;
+    let envelope: RepositoryPullRequestResolveEnvelope = github_graphql_request(json!({
+        "query": query,
+        "variables": {
+            "owner": owner,
+            "name": name,
+            "number": number,
+        },
+    }))?;
+    ensure_no_graphql_errors(envelope.errors.as_deref())?;
+    let data = envelope
+        .data
+        .context("GitHub returned no pull request data")?;
+    let repository = data
+        .repository
+        .context("GitHub repository was not found or is not accessible")?;
+    let node = repository
+        .pull_request
+        .context("GitHub pull request was not found")?;
+    let full_name = format!("{owner}/{name}");
+    pull_request_summary_from_node(node, &full_name)
+}
+
+fn github_graphql_request<T: DeserializeOwned>(body: serde_json::Value) -> Result<T> {
+    let Some(access_token) = auth::load_valid_github_access_token()? else {
+        bail!("GitHub account is not connected");
+    };
+    let client = Client::builder()
+        .build()
+        .context("Failed to build GitHub HTTP client")?;
+    let response = send_with_retry(
+        client
+            .post("https://api.github.com/graphql")
+            .header(USER_AGENT, "Helmor")
+            .header(ACCEPT, "application/json")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {access_token}"))
+            .json(&body),
+    )
+    .context("Failed to reach GitHub GraphQL API")?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow!(
+            "GitHub GraphQL API returned HTTP {status}: {}",
+            response.text().unwrap_or_default()
+        ));
+    }
+    let parsed: T = response
+        .json()
+        .context("Failed to decode GitHub GraphQL response")?;
+    Ok(parsed)
+}
+
+fn ensure_no_graphql_errors(errors: Option<&[GraphqlError]>) -> Result<()> {
+    let Some(errors) = errors else {
+        return Ok(());
+    };
+    if errors.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "GitHub GraphQL errors: {}",
+        errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
+}
+
+fn resolve_github_repository(repository: &repos::RepositoryRecord) -> Result<(String, String)> {
+    let remote = repository.remote.as_deref().unwrap_or("origin");
+    let repo_root = std::path::Path::new(repository.root_path.trim());
+    let remote_url = repos::resolve_repository_remote_url(repo_root, remote)?;
+    parse_github_remote(&remote_url).context("Repository remote is not a github.com repository")
+}
+
+fn parse_pull_request_input(input: &str, owner: &str, name: &str) -> Result<i64> {
+    let input = input.trim().trim_start_matches('#').trim();
+    if input.is_empty() {
+        bail!("Pull request number or URL is required");
+    }
+    if let Ok(number) = input.parse::<i64>() {
+        if number <= 0 {
+            bail!("Pull request number must be positive");
+        }
+        return Ok(number);
+    }
+
+    let expected_prefix = format!("https://github.com/{owner}/{name}/pull/");
+    let Some(rest) = input.strip_prefix(&expected_prefix) else {
+        bail!("Pull request URL must belong to {owner}/{name}");
+    };
+    let number_part = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|value| !value.is_empty())
+        .context("Pull request URL is missing a number")?;
+    let number = number_part
+        .parse::<i64>()
+        .context("Pull request URL has an invalid number")?;
+    if number <= 0 {
+        bail!("Pull request number must be positive");
+    }
+    Ok(number)
+}
+
+fn pull_request_summary_from_node(
+    node: RepositoryPullRequestNode,
+    repo_full_name: &str,
+) -> Result<GithubPullRequestSummary> {
+    if node.state != "OPEN" || node.merged {
+        bail!("Only open GitHub pull requests can be opened as workspaces");
+    }
+    let head_repo = node
+        .head_repository
+        .as_ref()
+        .map(|repo| repo.name_with_owner.as_str());
+    let base_repo = node
+        .base_repository
+        .as_ref()
+        .map(|repo| repo.name_with_owner.as_str());
+    if head_repo != Some(repo_full_name) || base_repo != Some(repo_full_name) {
+        bail!("Pull requests from forks are not supported yet");
+    }
+    if node.head_ref_name.trim().is_empty() {
+        bail!("Pull request has no head branch");
+    }
+    if node.base_ref_name.trim().is_empty() {
+        bail!("Pull request has no base branch");
+    }
+    Ok(GithubPullRequestSummary {
+        number: node.number,
+        title: node.title,
+        url: node.url,
+        state: node.state,
+        is_merged: node.merged,
+        head_branch: node.head_ref_name,
+        base_branch: node.base_ref_name,
+    })
 }
 /// Look up the (most recent) pull request matching this workspace's current
 /// branch on GitHub.
@@ -730,7 +967,7 @@ fn workspace_branch_has_remote_tracking(record: &workspace_models::WorkspaceReco
 
 /// Parse `https://github.com/owner/repo(.git)` and `git@github.com:owner/repo(.git)`
 /// remotes into `(owner, repo)`. Returns `None` for non-GitHub remotes.
-fn parse_github_remote(remote: &str) -> Option<(String, String)> {
+pub(crate) fn parse_github_remote(remote: &str) -> Option<(String, String)> {
     let remote = remote.trim();
     // SSH form: git@github.com:owner/repo(.git)
     if let Some(rest) = remote.strip_prefix("git@github.com:") {
@@ -799,6 +1036,65 @@ struct PullRequestNode {
 #[derive(Debug, Clone, Deserialize)]
 struct GraphqlError {
     message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RepositoryPullRequestListEnvelope {
+    data: Option<RepositoryPullRequestListData>,
+    errors: Option<Vec<GraphqlError>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RepositoryPullRequestListData {
+    repository: Option<RepositoryPullRequestListRepository>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RepositoryPullRequestListRepository {
+    #[serde(rename = "pullRequests")]
+    pull_requests: RepositoryPullRequestConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RepositoryPullRequestConnection {
+    nodes: Vec<RepositoryPullRequestNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryPullRequestNode {
+    url: String,
+    number: i64,
+    state: String,
+    title: String,
+    merged: bool,
+    head_ref_name: String,
+    base_ref_name: String,
+    head_repository: Option<RepositoryPullRequestRepository>,
+    base_repository: Option<RepositoryPullRequestRepository>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryPullRequestRepository {
+    name_with_owner: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RepositoryPullRequestResolveEnvelope {
+    data: Option<RepositoryPullRequestResolveData>,
+    errors: Option<Vec<GraphqlError>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RepositoryPullRequestResolveData {
+    repository: Option<RepositoryPullRequestResolveRepository>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RepositoryPullRequestResolveRepository {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<RepositoryPullRequestNode>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1328,6 +1624,129 @@ mod tests {
         assert_eq!(split_owner_repo(" / hello-world"), None);
         assert_eq!(split_owner_repo("octocat / "), None);
         assert_eq!(split_owner_repo("/"), None);
+    }
+
+    #[test]
+    fn parses_pull_request_number_and_url_input() {
+        assert_eq!(
+            parse_pull_request_input("#42", "octocat", "hello-world").unwrap(),
+            42
+        );
+        assert_eq!(
+            parse_pull_request_input("42", "octocat", "hello-world").unwrap(),
+            42
+        );
+        assert_eq!(
+            parse_pull_request_input(
+                "https://github.com/octocat/hello-world/pull/42/files",
+                "octocat",
+                "hello-world",
+            )
+            .unwrap(),
+            42
+        );
+    }
+
+    #[test]
+    fn rejects_pull_request_url_for_different_repo() {
+        let error = parse_pull_request_input(
+            "https://github.com/other/hello-world/pull/42",
+            "octocat",
+            "hello-world",
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("must belong to octocat/hello-world"));
+    }
+
+    fn repository_pr_node(
+        state: &str,
+        merged: bool,
+        head_repo: Option<&str>,
+        base_repo: Option<&str>,
+    ) -> RepositoryPullRequestNode {
+        RepositoryPullRequestNode {
+            url: "https://github.com/octocat/hello-world/pull/42".to_string(),
+            number: 42,
+            state: state.to_string(),
+            title: "Review this".to_string(),
+            merged,
+            head_ref_name: "feature/review".to_string(),
+            base_ref_name: "main".to_string(),
+            head_repository: head_repo.map(|name_with_owner| RepositoryPullRequestRepository {
+                name_with_owner: name_with_owner.to_string(),
+            }),
+            base_repository: base_repo.map(|name_with_owner| RepositoryPullRequestRepository {
+                name_with_owner: name_with_owner.to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn pull_request_summary_accepts_same_repo_open_pr() {
+        let summary = pull_request_summary_from_node(
+            repository_pr_node(
+                "OPEN",
+                false,
+                Some("octocat/hello-world"),
+                Some("octocat/hello-world"),
+            ),
+            "octocat/hello-world",
+        )
+        .unwrap();
+
+        assert_eq!(summary.number, 42);
+        assert_eq!(summary.head_branch, "feature/review");
+        assert_eq!(summary.base_branch, "main");
+    }
+
+    #[test]
+    fn pull_request_summary_rejects_fork_pr() {
+        let error = pull_request_summary_from_node(
+            repository_pr_node(
+                "OPEN",
+                false,
+                Some("someone/hello-world"),
+                Some("octocat/hello-world"),
+            ),
+            "octocat/hello-world",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("forks are not supported"));
+    }
+
+    #[test]
+    fn pull_request_summary_rejects_closed_or_merged_pr() {
+        let closed = pull_request_summary_from_node(
+            repository_pr_node(
+                "CLOSED",
+                false,
+                Some("octocat/hello-world"),
+                Some("octocat/hello-world"),
+            ),
+            "octocat/hello-world",
+        )
+        .unwrap_err();
+        assert!(closed
+            .to_string()
+            .contains("Only open GitHub pull requests"));
+
+        let merged = pull_request_summary_from_node(
+            repository_pr_node(
+                "OPEN",
+                true,
+                Some("octocat/hello-world"),
+                Some("octocat/hello-world"),
+            ),
+            "octocat/hello-world",
+        )
+        .unwrap_err();
+        assert!(merged
+            .to_string()
+            .contains("Only open GitHub pull requests"));
     }
 
     #[test]

@@ -202,6 +202,17 @@ pub fn load_archived_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+pub(crate) struct InitializingWorkspaceMetadata<'a> {
+    pub(crate) initialization_parent_branch: &'a str,
+    pub(crate) intended_target_branch: &'a str,
+    pub(crate) status: WorkspaceStatus,
+    pub(crate) pr_title: Option<&'a str>,
+    pub(crate) pr_sync_state: PrSyncState,
+    pub(crate) pr_url: Option<&'a str>,
+    pub(crate) timestamp: &'a str,
+}
+
+#[allow(dead_code)]
 pub(crate) fn insert_initializing_workspace_and_session(
     repository: &repos::RepositoryRecord,
     workspace_id: &str,
@@ -210,6 +221,32 @@ pub(crate) fn insert_initializing_workspace_and_session(
     branch: &str,
     default_branch: &str,
     timestamp: &str,
+) -> Result<()> {
+    insert_initializing_workspace_and_session_with_metadata(
+        repository,
+        workspace_id,
+        session_id,
+        directory_name,
+        branch,
+        InitializingWorkspaceMetadata {
+            initialization_parent_branch: default_branch,
+            intended_target_branch: default_branch,
+            status: WorkspaceStatus::InProgress,
+            pr_title: None,
+            pr_sync_state: PrSyncState::None,
+            pr_url: None,
+            timestamp,
+        },
+    )
+}
+
+pub(crate) fn insert_initializing_workspace_and_session_with_metadata(
+    repository: &repos::RepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    directory_name: &str,
+    branch: &str,
+    metadata: InitializingWorkspaceMetadata<'_>,
 ) -> Result<()> {
     let mut connection = db::write_conn()?;
     let transaction = connection
@@ -229,22 +266,29 @@ pub(crate) fn insert_initializing_workspace_and_session(
               initialization_parent_branch,
               intended_target_branch,
               status,
+              pr_title,
+              pr_sync_state,
+              pr_url,
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'in-progress', 0, ?9, ?9)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?13)
             "#,
-            (
+            rusqlite::params![
                 workspace_id,
                 repository.id.as_str(),
                 directory_name,
                 session_id,
                 branch,
                 WorkspaceState::Initializing,
-                default_branch,
-                default_branch,
-                timestamp,
-            ),
+                metadata.initialization_parent_branch,
+                metadata.intended_target_branch,
+                metadata.status,
+                metadata.pr_title,
+                metadata.pr_sync_state,
+                metadata.pr_url,
+                metadata.timestamp,
+            ],
         )
         .context("Failed to insert initializing workspace")?;
 
@@ -264,7 +308,7 @@ pub(crate) fn insert_initializing_workspace_and_session(
               is_hidden
             ) VALUES (?1, ?2, 'Untitled', 'idle', 'default', 0, 0, ?3, ?3, 0)
             "#,
-            (session_id, workspace_id, timestamp),
+            (session_id, workspace_id, metadata.timestamp),
         )
         .context("Failed to insert initial session")?;
 

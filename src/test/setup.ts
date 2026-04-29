@@ -149,6 +149,18 @@ vi.mock("@tauri-apps/api/core", () => ({
 				};
 			case "list_github_accessible_repositories":
 				return [];
+			case "list_github_pull_requests_for_repo":
+				return [];
+			case "resolve_github_pull_request_for_repo":
+				return {
+					number: 1,
+					title: "Test pull request",
+					url: "https://github.com/test/repo/pull/1",
+					state: "OPEN",
+					isMerged: false,
+					headBranch: "feature/test",
+					baseBranch: "main",
+				};
 			case "list_repositories":
 				return [];
 			case "list_agent_model_sections":
@@ -188,6 +200,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return [];
 			case "list_remote_branches":
 				return [];
+			case "prefetch_remote_refs":
+				return { fetched: false };
 			case "list_workspace_files":
 				return [];
 			case "list_workspace_changes_with_content":
@@ -303,6 +317,35 @@ if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
 		removeEventListener: () => {},
 		dispatchEvent: () => false,
 	})) as typeof window.matchMedia;
+}
+
+if (typeof window !== "undefined") {
+	const storage = new Map<string, string>();
+	const currentStorage = window.localStorage as Storage | undefined;
+	if (
+		!currentStorage ||
+		typeof currentStorage.getItem !== "function" ||
+		typeof currentStorage.setItem !== "function" ||
+		typeof currentStorage.clear !== "function"
+	) {
+		Object.defineProperty(window, "localStorage", {
+			configurable: true,
+			value: {
+				get length() {
+					return storage.size;
+				},
+				clear: () => storage.clear(),
+				getItem: (key: string) => storage.get(key) ?? null,
+				key: (index: number) => Array.from(storage.keys())[index] ?? null,
+				removeItem: (key: string) => {
+					storage.delete(key);
+				},
+				setItem: (key: string, value: string) => {
+					storage.set(key, String(value));
+				},
+			},
+		});
+	}
 }
 
 if (typeof HTMLCanvasElement !== "undefined") {

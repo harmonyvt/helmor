@@ -271,6 +271,16 @@ export type GithubRepositorySummary = {
 	pushedAt?: string | null;
 };
 
+export type GithubPullRequestSummary = {
+	number: number;
+	title: string;
+	url: string;
+	state: string;
+	isMerged: boolean;
+	headBranch: string;
+	baseBranch: string;
+};
+
 export type ForgeProvider = "github" | "gitlab" | "unknown";
 
 export type ForgeLabels = {
@@ -444,6 +454,13 @@ export type PrepareWorkspaceResponse = {
 	directoryName: string;
 	branch: string;
 	defaultBranch: string;
+	intendedTargetBranch: string;
+	status: WorkspaceStatus;
+	sourceStartBranch?: string | null;
+	prNumber?: number | null;
+	prTitle?: string | null;
+	prSyncState: PrSyncState;
+	prUrl?: string | null;
 	state: WorkspaceState;
 	repoScripts: RepoScripts;
 };
@@ -452,6 +469,11 @@ export type FinalizeWorkspaceResponse = {
 	workspaceId: string;
 	finalState: WorkspaceState;
 };
+
+export type WorkspaceCreationSource =
+	| { type: "defaultBranch" }
+	| { type: "remoteBranch"; branch: string }
+	| { type: "githubPullRequest"; number: number };
 
 export type MarkWorkspaceReadResponse = undefined;
 
@@ -601,6 +623,37 @@ export async function listGithubAccessibleRepositories(): Promise<
 		);
 	} catch {
 		return [];
+	}
+}
+
+export async function listGithubPullRequestsForRepo(
+	repoId: string,
+): Promise<GithubPullRequestSummary[]> {
+	try {
+		return await invoke<GithubPullRequestSummary[]>(
+			"list_github_pull_requests_for_repo",
+			{ repoId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load GitHub pull requests."),
+		);
+	}
+}
+
+export async function resolveGithubPullRequestForRepo(
+	repoId: string,
+	input: string,
+): Promise<GithubPullRequestSummary> {
+	try {
+		return await invoke<GithubPullRequestSummary>(
+			"resolve_github_pull_request_for_repo",
+			{ repoId, input },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to resolve GitHub pull request."),
+		);
 	}
 }
 
@@ -1824,6 +1877,16 @@ export async function prepareWorkspaceFromRepo(
 	});
 }
 
+export async function prepareWorkspaceFromSource(
+	repoId: string,
+	source: WorkspaceCreationSource,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_source", {
+		repoId,
+		source,
+	});
+}
+
 /**
  * Phase 2 of workspace creation. Slow (~200ms-2s): creates the git
  * worktree, probes `helmor.json`, and flips the
@@ -1832,9 +1895,11 @@ export async function prepareWorkspaceFromRepo(
  */
 export async function finalizeWorkspaceFromRepo(
 	workspaceId: string,
+	options?: { startBranch?: string | null; fetchStartBranch?: boolean | null },
 ): Promise<FinalizeWorkspaceResponse> {
 	return invoke<FinalizeWorkspaceResponse>("finalize_workspace_from_repo", {
 		workspaceId,
+		options: options ?? null,
 	});
 }
 

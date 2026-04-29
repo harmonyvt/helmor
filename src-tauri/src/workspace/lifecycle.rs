@@ -5,16 +5,18 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
     bail_coded, db,
     error::{coded, ErrorCode},
-    git_ops, helpers,
+    git_ops, github_graphql, helpers,
     models::workspaces as workspace_models,
     repos,
+    workspace_pr_sync::PrSyncState,
     workspace_state::WorkspaceState,
+    workspace_status::WorkspaceStatus,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +73,13 @@ pub struct PrepareWorkspaceResponse {
     pub directory_name: String,
     pub branch: String,
     pub default_branch: String,
+    pub intended_target_branch: String,
+    pub status: WorkspaceStatus,
+    pub source_start_branch: Option<String>,
+    pub pr_number: Option<i64>,
+    pub pr_title: Option<String>,
+    pub pr_sync_state: PrSyncState,
+    pub pr_url: Option<String>,
     pub state: WorkspaceState,
     /// DB-level repo scripts. After Phase 2 (worktree creation) the frontend
     /// may refetch to pick up any `helmor.json` overrides copied into the
@@ -86,6 +95,33 @@ pub struct PrepareWorkspaceResponse {
 pub struct FinalizeWorkspaceResponse {
     pub workspace_id: String,
     pub final_state: WorkspaceState,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum WorkspaceCreationSource {
+    DefaultBranch,
+    RemoteBranch { branch: String },
+    GithubPullRequest { number: i64 },
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FinalizeWorkspaceOptions {
+    pub start_branch: Option<String>,
+    pub fetch_start_branch: Option<bool>,
+}
+
+struct WorkspaceSourcePlan {
+    branch: String,
+    initialization_parent_branch: String,
+    intended_target_branch: String,
+    status: WorkspaceStatus,
+    source_start_branch: Option<String>,
+    pr_number: Option<i64>,
+    pr_title: Option<String>,
+    pr_sync_state: PrSyncState,
+    pr_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,6 +152,13 @@ pub struct TargetBranchConflict {
 /// `Ready` / `SetupPending`. It can run in the background while the UI
 /// already shows the workspace.
 pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspaceResponse> {
+    prepare_workspace_from_source_impl(repo_id, WorkspaceCreationSource::DefaultBranch)
+}
+
+pub fn prepare_workspace_from_source_impl(
+    repo_id: &str,
+    source: WorkspaceCreationSource,
+) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
     let repo_root = PathBuf::from(repository.root_path.trim());
@@ -135,24 +178,38 @@ pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspac
 
     let directory_name = helpers::allocate_directory_name_for_repo(repo_id)?;
     let branch_settings = crate::repos::load_repo_branch_prefix_settings(repo_id)?;
-    let branch = helpers::branch_name_for_directory(&directory_name, &branch_settings);
     let default_branch = repository
         .default_branch
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "main".to_string());
+    let source_plan = workspace_source_plan(
+        &repository,
+        &repo_root,
+        &directory_name,
+        &branch_settings,
+        &default_branch,
+        source,
+    )?;
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let timestamp = db::current_timestamp()?;
 
-    workspace_models::insert_initializing_workspace_and_session(
+    workspace_models::insert_initializing_workspace_and_session_with_metadata(
         &repository,
         &workspace_id,
         &session_id,
         &directory_name,
-        &branch,
-        &default_branch,
-        &timestamp,
+        &source_plan.branch,
+        workspace_models::InitializingWorkspaceMetadata {
+            initialization_parent_branch: &source_plan.initialization_parent_branch,
+            intended_target_branch: &source_plan.intended_target_branch,
+            status: source_plan.status,
+            pr_title: source_plan.pr_title.as_deref(),
+            pr_sync_state: source_plan.pr_sync_state,
+            pr_url: source_plan.pr_url.as_deref(),
+            timestamp: &timestamp,
+        },
     )?;
 
     // `load_repo_scripts` is the single truth source. The worktree
@@ -182,11 +239,93 @@ pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspac
         repo_id: repository.id,
         repo_name: repository.name,
         directory_name,
-        branch,
+        branch: source_plan.branch,
         default_branch,
+        intended_target_branch: source_plan.intended_target_branch,
+        status: source_plan.status,
+        source_start_branch: source_plan.source_start_branch,
+        pr_number: source_plan.pr_number,
+        pr_title: source_plan.pr_title,
+        pr_sync_state: source_plan.pr_sync_state,
+        pr_url: source_plan.pr_url,
         state: WorkspaceState::Initializing,
         repo_scripts,
     })
+}
+
+fn workspace_source_plan(
+    repository: &repos::RepositoryRecord,
+    repo_root: &Path,
+    directory_name: &str,
+    branch_settings: &crate::settings::EffectiveBranchPrefixSettings,
+    default_branch: &str,
+    source: WorkspaceCreationSource,
+) -> Result<WorkspaceSourcePlan> {
+    match source {
+        WorkspaceCreationSource::DefaultBranch => {
+            let branch = helpers::branch_name_for_directory(directory_name, branch_settings);
+            Ok(WorkspaceSourcePlan {
+                branch,
+                initialization_parent_branch: default_branch.to_string(),
+                intended_target_branch: default_branch.to_string(),
+                status: WorkspaceStatus::InProgress,
+                source_start_branch: None,
+                pr_number: None,
+                pr_title: None,
+                pr_sync_state: PrSyncState::None,
+                pr_url: None,
+            })
+        }
+        WorkspaceCreationSource::RemoteBranch { branch } => {
+            let branch = normalize_source_branch(&branch)?;
+            ensure_source_branch_available(repo_root, &branch)?;
+            Ok(WorkspaceSourcePlan {
+                branch: branch.clone(),
+                initialization_parent_branch: default_branch.to_string(),
+                intended_target_branch: default_branch.to_string(),
+                status: WorkspaceStatus::InProgress,
+                source_start_branch: Some(branch),
+                pr_number: None,
+                pr_title: None,
+                pr_sync_state: PrSyncState::None,
+                pr_url: None,
+            })
+        }
+        WorkspaceCreationSource::GithubPullRequest { number } => {
+            let pr = github_graphql::resolve_repository_pull_request_by_number(repository, number)?;
+            let branch = normalize_source_branch(&pr.head_branch)?;
+            ensure_source_branch_available(repo_root, &branch)?;
+            Ok(WorkspaceSourcePlan {
+                branch: branch.clone(),
+                initialization_parent_branch: pr.base_branch.clone(),
+                intended_target_branch: pr.base_branch,
+                status: WorkspaceStatus::Review,
+                source_start_branch: Some(branch),
+                pr_number: Some(pr.number),
+                pr_title: Some(pr.title),
+                pr_sync_state: PrSyncState::Open,
+                pr_url: Some(pr.url),
+            })
+        }
+    }
+}
+
+fn normalize_source_branch(branch: &str) -> Result<String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        bail!("Branch name is required");
+    }
+    if branch == "HEAD" || branch.starts_with("refs/") {
+        bail!("Unsupported branch name: {branch}");
+    }
+    Ok(branch.to_string())
+}
+
+fn ensure_source_branch_available(repo_root: &Path, branch: &str) -> Result<()> {
+    if git_ops::verify_branch_exists(repo_root, branch).is_ok() {
+        bail!("Local branch already exists: {branch}");
+    }
+    Ok(())
 }
 
 /// Phase 2 of workspace creation: creates the git worktree, probes
@@ -196,6 +335,16 @@ pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspac
 /// caller can surface the error without leaving a broken workspace
 /// lingering.
 pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeWorkspaceResponse> {
+    finalize_workspace_from_repo_with_options_impl(
+        workspace_id,
+        FinalizeWorkspaceOptions::default(),
+    )
+}
+
+pub fn finalize_workspace_from_repo_with_options_impl(
+    workspace_id: &str,
+    options: FinalizeWorkspaceOptions,
+) -> Result<FinalizeWorkspaceResponse> {
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
@@ -235,25 +384,43 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         }
 
         git_ops::ensure_git_repository(&repo_root)?;
-        let start_ref = git_ops::default_branch_ref(&remote, &default_branch);
+        let source_start_branch = options
+            .start_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if options.fetch_start_branch.unwrap_or(false) {
+            if let Some(branch) = source_start_branch {
+                git_ops::fetch_remote_branch_refspec(&repo_root, &remote, branch)?;
+            }
+        }
+
+        let start_branch = source_start_branch.unwrap_or(default_branch.as_str());
+        let start_ref = git_ops::default_branch_ref(&remote, start_branch);
         git_ops::verify_commitish_exists(
             &repo_root,
             &start_ref,
-            &format!("Default branch is missing in source repo: {default_branch}"),
+            &format!("Remote branch is missing in source repo: {start_branch}"),
         )?;
-        match git_ops::create_worktree_from_start_point(
-            &repo_root,
-            &workspace_dir,
-            &branch,
-            &start_ref,
-        ) {
-            Ok(_) => {
-                created_worktree = true;
-            }
-            Err(error) => {
-                return Err(error);
-            }
+        let create_result = if source_start_branch.is_some() {
+            git_ops::create_worktree_new_branch_from_start_point(
+                &repo_root,
+                &workspace_dir,
+                &branch,
+                &start_ref,
+            )
+        } else {
+            git_ops::create_worktree_from_start_point(
+                &repo_root,
+                &workspace_dir,
+                &branch,
+                &start_ref,
+            )
         };
+        match create_result {
+            Ok(_) => created_worktree = true,
+            Err(error) => return Err(error),
+        }
 
         // Defer setup to the frontend inspector: if a script is configured AND
         // the user opted into auto-run, the workspace starts in "setup_pending"

@@ -399,6 +399,41 @@ pub fn create_worktree_from_start_point(
     Ok(output)
 }
 
+/// Create a worktree with a new local branch based on a start point.
+/// Unlike `create_worktree_from_start_point`, this uses `-b` rather than
+/// `-B`, so an existing local branch is a hard error instead of being reset.
+pub fn create_worktree_new_branch_from_start_point(
+    repo_root: &Path,
+    workspace_dir: &Path,
+    branch: &str,
+    start_point: &str,
+) -> Result<String> {
+    let repo_root = repo_root.display().to_string();
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    prune_worktrees(&repo_root);
+    run_git(
+        [
+            "-C",
+            repo_root.as_str(),
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            workspace_dir_arg.as_str(),
+            start_point,
+        ],
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to create worktree at {} for new branch {} from {}",
+            workspace_dir.display(),
+            branch,
+            start_point
+        )
+    })
+}
+
 pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
     let repo_root_str = repo_root.display().to_string();
     if workspace_dir.exists() {
@@ -977,6 +1012,21 @@ pub fn fetch_remote_branch(workspace_dir: &Path, remote: &str, branch: &str) -> 
     )
     .map(|_| ())
     .with_context(|| format!("Failed to fetch {remote}/{branch} into {workspace_dir}"))
+}
+
+/// Fetch a specific remote branch into the matching remote-tracking ref.
+/// This avoids Git's shorthand fetch behavior and guarantees that
+/// `refs/remotes/<remote>/<branch>` is refreshed before worktree creation.
+pub fn fetch_remote_branch_refspec(repo_root: &Path, remote: &str, branch: &str) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
+    let refspec = format!("refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    run_git_with_timeout(
+        ["-C", repo_root.as_str(), "fetch", remote, refspec.as_str()],
+        None,
+        GIT_NETWORK_TIMEOUT,
+    )
+    .map(|_| ())
+    .with_context(|| format!("Failed to fetch {remote}/{branch} into {repo_root}"))
 }
 
 /// Fetch all branches from the given remote, pruning deleted remote refs.

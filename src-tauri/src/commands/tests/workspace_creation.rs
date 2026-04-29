@@ -126,6 +126,96 @@ fn create_workspace_from_repo_stays_ready_when_auto_run_setup_disabled() {
 }
 
 #[test]
+fn create_workspace_from_remote_branch_uses_same_branch_and_default_target() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let branch = "feature/from-remote";
+    let expected_sha = point_origin_at_upstream_branch(&harness, branch);
+
+    let prepared = workspaces::prepare_workspace_from_source_impl(
+        &harness.repo_id,
+        workspaces::WorkspaceCreationSource::RemoteBranch {
+            branch: branch.to_string(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(prepared.branch, branch);
+    assert_eq!(prepared.intended_target_branch, "main");
+    assert_eq!(prepared.source_start_branch.as_deref(), Some(branch));
+    assert_eq!(
+        prepared.status,
+        crate::workspace_status::WorkspaceStatus::InProgress
+    );
+
+    let finalized = workspaces::finalize_workspace_from_repo_with_options_impl(
+        &prepared.workspace_id,
+        workspaces::FinalizeWorkspaceOptions {
+            start_branch: Some(branch.to_string()),
+            fetch_start_branch: Some(true),
+        },
+    )
+    .unwrap();
+    assert_eq!(finalized.final_state, WorkspaceState::Ready);
+
+    let workspace_dir = harness.workspace_dir(&prepared.directory_name);
+    assert_eq!(
+        git_ops::current_branch_name(&workspace_dir).unwrap(),
+        branch.to_string()
+    );
+    assert_eq!(
+        git_ops::current_workspace_head_commit(&workspace_dir).unwrap(),
+        expected_sha
+    );
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (stored_branch, init_parent, intended_target): (String, String, String) = connection
+        .query_row(
+            "SELECT branch, initialization_parent_branch, intended_target_branch FROM workspaces WHERE id = ?1",
+            [&prepared.workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(stored_branch, branch);
+    assert_eq!(init_parent, "main");
+    assert_eq!(intended_target, "main");
+}
+
+#[test]
+fn create_workspace_from_remote_branch_fails_when_local_branch_exists() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let branch = "feature/existing";
+    git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "branch",
+            branch,
+        ],
+        None,
+    )
+    .unwrap();
+
+    let error = workspaces::prepare_workspace_from_source_impl(
+        &harness.repo_id,
+        workspaces::WorkspaceCreationSource::RemoteBranch {
+            branch: branch.to_string(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("Local branch already exists"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
 fn create_workspace_from_repo_uses_v2_suffix_after_star_list_is_exhausted() {
     let _guard = TEST_LOCK
         .lock()
@@ -694,4 +784,68 @@ fn cleanup_orphaned_initializing_workspaces_skips_non_initializing_states() {
         )
         .unwrap();
     assert_eq!(still_exists, 1);
+}
+
+fn point_origin_at_upstream_branch(harness: &CreateTestHarness, branch: &str) -> String {
+    let upstream = harness.root.join("upstream");
+    fs::create_dir_all(&upstream).unwrap();
+    let upstream_arg = upstream.to_str().unwrap();
+    git_ops::run_git(["init", "-b", "main", upstream_arg], None).unwrap();
+    fs::write(upstream.join("tracked.txt"), "main").unwrap();
+    git_ops::run_git(["-C", upstream_arg, "add", "tracked.txt"], None).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            upstream_arg,
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Helmor",
+            "-c",
+            "user.email=helmor@example.com",
+            "commit",
+            "-m",
+            "initial",
+        ],
+        None,
+    )
+    .unwrap();
+    git_ops::run_git(["-C", upstream_arg, "checkout", "-b", branch], None).unwrap();
+    fs::write(upstream.join("remote-only.txt"), "remote branch").unwrap();
+    git_ops::run_git(["-C", upstream_arg, "add", "remote-only.txt"], None).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            upstream_arg,
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Helmor",
+            "-c",
+            "user.email=helmor@example.com",
+            "commit",
+            "-m",
+            "remote branch",
+        ],
+        None,
+    )
+    .unwrap();
+    let expected_sha = git_ops::run_git(["-C", upstream_arg, "rev-parse", branch], None)
+        .unwrap()
+        .trim()
+        .to_string();
+    git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "remote",
+            "set-url",
+            "origin",
+            upstream_arg,
+        ],
+        None,
+    )
+    .unwrap();
+    git_ops::fetch_all_remote(&harness.source_repo_root, "origin").unwrap();
+    expected_sha
 }
