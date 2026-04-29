@@ -60,7 +60,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build());
 
     #[cfg(debug_assertions)]
-    let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    let builder = builder.plugin(
+        tauri_plugin_mcp_bridge::Builder::new()
+            .base_port(resolve_mcp_base_port())
+            .build(),
+    );
 
     let app = builder
         .manage(auth::GithubIdentityFlowRuntime::default())
@@ -376,6 +380,14 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+#[cfg(debug_assertions)]
+fn resolve_mcp_base_port() -> u16 {
+    std::env::var("HELMOR_MCP_BASE_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(9223)
 }
 
 // Route a user-initiated exit through the frontend quit-confirm flow.
