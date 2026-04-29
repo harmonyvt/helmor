@@ -28,7 +28,7 @@
 
 use serde_json::Value;
 use tauri::ipc::Channel;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::agents::AgentStreamEvent;
 use crate::pipeline::types::ThreadMessageLike;
@@ -125,6 +125,9 @@ pub(super) fn apply_action(action: Action, ctx: &ApplyContext) {
             // `let _ = on_event.send(...)`; matching that behavior keeps
             // this iteration a no-op-equivalent migration. The
             // disconnected-channel cleanup is on the iteration-N+ list.
+            if let Some(remote) = ctx.app.try_state::<crate::remote::RemoteServerManager>() {
+                remote.publish_agent_event(event.clone());
+            }
             let _ = ctx.on_event.send(event);
         }
         Action::PersistContextUsage { raw } => {

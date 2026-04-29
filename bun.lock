@@ -116,6 +116,17 @@
         "typescript": "6.0.2",
       },
     },
+    "apps/mobile": {
+      "name": "@helmor/mobile",
+      "dependencies": {
+        "@vitejs/plugin-react": "6.0.1",
+        "lucide-react": "^1.7.0",
+        "react": "19.2.0",
+        "react-dom": "19.2.0",
+        "typescript": "6.0.2",
+        "vite": "8.0.3",
+      },
+    },
   },
   "trustedDependencies": [
     "husky",
@@ -639,6 +650,8 @@
     "@hapi/topo": ["@hapi/topo@3.1.6", "", { "dependencies": { "@hapi/hoek": "^8.3.0" } }, "sha512-tAag0jEcjwH+P2quUfipd7liWCNX2F8NvYjQp2wtInsZxnMlypdw0FtAOLxtvvkO+GSRRbmNi8m/5y42PQJYCQ=="],
 
     "@helmor/marketing": ["@helmor/marketing@workspace:apps/marketing"],
+
+    "@helmor/mobile": ["@helmor/mobile@workspace:apps/mobile"],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 

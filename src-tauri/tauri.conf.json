@@ -57,7 +57,8 @@
 			"./target/bundled/helmor-cli"
 		],
 		"resources": {
-			"../sidecar/dist/vendor/": "vendor"
+			"../sidecar/dist/vendor/": "vendor",
+			"../apps/mobile/dist/": "mobile"
 		},
 		"icon": [
 			"icons/32x32.png",
