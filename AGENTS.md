@@ -31,6 +31,12 @@ bun run test:watch           # vitest watch (frontend only)
 
 Single test file: `bun x vitest run src/App.test.tsx` | `cd sidecar && bun test src/foo.test.ts` | `cd src-tauri && cargo test --test pipeline_scenarios -- <name>`
 
+## Pull requests and forks
+
+- For this checkout, treat `harmonyvt/helmor` as the default GitHub repository for `gh` commands. Verify with `gh repo set-default --view` before creating PRs.
+- Do **not** pass `--repo dohooo/helmor` to `gh pr create` unless the user explicitly asks for an upstream PR. Fork-local or temporary patch PRs should stay in `harmonyvt/helmor`.
+- When the intended target is ambiguous, ask whether the PR should go to the fork (`harmonyvt/helmor`) or upstream (`dohooo/helmor`) before creating it.
+
 ## Architecture
 
 ### Three-process model
