@@ -4,7 +4,8 @@
  * the result into its own SDK input format.
  */
 
-const IMAGE_REF_RE = /@(\/\S+\.(?:png|jpe?g|gif|webp|svg|bmp|ico))/gi;
+const IMAGE_REF_RE =
+	/@(\/[\s\S]*?\.(?:png|jpe?g|gif|webp|svg|bmp|ico))(?=\s|$)/gi;
 
 export interface ParsedImageRefs {
 	readonly text: string;
