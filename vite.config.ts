@@ -5,6 +5,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 const host = process.env.TAURI_DEV_HOST;
+const devPort = Number.parseInt(process.env.HELMOR_DEV_PORT ?? "1420", 10);
 const WATCH_IGNORED = [
 	"**/src-tauri/**",
 	"**/.local/**",
@@ -64,14 +65,14 @@ export default defineConfig(async () => ({
 	clearScreen: false,
 	// 2. tauri expects a fixed port, fail if that port is not available
 	server: {
-		port: 1420,
+		port: Number.isNaN(devPort) ? 1420 : devPort,
 		strictPort: true,
 		host: host || false,
 		hmr: host
 			? {
 					protocol: "ws",
 					host,
-					port: 1421,
+					port: (Number.isNaN(devPort) ? 1420 : devPort) + 1,
 				}
 			: undefined,
 		watch: {
