@@ -125,12 +125,10 @@ query($owner: String!, $name: String!) {
         return Ok(Vec::new());
     };
     let full_name = format!("{owner}/{name}");
-    repository
-        .pull_requests
-        .nodes
-        .into_iter()
-        .map(|node| pull_request_summary_from_node(node, &full_name))
-        .collect()
+    Ok(pull_request_summaries_from_nodes(
+        repository.pull_requests.nodes,
+        &full_name,
+    ))
 }
 
 pub fn resolve_repository_pull_request(
@@ -270,6 +268,16 @@ fn parse_pull_request_input(input: &str, owner: &str, name: &str) -> Result<i64>
         bail!("Pull request number must be positive");
     }
     Ok(number)
+}
+
+fn pull_request_summaries_from_nodes(
+    nodes: Vec<RepositoryPullRequestNode>,
+    repo_full_name: &str,
+) -> Vec<GithubPullRequestSummary> {
+    nodes
+        .into_iter()
+        .filter_map(|node| pull_request_summary_from_node(node, repo_full_name).ok())
+        .collect()
 }
 
 fn pull_request_summary_from_node(
@@ -1716,6 +1724,32 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("forks are not supported"));
+    }
+
+    #[test]
+    fn pull_request_summaries_skip_unsupported_nodes() {
+        let summaries = pull_request_summaries_from_nodes(
+            vec![
+                repository_pr_node(
+                    "OPEN",
+                    false,
+                    Some("octocat/hello-world"),
+                    Some("octocat/hello-world"),
+                ),
+                repository_pr_node(
+                    "OPEN",
+                    false,
+                    Some("someone/hello-world"),
+                    Some("octocat/hello-world"),
+                ),
+            ],
+            "octocat/hello-world",
+        );
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].number, 42);
+        assert_eq!(summaries[0].head_branch, "feature/review");
+        assert_eq!(summaries[0].base_branch, "main");
     }
 
     #[test]
