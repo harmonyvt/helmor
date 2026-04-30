@@ -14,6 +14,16 @@ describe("parseImageRefs", () => {
 		expect(result.text).toBe("look at please");
 	});
 
+	test("extracts image references with spaces in the path", () => {
+		const result = parseImageRefs(
+			"look at @/Users/harmony/Documents/Documents - Harmony’s MacBook Pro/Screenshot/CleanShot 2026-04-29 at 17.04.46.png please",
+		);
+		expect(result.imagePaths).toEqual([
+			"/Users/harmony/Documents/Documents - Harmony’s MacBook Pro/Screenshot/CleanShot 2026-04-29 at 17.04.46.png",
+		]);
+		expect(result.text).toBe("look at please");
+	});
+
 	test("extracts multiple images of different extensions", () => {
 		const result = parseImageRefs(
 			"compare @/a/one.png with @/b/two.jpg and @/c/three.gif",
@@ -24,6 +34,17 @@ describe("parseImageRefs", () => {
 			"/c/three.gif",
 		]);
 		expect(result.text).toBe("compare with and");
+	});
+
+	test("extracts multiple image references when filenames contain spaces", () => {
+		const result = parseImageRefs(
+			"compare @/tmp/CleanShot 2026-04-29 at 17.03.51.png with @/tmp/second image.jpg",
+		);
+		expect(result.imagePaths).toEqual([
+			"/tmp/CleanShot 2026-04-29 at 17.03.51.png",
+			"/tmp/second image.jpg",
+		]);
+		expect(result.text).toBe("compare with");
 	});
 
 	test("deduplicates repeated paths", () => {
