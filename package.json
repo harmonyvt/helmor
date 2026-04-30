@@ -18,6 +18,7 @@
 		"dev:analyze": "bun run dev:prepare && VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
 		"preview": "vite preview",
+		"clean": "rm -rf node_modules sidecar/node_modules sidecar/dist sidecar/.bundle-cache src-tauri/target src-tauri/gen dist storybook-static playwright-report test-results .husky/_",
 		"test": "bun run test:frontend && bun run test:sidecar && bun run test:rust",
 		"test:frontend": "vitest run",
 		"test:frontend:watch": "vitest",
