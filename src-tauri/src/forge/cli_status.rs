@@ -1,6 +1,8 @@
 //! `gh` / `glab` status probing + Connect terminal flow.
 
-use anyhow::{bail, Context, Result};
+#[cfg(target_os = "macos")]
+use anyhow::Context;
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
@@ -8,10 +10,13 @@ use std::time::Duration;
 use crate::github_cli;
 
 use super::bundled;
-use super::command::{command_detail, run_command, run_command_with_timeout};
+#[cfg(target_os = "macos")]
+use super::command::run_command_with_timeout;
+use super::command::{command_detail, run_command};
 use super::status_cache::{self, CacheableStatus, CachedEntry};
 use super::types::{ForgeCliStatus, ForgeLabels, ForgeProvider};
 
+#[cfg(target_os = "macos")]
 const OPEN_TERMINAL_TIMEOUT: Duration = Duration::from_secs(10);
 const GITLAB_CLI_STATUS_CACHE_TTL: Duration = Duration::from_secs(2);
 const GITLAB_CLI_READY_DOWNGRADE_GRACE: Duration = Duration::from_secs(600);
@@ -316,6 +321,7 @@ fn open_terminal_with_command(_command: &str) -> Result<()> {
     bail!("Opening a terminal for forge CLI auth is only supported on macOS right now.")
 }
 
+#[cfg(target_os = "macos")]
 fn applescript_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }

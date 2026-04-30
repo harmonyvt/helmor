@@ -60,7 +60,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build());
 
     #[cfg(debug_assertions)]
-    let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    let builder = builder.plugin(
+        tauri_plugin_mcp_bridge::Builder::new()
+            .base_port(resolve_mcp_base_port())
+            .build(),
+    );
 
     let app = builder
         .manage(auth::GithubIdentityFlowRuntime::default())
@@ -381,6 +385,14 @@ pub fn run() {
     });
 }
 
+#[cfg(debug_assertions)]
+fn resolve_mcp_base_port() -> u16 {
+    std::env::var("HELMOR_MCP_BASE_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(9223)
+}
+
 // Route a user-initiated exit through the frontend quit-confirm flow.
 // If the emit fails the webview is almost certainly gone, so falling
 // back to a direct exit is safer than leaving the process hanging with
@@ -395,7 +407,9 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
 const HELMOR_QUIT_MENU_ID: &str = "helmor-quit";
+#[cfg(target_os = "macos")]
 const HELMOR_CLOSE_CURRENT_SESSION_MENU_ID: &str = "helmor-close-current-session";
 
 #[cfg(target_os = "macos")]
@@ -463,6 +477,7 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn emit_close_current_session_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://close-current-session", ()) {
         tracing::warn!(error = %e, "Failed to emit close-current-session event");

@@ -11,6 +11,7 @@ Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **R
 ```bash
 bun install                  # Install deps (bun 1.3+). Also runs `bun install` in sidecar/ via postinstall.
 bun run dev                  # Full desktop app: Tauri + Vite (localhost:1420 in webview)
+bun run dev:preview          # Secondary worktree preview with isolated data, ports, app identity, and MCP range
 bun run dev:analyze          # Same as dev, with perf HUD (VITE_HELMOR_PERF_HUD=1)
 bun run build                # tsc + vite build (frontend bundle to dist/)
 bun run typecheck            # tsc --noEmit for frontend AND sidecar
@@ -31,6 +32,11 @@ bun run test:watch           # vitest watch (frontend only)
 
 Single test file: `bun x vitest run src/App.test.tsx` | `cd sidecar && bun test src/foo.test.ts` | `cd src-tauri && cargo test --test pipeline_scenarios -- <name>`
 
+## Worktree previews
+
+Use `bun run dev` for the primary development app. To run a second Helmor dev app from a worktree at the same time, run `bun run dev:preview` from that worktree. The preview command derives a stable identity from `git rev-parse --show-toplevel`, prints the selected data directory, Vite URL, and MCP bridge port range, then launches Tauri with isolated `HELMOR_DATA_DIR`, `HELMOR_DEV_PORT`, `HELMOR_MCP_BASE_PORT`, product name, and app identifier.
+
+For Tauri MCP debugging against a preview window, connect the driver to the printed preview MCP base port/range instead of the normal default.
 ## Pull requests and forks
 
 - For this checkout, treat `harmonyvt/helmor` as the default GitHub repository for `gh` commands. Verify with `gh repo set-default --view` before creating PRs.
@@ -165,7 +171,7 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 ### Prerequisites
 
 1. **Debug build only.** MCP bridge is behind `#[cfg(debug_assertions)]`. Always `bun run dev`.
-2. **Open driver session first.** Call `driver_session action=status` before `start`. Default port `9223`, window `main`.
+2. **Open driver session first.** Call `driver_session action=status` before `start`. Default port `9223`, window `main`. For `bun run dev:preview`, use the printed preview MCP base port/range.
 3. **Sanity-check.** Call `ipc_get_backend_state` after connecting to confirm the right instance.
 
 ### Tool playbook (condensed)
