@@ -37,7 +37,6 @@ Single test file: `bun x vitest run src/App.test.tsx` | `cd sidecar && bun test 
 Use `bun run dev` for the primary development app. To run a second Helmor dev app from a worktree at the same time, run `bun run dev:preview` from that worktree. The preview command derives a stable identity from `git rev-parse --show-toplevel`, prints the selected data directory, Vite URL, and MCP bridge port range, then launches Tauri with isolated `HELMOR_DATA_DIR`, `HELMOR_DEV_PORT`, `HELMOR_MCP_BASE_PORT`, product name, and app identifier.
 
 For Tauri MCP debugging against a preview window, connect the driver to the printed preview MCP base port/range instead of the normal default.
-
 ## Pull requests and forks
 
 - For this checkout, treat `harmonyvt/helmor` as the default GitHub repository for `gh` commands. Verify with `gh repo set-default --view` before creating PRs.

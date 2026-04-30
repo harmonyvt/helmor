@@ -28,6 +28,7 @@ const apiMocks = vi.hoisted(() => {
 		addRepositoryFromLocalPath: vi.fn(),
 		createWorkspaceFromRepo: vi.fn(),
 		prepareWorkspaceFromRepo: vi.fn(),
+		prepareWorkspaceFromSource: vi.fn(),
 		finalizeWorkspaceFromRepo: vi.fn(),
 		listRepositories: vi.fn(),
 		loadAddRepositoryDefaults: vi.fn(),
@@ -78,6 +79,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		addRepositoryFromLocalPath: apiMocks.addRepositoryFromLocalPath,
 		createWorkspaceFromRepo: apiMocks.createWorkspaceFromRepo,
 		prepareWorkspaceFromRepo: apiMocks.prepareWorkspaceFromRepo,
+		prepareWorkspaceFromSource: apiMocks.prepareWorkspaceFromSource,
 		finalizeWorkspaceFromRepo: apiMocks.finalizeWorkspaceFromRepo,
 		listRepositories: apiMocks.listRepositories,
 		loadAddRepositoryDefaults: apiMocks.loadAddRepositoryDefaults,
@@ -616,6 +618,91 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			checks: [],
 		});
 
+		expect(onSelectWorkspace).toHaveBeenCalledWith(generatedWorkspaceId);
+	});
+
+	it("creates a workspace from a remote branch source", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		const generatedWorkspaceId = crypto.randomUUID();
+		const generatedSessionId = crypto.randomUUID();
+
+		apiMocks.listRepositories.mockResolvedValue([
+			{
+				id: "repo-1",
+				name: "helmor",
+				defaultBranch: "main",
+				repoInitials: "HE",
+			},
+		]);
+		apiMocks.prepareWorkspaceFromSource.mockResolvedValue({
+			workspaceId: generatedWorkspaceId,
+			initialSessionId: generatedSessionId,
+			repoId: "repo-1",
+			repoName: "helmor",
+			directoryName: "feature-api",
+			branch: "feature/api",
+			defaultBranch: "main",
+			intendedTargetBranch: "main",
+			status: "in-progress" as const,
+			sourceStartBranch: "feature/api",
+			prTitle: null,
+			prSyncState: "none" as const,
+			prUrl: null,
+			state: "initializing" as const,
+			repoScripts: {
+				setupScript: null,
+				runScript: null,
+				archiveScript: null,
+				setupFromProject: false,
+				runFromProject: false,
+				archiveFromProject: false,
+				autoRunSetup: true,
+			},
+		});
+		apiMocks.finalizeWorkspaceFromRepo.mockImplementation(
+			() => new Promise(() => {}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace,
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+				"ws-1",
+				"ws-2",
+			]);
+		});
+
+		await act(async () => {
+			void result.current.handleCreateWorkspaceFromRepo("repo-1", {
+				type: "remoteBranch",
+				branch: "feature/api",
+			});
+		});
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows[0]?.id).toBe(generatedWorkspaceId);
+		});
+		expect(apiMocks.prepareWorkspaceFromRepo).not.toHaveBeenCalled();
+		expect(apiMocks.prepareWorkspaceFromSource).toHaveBeenCalledWith("repo-1", {
+			type: "remoteBranch",
+			branch: "feature/api",
+		});
+		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
+			generatedWorkspaceId,
+			{ startBranch: "feature/api", fetchStartBranch: true },
+		);
+		expect(result.current.groups[0]?.rows[0]?.branch).toBe("feature/api");
 		expect(onSelectWorkspace).toHaveBeenCalledWith(generatedWorkspaceId);
 	});
 

@@ -197,6 +197,7 @@ pub fn run() {
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
+            commands::workspace_commands::prepare_workspace_from_source,
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::github_commands::disconnect_github_identity,
             commands::repository_commands::get_add_repository_defaults,
@@ -235,6 +236,8 @@ pub fn run() {
             commands::repository_commands::add_repository_from_local_path,
             commands::repository_commands::clone_repository_from_url,
             commands::github_commands::list_github_accessible_repositories,
+            commands::github_commands::list_github_pull_requests_for_repo,
+            commands::github_commands::resolve_github_pull_request_for_repo,
             commands::workspace_commands::list_archived_workspaces,
             commands::repository_commands::list_repositories,
             commands::repository_commands::update_repository_default_branch,
@@ -404,7 +407,9 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
 const HELMOR_QUIT_MENU_ID: &str = "helmor-quit";
+#[cfg(target_os = "macos")]
 const HELMOR_CLOSE_CURRENT_SESSION_MENU_ID: &str = "helmor-close-current-session";
 
 #[cfg(target_os = "macos")]
@@ -472,6 +477,7 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn emit_close_current_session_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://close-current-session", ()) {
         tracing::warn!(error = %e, "Failed to emit close-current-session event");

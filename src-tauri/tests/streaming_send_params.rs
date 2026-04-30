@@ -82,7 +82,7 @@ fn seed_workspace_session(
     .unwrap();
 }
 
-fn build(input: BuildSendMessageParamsInput<'_>) -> Value {
+fn build(_env: &TestEnv, input: BuildSendMessageParamsInput<'_>) -> Value {
     build_send_message_params(input)
 }
 
@@ -108,7 +108,7 @@ fn omits_additional_directories_when_session_has_none() {
     let env = TestEnv::new();
     seed_workspace_session(&env.connection(), "w-1", "s-1", None);
 
-    let params = build(base_input(Some("s-1")));
+    let params = build(&env, base_input(Some("s-1")));
     assert_yaml_snapshot!("params_without_linked_dirs", &params);
 }
 
@@ -122,7 +122,7 @@ fn includes_additional_directories_from_workspace() {
         Some(r#"["/abs/claw-code","/abs/rust"]"#),
     );
 
-    let params = build(base_input(Some("s-2")));
+    let params = build(&env, base_input(Some("s-2")));
     assert_yaml_snapshot!("params_with_linked_dirs", &params);
 }
 
@@ -135,7 +135,7 @@ fn includes_claude_environment_for_custom_provider() {
     input.claude_base_url = Some("https://api.example.com/anthropic");
     input.claude_auth_token = Some("sk-test");
 
-    let params = build(input);
+    let params = build(&env, input);
     assert_yaml_snapshot!("params_with_claude_environment", &params);
 }
 
@@ -146,7 +146,7 @@ fn omits_additional_directories_when_helmor_session_id_is_absent() {
     let env = TestEnv::new();
     seed_workspace_session(&env.connection(), "w-3", "s-3", Some(r#"["/abs/a"]"#));
 
-    let params = build(base_input(None));
+    let params = build(&env, base_input(None));
     assert_yaml_snapshot!("params_for_new_session", &params);
 }
 
@@ -155,6 +155,6 @@ fn malformed_linked_column_falls_back_to_no_directories() {
     let env = TestEnv::new();
     seed_workspace_session(&env.connection(), "w-4", "s-4", Some("not-valid-json"));
 
-    let params = build(base_input(Some("s-4")));
+    let params = build(&env, base_input(Some("s-4")));
     assert_yaml_snapshot!("params_malformed_linked_column", &params);
 }

@@ -15,12 +15,14 @@ import {
 	pinWorkspace,
 	prepareArchiveWorkspace,
 	prepareWorkspaceFromRepo,
+	prepareWorkspaceFromSource,
 	type RepositoryCreateOption,
 	restoreWorkspace,
 	setWorkspaceStatus,
 	startArchiveWorkspace,
 	unpinWorkspace,
 	validateRestoreWorkspace,
+	type WorkspaceCreationSource,
 	type WorkspaceDetail,
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
@@ -662,7 +664,10 @@ export function useWorkspacesSidebarController({
 	);
 
 	const handleCreateWorkspaceFromRepo = useCallback(
-		async (repoId: string) => {
+		async (
+			repoId: string,
+			source: WorkspaceCreationSource = { type: "defaultBranch" },
+		) => {
 			if (creatingWorkspaceRepoId) {
 				return;
 			}
@@ -686,7 +691,10 @@ export function useWorkspacesSidebarController({
 				// the real workspace/session ids, directory name, branch,
 				// and repo scripts. Nothing is painted yet; the sidebar +
 				// panel are still showing the previously selected workspace.
-				prepareResponse = await prepareWorkspaceFromRepo(repoId);
+				prepareResponse =
+					source.type === "defaultBranch"
+						? await prepareWorkspaceFromRepo(repoId)
+						: await prepareWorkspaceFromSource(repoId, source);
 			} catch (error) {
 				setCreatingWorkspaceRepoId(null);
 				pushWorkspaceToast(
@@ -698,6 +706,8 @@ export function useWorkspacesSidebarController({
 			// Phase 1 succeeded. Paint immediately using the real metadata —
 			// no optimistic title, no optimistic scripts, no placeholder.
 			const createdAt = new Date().toISOString();
+			const intendedTargetBranch =
+				prepareResponse.intendedTargetBranch ?? prepareResponse.defaultBranch;
 			const preparedRow = createPreparedWorkspaceRow(
 				repository,
 				prepareResponse,
@@ -742,8 +752,8 @@ export function useWorkspacesSidebarController({
 					// intended target, matching what Phase 2 writes.
 					remote: repository.remote ?? "origin",
 					defaultBranch: prepareResponse.defaultBranch,
-					initializationParentBranch: prepareResponse.defaultBranch,
-					intendedTargetBranch: prepareResponse.defaultBranch,
+					initializationParentBranch: intendedTargetBranch,
+					intendedTargetBranch,
 				},
 			);
 			queryClient.setQueryData<WorkspaceSessionSummary[]>(
@@ -780,7 +790,7 @@ export function useWorkspacesSidebarController({
 				{
 					uncommittedCount: 0,
 					conflictCount: 0,
-					syncTargetBranch: prepareResponse.defaultBranch,
+					syncTargetBranch: intendedTargetBranch,
 					syncStatus: "upToDate",
 					behindTargetCount: 0,
 					remoteTrackingRef: null,
@@ -790,17 +800,33 @@ export function useWorkspacesSidebarController({
 			);
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceChangeRequest(prepareResponse.workspaceId),
-				null,
+				prepareResponse.prUrl
+					? {
+							url: prepareResponse.prUrl,
+							number: prepareResponse.prNumber ?? 0,
+							state: "OPEN",
+							title: prepareResponse.prTitle ?? "Pull request",
+							isMerged: false,
+						}
+					: null,
 			);
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceForgeActionStatus(prepareResponse.workspaceId),
 				{
-					changeRequest: null,
+					changeRequest: prepareResponse.prUrl
+						? {
+								url: prepareResponse.prUrl,
+								number: prepareResponse.prNumber ?? 0,
+								state: "OPEN",
+								title: prepareResponse.prTitle ?? "Pull request",
+								isMerged: false,
+							}
+						: null,
 					reviewDecision: null,
 					mergeable: null,
 					deployments: [],
 					checks: [],
-					remoteState: "noPr",
+					remoteState: prepareResponse.prUrl ? "ok" : "noPr",
 					message: null,
 				},
 			);
@@ -810,7 +836,13 @@ export function useWorkspacesSidebarController({
 			// background so the UI is already interactive. State flips from
 			// "initializing" → "ready"/"setup_pending" when it completes;
 			// the only visible change is the composer enabling.
-			finalizeWorkspaceFromRepo(prepareResponse.workspaceId)
+			const finalizePromise = prepareResponse.sourceStartBranch
+				? finalizeWorkspaceFromRepo(prepareResponse.workspaceId, {
+						startBranch: prepareResponse.sourceStartBranch,
+						fetchStartBranch: true,
+					})
+				: finalizeWorkspaceFromRepo(prepareResponse.workspaceId);
+			finalizePromise
 				.then((finalized) => {
 					queryClient.setQueryData<WorkspaceDetail | null>(
 						helmorQueryKeys.workspaceDetail(prepareResponse.workspaceId),
@@ -1520,6 +1552,10 @@ function createPreparedWorkspaceRow(
 		directoryName: string;
 		branch: string;
 		state: WorkspaceState;
+		status?: WorkspaceStatus;
+		prTitle?: string | null;
+		prSyncState?: "none" | "open" | "closed" | "merged";
+		prUrl?: string | null;
 	},
 ): WorkspaceRow {
 	return {
@@ -1535,13 +1571,15 @@ function createPreparedWorkspaceRow(
 		hasUnread: false,
 		workspaceUnread: 0,
 		unreadSessionCount: 0,
-		status: "in-progress",
+		status: prepared.status ?? "in-progress",
 		branch: prepared.branch,
 		activeSessionId: prepared.initialSessionId,
 		activeSessionTitle: "Untitled",
 		activeSessionAgentType: null,
 		activeSessionStatus: "idle",
-		prTitle: null,
+		prTitle: prepared.prTitle ?? null,
+		prSyncState: prepared.prSyncState ?? "none",
+		prUrl: prepared.prUrl ?? null,
 		pinnedAt: null,
 		sessionCount: 1,
 		messageCount: 0,

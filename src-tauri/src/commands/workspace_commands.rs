@@ -34,6 +34,21 @@ pub async fn prepare_workspace_from_repo(
     Ok(result)
 }
 
+#[tauri::command]
+pub async fn prepare_workspace_from_source(
+    app: AppHandle,
+    repo_id: String,
+    source: workspaces::WorkspaceCreationSource,
+) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
+    let result = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || workspaces::prepare_workspace_from_source_impl(&repo_id, source))
+            .await?
+    };
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
 /// Phase 2: slow (~200ms-2s) materialization. Creates the git worktree,
 /// probes `helmor.json` for a setup script, and flips
 /// the workspace row from `initializing` to `ready` / `setup_pending`. On
@@ -43,12 +58,17 @@ pub async fn prepare_workspace_from_repo(
 pub async fn finalize_workspace_from_repo(
     app: AppHandle,
     workspace_id: String,
+    options: Option<workspaces::FinalizeWorkspaceOptions>,
 ) -> CmdResult<workspaces::FinalizeWorkspaceResponse> {
     let ws_lock = db::workspace_fs_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
     let result = {
         let workspace_id = workspace_id.clone();
-        run_blocking(move || workspaces::finalize_workspace_from_repo_impl(&workspace_id)).await?
+        let options = options.unwrap_or_default();
+        run_blocking(move || {
+            workspaces::finalize_workspace_from_repo_with_options_impl(&workspace_id, options)
+        })
+        .await?
     };
     notify_workspace_changed_in_background(app);
     Ok(result)

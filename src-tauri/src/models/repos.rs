@@ -1059,7 +1059,7 @@ fn resolve_repository_remote(repo_root: &Path) -> Result<Option<String>> {
     Ok(remotes.into_iter().next())
 }
 
-fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<String> {
+pub(crate) fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<String> {
     let repo_root_arg = repo_root.display().to_string();
     git_ops::run_git(
         ["-C", repo_root_arg.as_str(), "remote", "get-url", remote],
