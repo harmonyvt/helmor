@@ -8,19 +8,6 @@
 export type InvokeHandler = (args?: unknown) => unknown | Promise<unknown>;
 
 export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
-	get_github_identity_session: () => ({
-		status: "connected",
-		session: {
-			provider: "test",
-			githubUserId: 0,
-			login: "test",
-			name: "Test User",
-			avatarUrl: null,
-			primaryEmail: null,
-			tokenExpiresAt: null,
-			refreshTokenExpiresAt: null,
-		},
-	}),
 	get_github_cli_status: () => ({
 		status: "ready",
 		host: "github.com",

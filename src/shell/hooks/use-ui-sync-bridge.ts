@@ -161,9 +161,6 @@ function handleUiMutation(
 				});
 			}
 			return;
-		case "githubIdentityChanged":
-			void options.refreshGithubIdentity();
-			return;
 		case "pendingCliSendQueued":
 			void options.processPendingCliSends();
 			return;

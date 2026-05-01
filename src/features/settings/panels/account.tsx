@@ -1,9 +1,7 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, CircleAlert, Loader2, LogOut } from "lucide-react";
-import { type ReactNode, useCallback, useMemo, useState } from "react";
-import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
+import { CheckCircle2, CircleAlert, Loader2 } from "lucide-react";
+import { type ReactNode, useMemo } from "react";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
@@ -11,66 +9,29 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-	disconnectGithubIdentity,
-	type ForgeCliStatus,
-	type ForgeProvider,
-	type GithubIdentitySession,
-	type RepositoryCreateOption,
+import type {
+	ForgeCliStatus,
+	ForgeProvider,
+	RepositoryCreateOption,
 } from "@/lib/api";
 import { forgeCliStatusQueryOptions } from "@/lib/query-client";
 import { useForgeCliConnect } from "@/lib/use-forge-cli-connect";
-import { useGithubIdentity } from "@/shell/hooks/use-github-identity";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
 import { gitlabHostsForRepositories } from "./cli-install-gitlab-hosts";
 
 export function AccountPanel({
 	repositories,
-	onSignedOut,
 }: {
 	repositories: RepositoryCreateOption[];
-	onSignedOut?: () => void;
 }) {
-	const queryClient = useQueryClient();
-	// Reflects external sign-in / sign-out via backend events.
-	const { githubIdentityState } = useGithubIdentity();
-	const [signingOut, setSigningOut] = useState(false);
 	const gitlabHosts = useMemo(
 		() => gitlabHostsForRepositories(repositories),
 		[repositories],
 	);
 
-	const identity: GithubIdentitySession | null =
-		githubIdentityState.status === "connected"
-			? githubIdentityState.session
-			: null;
-
-	const handleSignOut = useCallback(async () => {
-		setSigningOut(true);
-		try {
-			await disconnectGithubIdentity();
-			// Drop every auth-bound cache; backend pushes the identity update.
-			await queryClient.invalidateQueries();
-			onSignedOut?.();
-		} catch (error) {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to sign out.",
-			);
-		} finally {
-			setSigningOut(false);
-		}
-	}, [onSignedOut, queryClient]);
-
 	return (
 		<TooltipProvider delayDuration={150}>
 			<SettingsGroup>
-				{identity ? (
-					<IdentityRow
-						session={identity}
-						onSignOut={() => void handleSignOut()}
-						signingOut={signingOut}
-					/>
-				) : null}
 				<CliIntegrationRow
 					provider="github"
 					host="github.com"
@@ -94,57 +55,6 @@ export function AccountPanel({
 					: null}
 			</SettingsGroup>
 		</TooltipProvider>
-	);
-}
-
-function IdentityRow({
-	session,
-	onSignOut,
-	signingOut,
-}: {
-	session: GithubIdentitySession;
-	onSignOut: () => void;
-	signingOut: boolean;
-}) {
-	return (
-		<div className="flex items-center gap-3 py-5">
-			<Avatar size="lg">
-				{session.avatarUrl ? (
-					<AvatarImage src={session.avatarUrl} alt={session.login} />
-				) : null}
-				<AvatarFallback className="bg-muted text-[12px] font-medium text-muted-foreground">
-					{session.login.slice(0, 2).toUpperCase()}
-				</AvatarFallback>
-			</Avatar>
-			<div className="min-w-0 flex-1">
-				<div className="truncate text-[14px] font-semibold text-foreground">
-					{session.name?.trim() || session.login}
-				</div>
-				{session.primaryEmail ? (
-					<div className="truncate text-[12px] text-muted-foreground">
-						{session.primaryEmail}
-					</div>
-				) : null}
-				<div className="mt-0.5 flex items-center gap-1 text-[12px] text-muted-foreground">
-					<GithubBrandIcon size={12} />
-					<span className="truncate">{session.login}</span>
-				</div>
-			</div>
-			<Button
-				variant="ghost"
-				size="sm"
-				onClick={onSignOut}
-				disabled={signingOut}
-				className="shrink-0 text-muted-foreground hover:text-foreground"
-			>
-				{signingOut ? (
-					<Loader2 className="size-3.5 animate-spin" />
-				) : (
-					<LogOut className="size-3.5" strokeWidth={1.8} />
-				)}
-				Sign out
-			</Button>
-		</div>
 	);
 }
 

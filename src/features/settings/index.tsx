@@ -43,7 +43,7 @@ import { ShortcutsSettingsPanel } from "@/features/shortcuts/settings-panel";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
 	isConductorAvailable,
-	loadGithubIdentitySession,
+	loadGithubCliStatus,
 	type RepositoryCreateOption,
 } from "@/lib/api";
 import {
@@ -167,9 +167,9 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 	useEffect(() => {
 		if (open) {
-			void loadGithubIdentitySession().then((snapshot) => {
-				if (snapshot.status === "connected") {
-					setGithubLogin(snapshot.session.login);
+			void loadGithubCliStatus().then((status) => {
+				if (status.status === "ready") {
+					setGithubLogin(status.login);
 				}
 			});
 			void isConductorAvailable().then(setConductorEnabled);
@@ -616,10 +616,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "developer" && <DevToolsPanel />}
 
 							{activeSection === "account" && (
-								<AccountPanel
-									repositories={repositories}
-									onSignedOut={onClose}
-								/>
+								<AccountPanel repositories={repositories} />
 							)}
 
 							{activeRepo && (

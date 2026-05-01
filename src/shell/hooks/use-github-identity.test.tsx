@@ -1,25 +1,18 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GithubIdentitySnapshot } from "@/lib/api";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useGithubIdentity } from "./use-github-identity";
 
 const apiMocks = vi.hoisted(() => ({
-	loadGithubIdentitySession: vi.fn(),
-	listenGithubIdentityChanged: vi.fn(),
-	disconnectGithubIdentity: vi.fn(),
-	startGithubIdentityConnect: vi.fn(),
-	cancelGithubIdentityConnect: vi.fn(),
+	loadGithubCliStatus: vi.fn(),
+	openForgeCliAuthTerminal: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 	return {
 		...actual,
-		loadGithubIdentitySession: apiMocks.loadGithubIdentitySession,
-		listenGithubIdentityChanged: apiMocks.listenGithubIdentityChanged,
-		disconnectGithubIdentity: apiMocks.disconnectGithubIdentity,
-		startGithubIdentityConnect: apiMocks.startGithubIdentityConnect,
-		cancelGithubIdentityConnect: apiMocks.cancelGithubIdentityConnect,
+		loadGithubCliStatus: apiMocks.loadGithubCliStatus,
+		openForgeCliAuthTerminal: apiMocks.openForgeCliAuthTerminal,
 	};
 });
 
@@ -36,59 +29,72 @@ vi.mock("sonner", () => ({
 	toast: toastMocks.toast,
 }));
 
-describe("useGithubIdentity — pushWorkspaceToast fallback", () => {
+const githubUnauth = {
+	status: "unauthenticated" as const,
+	host: "github.com",
+	version: "2.88.1",
+	message: "Run `gh auth login` to connect GitHub CLI.",
+};
+
+const githubReady = {
+	status: "ready" as const,
+	host: "github.com",
+	login: "octocat",
+	version: "2.88.1",
+	message: "GitHub CLI ready as octocat.",
+};
+
+describe("useGithubIdentity — gh CLI state", () => {
 	beforeEach(() => {
 		toastMocks.toast.mockClear();
-		toastMocks.error.mockClear();
-		toastMocks.success.mockClear();
-		apiMocks.loadGithubIdentitySession.mockResolvedValue({
-			status: "disconnected",
-		} as GithubIdentitySnapshot);
-		apiMocks.listenGithubIdentityChanged.mockResolvedValue(() => {});
+		apiMocks.loadGithubCliStatus.mockReset();
+		apiMocks.openForgeCliAuthTerminal.mockReset();
+		apiMocks.loadGithubCliStatus.mockResolvedValue(githubUnauth);
+		apiMocks.openForgeCliAuthTerminal.mockResolvedValue(undefined);
 	});
 
-	afterEach(() => {
-		vi.unstubAllGlobals();
-	});
-
-	it("falls back to sonner toast when no pushWorkspaceToast is provided", async () => {
-		// Force the clipboard branch: report no clipboard so the hook hits
-		// the failure path that emits a toast. With no pushWorkspaceToast
-		// passed, the sonner fallback should fire.
-		vi.stubGlobal("navigator", {});
+	it("maps ready gh status to connected identity state", async () => {
+		apiMocks.loadGithubCliStatus.mockResolvedValue(githubReady);
 
 		const { result } = renderHook(() => useGithubIdentity());
 
 		await waitFor(() => {
-			expect(apiMocks.loadGithubIdentitySession).toHaveBeenCalled();
+			expect(result.current.githubIdentityState.status).toBe("connected");
+		});
+		expect(result.current.isIdentityConnected).toBe(true);
+	});
+
+	it("falls back to sonner toast when no pushWorkspaceToast is provided", async () => {
+		const { result } = renderHook(() => useGithubIdentity());
+
+		await waitFor(() => {
+			expect(apiMocks.loadGithubCliStatus).toHaveBeenCalled();
 		});
 
 		await act(async () => {
-			const ok = await result.current.handleCopyGithubDeviceCode("ABCD-1234");
-			expect(ok).toBe(false);
+			await result.current.handleDisconnectGithubIdentity();
 		});
 
-		// Sonner's `toast()` is the default channel for the fallback.
-		expect(toastMocks.toast).toHaveBeenCalled();
-		const [first] = toastMocks.toast.mock.calls[0] ?? [];
-		expect(typeof first).toBe("string");
+		expect(toastMocks.toast).toHaveBeenCalledWith(
+			"Run `gh auth logout` in Terminal to disconnect GitHub CLI.",
+		);
 	});
 
-	it("routes through the explicit pushWorkspaceToast when provided (no sonner fallback)", async () => {
-		vi.stubGlobal("navigator", {});
+	it("routes through the explicit pushWorkspaceToast when provided", async () => {
 		const pushWorkspaceToast = vi.fn();
-
 		const { result } = renderHook(() => useGithubIdentity(pushWorkspaceToast));
 
 		await waitFor(() => {
-			expect(apiMocks.loadGithubIdentitySession).toHaveBeenCalled();
+			expect(apiMocks.loadGithubCliStatus).toHaveBeenCalled();
 		});
 
 		await act(async () => {
-			await result.current.handleCopyGithubDeviceCode("ABCD-1234");
+			await result.current.handleDisconnectGithubIdentity();
 		});
 
-		expect(pushWorkspaceToast).toHaveBeenCalled();
+		expect(pushWorkspaceToast).toHaveBeenCalledWith(
+			"Run `gh auth logout` in Terminal to disconnect GitHub CLI.",
+		);
 		expect(toastMocks.toast).not.toHaveBeenCalled();
 	});
 });

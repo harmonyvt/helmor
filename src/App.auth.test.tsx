@@ -1,19 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import {
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-	waitFor,
-} from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
-	loadGithubIdentitySession: vi.fn(),
-	cancelGithubIdentityConnect: vi.fn(),
-	listenGithubIdentityChanged: vi.fn(),
-	disconnectGithubIdentity: vi.fn(),
+	loadGithubCliStatus: vi.fn(),
+	openForgeCliAuthTerminal: vi.fn(),
 	loadWorkspaceGroups: vi.fn(),
 	loadArchivedWorkspaces: vi.fn(),
 	loadAgentModelSections: vi.fn(),
@@ -24,16 +16,9 @@ const apiMocks = vi.hoisted(() => ({
 	loadSessionThreadMessages: vi.fn(),
 }));
 
-const openerMocks = vi.hoisted(() => ({
-	openUrl: vi.fn(),
-}));
-
 vi.mock("./App.css", () => ({}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
 	open: vi.fn(),
-}));
-vi.mock("@tauri-apps/plugin-opener", () => ({
-	openUrl: openerMocks.openUrl,
 }));
 
 vi.mock("./lib/api", async (importOriginal) => {
@@ -41,10 +26,8 @@ vi.mock("./lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
-		loadGithubIdentitySession: apiMocks.loadGithubIdentitySession,
-		cancelGithubIdentityConnect: apiMocks.cancelGithubIdentityConnect,
-		listenGithubIdentityChanged: apiMocks.listenGithubIdentityChanged,
-		disconnectGithubIdentity: apiMocks.disconnectGithubIdentity,
+		loadGithubCliStatus: apiMocks.loadGithubCliStatus,
+		openForgeCliAuthTerminal: apiMocks.openForgeCliAuthTerminal,
 		loadWorkspaceGroups: apiMocks.loadWorkspaceGroups,
 		loadArchivedWorkspaces: apiMocks.loadArchivedWorkspaces,
 		loadAgentModelSections: apiMocks.loadAgentModelSections,
@@ -58,16 +41,20 @@ vi.mock("./lib/api", async (importOriginal) => {
 
 import App from "./App";
 
-const CONNECTED_IDENTITY = {
-	provider: "github-app-device-flow",
-	githubUserId: 42,
+const GITHUB_READY = {
+	status: "ready" as const,
+	host: "github.com",
 	login: "octocat",
-	name: "Octocat",
-	avatarUrl: "https://avatars.githubusercontent.com/u/42?v=4",
-	primaryEmail: "test@example.com",
-	tokenExpiresAt: "2026-04-04T12:00:00Z",
-	refreshTokenExpiresAt: "2026-10-04T12:00:00Z",
-} as const;
+	version: "2.88.1",
+	message: "GitHub CLI ready as octocat.",
+};
+
+const GITHUB_UNAUTH = {
+	status: "unauthenticated" as const,
+	host: "github.com",
+	version: "2.88.1",
+	message: "Run `gh auth login` to connect GitHub CLI.",
+};
 
 function installTauriRuntime() {
 	Object.defineProperty(window, "__TAURI_INTERNALS__", {
@@ -147,14 +134,6 @@ function mockWorkspaceData() {
 	apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 }
 
-async function openGithubMenu() {
-	const trigger = await screen.findByRole("button", {
-		name: "GitHub account menu",
-	});
-	fireEvent.pointerDown(trigger);
-	fireEvent.click(trigger);
-}
-
 describe("App GitHub identity states", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
@@ -167,10 +146,8 @@ describe("App GitHub identity states", () => {
 			},
 		});
 
-		apiMocks.loadGithubIdentitySession.mockReset();
-		apiMocks.cancelGithubIdentityConnect.mockReset();
-		apiMocks.listenGithubIdentityChanged.mockReset();
-		apiMocks.disconnectGithubIdentity.mockReset();
+		apiMocks.loadGithubCliStatus.mockReset();
+		apiMocks.openForgeCliAuthTerminal.mockReset();
 		apiMocks.loadWorkspaceGroups.mockReset();
 		apiMocks.loadArchivedWorkspaces.mockReset();
 		apiMocks.loadAgentModelSections.mockReset();
@@ -179,16 +156,8 @@ describe("App GitHub identity states", () => {
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionMessages.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
-		openerMocks.openUrl.mockReset();
-
-		apiMocks.loadGithubIdentitySession.mockResolvedValue({
-			status: "disconnected",
-		});
-		apiMocks.cancelGithubIdentityConnect.mockResolvedValue(undefined);
-		apiMocks.disconnectGithubIdentity.mockResolvedValue(undefined);
-		apiMocks.listenGithubIdentityChanged.mockImplementation(async () => {
-			return () => {};
-		});
+		apiMocks.loadGithubCliStatus.mockResolvedValue(GITHUB_UNAUTH);
+		apiMocks.openForgeCliAuthTerminal.mockResolvedValue(undefined);
 
 		mockWorkspaceData();
 	});
@@ -220,7 +189,7 @@ describe("App GitHub identity states", () => {
 		).toBeInTheDocument();
 		expect(screen.getByText("Auth feature plan")).toBeInTheDocument();
 		expect(screen.getByText("Actions")).toBeInTheDocument();
-		expect(apiMocks.loadGithubIdentitySession).not.toHaveBeenCalled();
+		expect(apiMocks.loadGithubCliStatus).not.toHaveBeenCalled();
 		expect(
 			screen.queryByRole("main", { name: "GitHub identity gate" }),
 		).not.toBeInTheDocument();
@@ -230,7 +199,7 @@ describe("App GitHub identity states", () => {
 		expect(
 			await screen.findByRole("main", { name: "Helmor onboarding" }),
 		).toBeInTheDocument();
-		expect(apiMocks.loadGithubIdentitySession).not.toHaveBeenCalled();
+		expect(apiMocks.loadGithubCliStatus).not.toHaveBeenCalled();
 		expect(invokeMock).not.toHaveBeenCalledWith("update_app_settings", {
 			settingsMap: {
 				"app.onboarding_completed": "true",
@@ -248,14 +217,16 @@ describe("App GitHub identity states", () => {
 			screen.queryByRole("main", { name: "Application shell" }),
 		).not.toBeInTheDocument();
 		expect(
-			await screen.findByRole("button", { name: "Continue with GitHub" }),
+			await screen.findByRole("button", { name: "Connect GitHub CLI" }),
 		).toBeInTheDocument();
 	});
 
-	it("renders the identity unconfigured state without blocking the shell", async () => {
-		apiMocks.loadGithubIdentitySession.mockResolvedValue({
-			status: "unconfigured",
-			message: "GitHub account connection is not configured.",
+	it("renders GitHub CLI errors in the gate", async () => {
+		apiMocks.loadGithubCliStatus.mockResolvedValue({
+			status: "error",
+			host: "github.com",
+			version: "2.88.1",
+			message: "GitHub CLI auth check failed.",
 		});
 
 		render(<App />);
@@ -263,46 +234,29 @@ describe("App GitHub identity states", () => {
 			await screen.findByRole("main", { name: "GitHub identity gate" }),
 		).toBeInTheDocument();
 		expect(
-			await screen.findByRole("heading", {
-				name: "GitHub account connection is not configured",
-			}),
+			await screen.findByText("GitHub CLI auth check failed."),
 		).toBeInTheDocument();
 		expect(
-			await screen.findByRole("button", { name: "Continue with GitHub" }),
+			await screen.findByRole("button", { name: "Retry GitHub CLI" }),
 		).toBeInTheDocument();
 	});
 
-	it("disconnects the GitHub identity from the account menu", async () => {
-		apiMocks.loadGithubIdentitySession.mockResolvedValue({
-			status: "connected",
-			session: CONNECTED_IDENTITY,
-		});
-
+	it("opens the GitHub CLI auth terminal from the gate", async () => {
 		const user = userEvent.setup();
 		render(<App />);
 
-		await screen.findByRole("main", { name: "Application shell" });
-		await openGithubMenu();
+		await user.click(
+			await screen.findByRole("button", { name: "Connect GitHub CLI" }),
+		);
 
-		await user.click(screen.getByRole("menuitem", { name: "Log out" }));
-
-		await waitFor(() => {
-			expect(apiMocks.disconnectGithubIdentity).toHaveBeenCalled();
-		});
-
-		expect(
-			await screen.findByRole("main", { name: "GitHub identity gate" }),
-		).toBeInTheDocument();
-		expect(
-			screen.getByRole("button", { name: "Continue with GitHub" }),
-		).toBeInTheDocument();
+		expect(apiMocks.openForgeCliAuthTerminal).toHaveBeenCalledWith(
+			"github",
+			"github.com",
+		);
 	});
 
 	it("uses a compact GitHub trigger in the toolbar", async () => {
-		apiMocks.loadGithubIdentitySession.mockResolvedValue({
-			status: "connected",
-			session: CONNECTED_IDENTITY,
-		});
+		apiMocks.loadGithubCliStatus.mockResolvedValue(GITHUB_READY);
 
 		render(<App />);
 

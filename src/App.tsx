@@ -429,8 +429,6 @@ function AppShell({
 	const {
 		githubIdentityState,
 		handleCancelGithubIdentityConnect,
-		handleCopyGithubDeviceCode,
-		handleDisconnectGithubIdentity,
 		handleStartGithubIdentityConnect,
 		refreshGithubIdentityState,
 		isIdentityConnected,
@@ -2178,9 +2176,6 @@ function AppShell({
 								onConnectGithub={() => {
 									void handleStartGithubIdentityConnect();
 								}}
-								onCopyGithubCode={(userCode) =>
-									handleCopyGithubDeviceCode(userCode)
-								}
 								onCancelGithubConnect={handleCancelGithubIdentityConnect}
 							/>
 						) : (
@@ -2253,9 +2248,6 @@ function AppShell({
 														{githubIdentityState.status === "connected" ? (
 															<GithubStatusMenu
 																identityState={githubIdentityState}
-																onDisconnectGithub={() => {
-																	void handleDisconnectGithubIdentity();
-																}}
 															/>
 														) : null}
 													</div>

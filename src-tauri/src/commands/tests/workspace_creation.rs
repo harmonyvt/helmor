@@ -216,6 +216,113 @@ fn create_workspace_from_remote_branch_fails_when_local_branch_exists() {
 }
 
 #[test]
+fn create_workspace_from_github_pr_allows_existing_local_head_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let branch = "feature/review";
+    create_local_branch_with_commit(&harness, branch, "pr-local.txt", "local pr branch");
+    install_mock_gh_for_pr(&harness, branch, "main");
+    git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/octocat/hello-world.git",
+        ],
+        None,
+    )
+    .unwrap();
+
+    let prepared = workspaces::prepare_workspace_from_source_impl(
+        &harness.repo_id,
+        workspaces::WorkspaceCreationSource::GithubPullRequest { number: 42 },
+    )
+    .unwrap();
+
+    assert_eq!(prepared.branch, branch);
+    assert_eq!(prepared.intended_target_branch, "main");
+    assert_eq!(prepared.source_start_branch.as_deref(), Some(branch));
+    assert_eq!(prepared.pr_number, Some(42));
+    assert_eq!(prepared.pr_title.as_deref(), Some("Review this"));
+    assert_eq!(
+        prepared.pr_sync_state,
+        crate::workspace_pr_sync::PrSyncState::Open
+    );
+    assert_eq!(
+        prepared.status,
+        crate::workspace_status::WorkspaceStatus::Review
+    );
+}
+
+#[test]
+fn finalize_pr_workspace_uses_existing_local_head_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let branch = "feature/pr-local";
+    let expected_sha =
+        create_local_branch_with_commit(&harness, branch, "pr-local.txt", "local pr branch");
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    mark_prepared_workspace_as_pr(&harness, &prepared.workspace_id, branch, "main");
+
+    let finalized = workspaces::finalize_workspace_from_repo_with_options_impl(
+        &prepared.workspace_id,
+        workspaces::FinalizeWorkspaceOptions {
+            start_branch: Some(branch.to_string()),
+            fetch_start_branch: Some(true),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(finalized.final_state, WorkspaceState::Ready);
+    let workspace_dir = harness.workspace_dir(&prepared.directory_name);
+    assert_eq!(
+        git_ops::current_branch_name(&workspace_dir).unwrap(),
+        branch.to_string()
+    );
+    assert_eq!(
+        git_ops::current_workspace_head_commit(&workspace_dir).unwrap(),
+        expected_sha
+    );
+}
+
+#[test]
+fn finalize_pr_workspace_fetches_remote_head_when_local_branch_is_missing() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let branch = "feature/pr-remote";
+    let expected_sha = point_origin_at_upstream_branch(&harness, branch);
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    mark_prepared_workspace_as_pr(&harness, &prepared.workspace_id, branch, "main");
+
+    workspaces::finalize_workspace_from_repo_with_options_impl(
+        &prepared.workspace_id,
+        workspaces::FinalizeWorkspaceOptions {
+            start_branch: Some(branch.to_string()),
+            fetch_start_branch: Some(true),
+        },
+    )
+    .unwrap();
+
+    let workspace_dir = harness.workspace_dir(&prepared.directory_name);
+    assert_eq!(
+        git_ops::current_branch_name(&workspace_dir).unwrap(),
+        branch.to_string()
+    );
+    assert_eq!(
+        git_ops::current_workspace_head_commit(&workspace_dir).unwrap(),
+        expected_sha
+    );
+}
+
+#[test]
 fn create_workspace_from_repo_uses_v2_suffix_after_star_list_is_exhausted() {
     let _guard = TEST_LOCK
         .lock()
@@ -848,4 +955,118 @@ fn point_origin_at_upstream_branch(harness: &CreateTestHarness, branch: &str) ->
     .unwrap();
     git_ops::fetch_all_remote(&harness.source_repo_root, "origin").unwrap();
     expected_sha
+}
+
+fn create_local_branch_with_commit(
+    harness: &CreateTestHarness,
+    branch: &str,
+    file: &str,
+    contents: &str,
+) -> String {
+    let root = harness.source_repo_root.to_str().unwrap();
+    git_ops::run_git(["-C", root, "checkout", "-b", branch], None).unwrap();
+    fs::write(harness.source_repo_root.join(file), contents).unwrap();
+    git_ops::run_git(["-C", root, "add", file], None).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            root,
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Helmor",
+            "-c",
+            "user.email=helmor@example.com",
+            "commit",
+            "-m",
+            "local pr branch",
+        ],
+        None,
+    )
+    .unwrap();
+    let expected_sha = git_ops::run_git(["-C", root, "rev-parse", branch], None)
+        .unwrap()
+        .trim()
+        .to_string();
+    git_ops::run_git(["-C", root, "checkout", "main"], None).unwrap();
+    expected_sha
+}
+
+fn mark_prepared_workspace_as_pr(
+    harness: &CreateTestHarness,
+    workspace_id: &str,
+    branch: &str,
+    base_branch: &str,
+) {
+    let connection = Connection::open(harness.db_path()).unwrap();
+    connection
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET branch = ?1,
+                initialization_parent_branch = ?2,
+                intended_target_branch = ?2,
+                status = 'review',
+                pr_sync_state = 'open',
+                pr_title = 'Review this',
+                pr_url = 'https://github.com/octocat/hello-world/pull/42'
+            WHERE id = ?3
+            "#,
+            (branch, base_branch, workspace_id),
+        )
+        .unwrap();
+}
+
+fn install_mock_gh_for_pr(harness: &CreateTestHarness, head_branch: &str, base_branch: &str) {
+    let script = harness.root.join("mock-gh");
+    let response = serde_json::json!({
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "url": "https://github.com/octocat/hello-world/pull/42",
+                    "number": 42,
+                    "state": "OPEN",
+                    "title": "Review this",
+                    "merged": false,
+                    "headRefName": head_branch,
+                    "baseRefName": base_branch,
+                    "headRepository": { "nameWithOwner": "octocat/hello-world" },
+                    "baseRepository": { "nameWithOwner": "octocat/hello-world" }
+                }
+            }
+        }
+    });
+    fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "gh version 2.0.0"
+  exit 0
+fi
+if [ "$1" = "auth" ]; then
+  echo '{{"hosts":{{"github.com":[{{"state":"success","active":true,"host":"github.com","login":"octocat"}}]}}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+  cat <<'JSON'
+{response}
+JSON
+  exit 0
+fi
+echo "unexpected gh args: $@" >&2
+exit 1
+"#,
+            response = response
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+    }
+    std::env::set_var("HELMOR_GH_BIN_PATH", script);
 }

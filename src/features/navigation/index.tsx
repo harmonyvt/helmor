@@ -142,7 +142,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onCreateWorkspace?: (
 		repoId: string,
 		source?: WorkspaceCreationSource,
-	) => void;
+	) => Promise<void> | void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
@@ -658,10 +658,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				creating={createBusy}
 				onCreateWorkspace={(repoId, source) => {
 					if (source) {
-						onCreateWorkspace?.(repoId, source);
-					} else {
-						onCreateWorkspace?.(repoId);
+						return onCreateWorkspace?.(repoId, source);
 					}
+					return onCreateWorkspace?.(repoId);
 				}}
 			/>
 

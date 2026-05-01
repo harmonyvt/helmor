@@ -18,6 +18,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { WorkspaceAvatar } from "@/features/navigation/avatar";
 import {
 	type GithubPullRequestSummary,
@@ -36,7 +42,10 @@ type WorkspaceCreateDialogProps = {
 	onOpenChange: (open: boolean) => void;
 	repositories: RepositoryCreateOption[];
 	creating: boolean;
-	onCreateWorkspace: (repoId: string, source?: WorkspaceCreationSource) => void;
+	onCreateWorkspace: (
+		repoId: string,
+		source?: WorkspaceCreationSource,
+	) => Promise<void> | void;
 };
 
 export function WorkspaceCreateDialog({
@@ -60,6 +69,7 @@ export function WorkspaceCreateDialog({
 	const [prInput, setPrInput] = useState("");
 	const [prLoading, setPrLoading] = useState(false);
 	const [prError, setPrError] = useState<string | null>(null);
+	const [submitting, setSubmitting] = useState(false);
 	const newRepoListRef = useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
@@ -163,16 +173,27 @@ export function WorkspaceCreateDialog({
 		};
 	}, [open, prRepoId]);
 
+	// Derived busy flag — true while either the async handshake (Phase 1 /
+	// GitHub API) is in-flight from this dialog OR the parent controller has a
+	// creation already running (Phase 2 / git worktree).
+	const busy = submitting || creating;
+
 	const handleCreate = useCallback(
-		(repoId: string, source?: WorkspaceCreationSource) => {
-			if (source) {
-				onCreateWorkspace(repoId, source);
-			} else {
-				onCreateWorkspace(repoId);
+		async (repoId: string, source?: WorkspaceCreationSource) => {
+			if (submitting) return;
+			setSubmitting(true);
+			try {
+				if (source) {
+					await onCreateWorkspace(repoId, source);
+				} else {
+					await onCreateWorkspace(repoId);
+				}
+			} finally {
+				setSubmitting(false);
+				onOpenChange(false);
 			}
-			onOpenChange(false);
 		},
-		[onCreateWorkspace, onOpenChange],
+		[onCreateWorkspace, onOpenChange, submitting],
 	);
 
 	const handleResolvePr = useCallback(async () => {
@@ -203,10 +224,10 @@ export function WorkspaceCreateDialog({
 		<Dialog
 			modal={false}
 			open={open}
-			onOpenChange={(next) => !creating && onOpenChange(next)}
+			onOpenChange={(next) => !busy && onOpenChange(next)}
 		>
-			<DialogContent className="gap-3 p-4 sm:max-w-[520px]">
-				<DialogHeader>
+			<DialogContent className="min-w-0 gap-3 overflow-hidden p-4 sm:max-w-[680px]">
+				<DialogHeader className="min-w-0">
 					<DialogTitle className="text-[13px] font-medium tracking-[-0.01em]">
 						Create workspace
 					</DialogTitle>
@@ -215,8 +236,8 @@ export function WorkspaceCreateDialog({
 						request.
 					</DialogDescription>
 				</DialogHeader>
-				<Tabs value={tab} onValueChange={setTab}>
-					<TabsList className="grid w-full grid-cols-3">
+				<Tabs value={tab} onValueChange={setTab} className="min-w-0 w-full">
+					<TabsList className="grid w-full min-w-0 grid-cols-3">
 						<TabsTrigger value="new">
 							<Plus className="size-3.5" strokeWidth={2} />
 							New
@@ -230,22 +251,22 @@ export function WorkspaceCreateDialog({
 							PR
 						</TabsTrigger>
 					</TabsList>
-					<TabsContent value="new" className="min-h-[260px]">
+					<TabsContent value="new" className="min-h-[340px] min-w-0">
 						<RepositoryList
 							repositories={repositories}
-							creating={creating}
+							creating={busy}
 							listRef={newRepoListRef}
 							onSelect={(repoId) => handleCreate(repoId)}
 						/>
 					</TabsContent>
-					<TabsContent value="branch" className="min-h-[260px]">
-						<div className="flex flex-col gap-3">
+					<TabsContent value="branch" className="min-h-[340px] min-w-0">
+						<div className="flex min-w-0 flex-col gap-3">
 							<RepositorySelect
 								label="Repository"
 								value={remoteRepoId}
 								repositories={repositories}
 								onChange={setRemoteRepoId}
-								disabled={creating}
+								disabled={busy}
 							/>
 							<div className="flex flex-col gap-1">
 								<Label className="text-[12px] font-medium tracking-[-0.01em]">
@@ -255,7 +276,7 @@ export function WorkspaceCreateDialog({
 									value={remoteBranch}
 									onChange={(event) => setRemoteBranch(event.target.value)}
 									disabled={
-										creating || remoteLoading || remoteBranches.length === 0
+										busy || remoteLoading || remoteBranches.length === 0
 									}
 									className="h-8 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60"
 								>
@@ -270,7 +291,7 @@ export function WorkspaceCreateDialog({
 							<div className="flex justify-end">
 								<Button
 									size="sm"
-									disabled={!remoteRepoId || !remoteBranch || creating}
+									disabled={!remoteRepoId || !remoteBranch || busy}
 									onClick={() =>
 										handleCreate(remoteRepoId, {
 											type: "remoteBranch",
@@ -278,22 +299,22 @@ export function WorkspaceCreateDialog({
 										})
 									}
 								>
-									{creating ? <LoaderCircle className="animate-spin" /> : null}
+									{busy ? <LoaderCircle className="animate-spin" /> : null}
 									Create workspace
 								</Button>
 							</div>
 						</div>
 					</TabsContent>
-					<TabsContent value="pr" className="min-h-[260px]">
-						<div className="flex flex-col gap-3">
+					<TabsContent value="pr" className="min-h-[340px] min-w-0">
+						<div className="flex min-w-0 flex-col gap-3">
 							<RepositorySelect
 								label="Repository"
 								value={prRepoId}
 								repositories={repositories}
 								onChange={setPrRepoId}
-								disabled={creating}
+								disabled={busy}
 							/>
-							<div className="flex items-end gap-2">
+							<div className="flex min-w-0 items-end gap-2">
 								<div className="min-w-0 flex-1">
 									<Label
 										htmlFor="workspace-create-pr-input"
@@ -306,7 +327,7 @@ export function WorkspaceCreateDialog({
 										value={prInput}
 										onChange={(event) => setPrInput(event.target.value)}
 										placeholder="42 or https://github.com/owner/repo/pull/42"
-										disabled={creating || prLoading}
+										disabled={busy || prLoading}
 										className="mt-1 h-8 text-[13px] md:text-[13px]"
 									/>
 								</div>
@@ -314,9 +335,7 @@ export function WorkspaceCreateDialog({
 									type="button"
 									variant="outline"
 									size="sm"
-									disabled={
-										!prRepoId || !prInput.trim() || creating || prLoading
-									}
+									disabled={!prRepoId || !prInput.trim() || busy || prLoading}
 									onClick={() => void handleResolvePr()}
 								>
 									{prLoading ? (
@@ -325,46 +344,18 @@ export function WorkspaceCreateDialog({
 									Resolve
 								</Button>
 							</div>
-							<div className="min-h-28 rounded-md border border-app-border/50">
-								{pullRequests.length === 0 && !prLoading ? (
-									<div className="px-3 py-8 text-center text-[12px] text-muted-foreground">
-										No open pull requests.
-									</div>
-								) : null}
-								{prLoading && pullRequests.length === 0 ? (
-									<div className="flex items-center justify-center gap-2 px-3 py-8 text-[12px] text-muted-foreground">
-										<LoaderCircle className="size-3.5 animate-spin" />
-										Loading pull requests...
-									</div>
-								) : null}
-								<div className="max-h-36 overflow-y-auto p-1">
-									{pullRequests.map((pr) => (
-										<button
-											key={pr.number}
-											type="button"
-											className={cn(
-												"flex w-full cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-accent/60",
-												selectedPrNumber === pr.number &&
-													"bg-accent text-foreground",
-											)}
-											onClick={() => setSelectedPrNumber(pr.number)}
-											disabled={creating}
-										>
-											<span className="min-w-0 flex-1 truncate">
-												#{pr.number} {pr.title}
-											</span>
-											<span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">
-												{pr.headBranch}
-											</span>
-										</button>
-									))}
-								</div>
-							</div>
+							<PullRequestPicker
+								pullRequests={pullRequests}
+								loading={prLoading}
+								selectedPrNumber={selectedPrNumber}
+								creating={busy}
+								onSelect={setSelectedPrNumber}
+							/>
 							<StatusText loading={false} error={prError} />
 							<div className="flex justify-end">
 								<Button
 									size="sm"
-									disabled={!prRepoId || !selectedPrNumber || creating}
+									disabled={!prRepoId || !selectedPrNumber || busy}
 									onClick={() =>
 										selectedPrNumber
 											? handleCreate(prRepoId, {
@@ -374,7 +365,7 @@ export function WorkspaceCreateDialog({
 											: undefined
 									}
 								>
-									{creating ? <LoaderCircle className="animate-spin" /> : null}
+									{busy ? <LoaderCircle className="animate-spin" /> : null}
 									Create workspace
 								</Button>
 							</div>
@@ -383,6 +374,89 @@ export function WorkspaceCreateDialog({
 				</Tabs>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function PullRequestPicker({
+	pullRequests,
+	loading,
+	selectedPrNumber,
+	creating,
+	onSelect,
+}: {
+	pullRequests: GithubPullRequestSummary[];
+	loading: boolean;
+	selectedPrNumber: number | null;
+	creating: boolean;
+	onSelect: (number: number) => void;
+}) {
+	if (pullRequests.length === 0 && !loading) {
+		return (
+			<div className="min-h-28 min-w-0 rounded-md border border-app-border/50 px-3 py-8 text-center text-[12px] text-muted-foreground">
+				No open pull requests.
+			</div>
+		);
+	}
+
+	if (pullRequests.length === 0 && loading) {
+		return (
+			<div className="flex min-h-28 min-w-0 items-center justify-center gap-2 rounded-md border border-app-border/50 px-3 py-8 text-[12px] text-muted-foreground">
+				<LoaderCircle className="size-3.5 animate-spin" />
+				Loading pull requests...
+			</div>
+		);
+	}
+
+	return (
+		<div className="min-w-0 overflow-hidden rounded-md border border-app-border/50">
+			<div className="grid grid-cols-[minmax(0,1fr)_minmax(7rem,35%)] gap-3 border-app-border/50 border-b bg-muted/40 px-2.5 py-1.5 text-[10.5px] font-medium text-muted-foreground uppercase tracking-[0.02em]">
+				<span className="min-w-0 truncate">Pull request</span>
+				<span className="min-w-0 truncate">Branch</span>
+			</div>
+			<TooltipProvider delayDuration={400}>
+				<div
+					aria-label="Open pull requests"
+					className="max-h-[260px] min-w-0 overflow-y-auto p-1"
+				>
+					{pullRequests.map((pr) => (
+						<Tooltip key={pr.number}>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									aria-pressed={selectedPrNumber === pr.number}
+									className={cn(
+										"grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_minmax(7rem,35%)] items-center gap-3 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-accent/60 disabled:cursor-not-allowed disabled:opacity-60",
+										selectedPrNumber === pr.number &&
+											"bg-accent text-foreground",
+									)}
+									onClick={() => onSelect(pr.number)}
+									disabled={creating}
+								>
+									<span className="min-w-0 truncate">
+										#{pr.number} {pr.title}
+									</span>
+									<span className="min-w-0 truncate font-mono text-[10.5px] text-muted-foreground">
+										{pr.headBranch}
+									</span>
+								</button>
+							</TooltipTrigger>
+							<TooltipContent
+								side="top"
+								align="start"
+								className="max-w-sm flex-col items-start gap-1"
+							>
+								<p className="font-medium leading-snug">
+									#{pr.number} {pr.title}
+								</p>
+								<p className="font-mono text-[10px] opacity-70">
+									{pr.headBranch} -&gt; {pr.baseBranch}
+								</p>
+							</TooltipContent>
+						</Tooltip>
+					))}
+				</div>
+			</TooltipProvider>
+		</div>
 	);
 }
 
@@ -402,7 +476,7 @@ function RepositoryList({
 			<CommandList
 				ref={listRef}
 				tabIndex={0}
-				className="max-h-[260px] outline-none"
+				className="max-h-[320px] outline-none"
 			>
 				<CommandEmpty>No repositories found.</CommandEmpty>
 				{repositories.map((repository) => (

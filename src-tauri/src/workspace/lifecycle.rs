@@ -294,7 +294,6 @@ fn workspace_source_plan(
         WorkspaceCreationSource::GithubPullRequest { number } => {
             let pr = github_graphql::resolve_repository_pull_request_by_number(repository, number)?;
             let branch = normalize_source_branch(&pr.head_branch)?;
-            ensure_source_branch_available(repo_root, &branch)?;
             Ok(WorkspaceSourcePlan {
                 branch: branch.clone(),
                 initialization_parent_branch: pr.base_branch.clone(),
@@ -389,27 +388,34 @@ pub fn finalize_workspace_from_repo_with_options_impl(
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        if options.fetch_start_branch.unwrap_or(false) {
-            if let Some(branch) = source_start_branch {
-                git_ops::fetch_remote_branch_refspec(&repo_root, &remote, branch)?;
+        let create_result = if let Some(start_branch) = source_start_branch {
+            let is_pr_workspace = record.pr_url.is_some();
+            if is_pr_workspace && git_ops::verify_branch_exists(&repo_root, &branch).is_ok() {
+                git_ops::create_worktree(&repo_root, &workspace_dir, &branch).map(|_| String::new())
+            } else {
+                if options.fetch_start_branch.unwrap_or(false) {
+                    git_ops::fetch_remote_branch_refspec(&repo_root, &remote, start_branch)?;
+                }
+                let start_ref = git_ops::default_branch_ref(&remote, start_branch);
+                git_ops::verify_commitish_exists(
+                    &repo_root,
+                    &start_ref,
+                    &format!("Remote branch is missing in source repo: {start_branch}"),
+                )?;
+                git_ops::create_worktree_new_branch_from_start_point(
+                    &repo_root,
+                    &workspace_dir,
+                    &branch,
+                    &start_ref,
+                )
             }
-        }
-
-        let start_branch = source_start_branch.unwrap_or(default_branch.as_str());
-        let start_ref = git_ops::default_branch_ref(&remote, start_branch);
-        git_ops::verify_commitish_exists(
-            &repo_root,
-            &start_ref,
-            &format!("Remote branch is missing in source repo: {start_branch}"),
-        )?;
-        let create_result = if source_start_branch.is_some() {
-            git_ops::create_worktree_new_branch_from_start_point(
-                &repo_root,
-                &workspace_dir,
-                &branch,
-                &start_ref,
-            )
         } else {
+            let start_ref = git_ops::default_branch_ref(&remote, default_branch.as_str());
+            git_ops::verify_commitish_exists(
+                &repo_root,
+                &start_ref,
+                &format!("Remote branch is missing in source repo: {default_branch}"),
+            )?;
             git_ops::create_worktree_from_start_point(
                 &repo_root,
                 &workspace_dir,
