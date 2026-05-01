@@ -1,7 +1,8 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
@@ -126,6 +127,16 @@ pub fn get_github_cli_user() -> Result<Option<GithubCliUser>> {
 pub fn list_github_accessible_repositories() -> Result<Vec<GithubRepositorySummary>> {
     let status = get_github_cli_status()?;
     list_github_accessible_repositories_with_status(&SystemGhRunner, &status)
+}
+
+pub fn graphql<T: DeserializeOwned>(query: &str, variables: &[(&str, String)]) -> Result<T> {
+    let status = get_github_cli_status()?;
+    graphql_with_status(&SystemGhRunner, &status, query, variables)
+}
+
+pub fn api_json<T: DeserializeOwned>(endpoint: &str) -> Result<T> {
+    let status = get_github_cli_status()?;
+    api_json_with_status(&SystemGhRunner, &status, endpoint)
 }
 
 fn get_github_cli_status_with(runner: &impl GhCommandRunner) -> Result<GithubCliStatus> {
@@ -393,6 +404,86 @@ fn list_github_accessible_repositories_with_status(
             pushed_at: repository.pushed_at,
         })
         .collect())
+}
+
+fn graphql_with_status<T: DeserializeOwned>(
+    runner: &impl GhCommandRunner,
+    status: &GithubCliStatus,
+    query: &str,
+    variables: &[(&str, String)],
+) -> Result<T> {
+    run_gh_json(
+        runner,
+        status,
+        graphql_args(query, variables),
+        "GitHub CLI GraphQL lookup",
+    )
+}
+
+fn api_json_with_status<T: DeserializeOwned>(
+    runner: &impl GhCommandRunner,
+    status: &GithubCliStatus,
+    endpoint: &str,
+) -> Result<T> {
+    run_gh_json(
+        runner,
+        status,
+        [OsString::from("api"), OsString::from(endpoint)],
+        "GitHub CLI API lookup",
+    )
+}
+
+fn graphql_args(query: &str, variables: &[(&str, String)]) -> Vec<OsString> {
+    let mut args = Vec::from([
+        OsString::from("api"),
+        OsString::from("graphql"),
+        OsString::from("-f"),
+        OsString::from(format!("query={query}")),
+    ]);
+    for (key, value) in variables {
+        args.push(OsString::from("-F"));
+        args.push(OsString::from(format!("{key}={value}")));
+    }
+    args
+}
+
+fn run_gh_json<T, I>(
+    runner: &impl GhCommandRunner,
+    status: &GithubCliStatus,
+    args: I,
+    operation: &str,
+) -> Result<T>
+where
+    T: DeserializeOwned,
+    I: IntoIterator<Item = OsString>,
+{
+    if !github_cli_is_ready(status) {
+        bail!("GitHub CLI is not authenticated. Run `gh auth login`.");
+    }
+
+    let output = match runner.run(args) {
+        Ok(output) => output,
+        Err(GhCommandError::NotFound) => {
+            bail!("GitHub CLI is not installed on this machine.");
+        }
+        Err(GhCommandError::Failed {
+            stdout,
+            stderr,
+            code,
+        }) => {
+            let detail = command_error_detail(&stdout, &stderr, code);
+            if looks_like_unauthenticated(&detail) {
+                bail!("GitHub CLI is not authenticated. Run `gh auth login`.");
+            }
+            return Err(anyhow!("{operation} failed: {detail}"));
+        }
+        Err(GhCommandError::Other(message)) => {
+            return Err(anyhow!("{operation} failed: {message}"));
+        }
+    };
+
+    serde_json::from_str::<T>(&output.stdout)
+        .with_context(|| format!("Failed to decode {operation} response"))
 }
 
 fn parse_gh_version(stdout: &str) -> String {
@@ -716,6 +807,76 @@ mod tests {
                 pushed_at: Some("2026-01-01T00:00:00Z".to_string()),
             }]
         );
+    }
+
+    #[test]
+    fn graphql_decodes_cli_response() {
+        #[derive(Debug, Deserialize, PartialEq, Eq)]
+        struct Response {
+            data: ResponseData,
+        }
+
+        #[derive(Debug, Deserialize, PartialEq, Eq)]
+        struct ResponseData {
+            viewer: Viewer,
+        }
+
+        #[derive(Debug, Deserialize, PartialEq, Eq)]
+        struct Viewer {
+            login: String,
+        }
+
+        let runner = MockGhRunner::new([MockRunnerResponse::Success {
+            stdout: r#"{"data":{"viewer":{"login":"octocat"}}}"#.to_string(),
+            stderr: String::new(),
+        }]);
+        let status = GithubCliStatus::Ready {
+            host: "github.com".to_string(),
+            login: "octocat".to_string(),
+            version: "2.88.1".to_string(),
+            message: "GitHub CLI ready as octocat.".to_string(),
+        };
+
+        let response = graphql_with_status::<Response>(
+            &runner,
+            &status,
+            "query($owner: String!) { viewer { login } }",
+            &[("owner", "octocat".to_string())],
+        )
+        .unwrap();
+
+        assert_eq!(
+            response,
+            Response {
+                data: ResponseData {
+                    viewer: Viewer {
+                        login: "octocat".to_string()
+                    }
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn graphql_requires_ready_cli() {
+        let runner = MockGhRunner::new([]);
+        let status = GithubCliStatus::Unauthenticated {
+            host: "github.com".to_string(),
+            version: Some("2.88.1".to_string()),
+            message: "Run `gh auth login` to connect GitHub CLI.".to_string(),
+        };
+
+        let error = graphql_with_status::<serde_json::Value>(
+            &runner,
+            &status,
+            "query { viewer { login } }",
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("GitHub CLI is not authenticated"));
     }
 
     #[test]

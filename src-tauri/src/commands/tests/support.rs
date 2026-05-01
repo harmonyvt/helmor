@@ -785,6 +785,12 @@ fn create_branch_switch_fixture_db(
         .unwrap();
     connection
         .execute(
+            "INSERT INTO settings (key, value) VALUES ('branch_prefix_type', 'none')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
             r#"INSERT INTO workspaces (
                 id, repository_id, directory_name, state, status,
                 branch, initialization_parent_branch, intended_target_branch

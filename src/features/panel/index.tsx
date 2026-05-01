@@ -137,6 +137,9 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 						<ActiveThreadViewport
 							hasSession={!!selectedSession}
 							pane={activePane}
+							workspaceBranch={workspace?.branch ?? null}
+							workspacePrTitle={workspace?.prTitle ?? null}
+							workspaceState={workspace?.state ?? null}
 							missingScriptTypes={missingScriptTypes}
 							onInitializeScript={onInitializeScript}
 						/>
@@ -146,6 +149,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 						<div className="flex min-h-full flex-1 items-center justify-center px-8">
 							<EmptyState
 								workspaceState={workspace?.state ?? null}
+								workspaceBranch={workspace?.branch ?? null}
+								workspacePrTitle={workspace?.prTitle ?? null}
 								hasSession={!!selectedSession}
 								missingScriptTypes={missingScriptTypes}
 								onInitializeScript={onInitializeScript}

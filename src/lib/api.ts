@@ -203,32 +203,6 @@ export type AddRepositoryDefaults = {
 	lastCloneDirectory?: string | null;
 };
 
-export type GithubIdentitySession = {
-	provider: string;
-	githubUserId: number;
-	login: string;
-	name?: string | null;
-	avatarUrl?: string | null;
-	primaryEmail?: string | null;
-	tokenExpiresAt?: string | null;
-	refreshTokenExpiresAt?: string | null;
-};
-
-export type GithubIdentitySnapshot =
-	| { status: "connected"; session: GithubIdentitySession }
-	| { status: "disconnected" }
-	| { status: "unconfigured"; message: string }
-	| { status: "error"; message: string };
-
-export type GithubIdentityDeviceFlowStart = {
-	deviceCode: string;
-	userCode: string;
-	verificationUri: string;
-	verificationUriComplete?: string | null;
-	expiresAt: string;
-	intervalSeconds: number;
-};
-
 export type GithubCliStatus =
 	| {
 			status: "ready";
@@ -555,43 +529,6 @@ export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
 			describeInvokeError(error, "Unable to load workspace groups."),
 		);
 	}
-}
-
-export async function loadGithubIdentitySession(): Promise<GithubIdentitySnapshot> {
-	try {
-		return await invoke<GithubIdentitySnapshot>("get_github_identity_session");
-	} catch (error) {
-		return {
-			status: "error",
-			message: describeInvokeError(
-				error,
-				"Unable to load GitHub account state.",
-			),
-		};
-	}
-}
-
-export async function startGithubIdentityConnect(): Promise<GithubIdentityDeviceFlowStart> {
-	return invoke<GithubIdentityDeviceFlowStart>("start_github_identity_connect");
-}
-
-export async function cancelGithubIdentityConnect(): Promise<void> {
-	await invoke("cancel_github_identity_connect");
-}
-
-export async function disconnectGithubIdentity(): Promise<void> {
-	await invoke("disconnect_github_identity");
-}
-
-export async function listenGithubIdentityChanged(
-	callback: (snapshot: GithubIdentitySnapshot) => void,
-): Promise<UnlistenFn> {
-	return listen<GithubIdentitySnapshot>(
-		"github-identity-changed",
-		(tauriEvent) => {
-			callback(tauriEvent.payload);
-		},
-	);
 }
 
 export async function loadGithubCliStatus(): Promise<GithubCliStatus> {
@@ -1213,7 +1150,6 @@ export type UiMutationEvent =
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
-	| { type: "githubIdentityChanged" }
 	| {
 			type: "pendingCliSendQueued";
 			workspaceId: string;

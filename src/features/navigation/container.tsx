@@ -85,9 +85,9 @@ export const WorkspacesSidebarContainer = memo(
 				onSubmitClone={handleCloneFromUrl}
 				onSelectWorkspace={handleSelectWorkspace}
 				onPrefetchWorkspace={prefetchWorkspace}
-				onCreateWorkspace={(repoId) => {
-					void handleCreateWorkspaceFromRepo(repoId);
-				}}
+				onCreateWorkspace={(repoId, source) =>
+					handleCreateWorkspaceFromRepo(repoId, source)
+				}
 				onArchiveWorkspace={handleArchiveWorkspace}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}
 				onRestoreWorkspace={handleRestoreWorkspace}

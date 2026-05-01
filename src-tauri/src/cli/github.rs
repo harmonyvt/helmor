@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 
-use crate::auth;
 use crate::github_cli;
 use crate::github_graphql;
 use crate::service;
@@ -28,30 +27,17 @@ fn auth_dispatch(action: &GithubAuthAction, cli: &Cli) -> Result<()> {
 }
 
 fn auth_status(cli: &Cli) -> Result<()> {
-    let snapshot = auth::get_github_identity_session()?;
-    output::print(cli, &snapshot, |s| match s {
-        auth::GithubIdentitySnapshot::Connected { session } => format!(
-            "Connected as @{} ({}{})",
-            session.login,
-            session.name.clone().unwrap_or_default(),
-            session
-                .primary_email
-                .as_deref()
-                .map(|e| format!(" <{e}>"))
-                .unwrap_or_default(),
-        ),
-        auth::GithubIdentitySnapshot::Disconnected => "Not connected".to_string(),
-        auth::GithubIdentitySnapshot::Unconfigured { message } => {
-            format!("Unconfigured: {message}")
-        }
-        auth::GithubIdentitySnapshot::Error { message } => format!("Error: {message}"),
+    let status = github_cli::get_github_cli_status()?;
+    output::print(cli, &status, |s| match s {
+        github_cli::GithubCliStatus::Ready { login, .. } => format!("gh ready as @{login}"),
+        github_cli::GithubCliStatus::Unauthenticated { message, .. }
+        | github_cli::GithubCliStatus::Unavailable { message, .. }
+        | github_cli::GithubCliStatus::Error { message, .. } => message.clone(),
     })
 }
 
 fn logout(cli: &Cli) -> Result<()> {
-    auth::disconnect_github_identity_headless()?;
-    notify_ui_event(UiMutationEvent::GithubIdentityChanged);
-    output::print_ok(cli, "Disconnected from GitHub");
+    output::print_ok(cli, "Run `gh auth logout` to disconnect GitHub CLI");
     Ok(())
 }
 

@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-	cancelGithubIdentityConnect,
-	disconnectGithubIdentity,
-	listenGithubIdentityChanged,
-	loadGithubIdentitySession,
-	startGithubIdentityConnect,
+	type GithubCliStatus,
+	loadGithubCliStatus,
+	openForgeCliAuthTerminal,
 } from "@/lib/api";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 import { getInitialGithubIdentityState } from "@/shell/layout";
@@ -17,120 +15,115 @@ type WorkspaceToastFn = (
 	variant?: "default" | "destructive",
 ) => void;
 
-// Sonner fallback for callers without a workspace-specific toast surface
-// (e.g. Settings → Account, which doesn't sit inside the WorkspaceToastProvider).
+const POLL_INTERVAL_MS = 2000;
+const POLL_TIMEOUT_MS = 120_000;
+
 const sonnerFallbackToast: WorkspaceToastFn = (description, title, variant) => {
 	const fn = variant === "destructive" ? toast.error : toast;
-	fn(title ?? description, title ? { description } : undefined);
+	if (title) {
+		fn(title, { description });
+		return;
+	}
+	fn(description);
 };
+
+function stateFromGithubCliStatus(
+	status: GithubCliStatus,
+): GithubIdentityState {
+	if (status.status === "ready") {
+		return {
+			status: "connected",
+			session: {
+				provider: "gh-cli",
+				login: status.login,
+				version: status.version,
+			},
+		};
+	}
+	if (status.status === "unauthenticated") {
+		return { status: "disconnected", cliStatus: status };
+	}
+	return { status: "error", message: status.message, cliStatus: status };
+}
 
 export function useGithubIdentity(pushWorkspaceToast?: WorkspaceToastFn) {
 	const pushToast = pushWorkspaceToast ?? sonnerFallbackToast;
 	const [githubIdentityState, setGithubIdentityState] =
 		useState<GithubIdentityState>(getInitialGithubIdentityState);
+	const disposedRef = useRef(false);
+	const pollGenerationRef = useRef(0);
 
 	const refreshGithubIdentityState = useCallback(async () => {
-		const snapshot = await loadGithubIdentitySession();
-		setGithubIdentityState(snapshot);
+		const status = await loadGithubCliStatus();
+		setGithubIdentityState(stateFromGithubCliStatus(status));
 	}, []);
 
 	useEffect(() => {
-		let disposed = false;
-		let unlistenIdentity: (() => void) | undefined;
-
-		void loadGithubIdentitySession().then((snapshot) => {
-			if (!disposed) {
-				setGithubIdentityState(snapshot);
-			}
-		});
-
-		void listenGithubIdentityChanged((snapshot) => {
-			if (!disposed) {
-				setGithubIdentityState(snapshot);
-			}
-		}).then((unlisten) => {
-			if (disposed) {
-				unlisten();
-				return;
-			}
-
-			unlistenIdentity = unlisten;
-		});
-
+		disposedRef.current = false;
+		void refreshGithubIdentityState();
 		return () => {
-			disposed = true;
-			unlistenIdentity?.();
+			disposedRef.current = true;
+			pollGenerationRef.current += 1;
 		};
-	}, []);
+	}, [refreshGithubIdentityState]);
 
-	const handleStartGithubIdentityConnect = useCallback(async () => {
-		try {
-			const flow = await startGithubIdentityConnect();
-			setGithubIdentityState({ status: "pending", flow });
-		} catch (error) {
-			setGithubIdentityState({
-				status: "error",
-				message: describeUnknownError(error, "Unable to start GitHub sign-in."),
-			});
-		}
-	}, []);
-
-	const handleCopyGithubDeviceCode = useCallback(
-		async (userCode: string) => {
-			if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-				pushToast(
-					"Unable to copy the one-time code on this device.",
-					"Copy failed",
-				);
-				return false;
-			}
-
-			try {
-				await navigator.clipboard.writeText(userCode);
-				return true;
-			} catch {
-				pushToast("Unable to copy the one-time code.", "Copy failed");
-				return false;
+	const pollUntilGithubCliReady = useCallback(
+		async (generation: number, startedAt = Date.now()) => {
+			while (!disposedRef.current && pollGenerationRef.current === generation) {
+				const status = await loadGithubCliStatus();
+				const nextState = stateFromGithubCliStatus(status);
+				if (nextState.status === "connected") {
+					setGithubIdentityState(nextState);
+					pushToast(`gh connected as ${nextState.session.login}`);
+					return;
+				}
+				if (nextState.status === "error") {
+					setGithubIdentityState(nextState);
+					return;
+				}
+				if (Date.now() - startedAt >= POLL_TIMEOUT_MS) {
+					setGithubIdentityState(nextState);
+					pushToast("Finish GitHub CLI auth in Terminal, then try again.");
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 			}
 		},
 		[pushToast],
 	);
 
-	const handleCancelGithubIdentityConnect = useCallback(() => {
-		void cancelGithubIdentityConnect()
-			.then(() => {
-				setGithubIdentityState({ status: "disconnected" });
-			})
-			.catch((error) => {
-				setGithubIdentityState({
-					status: "error",
-					message: describeUnknownError(
-						error,
-						"Unable to cancel GitHub account connection.",
-					),
-				});
-			});
-	}, []);
-
-	const handleDisconnectGithubIdentity = useCallback(async () => {
+	const handleStartGithubIdentityConnect = useCallback(async () => {
+		const generation = pollGenerationRef.current + 1;
+		pollGenerationRef.current = generation;
+		setGithubIdentityState({ status: "pending" });
 		try {
-			await disconnectGithubIdentity();
-			setGithubIdentityState({ status: "disconnected" });
+			await openForgeCliAuthTerminal("github", "github.com");
+			pushToast("Complete GitHub CLI auth in Terminal.");
+			await pollUntilGithubCliReady(generation);
 		} catch (error) {
 			setGithubIdentityState({
 				status: "error",
 				message: describeUnknownError(
 					error,
-					"Unable to disconnect the GitHub account.",
+					"Unable to start GitHub CLI auth.",
 				),
 			});
 		}
-	}, []);
+	}, [pollUntilGithubCliReady, pushToast]);
+
+	const handleCancelGithubIdentityConnect = useCallback(() => {
+		pollGenerationRef.current += 1;
+		void refreshGithubIdentityState();
+	}, [refreshGithubIdentityState]);
+
+	const handleDisconnectGithubIdentity = useCallback(async () => {
+		pushToast("Run `gh auth logout` in Terminal to disconnect GitHub CLI.");
+		await refreshGithubIdentityState();
+	}, [pushToast, refreshGithubIdentityState]);
 
 	return {
 		githubIdentityState,
 		handleCancelGithubIdentityConnect,
-		handleCopyGithubDeviceCode,
 		handleDisconnectGithubIdentity,
 		handleStartGithubIdentityConnect,
 		refreshGithubIdentityState,
