@@ -258,6 +258,8 @@ export type GithubPullRequestSummary = {
 	isMerged: boolean;
 	headBranch: string;
 	baseBranch: string;
+	additions: number;
+	deletions: number;
 };
 
 export type ForgeProvider = "github" | "gitlab" | "unknown";
