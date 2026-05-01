@@ -114,6 +114,13 @@ type SubmitPayload = {
 	 *  "send with opposite follow-up" shortcut. Ignored when `forceQueue`
 	 *  is set. */
 	followUpBehaviorOverride?: FollowUpBehavior;
+	/**
+	 * One-shot context-transfer preamble injected when the user switched
+	 * providers mid-thread and chose "Bring history". Combined with the
+	 * repo general-preference prefix and sent via `promptPrefix` so it
+	 * never appears in the chat bubble or the DB.
+	 */
+	contextTransferPrefix?: string | null;
 };
 
 type UseConversationStreamingArgs = {
@@ -1009,6 +1016,7 @@ export function useConversationStreaming({
 				fastMode,
 				forceQueue,
 				followUpBehaviorOverride,
+				contextTransferPrefix,
 			}: SubmitPayload,
 			// Override for drain / queued-steer. When present, all
 			// session/workspace lookups use the override instead of the
@@ -1197,10 +1205,19 @@ export function useConversationStreaming({
 			// `trimmedPrompt` is what the user typed — that's what we
 			// optimistically render in the chat bubble and what the Rust
 			// side persists to `session_messages` as the user_prompt body.
-			const promptPrefix =
+			const repoPreferencePrefix =
 				isFirstUserMessage && !isCompactCommand
 					? resolveGeneralPreferencePrefix(repoPreferences)
 					: null;
+			// Combine the (optional) context-transfer history with the repo
+			// preference preamble. Both ride as `promptPrefix` — neither
+			// appears in the chat bubble or DB. Context transfer goes first so
+			// the general preferences land closest to the user's actual prompt.
+			const contextTransferTrimmed = contextTransferPrefix?.trim() || null;
+			const promptPrefix =
+				[contextTransferTrimmed, repoPreferencePrefix]
+					.filter(Boolean)
+					.join("\n\n") || null;
 			const now = new Date().toISOString();
 			const userMessageId = crypto.randomUUID();
 			const optimisticUserMessage = createLiveThreadMessage({
