@@ -294,6 +294,18 @@ export function ChangesSection({
 		await onCommitAction(commitButtonMode);
 	}, [commitButtonMode, onCommitAction]);
 
+	const handleRefreshPrStatus = useCallback(async () => {
+		if (!workspaceId) return;
+		await Promise.all([
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceChangeRequest(workspaceId),
+			}),
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+			}),
+		]);
+	}, [queryClient, workspaceId]);
+
 	const handleContinueWorkspace = useCallback(async () => {
 		if (!workspaceId || isContinuingWorkspace) return;
 		setIsContinuingWorkspace(true);
@@ -359,6 +371,7 @@ export function ChangesSection({
 				}
 				onCommit={handleCommitButtonClick}
 				onContinueWorkspace={handleContinueWorkspace}
+				onRefreshPrStatus={workspaceId ? handleRefreshPrStatus : undefined}
 			/>
 
 			<ScrollArea

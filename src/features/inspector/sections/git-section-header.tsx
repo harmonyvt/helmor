@@ -1,5 +1,5 @@
-import { ChevronsRight, ExternalLink } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { ChevronsRight, ExternalLink, RefreshCw } from "lucide-react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import {
@@ -90,6 +90,7 @@ export type GitSectionHeaderProps = {
 	onChangeRequestClick?: () => void;
 	onCommit?: () => void | Promise<void>;
 	onContinueWorkspace?: () => void | Promise<void>;
+	onRefreshPrStatus?: () => Promise<void>;
 	isContinuingWorkspace?: boolean;
 	className?: string;
 };
@@ -107,9 +108,20 @@ export function GitSectionHeader({
 	onChangeRequestClick,
 	onCommit,
 	onContinueWorkspace,
+	onRefreshPrStatus,
 	isContinuingWorkspace = false,
 	className,
 }: GitSectionHeaderProps) {
+	const [isRefreshingPr, setIsRefreshingPr] = useState(false);
+	const handleRefreshPrStatus = useCallback(async () => {
+		if (!onRefreshPrStatus || isRefreshingPr) return;
+		setIsRefreshingPr(true);
+		try {
+			await onRefreshPrStatus();
+		} finally {
+			setIsRefreshingPr(false);
+		}
+	}, [onRefreshPrStatus, isRefreshingPr]);
 	const { settings } = useSettings();
 	const gitHeaderHighlightClass =
 		getGitSectionHeaderHighlightClass(commitButtonMode);
@@ -364,6 +376,33 @@ export function GitSectionHeader({
 									{CONTINUE_LABEL}
 								</span>
 							</Button>
+						)}
+						{commitButtonMode === "create-pr" && onRefreshPrStatus && (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon"
+										aria-label="Refresh PR status"
+										className="size-6 shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
+										disabled={isRefreshingPr}
+										onClick={() => void handleRefreshPrStatus()}
+									>
+										<RefreshCw
+											size={12}
+											strokeWidth={2}
+											className={isRefreshingPr ? "animate-spin" : ""}
+										/>
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent
+									side="bottom"
+									className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
+								>
+									Refresh PR status
+								</TooltipContent>
+							</Tooltip>
 						)}
 						<div ref={commitButtonRef} className="flex shrink-0 items-center">
 							<Tooltip>
