@@ -363,24 +363,26 @@ function ConversationViewport({
 				className="conversation-scroll-viewport h-full w-full overflow-x-hidden overflow-y-auto"
 			>
 				{usePlainThread ? (
-					<div ref={contentRef} className="flex min-h-full flex-col">
-						{Header ? createElement(Header) : null}
-						{data.length === 0
-							? EmptyPlaceholder
-								? createElement(EmptyPlaceholder)
-								: null
-							: data.map((message, index) => (
-									<ConversationRowShell
-										key={message.id ?? `${message.role}:${index}`}
-									>
-										{itemContent(index, message)}
-									</ConversationRowShell>
-								))}
+					<>
+						<div ref={contentRef} className="flex min-h-full flex-col">
+							{Header ? createElement(Header) : null}
+							{data.length === 0
+								? EmptyPlaceholder
+									? createElement(EmptyPlaceholder)
+									: null
+								: data.map((message, index) => (
+										<ConversationRowShell
+											key={message.id ?? `${message.role}:${index}`}
+										>
+											{itemContent(index, message)}
+										</ConversationRowShell>
+									))}
+							<ConversationBottomSpacer />
+						</div>
 						{showStreamingFooter ? (
 							<StreamingFooter startTime={sendingStartTime} />
 						) : null}
-						<ConversationBottomSpacer />
-					</div>
+					</>
 				) : (
 					<ProgressiveConversationViewport
 						contentRef={contentRef}
