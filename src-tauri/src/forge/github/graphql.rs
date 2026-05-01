@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use crate::forge::{
     ActionProvider, ActionStatusKind, ChangeRequestInfo, ForgeActionItem, ForgeActionStatus,
-    RemoteState,
+    PrComment, PrCommentData, RemoteState,
 };
 use crate::{
     git_ops, github_cli,
@@ -399,6 +399,35 @@ pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<ForgeActi
         .unwrap_or_else(|error| ForgeActionStatus::error(format!("{error:#}")));
 
     Ok(status)
+}
+
+pub fn lookup_workspace_forge_deployment_insert_text(
+    workspace_id: &str,
+    item_id: &str,
+) -> Result<String> {
+    let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
+        bail!("Workspace not found: {workspace_id}");
+    };
+
+    let Some(remote_url) = record.remote_url.as_deref() else {
+        bail!("Workspace has no remote");
+    };
+    let Some((owner, name)) = parse_github_remote(remote_url) else {
+        bail!("Workspace remote is not a GitHub repository");
+    };
+    let Some(branch) = record.branch.as_deref().filter(|b| !b.is_empty()) else {
+        bail!("Workspace has no current branch");
+    };
+    let action_status = query_workspace_pr_action_status(owner, name, branch)
+        .context("Failed to load current PR action status")?;
+
+    let item = action_status
+        .deployments
+        .into_iter()
+        .find(|dep| dep.id == item_id)
+        .with_context(|| format!("Deployment item not found: {item_id}"))?;
+
+    Ok(build_deployment_insert_text(&item))
 }
 
 pub fn lookup_workspace_pr_check_insert_text(workspace_id: &str, item_id: &str) -> Result<String> {
@@ -1283,6 +1312,21 @@ fn build_check_insert_text(
     sections.join("\n\n")
 }
 
+fn build_deployment_insert_text(item: &ForgeActionItem) -> String {
+    let mut lines = vec![format!(
+        "Deployment: {}\nProvider: {}\nStatus: {}",
+        item.name,
+        action_provider_label(item.provider),
+        action_status_label(item.status),
+    )];
+
+    if let Some(url) = item.url.as_deref() {
+        lines.push(format!("URL: {url}"));
+    }
+
+    lines.join("\n")
+}
+
 fn action_provider_label(provider: ActionProvider) -> &'static str {
     match provider {
         ActionProvider::Github => "GitHub",
@@ -1305,6 +1349,314 @@ fn parse_github_datetime(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|datetime| datetime.with_timezone(&Utc))
+}
+
+// ── PR comments ──────────────────────────────────────────────────────────────
+
+/// Fetch all review-thread and general PR comments for the workspace's
+/// current branch. Returns `Ok(PrCommentData::default())` (empty) for any
+/// non-error early-out condition (no PR, unauthenticated, non-GitHub remote,
+/// etc.). Only genuine transport / parse failures propagate as `Err`.
+pub fn lookup_workspace_pr_comments(workspace_id: &str) -> Result<PrCommentData> {
+    let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
+        bail!("Workspace not found: {workspace_id}");
+    };
+    if record.state == crate::workspace_state::WorkspaceState::Initializing {
+        return Ok(PrCommentData::default());
+    }
+    let Some(remote_url) = record.remote_url.as_deref() else {
+        return Ok(PrCommentData::default());
+    };
+    let Some((owner, name)) = parse_github_remote(remote_url) else {
+        return Ok(PrCommentData::default());
+    };
+    let Some(branch) = record.branch.as_deref().filter(|b| !b.is_empty()) else {
+        return Ok(PrCommentData::default());
+    };
+    if !workspace_branch_has_remote_tracking(&record) {
+        return Ok(PrCommentData::default());
+    }
+    let cli_status = github_cli::get_github_cli_status()?;
+    if !matches!(cli_status, github_cli::GithubCliStatus::Ready { .. }) {
+        return Ok(PrCommentData::default());
+    }
+    query_workspace_pr_comments(owner, name, branch)
+}
+
+/// Fetch the formatted insert-text for a single PR comment by its ID.
+/// Re-fetches the full comment list — consistent with how check insert text
+/// works in `lookup_workspace_pr_check_insert_text`.
+pub fn lookup_workspace_pr_comment_insert_text(
+    workspace_id: &str,
+    comment_id: &str,
+) -> Result<String> {
+    let data = lookup_workspace_pr_comments(workspace_id)?;
+    let comment = data
+        .comments
+        .into_iter()
+        .find(|c| c.id == comment_id)
+        .with_context(|| format!("PR comment not found: {comment_id}"))?;
+    Ok(build_pr_comment_insert_text(&comment))
+}
+
+fn query_workspace_pr_comments(owner: String, name: String, branch: &str) -> Result<PrCommentData> {
+    let query = r#"
+query($owner: String!, $name: String!, $head: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $head, states: [OPEN, MERGED, CLOSED], first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        url
+        number
+        reviewThreads(first: 50) {
+          nodes {
+            id
+            isResolved
+            path
+            comments(first: 10) {
+              nodes {
+                databaseId
+                author { login }
+                body
+                url
+                createdAt
+              }
+            }
+          }
+        }
+        comments(first: 50) {
+          nodes {
+            databaseId
+            author { login }
+            body
+            url
+            createdAt
+          }
+        }
+      }
+    }
+  }
+}
+"#;
+
+    let parsed: CommentsGraphqlEnvelope = github_cli::graphql(
+        query,
+        &[
+            ("owner", owner),
+            ("name", name),
+            ("head", branch.to_string()),
+        ],
+    )
+    .context("Failed to load GitHub PR comments with gh")?;
+
+    if let Some(errors) = &parsed.errors {
+        if !errors.is_empty() {
+            let is_not_found = errors.iter().any(|e| {
+                e.message.contains("Could not resolve to a Repository")
+                    || e.message.contains("NOT_FOUND")
+            });
+            if is_not_found {
+                return Ok(PrCommentData::default());
+            }
+            return Err(anyhow!(
+                "GitHub GraphQL errors: {}",
+                errors
+                    .iter()
+                    .map(|e| e.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+    }
+
+    let Some(data) = parsed.data else {
+        return Ok(PrCommentData::default());
+    };
+    let Some(repository) = data.repository else {
+        return Ok(PrCommentData::default());
+    };
+    let Some(pr) = repository.pull_requests.nodes.into_iter().next() else {
+        return Ok(PrCommentData::default());
+    };
+
+    let pr_number = pr.number;
+    let pr_url = pr.url.clone();
+    let comments = normalize_pr_comments(pr);
+    Ok(PrCommentData {
+        comments,
+        pr_number: Some(pr_number),
+        pr_url: Some(pr_url),
+    })
+}
+
+/// Flatten review threads + general comments into a single ordered list:
+/// unresolved inline threads first, resolved inline threads next, general
+/// comments last. Within each group: oldest-first by `created_at`.
+fn normalize_pr_comments(pr: CommentsPullRequestNode) -> Vec<PrComment> {
+    let mut unresolved_inline: Vec<PrComment> = Vec::new();
+    let mut resolved_inline: Vec<PrComment> = Vec::new();
+
+    for thread in pr.review_threads.nodes {
+        // Take only the first (root) comment of each thread.
+        let Some(node) = thread.comments.nodes.into_iter().next() else {
+            continue;
+        };
+        let comment = PrComment {
+            id: format!(
+                "review-thread-{}-comment-{}",
+                thread.id,
+                node.database_id.unwrap_or(0)
+            ),
+            author: node
+                .author
+                .map(|a| a.login)
+                .unwrap_or_else(|| "ghost".to_string()),
+            body: node.body,
+            url: node.url,
+            file_path: thread.path,
+            is_thread_resolved: thread.is_resolved,
+            created_at: node.created_at,
+        };
+        if thread.is_resolved {
+            resolved_inline.push(comment);
+        } else {
+            unresolved_inline.push(comment);
+        }
+    }
+
+    let mut general: Vec<PrComment> = pr
+        .comments
+        .nodes
+        .into_iter()
+        .map(|node| PrComment {
+            id: format!("comment-{}", node.database_id.unwrap_or(0)),
+            author: node
+                .author
+                .map(|a| a.login)
+                .unwrap_or_else(|| "ghost".to_string()),
+            body: node.body,
+            url: node.url,
+            file_path: None,
+            is_thread_resolved: false,
+            created_at: node.created_at,
+        })
+        .collect();
+
+    // Sort each group oldest-first.
+    unresolved_inline.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    resolved_inline.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    general.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+    let mut out = unresolved_inline;
+    out.extend(resolved_inline);
+    out.extend(general);
+    out
+}
+
+fn build_pr_comment_insert_text(comment: &PrComment) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("PR Comment by @{}", comment.author));
+    if let Some(path) = &comment.file_path {
+        lines.push(format!("File: {path}"));
+    }
+    let status = if comment.is_thread_resolved {
+        "Resolved"
+    } else {
+        "Unresolved"
+    };
+    lines.push(format!("Status: {status}"));
+    lines.push(String::new());
+    for line in comment.body.lines() {
+        lines.push(format!("> {line}"));
+    }
+    // Ensure at least one quote line even for empty body.
+    if comment.body.trim().is_empty() {
+        lines.push("> ".to_string());
+    }
+    lines.push(String::new());
+    lines.push(format!("URL: {}", comment.url));
+    lines.join("\n")
+}
+
+// ── PR comments deserializer structs ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommentsGraphqlEnvelope {
+    data: Option<CommentsGraphqlData>,
+    errors: Option<Vec<GraphqlError>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommentsGraphqlData {
+    repository: Option<CommentsRepository>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommentsRepository {
+    #[serde(rename = "pullRequests")]
+    pull_requests: CommentsPullRequestConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommentsPullRequestConnection {
+    nodes: Vec<CommentsPullRequestNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentsPullRequestNode {
+    url: String,
+    number: i64,
+    review_threads: CommentsReviewThreadConnection,
+    comments: CommentsIssueCommentConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommentsReviewThreadConnection {
+    nodes: Vec<CommentsReviewThreadNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentsReviewThreadNode {
+    id: String,
+    is_resolved: bool,
+    path: Option<String>,
+    comments: CommentsReviewCommentConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommentsReviewCommentConnection {
+    nodes: Vec<CommentsReviewCommentNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentsReviewCommentNode {
+    database_id: Option<i64>,
+    author: Option<CommentsAuthor>,
+    body: String,
+    url: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommentsIssueCommentConnection {
+    nodes: Vec<CommentsIssueCommentNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentsIssueCommentNode {
+    database_id: Option<i64>,
+    author: Option<CommentsAuthor>,
+    body: String,
+    url: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommentsAuthor {
+    login: String,
 }
 
 #[cfg(test)]

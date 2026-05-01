@@ -38,10 +38,12 @@ pub use detect::detect_provider_for_repo;
 pub(crate) use detect::detect_provider_for_repo_offline;
 pub use types::{
     ActionProvider, ActionStatusKind, ChangeRequestInfo, DetectionSignal, ForgeActionItem,
-    ForgeActionStatus, ForgeCliStatus, ForgeDetection, ForgeLabels, ForgeProvider, RemoteState,
+    ForgeActionStatus, ForgeCliStatus, ForgeDetection, ForgeLabels, ForgeProvider, PrComment,
+    PrCommentData, RemoteState,
 };
 pub use workspace::{
     close_workspace_change_request, get_workspace_forge, lookup_workspace_forge_action_status,
-    lookup_workspace_forge_check_insert_text, merge_workspace_change_request,
-    refresh_workspace_change_request,
+    lookup_workspace_forge_check_insert_text, lookup_workspace_forge_deployment_insert_text,
+    lookup_workspace_pr_comment_insert_text, lookup_workspace_pr_comments,
+    merge_workspace_change_request, refresh_workspace_change_request,
 };
