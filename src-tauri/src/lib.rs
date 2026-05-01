@@ -318,6 +318,7 @@ pub fn run() {
             commands::settings_commands::set_capy_api_key,
             commands::settings_commands::get_repo_capy_project_id,
             commands::settings_commands::set_repo_capy_project_id,
+            commands::settings_commands::list_capy_projects,
             global_hotkey::sync_global_hotkey,
             ui_sync::subscribe_ui_mutations,
             commands::updater_commands::get_app_update_status,

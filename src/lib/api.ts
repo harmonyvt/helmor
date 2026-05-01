@@ -2567,6 +2567,21 @@ export async function setRepoCapyProjectId(
 	await invoke("set_repo_capy_project_id", { repoId, projectId });
 }
 
+export type CapyProjectRepo = {
+	repoFullName: string;
+	branch: string;
+};
+
+export type CapyProject = {
+	id: string;
+	name: string;
+	repos: CapyProjectRepo[];
+};
+
+export async function listCapyProjects(): Promise<CapyProject[]> {
+	return invoke<CapyProject[]>("list_capy_projects");
+}
+
 export async function executeRepoScript(
 	repoId: string,
 	scriptType: "setup" | "run",

@@ -4,6 +4,25 @@ use crate::{
     agents::ActionKind, db, models::repos, rate_limits::throttle::Throttle, settings, ui_sync,
 };
 
+// ---------------------------------------------------------------------------
+// Capy project types (shared with the list_capy_projects command)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapyProjectRepo {
+    pub repo_full_name: String,
+    pub branch: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapyProject {
+    pub id: String,
+    pub name: String,
+    pub repos: Vec<CapyProjectRepo>,
+}
+
 use super::common::{run_blocking, CmdResult};
 
 /// 30 s belt-and-suspenders gate for rate-limit fetchers. Independent
@@ -188,6 +207,69 @@ pub async fn set_repo_capy_project_id(
         repos::update_repo_capy_project_id(&repo_id, project_id.as_deref())?;
         ui_sync::publish(&app, ui_sync::UiMutationEvent::RepositoryListChanged);
         Ok(())
+    })
+    .await
+}
+
+/// Fetch all Capy projects accessible to the saved API key.
+///
+/// Returns up to 100 projects (Capy's maximum page size). The API key is
+/// read from settings — if none is configured an error is returned so the
+/// frontend can show a "configure your API key first" message.
+#[tauri::command]
+pub async fn list_capy_projects() -> CmdResult<Vec<CapyProject>> {
+    run_blocking(|| {
+        let api_key = settings::load_setting_value("capy.api_key")?
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("No Capy API key configured"))?;
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .context("Failed to build HTTP client")?;
+
+        let response = client
+            .get("https://capy.ai/api/v1/projects?limit=100")
+            .bearer_auth(&api_key)
+            .send()
+            .context("Failed to fetch Capy projects")?;
+
+        anyhow::ensure!(
+            response.status().is_success(),
+            "Capy API returned {}",
+            response.status()
+        );
+
+        let body: serde_json::Value = response
+            .json()
+            .context("Failed to parse Capy projects response")?;
+
+        let projects = body["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|item| {
+                let id = item["id"].as_str()?.to_string();
+                let name = item["name"].as_str()?.to_string();
+                let repos = item["repos"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|r| {
+                                Some(CapyProjectRepo {
+                                    repo_full_name: r["repoFullName"].as_str()?.to_string(),
+                                    branch: r["branch"].as_str()?.to_string(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(CapyProject { id, name, repos })
+            })
+            .collect();
+
+        Ok(projects)
     })
     .await
 }
