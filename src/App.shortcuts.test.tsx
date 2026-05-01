@@ -321,6 +321,16 @@ const EMPTY_REPO_SCRIPTS = {
 	autoRunSetup: true,
 };
 
+function createDeferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
+}
+
 function getSessionTab(title: string) {
 	const tab = screen.getByText(title).closest('[role="tab"]');
 
@@ -686,6 +696,53 @@ describe("App global navigation shortcuts", () => {
 			expectSelectedWorkspace("Review workspace");
 			expectSelectedSession("Review session 1");
 		});
+	});
+
+	it("does not wait for thread history before selecting a workspace", async () => {
+		const reviewMessages = createDeferred<[]>();
+		apiMocks.loadSessionThreadMessages.mockImplementation(
+			async (sessionId: string) => {
+				if (sessionId === "session-review-1") {
+					return reviewMessages.promise;
+				}
+				return [];
+			},
+		);
+
+		await renderAppReady();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "Review workspace" }),
+		);
+
+		await waitFor(() => {
+			expectSelectedWorkspace("Review workspace");
+			expectSelectedSession("Review session 1");
+		});
+		expect(apiMocks.loadSessionThreadMessages).toHaveBeenCalledWith(
+			"session-review-1",
+		);
+
+		reviewMessages.resolve([]);
+	});
+
+	it("background workspace warmup does not read thread history", async () => {
+		await renderAppReady();
+
+		await waitFor(
+			() => {
+				expect(apiMocks.loadWorkspaceDetail).toHaveBeenCalledWith(
+					WORKSPACE_IDS.progress,
+				);
+				expect(apiMocks.loadWorkspaceSessions).toHaveBeenCalledWith(
+					WORKSPACE_IDS.progress,
+				);
+			},
+			{ timeout: 3000 },
+		);
+		expect(apiMocks.loadSessionThreadMessages).not.toHaveBeenCalledWith(
+			"session-progress-1",
+		);
 	});
 
 	it("does not wrap workspace navigation on Option+Command+Up from the first workspace", async () => {

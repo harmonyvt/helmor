@@ -1106,12 +1106,6 @@ function AppShell({
 				workspaceSessions[0]?.id ??
 				null;
 
-			if (resolvedSessionId) {
-				await queryClient.ensureQueryData(
-					sessionThreadMessagesQueryOptions(resolvedSessionId),
-				);
-			}
-
 			return {
 				workspaceId,
 				sessionId: resolvedSessionId,
