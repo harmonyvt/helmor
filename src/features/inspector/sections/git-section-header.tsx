@@ -1,4 +1,4 @@
-import { ChevronsRight, ExternalLink } from "lucide-react";
+import { ChevronsRight, ExternalLink, RefreshCwIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
@@ -91,6 +91,8 @@ export type GitSectionHeaderProps = {
 	onCommit?: () => void | Promise<void>;
 	onContinueWorkspace?: () => void | Promise<void>;
 	isContinuingWorkspace?: boolean;
+	onRefreshPr?: () => void | Promise<void>;
+	isPrRefreshing?: boolean;
 	className?: string;
 };
 
@@ -108,6 +110,8 @@ export function GitSectionHeader({
 	onCommit,
 	onContinueWorkspace,
 	isContinuingWorkspace = false,
+	onRefreshPr,
+	isPrRefreshing = false,
 	className,
 }: GitSectionHeaderProps) {
 	const { settings } = useSettings();
@@ -261,12 +265,43 @@ export function GitSectionHeader({
 			)}
 			<div
 				ref={changeRequestRef}
-				className="flex shrink-0 items-center gap-1.5"
+				className="group/pr-cluster flex shrink-0 items-center gap-1"
 			>
 				{!showChangeRequest ? (
-					<span className={cn(INSPECTOR_SECTION_TITLE_CLASS, "translate-y-px")}>
-						Git
-					</span>
+					<>
+						<span
+							className={cn(INSPECTOR_SECTION_TITLE_CLASS, "translate-y-px")}
+						>
+							Git
+						</span>
+						{onRefreshPr && (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-xs"
+										aria-label="Detect PR"
+										disabled={isPrRefreshing}
+										onClick={() => void onRefreshPr()}
+										className="size-4 rounded-sm text-transparent transition-colors disabled:pointer-events-none group-hover/pr-cluster:text-muted-foreground group-hover/pr-cluster:hover:text-foreground"
+									>
+										<RefreshCwIcon
+											size={11}
+											strokeWidth={2}
+											className={cn(isPrRefreshing && "animate-spin")}
+										/>
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent
+									side="bottom"
+									className="rounded-md px-2 py-1 text-[12px] leading-tight"
+								>
+									{isPrRefreshing ? "Detecting…" : "Detect PR"}
+								</TooltipContent>
+							</Tooltip>
+						)}
+					</>
 				) : (
 					(() => {
 						const button = (
@@ -312,18 +347,49 @@ export function GitSectionHeader({
 							? "Open merge request"
 							: "Open pull request";
 						return (
-							<Tooltip>
-								<TooltipTrigger asChild>{button}</TooltipTrigger>
-								<TooltipContent
-									side="bottom"
-									className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
-								>
-									<span className="truncate">{openLabel}</span>
-									{openChangeRequestShortcut ? (
-										<InlineShortcutDisplay hotkey={openChangeRequestShortcut} />
-									) : null}
-								</TooltipContent>
-							</Tooltip>
+							<>
+								<Tooltip>
+									<TooltipTrigger asChild>{button}</TooltipTrigger>
+									<TooltipContent
+										side="bottom"
+										className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
+									>
+										<span className="truncate">{openLabel}</span>
+										{openChangeRequestShortcut ? (
+											<InlineShortcutDisplay
+												hotkey={openChangeRequestShortcut}
+											/>
+										) : null}
+									</TooltipContent>
+								</Tooltip>
+								{onRefreshPr && (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												type="button"
+												variant="ghost"
+												size="icon-xs"
+												aria-label="Refresh PR"
+												disabled={isPrRefreshing}
+												onClick={() => void onRefreshPr()}
+												className="size-4 rounded-sm text-transparent transition-colors disabled:pointer-events-none group-hover/pr-cluster:text-muted-foreground group-hover/pr-cluster:hover:text-foreground"
+											>
+												<RefreshCwIcon
+													size={11}
+													strokeWidth={2}
+													className={cn(isPrRefreshing && "animate-spin")}
+												/>
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent
+											side="bottom"
+											className="rounded-md px-2 py-1 text-[12px] leading-tight"
+										>
+											{isPrRefreshing ? "Refreshing…" : "Refresh PR"}
+										</TooltipContent>
+									</Tooltip>
+								)}
+							</>
 						);
 					})()
 				)}
