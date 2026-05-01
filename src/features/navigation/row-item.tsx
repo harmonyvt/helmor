@@ -219,6 +219,11 @@ export const WorkspaceRowItem = memo(
 					<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
 						{isSending && !isInteractionRequired ? (
 							<HelmorThinkingIndicator size={13} />
+						) : row.state === "initializing" ? (
+							<LoaderCircle
+								className="size-[13px] shrink-0 animate-spin text-muted-foreground"
+								strokeWidth={1.9}
+							/>
 						) : (
 							<GitBranch
 								className={cn(

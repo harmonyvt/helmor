@@ -91,13 +91,14 @@ export default defineConfig(async () => ({
 		// load. Retry twice in CI so a single scheduling hiccup does not
 		// fail the whole run; local dev stays strict.
 		retry: process.env.CI ? 2 : 0,
-		// Sidecar tests are written for `bun:test`, not vitest. Exclude them
+		// Sidecar and script tests are written for `bun:test`, not vitest. Exclude them
 		// so `bun run test:frontend` doesn't trip on `import ... from "bun:test"`.
 		// Same for the Rust + fixtures trees which contain no TS tests.
 		exclude: [
 			"**/node_modules/**",
 			"**/dist/**",
 			"sidecar/**",
+			"scripts/**",
 			"src-tauri/**",
 			"fixtures/**",
 			"e2e/**",

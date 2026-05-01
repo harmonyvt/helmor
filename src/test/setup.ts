@@ -117,20 +117,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return {
 					"app.onboarding_completed": "true",
 				};
-			case "get_github_identity_session":
-				return {
-					status: "connected",
-					session: {
-						provider: "test",
-						githubUserId: 0,
-						login: "test",
-						name: "Test User",
-						avatarUrl: null,
-						primaryEmail: null,
-						tokenExpiresAt: null,
-						refreshTokenExpiresAt: null,
-					},
-				};
 			case "get_github_cli_status":
 				return {
 					status: "ready",

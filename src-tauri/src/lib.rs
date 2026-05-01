@@ -25,7 +25,6 @@ pub mod workspace;
 pub(crate) mod testkit;
 
 pub use forge as forge_ops;
-pub use forge::github::auth;
 pub use forge::github::cli as github_cli;
 pub use forge::github::graphql as github_graphql;
 pub use git::ops as git_ops;
@@ -67,7 +66,6 @@ pub fn run() {
     );
 
     let app = builder
-        .manage(auth::GithubIdentityFlowRuntime::default())
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
@@ -193,13 +191,11 @@ pub fn run() {
             commands::workspace_commands::start_archive_workspace,
             commands::workspace_commands::validate_archive_workspace,
             commands::workspace_commands::validate_restore_workspace,
-            commands::github_commands::cancel_github_identity_connect,
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_source,
             commands::workspace_commands::finalize_workspace_from_repo,
-            commands::github_commands::disconnect_github_identity,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
@@ -219,7 +215,6 @@ pub fn run() {
             commands::system_commands::resize_agent_login_terminal,
             commands::github_commands::get_github_cli_status,
             commands::github_commands::get_github_cli_user,
-            commands::github_commands::get_github_identity_session,
             commands::forge_commands::get_workspace_forge,
             commands::forge_commands::get_forge_cli_status,
             commands::forge_commands::open_forge_cli_auth_terminal,
@@ -304,7 +299,6 @@ pub fn run() {
             commands::workspace_commands::permanently_delete_workspace,
             commands::workspace_commands::restore_workspace,
             commands::editor_commands::stat_editor_file,
-            commands::github_commands::start_github_identity_connect,
             commands::conductor_commands::conductor_source_available,
             commands::conductor_commands::list_conductor_repos,
             commands::conductor_commands::list_conductor_workspaces,

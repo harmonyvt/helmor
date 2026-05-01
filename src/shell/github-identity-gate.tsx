@@ -1,6 +1,4 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Copy, RefreshCw } from "lucide-react";
-import { useCallback, useState } from "react";
+import { RefreshCw, Terminal } from "lucide-react";
 import helmorLogoSrc from "@/assets/helmor-logo.png";
 import bannerHtml from "@/assets/render-banner.html?raw";
 import { GithubBrandIcon } from "@/components/brand-icon";
@@ -12,41 +10,19 @@ import type { GithubIdentityState } from "./types";
 export function GithubIdentityGate({
 	identityState,
 	onConnectGithub,
-	onCopyGithubCode,
 	onCancelGithubConnect,
 }: {
 	identityState: GithubIdentityState;
 	onConnectGithub: () => void;
-	onCopyGithubCode: (userCode: string) => Promise<boolean>;
 	onCancelGithubConnect: () => void;
 }) {
-	const [codeCopied, setCodeCopied] = useState(false);
-
-	const handleCopyCodeThenRedirect = useCallback(async () => {
-		if (identityState.status !== "pending" || codeCopied) {
-			return;
-		}
-
-		const copied = await onCopyGithubCode(identityState.flow.userCode);
-
-		if (!copied) {
-			return;
-		}
-
-		setCodeCopied(true);
-
-		const { verificationUri, verificationUriComplete } = identityState.flow;
-
-		setTimeout(() => {
-			void (async () => {
-				try {
-					await openUrl(verificationUriComplete ?? verificationUri);
-				} catch {
-					// Keep the pending state visible even if the browser cannot be opened.
-				}
-			})();
-		}, 600);
-	}, [identityState, onCopyGithubCode, codeCopied]);
+	const message =
+		identityState.status === "error"
+			? identityState.message
+			: identityState.status === "disconnected"
+				? (identityState.cliStatus?.message ??
+					"Connect GitHub CLI to continue.")
+				: null;
 
 	return (
 		<main
@@ -78,62 +54,26 @@ export function GithubIdentityGate({
 						className="size-18 rounded-[11px] opacity-90"
 					/>
 
-					{identityState.status === "pending" ? (
-						<div className="mt-10 flex w-full max-w-[15rem] flex-col items-center gap-4">
-							<Button
-								variant="outline"
-								size="lg"
-								onClick={() => {
-									void handleCopyCodeThenRedirect();
-								}}
-								disabled={codeCopied}
-								aria-label="Copy one-time code"
-								title="Copy one-time code"
-								className="h-auto w-full justify-center gap-1.5 px-3 py-4"
-							>
-								<span className="font-mono text-2xl font-medium tracking-[0.25em] text-foreground">
-									{identityState.flow.userCode}
-								</span>
-								{codeCopied ? (
-									<Check
-										data-icon="inline-end"
-										className="size-4 text-emerald-500"
-										strokeWidth={2.5}
-									/>
-								) : (
-									<Copy
-										data-icon="inline-end"
-										className="size-4 text-muted-foreground"
-										strokeWidth={1.8}
-									/>
-								)}
-							</Button>
+					{identityState.status === "checking" ? (
+						<div className="mt-10 inline-flex items-center justify-center gap-2 text-sm text-muted-foreground">
+							<RefreshCw className="size-4 animate-spin" strokeWidth={1.8} />
+							Checking GitHub CLI
+						</div>
+					) : identityState.status === "pending" ? (
+						<div className="mt-10 flex flex-col items-center gap-4 text-center">
+							<div className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+								<Terminal className="size-4" strokeWidth={1.8} />
+								Complete GitHub CLI auth in Terminal
+							</div>
 							<Button variant="ghost" size="sm" onClick={onCancelGithubConnect}>
 								Cancel
 							</Button>
 						</div>
-					) : identityState.status === "unconfigured" ? (
-						<div className="mt-10 flex w-full max-w-md flex-col items-center gap-3 text-center">
-							<div className="space-y-1">
-								<h1 className="text-lg font-semibold text-foreground">
-									GitHub account connection is not configured
-								</h1>
-								<p className="text-sm text-muted-foreground">
-									{identityState.message}
-								</p>
-							</div>
-							<Button disabled size="lg">
-								<GithubBrandIcon size={16} data-icon="inline-start" />
-								Continue with GitHub
-							</Button>
-						</div>
-					) : identityState.status === "checking" ? (
-						<div className="mt-10 inline-flex items-center justify-center gap-2 text-sm text-muted-foreground">
-							<RefreshCw className="size-4 animate-spin" strokeWidth={1.8} />
-							Restoring your last session
-						</div>
 					) : (
-						<div className="mt-10 flex justify-center">
+						<div className="mt-10 flex w-full max-w-sm flex-col items-center gap-4 text-center">
+							{message ? (
+								<p className="text-sm text-muted-foreground">{message}</p>
+							) : null}
 							<Button
 								onClick={onConnectGithub}
 								size="lg"
@@ -141,8 +81,8 @@ export function GithubIdentityGate({
 							>
 								<GithubBrandIcon size={16} data-icon="inline-start" />
 								{identityState.status === "error"
-									? "Retry with GitHub"
-									: "Continue with GitHub"}
+									? "Retry GitHub CLI"
+									: "Connect GitHub CLI"}
 							</Button>
 						</div>
 					)}

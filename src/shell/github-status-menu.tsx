@@ -1,4 +1,5 @@
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { GithubBrandIcon } from "@/components/brand-icon";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -9,10 +10,8 @@ import type { GithubIdentityState } from "./types";
 
 export function GithubStatusMenu({
 	identityState,
-	onDisconnectGithub,
 }: {
 	identityState: Extract<GithubIdentityState, { status: "connected" }>;
-	onDisconnectGithub: () => void;
 }) {
 	const identitySession = identityState.session;
 	const triggerLabel = identitySession.login;
@@ -24,14 +23,8 @@ export function GithubStatusMenu({
 				className="inline-flex h-7 items-center gap-2 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
 			>
 				<Avatar size="sm" className="size-4">
-					{identitySession?.avatarUrl ? (
-						<AvatarImage
-							src={identitySession.avatarUrl}
-							alt={identitySession.login}
-						/>
-					) : null}
 					<AvatarFallback className="bg-muted text-[10px] font-medium text-muted-foreground">
-						{identitySession?.login.slice(0, 2).toUpperCase() ?? "GH"}
+						<GithubBrandIcon size={10} />
 					</AvatarFallback>
 				</Avatar>
 				<span className="text-[13px] font-medium text-muted-foreground">
@@ -40,9 +33,7 @@ export function GithubStatusMenu({
 			</DropdownMenuTrigger>
 
 			<DropdownMenuContent align="end" sideOffset={8}>
-				<DropdownMenuItem onClick={onDisconnectGithub}>
-					Log out
-				</DropdownMenuItem>
+				<DropdownMenuItem disabled>Authenticated with gh</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

@@ -13,11 +13,10 @@
 //! - [`cli_status`] — gh / glab CLI probes + install paths.
 //! - [`workspace`] — per-workspace router that dispatches change-request calls
 //!   to the right backend once a provider is resolved.
-//! - [`github`] — GitHub SDK (auth, CLI helpers, GraphQL). Moved here from
+//! - [`github`] — GitHub CLI helpers + GraphQL over `gh api`. Moved here from
 //!   the old crate-root `github` module so everything forge-shaped lives
-//!   in one place. The crate-root aliases (`github_cli`, `github_graphql`,
-//!   `auth`) in `lib.rs` still resolve, so existing call sites don't need
-//!   to change.
+//!   in one place. The crate-root aliases (`github_cli`, `github_graphql`)
+//!   in `lib.rs` still resolve, so existing call sites don't need to change.
 //! - [`gitlab`] — GitLab REST client using `glab api`.
 
 mod bundled;

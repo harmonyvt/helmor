@@ -578,15 +578,13 @@ fn remote_url_looks_like_gitlab(settings: &crate::settings::EffectiveBranchPrefi
         .is_some_and(|remote| remote.host.contains("gitlab"))
 }
 
-/// Read the GitHub login from the stored identity metadata.
 fn resolve_github_login() -> Result<Option<String>> {
-    let raw = crate::settings::load_setting_value("github_identity_meta")?;
-    let raw = match raw {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-    let meta: serde_json::Value = serde_json::from_str(&raw)?;
-    Ok(meta.get("login").and_then(|v| v.as_str()).map(String::from))
+    Ok(
+        match forge::get_forge_cli_status(ForgeProvider::Github, Some("github.com"))? {
+            ForgeCliStatus::Ready { login, .. } => Some(login),
+            _ => None,
+        },
+    )
 }
 
 fn resolve_gitlab_login(

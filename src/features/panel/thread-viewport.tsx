@@ -64,11 +64,17 @@ export function resolveConversationRowHeight({
 export function ActiveThreadViewport({
 	hasSession,
 	pane,
+	workspaceBranch,
+	workspacePrTitle,
+	workspaceState,
 	missingScriptTypes = [],
 	onInitializeScript,
 }: {
 	hasSession: boolean;
 	pane: PresentedSessionPane;
+	workspaceBranch?: string | null;
+	workspacePrTitle?: string | null;
+	workspaceState?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 }) {
@@ -121,6 +127,9 @@ export function ActiveThreadViewport({
 					paneWidth={paneWidth}
 					sessionId={pane.sessionId}
 					sending={pane.sending}
+					workspaceBranch={workspaceBranch}
+					workspacePrTitle={workspacePrTitle}
+					workspaceState={workspaceState}
 				/>
 			</div>
 		</div>
@@ -136,6 +145,9 @@ function ChatThread({
 	paneWidth,
 	sessionId,
 	sending,
+	workspaceBranch,
+	workspacePrTitle,
+	workspaceState,
 }: {
 	layoutCacheKey: string;
 	messages: ThreadMessageLike[];
@@ -145,6 +157,9 @@ function ChatThread({
 	paneWidth: number;
 	sessionId: string;
 	sending: boolean;
+	workspaceBranch?: string | null;
+	workspacePrTitle?: string | null;
+	workspaceState?: string | null;
 }) {
 	const threadMessages = messages;
 	const { settings } = useSettings();
@@ -248,6 +263,9 @@ function ChatThread({
 				sendingStartTime={sendingStartTime}
 				stopScroll={stopScroll}
 				usePlainThread={usePlainThread}
+				workspaceBranch={workspaceBranch}
+				workspacePrTitle={workspacePrTitle}
+				workspaceState={workspaceState}
 			>
 				<Button
 					type="button"
@@ -284,6 +302,9 @@ function ConversationViewport({
 	sendingStartTime,
 	stopScroll,
 	usePlainThread,
+	workspaceBranch,
+	workspacePrTitle,
+	workspaceState,
 }: {
 	children?: ReactNode;
 	contentRef: React.RefCallback<HTMLElement>;
@@ -302,6 +323,9 @@ function ConversationViewport({
 	sendingStartTime: number;
 	stopScroll: () => void;
 	usePlainThread: boolean;
+	workspaceBranch?: string | null;
+	workspacePrTitle?: string | null;
+	workspaceState?: string | null;
 }) {
 	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
 
@@ -323,6 +347,9 @@ function ConversationViewport({
 		<div className="flex min-h-full flex-1 items-center justify-center px-8">
 			<EmptyState
 				hasSession={hasSession}
+				workspaceBranch={workspaceBranch}
+				workspacePrTitle={workspacePrTitle}
+				workspaceState={workspaceState}
 				missingScriptTypes={missingScriptTypes}
 				onInitializeScript={onInitializeScript}
 			/>
