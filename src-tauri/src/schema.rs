@@ -448,6 +448,13 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         .execute_batch("UPDATE sessions SET model = 'default' WHERE model = 'opus-1m'")
         .ok();
 
+    // Migration: add capy_project_id to repos for per-repo Capy integration.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "capy_project_id") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN capy_project_id TEXT")
+            .context("Failed to add capy_project_id column")?;
+    }
+
     Ok(())
 }
 

@@ -1,6 +1,8 @@
 use anyhow::Context;
 
-use crate::{agents::ActionKind, db, rate_limits::throttle::Throttle, settings};
+use crate::{
+    agents::ActionKind, db, models::repos, rate_limits::throttle::Throttle, settings, ui_sync,
+};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -138,4 +140,54 @@ pub async fn load_auto_close_opt_in_asked() -> CmdResult<Vec<ActionKind>> {
 #[tauri::command]
 pub async fn save_auto_close_opt_in_asked(kinds: Vec<ActionKind>) -> CmdResult<()> {
     run_blocking(move || settings::save_auto_close_opt_in_asked(&kinds)).await
+}
+
+// ---------------------------------------------------------------------------
+// Capy AI integration settings
+// ---------------------------------------------------------------------------
+
+/// Read the global Capy API key. Returns None when not configured.
+#[tauri::command]
+pub async fn get_capy_api_key() -> CmdResult<Option<String>> {
+    run_blocking(|| settings::load_setting_value("capy.api_key")).await
+}
+
+/// Persist or clear the global Capy API key.
+#[tauri::command]
+pub async fn set_capy_api_key(app: tauri::AppHandle, key: Option<String>) -> CmdResult<()> {
+    run_blocking(move || {
+        match key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(k) => settings::upsert_setting_value("capy.api_key", k)?,
+            None => settings::delete_setting_value("capy.api_key")?,
+        }
+        ui_sync::publish(
+            &app,
+            ui_sync::UiMutationEvent::SettingsChanged {
+                key: Some("capy.api_key".to_string()),
+            },
+        );
+        Ok(())
+    })
+    .await
+}
+
+/// Read the Capy project ID for a specific repo.
+#[tauri::command]
+pub async fn get_repo_capy_project_id(repo_id: String) -> CmdResult<Option<String>> {
+    run_blocking(move || repos::load_repo_capy_project_id(&repo_id)).await
+}
+
+/// Set or clear the Capy project ID for a specific repo.
+#[tauri::command]
+pub async fn set_repo_capy_project_id(
+    app: tauri::AppHandle,
+    repo_id: String,
+    project_id: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        repos::update_repo_capy_project_id(&repo_id, project_id.as_deref())?;
+        ui_sync::publish(&app, ui_sync::UiMutationEvent::RepositoryListChanged);
+        Ok(())
+    })
+    .await
 }

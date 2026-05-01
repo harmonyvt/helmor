@@ -6,6 +6,7 @@ import {
 	HelpCircle,
 	Trash2,
 } from "lucide-react";
+import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { Button } from "@/components/ui/button";
@@ -33,11 +34,13 @@ import {
 import {
 	deleteRepository,
 	getForgeCliStatus,
+	getRepoCapyProjectId,
 	listRemoteBranches,
 	listRepoRemotes,
 	loadRepoScripts,
 	prefetchRemoteRefs,
 	type RepositoryCreateOption,
+	setRepoCapyProjectId,
 	updateRepoAutoRunSetup,
 	updateRepoScripts,
 	updateRepositoryBranchPrefix,
@@ -241,6 +244,8 @@ export function RepositorySettingsPanel({
 
 			<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
 			<RepositoryPreferencesSection repoId={repo.id} />
+
+			<CapyProjectIdSection repoId={repo.id} />
 
 			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />
 		</SettingsGroup>
@@ -661,5 +666,69 @@ function DeleteRepoSection({
 				loading={deleting}
 			/>
 		</>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Capy project ID section
+// ---------------------------------------------------------------------------
+
+function CapyProjectIdSection({ repoId }: { repoId: string }) {
+	const [projectId, setProjectId] = useState<string>("");
+	const [saved, setSaved] = useState(false);
+	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	// Load current value on mount / repo change.
+	useEffect(() => {
+		void getRepoCapyProjectId(repoId).then((id) => {
+			setProjectId(id ?? "");
+		});
+	}, [repoId]);
+
+	const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+		const val = e.target.value;
+		setProjectId(val);
+		setSaved(false);
+
+		if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+		saveTimerRef.current = setTimeout(() => {
+			void setRepoCapyProjectId(repoId, val.trim() || null).then(() => {
+				setSaved(true);
+				saveTimerRef.current = setTimeout(() => setSaved(false), 2000);
+			});
+		}, 600);
+	};
+
+	return (
+		<div className="py-5">
+			<div className="flex items-center gap-2">
+				<div className="text-[13px] font-medium leading-snug text-foreground">
+					Capy project ID
+				</div>
+				{saved && <span className="text-[11px] text-green-500/80">Saved</span>}
+			</div>
+			<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+				Link this repo to a Capy project so workspaces can run threads via the
+				Capy API. Find your project ID at{" "}
+				<a
+					href="https://capy.ai"
+					target="_blank"
+					rel="noreferrer"
+					className="underline underline-offset-2 hover:text-foreground"
+				>
+					capy.ai
+				</a>
+				.
+			</div>
+			<div className="mt-3">
+				<Input
+					type="text"
+					value={projectId}
+					onChange={handleChange}
+					placeholder="proj_…"
+					className="w-full max-w-xs bg-muted/30 font-mono text-[12px] text-foreground placeholder:text-muted-foreground/50"
+				/>
+			</div>
+		</div>
 	);
 }

@@ -26,6 +26,7 @@ pub struct RepositoryCreateOption {
     pub forge_provider: Option<String>,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
+    pub capy_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -89,7 +90,8 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
               remote,
               remote_url,
               forge_provider,
-              branch_prefix_custom
+              branch_prefix_custom,
+              capy_project_id
             FROM repos
             WHERE COALESCE(hidden, 0) = 0
             ORDER BY COALESCE(display_order, 0) ASC, LOWER(name) ASC
@@ -114,6 +116,7 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
                 default_branch: row.get(2)?,
                 repo_icon_src: icon_src,
                 repo_initials: initials,
+                capy_project_id: row.get(8)?,
             })
         })
         .context("Failed to load repositories")?;
@@ -415,6 +418,38 @@ pub fn update_repository_forge_provider(repo_id: &str, provider: &str) -> Result
             rusqlite::params![provider, repo_id],
         )
         .with_context(|| format!("Failed to update forge_provider for {repo_id}"))?;
+    Ok(())
+}
+
+/// Load the Capy project ID for a repo. Returns None when not configured.
+pub fn load_repo_capy_project_id(repo_id: &str) -> Result<Option<String>> {
+    let connection = db::read_conn()?;
+    let result: Option<String> = connection
+        .query_row(
+            "SELECT capy_project_id FROM repos WHERE id = ?1",
+            [repo_id],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+    Ok(result.filter(|s| !s.trim().is_empty()))
+}
+
+/// Set or clear the Capy project ID for a repo.
+pub fn update_repo_capy_project_id(repo_id: &str, project_id: Option<&str>) -> Result<()> {
+    let project_id = project_id.map(str::trim).filter(|s| !s.is_empty());
+
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            "UPDATE repos SET capy_project_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![project_id, repo_id],
+        )
+        .with_context(|| format!("Failed to update capy_project_id for {repo_id}"))?;
+
+    if updated != 1 {
+        anyhow::bail!("Repository not found: {repo_id}");
+    }
+
     Ok(())
 }
 
