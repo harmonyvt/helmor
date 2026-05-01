@@ -101,6 +101,8 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         claude_base_url: None,
         claude_auth_token: None,
         images: &[],
+        capy_api_key: None,
+        capy_project_id: None,
     }
 }
 

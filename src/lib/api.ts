@@ -114,7 +114,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "codex" | "capy";
 
 export type AgentModelOption = {
 	id: string;
@@ -199,6 +199,7 @@ export type RepositoryCreateOption = {
 	remote?: string | null;
 	remoteUrl?: string | null;
 	defaultBranch?: string | null;
+	capyProjectId?: string | null;
 	branchPrefixCustom?: string | null;
 	forgeProvider?: ForgeProvider | null;
 	repoIconSrc?: string | null;
@@ -2609,6 +2610,46 @@ export async function updateRepoPreferences(
 		repoId,
 		preferences,
 	});
+}
+
+// ---------------------------------------------------------------------------
+// Capy AI integration
+// ---------------------------------------------------------------------------
+
+export async function getCapyApiKey(): Promise<string | null> {
+	return invoke<string | null>("get_capy_api_key");
+}
+
+export async function setCapyApiKey(key: string | null): Promise<void> {
+	await invoke("set_capy_api_key", { key });
+}
+
+export async function getRepoCapyProjectId(
+	repoId: string,
+): Promise<string | null> {
+	return invoke<string | null>("get_repo_capy_project_id", { repoId });
+}
+
+export async function setRepoCapyProjectId(
+	repoId: string,
+	projectId: string | null,
+): Promise<void> {
+	await invoke("set_repo_capy_project_id", { repoId, projectId });
+}
+
+export type CapyProjectRepo = {
+	repoFullName: string;
+	branch: string;
+};
+
+export type CapyProject = {
+	id: string;
+	name: string;
+	repos: CapyProjectRepo[];
+};
+
+export async function listCapyProjects(): Promise<CapyProject[]> {
+	return invoke<CapyProject[]>("list_capy_projects");
 }
 
 export async function executeRepoScript(

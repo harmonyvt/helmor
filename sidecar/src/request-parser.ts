@@ -110,7 +110,7 @@ export function parseElicitationResultContent(
 }
 
 export function parseProvider(value: unknown): Provider {
-	if (value === "claude" || value === "codex") return value;
+	if (value === "claude" || value === "codex" || value === "capy") return value;
 	throw new Error(`unknown provider: ${String(value)}`);
 }
 
@@ -136,6 +136,8 @@ export function parseSendMessageParams(
 		// "field absent" vs "no images" — both mean `[]`. The structured
 		// list is the single source of truth (see `parseImageRefs`).
 		images: parseOptionalStringArray(params, "images") ?? [],
+		capyApiKey: optionalString(params, "capyApiKey"),
+		capyProjectId: optionalString(params, "capyProjectId"),
 	};
 }
 

@@ -34,7 +34,9 @@ pub struct AgentModelSection {
 }
 
 pub fn static_model_sections() -> Vec<AgentModelSection> {
-    model_sections_for_custom(super::custom_providers::configured_models())
+    let mut sections = model_sections_for_custom(super::custom_providers::configured_models());
+    sections.push(capy_section());
+    sections
 }
 
 fn model_sections_for_custom(
@@ -152,6 +154,54 @@ fn claude_effort_levels() -> Vec<String> {
         .collect()
 }
 
+fn capy_section() -> AgentModelSection {
+    // Mark Unavailable when the API key is not yet configured so the
+    // frontend can show a greyed-out section with a helpful prompt.
+    let has_key = crate::settings::load_setting_value("capy.api_key")
+        .ok()
+        .flatten()
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
+
+    AgentModelSection {
+        id: "capy".to_string(),
+        label: "Capy".to_string(),
+        status: if has_key {
+            AgentModelSectionStatus::Ready
+        } else {
+            AgentModelSectionStatus::Unavailable
+        },
+        options: vec![
+            capy_model("capy/auto", "Auto", "auto"),
+            capy_model("capy/claude-opus-4-7", "Claude Opus 4.7", "claude-opus-4-7"),
+            capy_model(
+                "capy/claude-sonnet-4-6",
+                "Claude Sonnet 4.6",
+                "claude-sonnet-4-6",
+            ),
+            capy_model("capy/gpt-5.5", "GPT-5.5", "gpt-5.5"),
+            capy_model(
+                "capy/gemini-3.1-pro-preview",
+                "Gemini 3.1 Pro",
+                "gemini-3.1-pro-preview",
+            ),
+        ],
+    }
+}
+
+fn capy_model(id: &str, label: &str, cli_model: &str) -> AgentModelOption {
+    AgentModelOption {
+        id: id.to_string(),
+        provider: "capy".to_string(),
+        label: label.to_string(),
+        cli_model: cli_model.to_string(),
+        provider_key: None,
+        effort_levels: vec![],
+        supports_fast_mode: false,
+        supports_context_usage: false,
+    }
+}
+
 /// Resolved model info needed by the streaming path.
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
@@ -164,8 +214,9 @@ pub struct ResolvedModel {
 }
 
 /// Resolve a model ID to provider + cli_model. Provider is inferred from the
-/// ID: `gpt-*` → codex, everything else → claude. The ID is passed through
-/// as cli_model directly — the sidecar/SDK handles the actual mapping.
+/// ID: `capy/*` → capy, `gpt-*` → codex, everything else → claude. The ID
+/// is passed through as cli_model directly — the sidecar handles the actual
+/// mapping to the Capy/OpenAI/Anthropic API.
 pub fn resolve_model(model_id: &str) -> ResolvedModel {
     if let Some(model) = super::custom_providers::resolve(model_id) {
         return ResolvedModel {
@@ -175,6 +226,17 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
             supports_effort: true,
             claude_base_url: Some(model.base_url),
             claude_auth_token: Some(model.api_key),
+        };
+    }
+
+    if let Some(capy_model) = model_id.strip_prefix("capy/") {
+        return ResolvedModel {
+            id: model_id.to_string(),
+            provider: "capy".to_string(),
+            cli_model: capy_model.to_string(),
+            supports_effort: false,
+            claude_base_url: None,
+            claude_auth_token: None,
         };
     }
 

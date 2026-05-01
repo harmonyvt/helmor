@@ -11,6 +11,7 @@
 import { createInterface } from "node:readline";
 import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError } from "./abort.js";
+import { CapySessionManager } from "./capy-session-manager.js";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
@@ -37,9 +38,11 @@ import {
 
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
+const capyManager = new CapySessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
+	capy: capyManager,
 };
 
 const emitter = createSidecarEmitter((event) => {

@@ -112,9 +112,71 @@ pub(super) fn stream_via_sidecar(
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty());
-    let combined_prompt = match prefix_trimmed {
+
+    // For Capy sessions: inject PR context when the workspace has a linked PR.
+    // This is appended to (or becomes) the prefix so it stays off the persisted
+    // user prompt but arrives at the Capy thread as context.
+    let capy_pr_context = if model.provider == "capy" {
+        request.helmor_session_id.as_deref().and_then(|hsid| {
+            let conn = crate::models::db::read_conn().ok()?;
+            let row: Option<(Option<String>, Option<String>)> = conn
+                .query_row(
+                    r#"SELECT w.pr_title, w.pr_url
+                       FROM sessions s
+                       JOIN workspaces w ON w.id = s.workspace_id
+                       WHERE s.id = ?1 AND w.pr_url IS NOT NULL AND w.pr_url != ''"#,
+                    [hsid],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok();
+            let (pr_title, pr_url) = row?;
+            let url = pr_url.filter(|u| !u.trim().is_empty())?;
+            let ctx = match pr_title.as_deref().filter(|t| !t.trim().is_empty()) {
+                Some(title) => format!("PR Context: {title} — {url}"),
+                None => format!("PR Context: {url}"),
+            };
+            Some(ctx)
+        })
+    } else {
+        None
+    };
+
+    let effective_prefix = match (prefix_trimmed, capy_pr_context.as_deref()) {
+        (Some(p), Some(ctx)) => Some(format!("{ctx}\n\n{p}")),
+        (Some(p), None) => Some(p.to_string()),
+        (None, Some(ctx)) => Some(ctx.to_string()),
+        (None, None) => None,
+    };
+
+    let combined_prompt = match effective_prefix.as_deref() {
         Some(prefix) => format!("{prefix}\n\nUser request:\n{prompt}"),
         None => prompt.to_string(),
+    };
+
+    // For Capy sessions: read API key + repo project ID from settings/DB.
+    let (capy_api_key, capy_project_id) = if model.provider == "capy" {
+        let api_key = crate::settings::load_setting_value("capy.api_key")
+            .ok()
+            .flatten()
+            .filter(|k| !k.trim().is_empty());
+        let project_id = request.helmor_session_id.as_deref().and_then(|hsid| {
+            let conn = crate::models::db::read_conn().ok()?;
+            let pid: Option<String> = conn
+                .query_row(
+                    r#"SELECT r.capy_project_id
+                       FROM sessions s
+                       JOIN workspaces w ON w.id = s.workspace_id
+                       JOIN repos r ON r.id = w.repository_id
+                       WHERE s.id = ?1 AND r.capy_project_id IS NOT NULL AND r.capy_project_id != ''"#,
+                    [hsid],
+                    |row| row.get(0),
+                )
+                .ok()?;
+            pid.filter(|p| !p.trim().is_empty())
+        });
+        (api_key, project_id)
+    } else {
+        (None, None)
     };
 
     let images_for_wire = request.images.clone().unwrap_or_default();
@@ -132,6 +194,8 @@ pub(super) fn stream_via_sidecar(
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
         images: &images_for_wire,
+        capy_api_key: capy_api_key.as_deref(),
+        capy_project_id: capy_project_id.as_deref(),
     });
 
     // Surface the `/add-dir` decision in logs — we often debug linked-

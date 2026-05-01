@@ -7,7 +7,7 @@
 
 import type { SidecarEmitter } from "./emitter.js";
 
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "capy";
 
 export interface SendMessageParams {
 	readonly sessionId: string;
@@ -36,6 +36,10 @@ export interface SendMessageParams {
 	 * attachments".
 	 */
 	readonly images: readonly string[];
+	/** Capy AI API key (bearer token). Only set when provider == "capy". */
+	readonly capyApiKey?: string;
+	/** Capy project ID for the workspace's repo. Only set when provider == "capy". */
+	readonly capyProjectId?: string;
 }
 
 export interface ListSlashCommandsParams {

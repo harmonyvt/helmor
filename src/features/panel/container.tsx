@@ -334,6 +334,9 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 				sessionId: preferredPaneSessionId,
 				messages,
 				sending,
+				sendingProvider: sending
+					? (sessionDisplayProviders[preferredPaneSessionId] ?? null)
+					: null,
 				hasLoaded: true,
 				presentationState: "presented" as const,
 			},
@@ -343,6 +346,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		messagesQuery.data,
 		preferredPaneSessionId,
 		sending,
+		sessionDisplayProviders,
 		threadSessionId,
 	]);
 

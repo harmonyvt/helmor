@@ -24,6 +24,10 @@ pub struct BuildSendMessageParamsInput<'a> {
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
+    /// Capy AI API key. Only set when provider == "capy".
+    pub capy_api_key: Option<&'a str>,
+    /// Capy project ID for the workspace's repo. Only set when provider == "capy".
+    pub capy_project_id: Option<&'a str>,
 }
 
 /// Build the `sendMessage` request params that the sidecar receives.
@@ -67,6 +71,16 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
                     "ANTHROPIC_AUTH_TOKEN": auth_token,
                 }),
             );
+        }
+    }
+    if let Some(api_key) = input.capy_api_key {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("capyApiKey".to_string(), Value::from(api_key));
+        }
+    }
+    if let Some(project_id) = input.capy_project_id {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("capyProjectId".to_string(), Value::from(project_id));
         }
     }
     params

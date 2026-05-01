@@ -8,7 +8,8 @@ import {
 	Settings,
 	Sun,
 } from "lucide-react";
-import { memo, useEffect, useState } from "react";
+import type React from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -42,9 +43,11 @@ import { getShortcut } from "@/features/shortcuts/registry";
 import { ShortcutsSettingsPanel } from "@/features/shortcuts/settings-panel";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
+	getCapyApiKey,
 	isConductorAvailable,
 	loadGithubCliStatus,
 	type RepositoryCreateOption,
+	setCapyApiKey,
 } from "@/lib/api";
 import {
 	agentModelSectionsQueryOptions,
@@ -550,6 +553,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										</div>
 									</SettingsRow>
 									<ClaudeCustomProvidersPanel />
+									<CapyApiKeyRow />
 								</SettingsGroup>
 							)}
 
@@ -724,5 +728,70 @@ export function SettingsButton({
 				) : null}
 			</TooltipContent>
 		</Tooltip>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Capy API key row (rendered inside the "model" settings section)
+// ---------------------------------------------------------------------------
+
+function CapyApiKeyRow() {
+	const [apiKey, setApiKey] = useState<string>("");
+	const [saved, setSaved] = useState(false);
+	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	useEffect(() => {
+		void getCapyApiKey().then((k) => setApiKey(k ?? ""));
+	}, []);
+
+	const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+		const val = e.target.value;
+		setApiKey(val);
+		setSaved(false);
+
+		if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+		saveTimerRef.current = setTimeout(() => {
+			void setCapyApiKey(val.trim() || null).then(() => {
+				setSaved(true);
+				saveTimerRef.current = setTimeout(() => setSaved(false), 2000);
+			});
+		}, 600);
+	};
+
+	return (
+		<SettingsRow
+			title={
+				<span className="flex items-center gap-2">
+					Capy API key
+					{saved && (
+						<span className="text-[11px] font-normal text-green-500/80">
+							Saved
+						</span>
+					)}
+				</span>
+			}
+			description={
+				<>
+					Bearer token for the Capy AI API. Get yours at{" "}
+					<a
+						href="https://capy.ai/settings/tokens"
+						target="_blank"
+						rel="noreferrer"
+						className="underline underline-offset-2 hover:text-foreground"
+					>
+						capy.ai/settings/tokens
+					</a>
+					.
+				</>
+			}
+		>
+			<Input
+				type="password"
+				value={apiKey}
+				onChange={handleChange}
+				placeholder="capy_…"
+				className="w-[260px] bg-muted/30 font-mono text-[12px] text-foreground placeholder:text-muted-foreground/50"
+			/>
+		</SettingsRow>
 	);
 }

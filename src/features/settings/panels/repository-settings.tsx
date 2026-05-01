@@ -6,6 +6,7 @@ import {
 	HelpCircle,
 	Trash2,
 } from "lucide-react";
+import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { Button } from "@/components/ui/button";
@@ -31,13 +32,17 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+	type CapyProject,
 	deleteRepository,
 	getForgeCliStatus,
+	getRepoCapyProjectId,
+	listCapyProjects,
 	listRemoteBranches,
 	listRepoRemotes,
 	loadRepoScripts,
 	prefetchRemoteRefs,
 	type RepositoryCreateOption,
+	setRepoCapyProjectId,
 	updateRepoAutoRunSetup,
 	updateRepoScripts,
 	updateRepositoryBranchPrefix,
@@ -241,6 +246,8 @@ export function RepositorySettingsPanel({
 
 			<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
 			<RepositoryPreferencesSection repoId={repo.id} />
+
+			<CapyProjectIdSection repoId={repo.id} />
 
 			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />
 		</SettingsGroup>
@@ -661,5 +668,152 @@ function DeleteRepoSection({
 				loading={deleting}
 			/>
 		</>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Capy project picker section
+// ---------------------------------------------------------------------------
+
+function CapyProjectIdSection({ repoId }: { repoId: string }) {
+	const [open, setOpen] = useState(false);
+	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [saved, setSaved] = useState(false);
+	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	// Load the current project ID for this repo on mount / repo change.
+	useEffect(() => {
+		void getRepoCapyProjectId(repoId).then((id) => setSelectedId(id));
+	}, [repoId]);
+
+	const projectsQuery = useQuery<CapyProject[], Error>({
+		queryKey: ["capyProjects"],
+		queryFn: listCapyProjects,
+		staleTime: 60_000,
+		retry: false,
+	});
+
+	const projects = projectsQuery.data ?? [];
+	const selected = projects.find((p) => p.id === selectedId) ?? null;
+
+	const handleSelect = (project: CapyProject | null) => {
+		setOpen(false);
+		const nextId = project?.id ?? null;
+		setSelectedId(nextId);
+		setSaved(false);
+		if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+		saveTimerRef.current = setTimeout(() => {
+			void setRepoCapyProjectId(repoId, nextId).then(() => {
+				setSaved(true);
+				saveTimerRef.current = setTimeout(() => setSaved(false), 2000);
+			});
+		}, 200);
+	};
+
+	const noApiKey =
+		projectsQuery.isError &&
+		projectsQuery.error.message?.includes("No Capy API key");
+
+	return (
+		<div className="py-5">
+			<div className="flex items-center gap-2">
+				<div className="text-[13px] font-medium leading-snug text-foreground">
+					Capy project
+				</div>
+				{saved && <span className="text-[11px] text-green-500/80">Saved</span>}
+			</div>
+			<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+				Link this repo to a Capy project so workspaces can run threads via the
+				Capy API.
+			</div>
+
+			<div className="mt-3">
+				{noApiKey ? (
+					<p className="text-[12px] text-muted-foreground/70">
+						Add your Capy API key in Settings → Integrations to pick a project.
+					</p>
+				) : (
+					<Popover open={open} onOpenChange={setOpen}>
+						<PopoverTrigger className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-[13px] font-medium text-app-foreground transition-colors hover:border-app-border-strong">
+							{projectsQuery.isLoading ? (
+								<span className="text-muted-foreground">Loading…</span>
+							) : selected ? (
+								<>
+									<span className="truncate max-w-[220px]">
+										{selected.name}
+									</span>
+									{selected.repos[0] && (
+										<span className="text-[11px] text-muted-foreground truncate max-w-[140px]">
+											{selected.repos[0].repoFullName}
+										</span>
+									)}
+								</>
+							) : (
+								<span className="text-muted-foreground">
+									Select a Capy project…
+								</span>
+							)}
+							<ChevronDown
+								className="size-3 shrink-0 text-app-muted"
+								strokeWidth={2}
+							/>
+						</PopoverTrigger>
+						<PopoverContent align="start" className="w-[300px] p-0">
+							<Command className="rounded-lg! p-0.5">
+								<CommandList className="max-h-60">
+									<CommandEmpty>
+										{projectsQuery.isError
+											? "Failed to load projects"
+											: "No projects found"}
+									</CommandEmpty>
+
+									{/* Clear / none option */}
+									{selectedId && (
+										<CommandItem
+											value="__none__"
+											onSelect={() => handleSelect(null)}
+											className="flex items-center gap-2 px-1.5 py-1 text-[12px] text-muted-foreground"
+										>
+											Clear selection
+										</CommandItem>
+									)}
+
+									{projects.map((project) => (
+										<CommandItem
+											key={project.id}
+											value={project.id}
+											onSelect={() => handleSelect(project)}
+											className="flex items-center justify-between gap-2 px-1.5 py-1.5 text-[12px]"
+										>
+											<div className="min-w-0">
+												<div
+													className={cn(
+														"truncate",
+														project.id === selectedId && "font-semibold",
+													)}
+												>
+													{project.name}
+												</div>
+												{project.repos[0] && (
+													<div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+														{project.repos[0].repoFullName}
+													</div>
+												)}
+											</div>
+											{project.id === selectedId && (
+												<Check
+													className="size-3.5 shrink-0 text-app-foreground"
+													strokeWidth={2}
+												/>
+											)}
+										</CommandItem>
+									))}
+								</CommandList>
+							</Command>
+						</PopoverContent>
+					</Popover>
+				)}
+			</div>
+		</div>
 	);
 }

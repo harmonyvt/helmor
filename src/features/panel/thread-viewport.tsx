@@ -14,7 +14,7 @@ import {
 import { useStickToBottom } from "use-stick-to-bottom";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { Button } from "@/components/ui/button";
-import type { ThreadMessageLike } from "@/lib/api";
+import type { AgentProvider, ThreadMessageLike } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
 import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
 import { measureSync } from "@/lib/perf-marks";
@@ -27,6 +27,8 @@ export type PresentedSessionPane = {
 	sessionId: string;
 	messages: ThreadMessageLike[];
 	sending: boolean;
+	/** Provider for the in-flight stream, used to render provider-specific streaming UX. */
+	sendingProvider?: AgentProvider | null;
 	hasLoaded: boolean;
 	presentationState: "presented";
 };
@@ -127,6 +129,7 @@ export function ActiveThreadViewport({
 					paneWidth={paneWidth}
 					sessionId={pane.sessionId}
 					sending={pane.sending}
+					sendingProvider={pane.sendingProvider}
 					workspaceBranch={workspaceBranch}
 					workspacePrTitle={workspacePrTitle}
 					workspaceState={workspaceState}
@@ -145,6 +148,7 @@ function ChatThread({
 	paneWidth,
 	sessionId,
 	sending,
+	sendingProvider,
 	workspaceBranch,
 	workspacePrTitle,
 	workspaceState,
@@ -157,6 +161,7 @@ function ChatThread({
 	paneWidth: number;
 	sessionId: string;
 	sending: boolean;
+	sendingProvider?: AgentProvider | null;
 	workspaceBranch?: string | null;
 	workspacePrTitle?: string | null;
 	workspaceState?: string | null;
@@ -260,6 +265,7 @@ function ChatThread({
 				scrollRef={handleScrollRef}
 				sessionId={sessionId}
 				sending={sending}
+				sendingProvider={sendingProvider}
 				sendingStartTime={sendingStartTime}
 				stopScroll={stopScroll}
 				usePlainThread={usePlainThread}
@@ -299,6 +305,7 @@ function ConversationViewport({
 	scrollRef,
 	sessionId,
 	sending,
+	sendingProvider,
 	sendingStartTime,
 	stopScroll,
 	usePlainThread,
@@ -320,6 +327,7 @@ function ConversationViewport({
 	scrollRef: React.RefCallback<HTMLElement>;
 	sessionId: string;
 	sending: boolean;
+	sendingProvider?: AgentProvider | null;
 	sendingStartTime: number;
 	stopScroll: () => void;
 	usePlainThread: boolean;
@@ -380,7 +388,10 @@ function ConversationViewport({
 							<ConversationBottomSpacer />
 						</div>
 						{showStreamingFooter ? (
-							<StreamingFooter startTime={sendingStartTime} />
+							<StreamingFooter
+								startTime={sendingStartTime}
+								provider={sendingProvider}
+							/>
 						) : null}
 					</>
 				) : (
@@ -396,6 +407,7 @@ function ConversationViewport({
 						pinTailRows={pinTailRows}
 						scrollParent={scrollParent}
 						sessionId={sessionId}
+						sendingProvider={sendingProvider}
 						stopScroll={stopScroll}
 						streamingIndicatorStartTime={streamingIndicatorStartTime}
 					/>
@@ -433,6 +445,7 @@ type ProgressiveViewportRow =
 			top: number;
 			height: number;
 			startTime: number;
+			provider?: AgentProvider | null;
 	  };
 
 const STREAMING_INDICATOR_ROW_KEY = "__streaming_indicator__";
@@ -449,6 +462,7 @@ function ProgressiveConversationViewport({
 	pinTailRows,
 	scrollParent,
 	sessionId,
+	sendingProvider,
 	stopScroll,
 	streamingIndicatorStartTime,
 }: {
@@ -463,6 +477,7 @@ function ProgressiveConversationViewport({
 	pinTailRows: boolean;
 	scrollParent: HTMLDivElement | null;
 	sessionId: string;
+	sendingProvider?: AgentProvider | null;
 	stopScroll: () => void;
 	streamingIndicatorStartTime?: number;
 }) {
@@ -698,6 +713,7 @@ function ProgressiveConversationViewport({
 							index: data.length,
 							key: STREAMING_INDICATOR_ROW_KEY,
 							kind: "indicator",
+							provider: sendingProvider,
 							startTime: streamingIndicatorStartTime,
 							top,
 						});
@@ -960,7 +976,10 @@ function ProgressiveConversationViewport({
 									// synced value.
 								}}
 							>
-								<StreamingFooter startTime={row.startTime} />
+								<StreamingFooter
+									startTime={row.startTime}
+									provider={row.provider}
+								/>
 							</div>
 						);
 					}
@@ -1112,7 +1131,42 @@ function ConversationBottomSpacer() {
 	);
 }
 
-function StreamingFooter({ startTime }: { startTime: number }) {
+// ---------------------------------------------------------------------------
+// Capy poll countdown hook — tracks seconds until the next 3 s poll fires.
+// The sidecar polls on a fixed 3 s cycle; we synchronise the display clock
+// to that rhythm so the user always knows when the next check is coming.
+// ---------------------------------------------------------------------------
+const CAPY_POLL_INTERVAL_MS = 3_000;
+
+function useCapyPollCountdown(startTime: number) {
+	// "polling" = we're in the brief window at the start of each cycle (first
+	// 800 ms); otherwise show a numeric countdown to the next poll.
+	const [state, setState] = useState<"polling" | number>(() => "polling");
+
+	useEffect(() => {
+		const tick = () => {
+			const cycleMs = (Date.now() - startTime) % CAPY_POLL_INTERVAL_MS;
+			if (cycleMs < 800) {
+				setState("polling");
+			} else {
+				setState(Math.ceil((CAPY_POLL_INTERVAL_MS - cycleMs) / 1000));
+			}
+		};
+		tick();
+		const id = window.setInterval(tick, 250);
+		return () => window.clearInterval(id);
+	}, [startTime]);
+
+	return state;
+}
+
+function StreamingFooter({
+	startTime,
+	provider,
+}: {
+	startTime: number;
+	provider?: AgentProvider | null;
+}) {
 	const [elapsed, setElapsed] = useState(() =>
 		Math.floor((Date.now() - startTime) / 1000),
 	);
@@ -1124,12 +1178,21 @@ function StreamingFooter({ startTime }: { startTime: number }) {
 		return () => window.clearInterval(intervalId);
 	}, [startTime]);
 
-	const display =
+	const elapsedDisplay =
 		elapsed < 60
 			? `${elapsed}s`
 			: `${Math.floor(elapsed / 60)}m ${(elapsed % 60)
 					.toString()
 					.padStart(2, "0")}s`;
+
+	if (provider === "capy") {
+		return (
+			<CapyStreamingFooter
+				startTime={startTime}
+				elapsedDisplay={elapsedDisplay}
+			/>
+		);
+	}
 
 	return (
 		<div
@@ -1137,7 +1200,57 @@ function StreamingFooter({ startTime }: { startTime: number }) {
 			className="flex items-center gap-1.5 px-5 py-3 text-[12px] tabular-nums text-muted-foreground"
 		>
 			<HelmorLogoAnimated size={14} className="opacity-80" />
-			{display}
+			{elapsedDisplay}
+		</div>
+	);
+}
+
+function CapyStreamingFooter({
+	startTime,
+	elapsedDisplay,
+}: {
+	startTime: number;
+	elapsedDisplay: string;
+}) {
+	const pollState = useCapyPollCountdown(startTime);
+	const isPolling = pollState === "polling";
+
+	return (
+		<div
+			data-testid="streaming-footer"
+			className="flex items-center gap-2.5 px-5 py-3 text-[12px] tabular-nums text-muted-foreground"
+		>
+			{/* Three pulsing dots — staggered to signal async polling rhythm */}
+			<span className="flex items-center gap-[3px]">
+				{([0, 1, 2] as const).map((i) => (
+					<span
+						key={i}
+						className="inline-block size-[5px] rounded-full bg-muted-foreground/50 animate-pulse"
+						style={{ animationDelay: `${i * 180}ms` }}
+					/>
+				))}
+			</span>
+
+			{/* Provider label */}
+			<span className="font-medium opacity-55">capy.ai</span>
+
+			<span className="opacity-25">·</span>
+
+			{/* Poll countdown — flashes "polling…" on each cycle tick */}
+			<span
+				className={
+					isPolling
+						? "text-foreground/60 transition-colors duration-150"
+						: "transition-colors duration-300"
+				}
+			>
+				{isPolling ? "polling…" : `next poll in ${pollState}s`}
+			</span>
+
+			<span className="opacity-25">·</span>
+
+			{/* Elapsed time */}
+			<span>{elapsedDisplay}</span>
 		</div>
 	);
 }
