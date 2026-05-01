@@ -277,6 +277,16 @@ pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInf
         return Ok(None);
     }
 
+    // Guard: `github_cli::graphql()` bails when the CLI is not authenticated,
+    // which would violate this function's documented `Ok(None)` contract for
+    // the unauthenticated / unavailable case. Check status first and return
+    // `Ok(None)` gracefully so callers (commit button, CLI, forge router) see
+    // a clean "no PR" state rather than an error toast.
+    let cli_status = github_cli::get_github_cli_status()?;
+    if !matches!(cli_status, github_cli::GithubCliStatus::Ready { .. }) {
+        return Ok(None);
+    }
+
     let query = r#"
 query($owner: String!, $name: String!, $head: String!) {
   repository(owner: $owner, name: $name) {
@@ -488,6 +498,15 @@ query($owner: String!, $name: String!, $head: String!) {
   }
 }
 "#;
+
+    // Same auth guard as `lookup_workspace_pr`: bail before calling graphql so
+    // that unauthenticated status surfaces as `unavailable` rather than an error.
+    let cli_status = github_cli::get_github_cli_status()?;
+    if !matches!(cli_status, github_cli::GithubCliStatus::Ready { .. }) {
+        return Ok(ForgeActionStatus::unavailable(
+            "GitHub CLI is not authenticated",
+        ));
+    }
 
     let parsed: ActionGraphqlEnvelope = github_cli::graphql(
         query,
