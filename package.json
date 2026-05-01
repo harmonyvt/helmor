@@ -14,6 +14,7 @@
 		"changeset": "changeset",
 		"dev": "bun run dev:prepare && tauri dev",
 		"dev:preview": "bun scripts/dev-preview.ts",
+		"worktree:cleanup": "bun scripts/worktree-cleanup.ts",
 		"dev:prepare": "cd sidecar && bun run dev:prepare",
 		"dev:analyze": "bun run dev:prepare && VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
