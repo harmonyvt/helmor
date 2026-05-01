@@ -276,6 +276,7 @@ export const PrVirtualItemRenderer = memo(function PrVirtualItemRenderer({
 				isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 					stacked.row.id,
 				)}
+				showPrNumber
 				workspaceActionsDisabled={Boolean(
 					actions.markingUnreadWorkspaceId || actions.restoringWorkspaceId,
 				)}

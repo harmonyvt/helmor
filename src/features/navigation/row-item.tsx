@@ -66,6 +66,8 @@ export type WorkspaceRowItemProps = {
 	selected: boolean;
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
+	/** When true, displays the PR number extracted from `row.prUrl` as a badge. */
+	showPrNumber?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -81,6 +83,12 @@ export type WorkspaceRowItemProps = {
 	restoringWorkspaceId?: string | null;
 	workspaceActionsDisabled?: boolean;
 };
+
+function extractPrNumber(prUrl: string | null | undefined): number | null {
+	if (!prUrl) return null;
+	const match = prUrl.match(/\/(\d+)\/?$/);
+	return match ? parseInt(match[1], 10) : null;
+}
 
 /**
  * Subscribes to this workspace's `run`-script status via the module-level
@@ -108,6 +116,7 @@ export const WorkspaceRowItem = memo(
 		selected,
 		isSending,
 		isInteractionRequired,
+		showPrNumber,
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -173,6 +182,7 @@ export const WorkspaceRowItem = memo(
 			: "bg-chart-2";
 		const showStatusDot = statusDotLabel !== null;
 		const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
+		const prNumber = showPrNumber ? extractPrNumber(row.prUrl) : null;
 
 		const rowBody = (
 			<div
@@ -251,6 +261,11 @@ export const WorkspaceRowItem = memo(
 							<HyperText text={displayTitle} className="inline" />
 						</span>
 					</div>
+					{prNumber !== null && (
+						<span className="shrink-0 rounded px-1 py-0 text-[10px] tabular-nums font-medium text-foreground/40 group-hover/row:opacity-0 transition-opacity">
+							#{prNumber}
+						</span>
+					)}
 				</div>
 
 				{hasActionHandler ? (
