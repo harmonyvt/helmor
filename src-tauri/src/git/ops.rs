@@ -434,6 +434,32 @@ pub fn create_worktree_new_branch_from_start_point(
     })
 }
 
+/// Move an existing git worktree from `source_dir` to `dest_dir`.
+/// Requires git 2.32+ (June 2021). Updates git's internal worktree registry
+/// atomically — no branch copy needed, preserving the original branch name.
+pub fn move_worktree(repo_root: &Path, source_dir: &Path, dest_dir: &Path) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
+    run_git(
+        [
+            "-C",
+            repo_root.as_str(),
+            "worktree",
+            "move",
+            source_dir.display().to_string().as_str(),
+            dest_dir.display().to_string().as_str(),
+        ],
+        None,
+    )
+    .map(|_| ())
+    .with_context(|| {
+        format!(
+            "Failed to move worktree from {} to {}",
+            source_dir.display(),
+            dest_dir.display()
+        )
+    })
+}
+
 pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
     let repo_root_str = repo_root.display().to_string();
     if workspace_dir.exists() {

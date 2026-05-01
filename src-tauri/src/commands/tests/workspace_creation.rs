@@ -155,6 +155,7 @@ fn create_workspace_from_remote_branch_uses_same_branch_and_default_target() {
         workspaces::FinalizeWorkspaceOptions {
             start_branch: Some(branch.to_string()),
             fetch_start_branch: Some(true),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -275,6 +276,7 @@ fn finalize_pr_workspace_uses_existing_local_head_branch() {
         workspaces::FinalizeWorkspaceOptions {
             start_branch: Some(branch.to_string()),
             fetch_start_branch: Some(true),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -307,6 +309,7 @@ fn finalize_pr_workspace_fetches_remote_head_when_local_branch_is_missing() {
         workspaces::FinalizeWorkspaceOptions {
             start_branch: Some(branch.to_string()),
             fetch_start_branch: Some(true),
+            ..Default::default()
         },
     )
     .unwrap();

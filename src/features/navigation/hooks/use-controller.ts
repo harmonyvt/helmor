@@ -663,10 +663,22 @@ export function useWorkspacesSidebarController({
 		[flushSidebarLists, pushWorkspaceToast],
 	);
 
+	// Stable ref so the conflict-recovery toast can call back into the latest
+	// version of handleCreateWorkspaceFromRepo without creating a circular dep.
+	const handleCreateWorkspaceFromRepoRef = useRef<
+		| ((
+				repoId: string,
+				source?: WorkspaceCreationSource,
+				migrateFromPath?: string,
+		  ) => Promise<void>)
+		| null
+	>(null);
+
 	const handleCreateWorkspaceFromRepo = useCallback(
 		async (
 			repoId: string,
 			source: WorkspaceCreationSource = { type: "defaultBranch" },
+			migrateFromPath?: string,
 		) => {
 			if (creatingWorkspaceRepoId) {
 				return;
@@ -836,12 +848,18 @@ export function useWorkspacesSidebarController({
 			// background so the UI is already interactive. State flips from
 			// "initializing" → "ready"/"setup_pending" when it completes;
 			// the only visible change is the composer enabling.
-			const finalizePromise = prepareResponse.sourceStartBranch
-				? finalizeWorkspaceFromRepo(prepareResponse.workspaceId, {
-						startBranch: prepareResponse.sourceStartBranch,
-						fetchStartBranch: true,
-					})
-				: finalizeWorkspaceFromRepo(prepareResponse.workspaceId);
+			const finalizePromise = finalizeWorkspaceFromRepo(
+				prepareResponse.workspaceId,
+				prepareResponse.sourceStartBranch || migrateFromPath
+					? {
+							...(prepareResponse.sourceStartBranch && {
+								startBranch: prepareResponse.sourceStartBranch,
+								fetchStartBranch: true,
+							}),
+							...(migrateFromPath && { migrateFromPath }),
+						}
+					: undefined,
+			);
 			finalizePromise
 				.then((finalized) => {
 					queryClient.setQueryData<WorkspaceDetail | null>(
@@ -969,9 +987,38 @@ export function useWorkspacesSidebarController({
 							previousSelection ?? findInitialWorkspaceId(groups),
 						);
 					}
-					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to create workspace."),
+					// If this was a first attempt (not already a migrate), check whether
+					// git rejected it because the branch is checked out elsewhere.
+					const errorMessage = describeUnknownError(
+						error,
+						"Unable to create workspace.",
 					);
+					const conflictMatch =
+						!migrateFromPath &&
+						errorMessage.match(/already used by worktree at '(.+?)'/);
+					const conflictPath = conflictMatch ? conflictMatch[1] : undefined;
+					if (conflictPath) {
+						const dirName = conflictPath.split("/").pop() ?? conflictPath;
+						pushWorkspaceToast(
+							`Branch already checked out at "${dirName}". Move the existing worktree into Helmor?`,
+							"Workspace conflict",
+							"destructive",
+							{
+								action: {
+									label: "Move into Helmor",
+									onClick: () =>
+										void handleCreateWorkspaceFromRepoRef.current?.(
+											repoId,
+											source,
+											conflictPath,
+										),
+								},
+								persistent: true,
+							},
+						);
+					} else {
+						pushWorkspaceToast(errorMessage);
+					}
 					void refetchNavigation();
 				})
 				.finally(() => {
@@ -990,6 +1037,9 @@ export function useWorkspacesSidebarController({
 			selectedWorkspaceId,
 		],
 	);
+	// Keep the ref pointing to the latest version so the conflict-recovery
+	// toast can invoke it without being listed in its own deps array.
+	handleCreateWorkspaceFromRepoRef.current = handleCreateWorkspaceFromRepo;
 
 	const applyAddRepositoryResponse = useCallback(
 		async (response: AddRepositoryResponse) => {
