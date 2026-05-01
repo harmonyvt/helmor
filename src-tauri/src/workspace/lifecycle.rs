@@ -110,6 +110,10 @@ pub enum WorkspaceCreationSource {
 pub struct FinalizeWorkspaceOptions {
     pub start_branch: Option<String>,
     pub fetch_start_branch: Option<bool>,
+    /// When set, move this existing worktree directory into the Helmor workspace
+    /// location instead of creating a new one. The original branch is preserved
+    /// as-is — no `-copy` suffix. Requires git 2.32+.
+    pub migrate_from_path: Option<String>,
 }
 
 struct WorkspaceSourcePlan {
@@ -388,7 +392,12 @@ pub fn finalize_workspace_from_repo_with_options_impl(
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        let create_result = if let Some(start_branch) = source_start_branch {
+        let create_result = if let Some(ref existing_path_str) = options.migrate_from_path {
+            // Migrate path: physically move the existing worktree into the Helmor
+            // workspace location. No branch copy — the original branch is preserved.
+            let existing_dir = PathBuf::from(existing_path_str.trim());
+            git_ops::move_worktree(&repo_root, &existing_dir, &workspace_dir).map(|_| String::new())
+        } else if let Some(start_branch) = source_start_branch {
             let is_pr_workspace = record.pr_url.is_some();
             if is_pr_workspace && git_ops::verify_branch_exists(&repo_root, &branch).is_ok() {
                 git_ops::create_worktree(&repo_root, &workspace_dir, &branch).map(|_| String::new())

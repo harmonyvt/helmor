@@ -1905,7 +1905,12 @@ export async function prepareWorkspaceFromSource(
  */
 export async function finalizeWorkspaceFromRepo(
 	workspaceId: string,
-	options?: { startBranch?: string | null; fetchStartBranch?: boolean | null },
+	options?: {
+		startBranch?: string | null;
+		fetchStartBranch?: boolean | null;
+		/** Move this existing worktree path into the Helmor workspace location instead of creating a new one. */
+		migrateFromPath?: string | null;
+	},
 ): Promise<FinalizeWorkspaceResponse> {
 	return invoke<FinalizeWorkspaceResponse>("finalize_workspace_from_repo", {
 		workspaceId,
