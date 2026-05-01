@@ -61,10 +61,15 @@ import {
 import {
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
+	type ProjectGroup,
 	projectSidebarLists,
+	projectSidebarListsByPr,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
 } from "../sidebar-projection";
+
+export type SidebarLayoutMode = "status" | "pr";
+const LAYOUT_MODE_KEY = "helmor:workspaces-sidebar:layout-mode";
 
 type WorkspaceToastVariant = "default" | "destructive";
 
@@ -93,6 +98,14 @@ export function useWorkspacesSidebarController({
 }: UseWorkspacesSidebarControllerArgs) {
 	const queryClient = useQueryClient();
 	const { settings } = useSettings();
+	const [layoutMode, setLayoutModeState] = useState<SidebarLayoutMode>(
+		() =>
+			(localStorage.getItem(LAYOUT_MODE_KEY) as SidebarLayoutMode) ?? "status",
+	);
+	const setLayoutMode = useCallback((mode: SidebarLayoutMode) => {
+		localStorage.setItem(LAYOUT_MODE_KEY, mode);
+		setLayoutModeState(mode);
+	}, []);
 	const [addingRepository, setAddingRepository] = useState(false);
 	const [isCloneDialogOpen, setIsCloneDialogOpen] = useState(false);
 	const [cloneDefaultDirectory, setCloneDefaultDirectory] = useState<
@@ -172,6 +185,25 @@ export function useWorkspacesSidebarController({
 	const archivedRows = useMemo(
 		() => projectedSidebar.archivedRows,
 		[projectedSidebar.archivedRows],
+	);
+
+	const pendingCreationsForPr = useMemo(
+		() =>
+			new Map(
+				Array.from(pendingCreations.entries()).map(([id, pc]) => [
+					id,
+					pc.entry,
+				]),
+			),
+		[pendingCreations],
+	);
+
+	const projectGroups = useMemo<ProjectGroup[]>(
+		() =>
+			layoutMode === "pr"
+				? projectSidebarListsByPr(baseGroups, pendingCreationsForPr)
+				: [],
+		[layoutMode, baseGroups, pendingCreationsForPr],
 	);
 
 	const updateArchivingWorkspaceId = useCallback(
@@ -1527,6 +1559,9 @@ export function useWorkspacesSidebarController({
 		creatingWorkspaceRepoId,
 		cloneDefaultDirectory,
 		groups,
+		layoutMode,
+		setLayoutMode,
+		projectGroups,
 		handleAddRepository,
 		handleArchiveWorkspace,
 		handleCloneFromUrl,

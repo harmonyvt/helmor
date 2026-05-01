@@ -4,6 +4,7 @@ import {
 	ChevronRight,
 	Folder,
 	FolderPlus,
+	GitPullRequest,
 	Globe,
 	LoaderCircle,
 	Plus,
@@ -41,17 +42,26 @@ import type {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
+import type { SidebarLayoutMode } from "./hooks/use-controller";
 import {
 	createInitialSectionOpenState,
 	readStoredSectionOpenState,
 	writeStoredSectionOpenState,
 } from "./open-state";
+import {
+	buildPrViewVirtualItems,
+	getPrItemHeight,
+	getPrItemKey,
+	type PrVirtualItem,
+	PrVirtualItemRenderer,
+} from "./pr-layout";
 import { WorkspaceRowItem } from "./row-item";
 import {
 	ARCHIVED_SECTION_ID,
 	findSelectedSectionId,
 	GroupIcon,
 } from "./shared";
+import type { ProjectGroup } from "./sidebar-projection";
 import { WorkspaceCreateDialog } from "./workspace-create-dialog";
 
 // ---------------------------------------------------------------------------
@@ -117,6 +127,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	archivingWorkspaceIds,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
+	layoutMode,
+	onToggleLayout,
+	projectGroups,
 }: {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
@@ -153,6 +166,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
+	layoutMode?: SidebarLayoutMode;
+	onToggleLayout?: () => void;
+	projectGroups?: ProjectGroup[];
 }) {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
@@ -224,7 +240,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		);
 	}, [archivedRows, groups, selectedWorkspaceId]);
 
-	// ── Flatten groups into virtual items ──────────────────────────────
+	// ── PR-first layout virtual items ─────────────────────────────────
+	const isPrMode = layoutMode === "pr";
+
+	const prFlatItems = useMemo<PrVirtualItem[]>(() => {
+		if (!isPrMode || !projectGroups?.length) return [];
+		return buildPrViewVirtualItems(projectGroups, sectionOpenState);
+	}, [isPrMode, projectGroups, sectionOpenState]);
+
+	// ── Status layout virtual items ────────────────────────────────────
 	const flatItems = useMemo(() => {
 		const items: VirtualItem[] = [];
 		const visibleGroups = groups.filter(
@@ -301,10 +325,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}, [groups, archivedRows, sectionOpenState]);
 
 	// ── Virtualizer ───────────────────────────────────────────────────
+	const activeItems = isPrMode ? prFlatItems : flatItems;
+
 	const virtualizer = useVirtualizer({
-		count: flatItems.length,
+		count: activeItems.length,
 		getScrollElement: () => scrollContainerRef.current,
 		estimateSize: (index) => {
+			if (isPrMode) {
+				return getPrItemHeight(prFlatItems[index]);
+			}
 			const item = flatItems[index];
 			switch (item.kind) {
 				case "group-header":
@@ -318,6 +347,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			}
 		},
 		getItemKey: (index) => {
+			if (isPrMode) {
+				return getPrItemKey(prFlatItems[index], index);
+			}
 			const item = flatItems[index];
 			switch (item.kind) {
 				case "group-header":
@@ -337,13 +369,26 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	useLayoutEffect(() => {
 		if (!selectedWorkspaceId) return;
 
-		const targetIndex = flatItems.findIndex(
-			(item) => item.kind === "row" && item.row.id === selectedWorkspaceId,
-		);
+		const targetIndex = isPrMode
+			? prFlatItems.findIndex(
+					(item) =>
+						item.kind === "pr-row" &&
+						item.stacked.row.id === selectedWorkspaceId,
+				)
+			: flatItems.findIndex(
+					(item) => item.kind === "row" && item.row.id === selectedWorkspaceId,
+				);
 		if (targetIndex === -1) return;
 
 		virtualizer.scrollToIndex(targetIndex, { align: "auto" });
-	}, [selectedWorkspaceId, sectionOpenState, flatItems, virtualizer]);
+	}, [
+		selectedWorkspaceId,
+		sectionOpenState,
+		flatItems,
+		prFlatItems,
+		isPrMode,
+		virtualizer,
+	]);
 
 	const workspaceActionsBusy = Boolean(
 		addingRepository || markingUnreadWorkspaceId || restoringWorkspaceId,
@@ -535,6 +580,33 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								type="button"
+								aria-label={
+									isPrMode ? "Switch to status view" : "Switch to PR view"
+								}
+								variant="ghost"
+								size="icon-xs"
+								onClick={onToggleLayout}
+								className={cn(
+									"text-muted-foreground",
+									isPrMode && "bg-accent text-foreground",
+								)}
+							>
+								<GitPullRequest className="size-4" strokeWidth={2} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="top"
+							sideOffset={4}
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+						>
+							<span>{isPrMode ? "Status view" : "PR view"}</span>
+						</TooltipContent>
+					</Tooltip>
+
 					<DropdownMenu
 						open={isAddRepositoryMenuOpen}
 						onOpenChange={setIsAddRepositoryMenuOpen}
@@ -689,7 +761,31 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								transform: `translateY(${vItem.start}px)`,
 							}}
 						>
-							{renderItem(flatItems[vItem.index])}
+							{isPrMode ? (
+								<PrVirtualItemRenderer
+									item={prFlatItems[vItem.index]}
+									selectedWorkspaceId={selectedWorkspaceId}
+									sendingWorkspaceIds={sendingWorkspaceIds}
+									interactionRequiredWorkspaceIds={
+										interactionRequiredWorkspaceIds
+									}
+									actions={{
+										onSelect: onSelectWorkspace,
+										onPrefetch: onPrefetchWorkspace,
+										onArchiveWorkspace,
+										onMarkWorkspaceUnread,
+										onOpenInFinder,
+										onTogglePin,
+										onSetWorkspaceStatus,
+										archivingWorkspaceIds,
+										markingUnreadWorkspaceId,
+										restoringWorkspaceId,
+									}}
+									onToggleSection={toggleSection}
+								/>
+							) : (
+								renderItem(flatItems[vItem.index])
+							)}
 						</div>
 					))}
 				</div>
