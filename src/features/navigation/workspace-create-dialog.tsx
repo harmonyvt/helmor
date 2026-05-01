@@ -18,13 +18,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { WorkspaceAvatar } from "@/features/navigation/avatar";
+import { PullRequestPicker } from "@/features/navigation/pull-request-picker";
 import {
 	type GithubPullRequestSummary,
 	listGithubPullRequestsForRepo,
@@ -34,7 +29,6 @@ import {
 	resolveGithubPullRequestForRepo,
 	type WorkspaceCreationSource,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
 type WorkspaceCreateDialogProps = {
@@ -374,89 +368,6 @@ export function WorkspaceCreateDialog({
 				</Tabs>
 			</DialogContent>
 		</Dialog>
-	);
-}
-
-function PullRequestPicker({
-	pullRequests,
-	loading,
-	selectedPrNumber,
-	creating,
-	onSelect,
-}: {
-	pullRequests: GithubPullRequestSummary[];
-	loading: boolean;
-	selectedPrNumber: number | null;
-	creating: boolean;
-	onSelect: (number: number) => void;
-}) {
-	if (pullRequests.length === 0 && !loading) {
-		return (
-			<div className="min-h-28 min-w-0 rounded-md border border-app-border/50 px-3 py-8 text-center text-[12px] text-muted-foreground">
-				No open pull requests.
-			</div>
-		);
-	}
-
-	if (pullRequests.length === 0 && loading) {
-		return (
-			<div className="flex min-h-28 min-w-0 items-center justify-center gap-2 rounded-md border border-app-border/50 px-3 py-8 text-[12px] text-muted-foreground">
-				<LoaderCircle className="size-3.5 animate-spin" />
-				Loading pull requests...
-			</div>
-		);
-	}
-
-	return (
-		<div className="min-w-0 overflow-hidden rounded-md border border-app-border/50">
-			<div className="grid grid-cols-[minmax(0,1fr)_minmax(7rem,35%)] gap-3 border-app-border/50 border-b bg-muted/40 px-2.5 py-1.5 text-[10.5px] font-medium text-muted-foreground uppercase tracking-[0.02em]">
-				<span className="min-w-0 truncate">Pull request</span>
-				<span className="min-w-0 truncate">Branch</span>
-			</div>
-			<TooltipProvider delayDuration={400}>
-				<div
-					aria-label="Open pull requests"
-					className="max-h-[260px] min-w-0 overflow-y-auto p-1"
-				>
-					{pullRequests.map((pr) => (
-						<Tooltip key={pr.number}>
-							<TooltipTrigger asChild>
-								<button
-									type="button"
-									aria-pressed={selectedPrNumber === pr.number}
-									className={cn(
-										"grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_minmax(7rem,35%)] items-center gap-3 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-accent/60 disabled:cursor-not-allowed disabled:opacity-60",
-										selectedPrNumber === pr.number &&
-											"bg-accent text-foreground",
-									)}
-									onClick={() => onSelect(pr.number)}
-									disabled={creating}
-								>
-									<span className="min-w-0 truncate">
-										#{pr.number} {pr.title}
-									</span>
-									<span className="min-w-0 truncate font-mono text-[10.5px] text-muted-foreground">
-										{pr.headBranch}
-									</span>
-								</button>
-							</TooltipTrigger>
-							<TooltipContent
-								side="top"
-								align="start"
-								className="max-w-sm flex-col items-start gap-1"
-							>
-								<p className="font-medium leading-snug">
-									#{pr.number} {pr.title}
-								</p>
-								<p className="font-mono text-[10px] opacity-70">
-									{pr.headBranch} -&gt; {pr.baseBranch}
-								</p>
-							</TooltipContent>
-						</Tooltip>
-					))}
-				</div>
-			</TooltipProvider>
-		</div>
 	);
 }
 

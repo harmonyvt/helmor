@@ -43,6 +43,8 @@ pub struct GithubPullRequestSummary {
     pub is_merged: bool,
     pub head_branch: String,
     pub base_branch: String,
+    pub additions: u64,
+    pub deletions: u64,
 }
 
 pub fn list_repository_pull_requests(repo_id: &str) -> Result<Vec<GithubPullRequestSummary>> {
@@ -61,6 +63,8 @@ query($owner: String!, $name: String!) {
         merged
         headRefName
         baseRefName
+        additions
+        deletions
         headRepository { nameWithOwner }
         baseRepository { nameWithOwner }
       }
@@ -111,6 +115,8 @@ query($owner: String!, $name: String!, $number: Int!) {
       merged
       headRefName
       baseRefName
+      additions
+      deletions
       headRepository { nameWithOwner }
       baseRepository { nameWithOwner }
     }
@@ -235,6 +241,8 @@ fn pull_request_summary_from_node(
         is_merged: node.merged,
         head_branch: node.head_ref_name,
         base_branch: node.base_ref_name,
+        additions: node.additions,
+        deletions: node.deletions,
     })
 }
 /// Look up the (most recent) pull request matching this workspace's current
@@ -846,6 +854,8 @@ struct RepositoryPullRequestNode {
     base_ref_name: String,
     head_repository: Option<RepositoryPullRequestRepository>,
     base_repository: Option<RepositoryPullRequestRepository>,
+    additions: u64,
+    deletions: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1455,6 +1465,8 @@ mod tests {
             base_repository: base_repo.map(|name_with_owner| RepositoryPullRequestRepository {
                 name_with_owner: name_with_owner.to_string(),
             }),
+            additions: 0,
+            deletions: 0,
         }
     }
 
