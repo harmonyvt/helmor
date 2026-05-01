@@ -1560,6 +1560,26 @@ export type ForgeActionStatus = {
 	message?: string | null;
 };
 
+/// A single comment from a PR — either the root of an inline review thread
+/// or a general issue-style comment on the PR.
+export type PrComment = {
+	id: string;
+	author: string;
+	body: string;
+	url: string;
+	/** File path for inline review thread comments; absent for general comments. */
+	filePath?: string | null;
+	/** True when the parent review thread has been marked resolved on GitHub. */
+	isThreadResolved: boolean;
+	createdAt: string;
+};
+
+export type PrCommentData = {
+	comments: PrComment[];
+	prNumber?: number | null;
+	prUrl?: string | null;
+};
+
 export async function refreshWorkspaceChangeRequest(
 	workspaceId: string,
 ): Promise<ChangeRequestInfo | null> {
@@ -1646,6 +1666,50 @@ export async function getWorkspaceForgeCheckInsertText(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load check details."),
+		);
+	}
+}
+
+export async function getWorkspaceForgeDeploymentInsertText(
+	workspaceId: string,
+	itemId: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("get_workspace_forge_deployment_insert_text", {
+			workspaceId,
+			itemId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load deployment details."),
+		);
+	}
+}
+
+export async function getWorkspacePrComments(
+	workspaceId: string,
+): Promise<PrCommentData> {
+	try {
+		return await invoke<PrCommentData>("get_workspace_pr_comments", {
+			workspaceId,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load PR comments."));
+	}
+}
+
+export async function getWorkspacePrCommentInsertText(
+	workspaceId: string,
+	commentId: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("get_workspace_pr_comment_insert_text", {
+			workspaceId,
+			commentId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load PR comment details."),
 		);
 	}
 }

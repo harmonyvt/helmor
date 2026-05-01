@@ -217,6 +217,31 @@ pub async fn get_workspace_forge_check_insert_text(
 }
 
 #[tauri::command]
+pub async fn get_workspace_forge_deployment_insert_text(
+    workspace_id: String,
+    item_id: String,
+) -> CmdResult<String> {
+    run_blocking(move || {
+        forge::lookup_workspace_forge_deployment_insert_text(&workspace_id, &item_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_workspace_pr_comments(workspace_id: String) -> CmdResult<forge::PrCommentData> {
+    run_blocking(move || forge::lookup_workspace_pr_comments(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn get_workspace_pr_comment_insert_text(
+    workspace_id: String,
+    comment_id: String,
+) -> CmdResult<String> {
+    run_blocking(move || forge::lookup_workspace_pr_comment_insert_text(&workspace_id, &comment_id))
+        .await
+}
+
+#[tauri::command]
 pub async fn merge_workspace_change_request(
     workspace_id: String,
     app: tauri::AppHandle,

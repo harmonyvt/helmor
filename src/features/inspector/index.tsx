@@ -7,7 +7,11 @@ import {
 	type ShortcutHandler,
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
-import type { ChangeRequestInfo } from "@/lib/api";
+import {
+	type ChangeRequestInfo,
+	createSession,
+	type PrComment,
+} from "@/lib/api";
 import type { DiffOpenOptions } from "@/lib/editor-session";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -28,6 +32,54 @@ import {
 	TERMINAL_INSTANCE_LIMIT,
 	type TerminalInstance,
 } from "./terminal-store";
+
+// ── Review-all prompt builder ─────────────────────────────────────────────────
+
+function buildReviewAllPrompt(comments: PrComment[]): string {
+	const inlineUnresolved = comments.filter(
+		(c) => c.filePath != null && !c.isThreadResolved,
+	);
+	const generalComments = comments.filter((c) => c.filePath == null);
+
+	const sections: string[] = [
+		"Please review and address all outstanding PR review comments.",
+	];
+
+	if (inlineUnresolved.length > 0) {
+		sections.push("\n## Inline Code Review Comments");
+		// Group by file path.
+		const byFile = new Map<string, PrComment[]>();
+		for (const comment of inlineUnresolved) {
+			const key = comment.filePath!;
+			const group = byFile.get(key);
+			if (group) {
+				group.push(comment);
+			} else {
+				byFile.set(key, [comment]);
+			}
+		}
+		for (const [filePath, fileComments] of byFile) {
+			sections.push(`\n### ${filePath}`);
+			for (const comment of fileComments) {
+				sections.push(`**@${comment.author}**: ${comment.body}`);
+			}
+		}
+	}
+
+	if (generalComments.length > 0) {
+		sections.push("\n## General PR Comments");
+		for (const comment of generalComments) {
+			sections.push(`\n### @${comment.author}`);
+			sections.push(comment.body);
+		}
+	}
+
+	sections.push(
+		"\n---\nFor each comment, understand the requested change and implement it. Run the relevant tests to confirm nothing is broken.",
+	);
+
+	return sections.join("\n");
+}
 
 type WorkspaceInspectorSidebarProps = {
 	workspaceId?: string | null;
@@ -137,6 +189,19 @@ export function WorkspaceInspectorSidebar({
 		workspaceId ?? null,
 		"run",
 		!!repoScripts?.runScript?.trim(),
+	);
+
+	const handleReviewAllComments = useCallback(
+		async (comments: PrComment[]) => {
+			if (!workspaceId || !onQueuePendingPromptForSession) return;
+			const { sessionId } = await createSession(workspaceId);
+			onQueuePendingPromptForSession({
+				sessionId,
+				prompt: buildReviewAllPrompt(comments),
+				forceQueue: false,
+			});
+		},
+		[workspaceId, onQueuePendingPromptForSession],
 	);
 
 	// Live list of Terminal sub-tabs for the current workspace, observed at
@@ -397,6 +462,7 @@ export function WorkspaceInspectorSidebar({
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
+				onReviewAllComments={handleReviewAllComments}
 			/>
 
 			{tabsOpen && (

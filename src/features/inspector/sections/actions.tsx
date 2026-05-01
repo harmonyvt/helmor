@@ -26,7 +26,11 @@ import {
 	type ForgeActionItem,
 	type ForgeActionStatus,
 	getWorkspaceForgeCheckInsertText,
+	getWorkspaceForgeDeploymentInsertText,
+	getWorkspacePrCommentInsertText,
 	loadRepoPreferences,
+	type PrComment,
+	type PrCommentData,
 	type RepoPreferences,
 	type SyncWorkspaceTargetResponse,
 	syncWorkspaceWithTargetBranch,
@@ -38,6 +42,7 @@ import {
 	workspaceForgeActionStatusQueryOptions,
 	workspaceForgeQueryOptions,
 	workspaceGitActionStatusQueryOptions,
+	workspacePrCommentsQueryOptions,
 } from "@/lib/query-client";
 // `workspaceForgeQueryOptions` is still used here to drive `changeRequestName`
 // for the review/PR rows (MR vs PR wording). Forge onboarding lives in
@@ -115,6 +120,9 @@ type ActionsSectionProps = {
 	commitButtonMode?: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
 	changeRequest: ChangeRequestInfo | null;
+	/** Called when the user clicks "Review all" in the Comments section.
+	 *  Receives all current PR comments so the parent can build the prompt. */
+	onReviewAllComments?: (comments: PrComment[]) => void | Promise<void>;
 };
 
 function buildSyncResolutionPrompt(
@@ -156,6 +164,7 @@ export function ActionsSection({
 	commitButtonMode,
 	commitButtonState,
 	changeRequest,
+	onReviewAllComments,
 }: ActionsSectionProps) {
 	const queryClient = useQueryClient();
 	const [syncPending, setSyncPending] = useState(false);
@@ -174,6 +183,16 @@ export function ActionsSection({
 		...workspaceForgeActionStatusQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null && !isArchived,
 	});
+	const prCommentsQuery = useQuery({
+		...workspacePrCommentsQueryOptions(workspaceId ?? "__none__"),
+		enabled: workspaceId !== null && !isArchived,
+	});
+	const EMPTY_PR_COMMENT_DATA: PrCommentData = {
+		comments: [],
+		prNumber: null,
+		prUrl: null,
+	};
+	const prCommentData = prCommentsQuery.data ?? EMPTY_PR_COMMENT_DATA;
 	const gitStatus = gitStatusQuery.data ?? EMPTY_GIT_ACTION_STATUS;
 	const forgeStatus = forgeStatusQuery.data ?? EMPTY_FORGE_ACTION_STATUS;
 	const changeRequestName = forgeQuery.data?.labels.changeRequestName ?? "PR";
@@ -286,6 +305,65 @@ export function ActionsSection({
 		},
 		[workspaceId],
 	);
+
+	const handleInsertDeployment = useCallback(
+		async (item: ForgeActionItem) => {
+			if (!workspaceId) {
+				return;
+			}
+			const submitText = await getWorkspaceForgeDeploymentInsertText(
+				workspaceId,
+				item.id,
+			);
+			return {
+				target: { workspaceId },
+				label: item.name,
+				submitText,
+				key: `pr-deployment:${item.id}`,
+				preview: buildComposerPreviewPayload({
+					title: item.name,
+					content: submitText,
+					preferredKind: "code",
+				}),
+			};
+		},
+		[workspaceId],
+	);
+
+	const handleInsertComment = useCallback(
+		async (comment: PrComment) => {
+			if (!workspaceId) {
+				return;
+			}
+			const submitText = await getWorkspacePrCommentInsertText(
+				workspaceId,
+				comment.id,
+			);
+			const label = comment.filePath
+				? `Comment on ${comment.filePath}`
+				: `Comment by @${comment.author}`;
+			return {
+				target: { workspaceId },
+				label,
+				submitText,
+				key: `pr-comment:${comment.id}`,
+				preview: buildComposerPreviewPayload({
+					title: comment.filePath
+						? `PR Comment – ${comment.filePath}`
+						: `PR Comment by @${comment.author}`,
+					content: submitText,
+					preferredKind: "code",
+				}),
+			};
+		},
+		[workspaceId],
+	);
+
+	const handleReviewAll = useCallback(async () => {
+		if (!onReviewAllComments) return;
+		await onReviewAllComments(prCommentData.comments);
+	}, [onReviewAllComments, prCommentData.comments]);
+
 	return (
 		<section
 			ref={sectionRef}
@@ -388,33 +466,95 @@ export function ActionsSection({
 					</>
 				)}
 
-				{sortedDeployments.length > 0 && (
+				{(prCommentData.comments.length > 0 || prCommentsQuery.isFetching) && (
+					<>
+						<div className="flex items-center justify-between px-2.5 pb-1 pt-2.5">
+							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+								Comments
+							</span>
+							{prCommentData.comments.some((c) => !c.isThreadResolved) && (
+								<button
+									type="button"
+									onClick={() => void handleReviewAll()}
+									className="cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80"
+									aria-label="Review all PR comments"
+								>
+									Review all
+								</button>
+							)}
+						</div>
+						{prCommentsQuery.isFetching &&
+						prCommentData.comments.length === 0 ? (
+							<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground">
+								<LoaderCircleIcon
+									className="size-3 animate-spin opacity-50"
+									strokeWidth={2}
+								/>
+								<span className="text-[10.5px]">Loading comments…</span>
+							</div>
+						) : (
+							prCommentData.comments.map((comment) => (
+								<CommentRow
+									key={comment.id}
+									comment={comment}
+									onInsertToComposer={handleInsertComment}
+								/>
+							))
+						)}
+					</>
+				)}
+
+				{(sortedDeployments.length > 0 || forgeStatusQuery.isLoading) && (
 					<>
 						<div className="px-2.5 pb-1 pt-2.5">
 							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 								Deployments
 							</span>
 						</div>
-						{sortedDeployments.map((item) => (
-							<ActionStatusRow key={item.id} item={item} />
-						))}
+						{forgeStatusQuery.isLoading && sortedDeployments.length === 0 ? (
+							<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground">
+								<LoaderCircleIcon
+									className="size-3 animate-spin opacity-50"
+									strokeWidth={2}
+								/>
+								<span className="text-[10.5px]">Loading deployments…</span>
+							</div>
+						) : (
+							sortedDeployments.map((item) => (
+								<ActionStatusRow
+									key={item.id}
+									item={item}
+									onInsertToComposer={handleInsertDeployment}
+								/>
+							))
+						)}
 					</>
 				)}
 
-				{sortedChecks.length > 0 && (
+				{(sortedChecks.length > 0 || forgeStatusQuery.isLoading) && (
 					<>
 						<div className="px-2.5 pb-1 pt-2.5">
 							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 								Checks
 							</span>
 						</div>
-						{sortedChecks.map((item) => (
-							<ActionStatusRow
-								key={item.id}
-								item={item}
-								onInsertToComposer={handleInsertCheck}
-							/>
-						))}
+						{forgeStatusQuery.isLoading && sortedChecks.length === 0 ? (
+							<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground">
+								<LoaderCircleIcon
+									className="size-3 animate-spin opacity-50"
+									strokeWidth={2}
+								/>
+								<span className="text-[10.5px]">Loading checks…</span>
+							</div>
+						) : (
+							sortedChecks.map((item) => (
+								<ActionStatusRow
+									key={item.id}
+									item={item}
+									onInsertToComposer={handleInsertCheck}
+								/>
+							))
+						)}
 					</>
 				)}
 				{bottomSpacerHeight > 0 && (
@@ -690,6 +830,62 @@ function ActionStatusRow({
 						<ArrowUpRightIcon strokeWidth={1.8} />
 					</Button>
 				)}
+			</div>
+		</div>
+	);
+}
+
+function CommentRow({
+	comment,
+	onInsertToComposer,
+}: {
+	comment: PrComment;
+	onInsertToComposer: (
+		comment: PrComment,
+	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
+}) {
+	const actionButtonClassName =
+		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5";
+	const appendActionButtonClassName =
+		"size-4 rounded-sm text-muted-foreground opacity-0 pointer-events-none group-hover/comment-row:opacity-55 group-hover/comment-row:pointer-events-auto group-focus-within/comment-row:opacity-55 group-focus-within/comment-row:pointer-events-auto hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3";
+
+	const label = comment.filePath
+		? `${comment.filePath} – @${comment.author}`
+		: `@${comment.author}`;
+	const statusKind: ActionStatusKind = comment.isThreadResolved
+		? "success"
+		: "pending";
+
+	return (
+		<div className="group/comment-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+			<div className="flex min-w-0 flex-1 items-center gap-1.5">
+				<StatusIcon status={statusKind} />
+				<span
+					className="min-w-0 truncate whitespace-nowrap text-primary"
+					title={label}
+				>
+					{label}
+				</span>
+			</div>
+			<div className="flex shrink-0 items-center justify-end gap-0">
+				<AppendContextButton
+					subjectLabel={label}
+					getPayload={() => onInsertToComposer(comment)}
+					errorTitle="Couldn't insert comment"
+					className={appendActionButtonClassName}
+				/>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-xs"
+					aria-label={`Open comment by @${comment.author}`}
+					onClick={() => {
+						void openUrl(comment.url);
+					}}
+					className={cn("shrink-0", actionButtonClassName)}
+				>
+					<ArrowUpRightIcon strokeWidth={1.8} />
+				</Button>
 			</div>
 		</div>
 	);

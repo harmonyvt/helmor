@@ -17,6 +17,7 @@ import {
 	getLiveContextUsage,
 	getSessionContextUsage,
 	getWorkspaceForge,
+	getWorkspacePrComments,
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
@@ -33,6 +34,7 @@ import {
 	loadWorkspaceGitActionStatus,
 	loadWorkspaceGroups,
 	loadWorkspaceSessions,
+	type PrCommentData,
 	type PrSyncState,
 	refreshWorkspaceChangeRequest,
 } from "./api";
@@ -89,6 +91,8 @@ export const helmorQueryKeys = {
 		["workspaceGitActionStatus", workspaceId] as const,
 	workspaceForgeActionStatus: (workspaceId: string) =>
 		["workspaceForgeActionStatus", workspaceId] as const,
+	workspacePrComments: (workspaceId: string) =>
+		["workspacePrComments", workspaceId] as const,
 	repoScripts: (repoId: string, workspaceId: string | null) =>
 		["repoScripts", repoId, workspaceId ?? ""] as const,
 	repoPreferences: (repoId: string) => ["repoPreferences", repoId] as const,
@@ -535,8 +539,21 @@ export function workspaceForgeActionStatusQueryOptions(workspaceId: string) {
 		queryFn: () => loadWorkspaceForgeActionStatus(workspaceId),
 		staleTime: 30_000,
 		gcTime: DEFAULT_GC_TIME,
+		refetchOnWindowFocus: true,
 		refetchInterval: (query) =>
 			forgeActionStatusRefetchInterval(query.state.data),
+		retry: 0,
+	});
+}
+
+export function workspacePrCommentsQueryOptions(workspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspacePrComments(workspaceId),
+		queryFn: (): Promise<PrCommentData> => getWorkspacePrComments(workspaceId),
+		staleTime: 30_000,
+		gcTime: DEFAULT_GC_TIME,
+		refetchInterval: 60_000,
+		refetchOnWindowFocus: true,
 		retry: 0,
 	});
 }

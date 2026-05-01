@@ -209,6 +209,39 @@ impl ForgeActionStatus {
     }
 }
 
+/// A single comment from a PR — either the root comment of an inline review
+/// thread or a general issue-style comment on the PR itself.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrComment {
+    /// Stable ID for this comment.
+    ///
+    /// - Inline review thread root: `"review-thread-{threadId}-comment-{dbId}"`
+    /// - General PR comment: `"comment-{dbId}"`
+    pub id: String,
+    pub author: String,
+    pub body: String,
+    pub url: String,
+    /// File path for inline review thread comments; `None` for general comments.
+    pub file_path: Option<String>,
+    /// `true` when the parent review thread has been marked resolved on GitHub.
+    /// Always `false` for general PR comments (they have no resolution state).
+    pub is_thread_resolved: bool,
+    pub created_at: String,
+}
+
+/// All PR comments for a workspace's current branch, fetched from GitHub.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrCommentData {
+    /// Flat list of comments ordered: unresolved inline threads first, then
+    /// resolved inline threads, then general comments; within each group
+    /// oldest-first by `created_at`.
+    pub comments: Vec<PrComment>,
+    pub pr_number: Option<i64>,
+    pub pr_url: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

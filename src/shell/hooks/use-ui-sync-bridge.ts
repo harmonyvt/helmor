@@ -101,6 +101,9 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.forgeCliStatusAll,
 			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspacePrComments(event.workspaceId),
+			});
 			return;
 		case "workspaceChangeRequestChanged":
 			void queryClient.invalidateQueries({
@@ -114,6 +117,9 @@ function handleUiMutation(
 			});
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceForgeActionStatus(event.workspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspacePrComments(event.workspaceId),
 			});
 			return;
 		case "repositoryListChanged":
