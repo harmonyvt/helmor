@@ -158,7 +158,7 @@ function ChatThread({
 	const { contentRef, scrollRef, scrollToBottom, stopScroll, isAtBottom } =
 		useStickToBottom({
 			initial: "instant",
-			resize: "smooth",
+			resize: "instant",
 		});
 	const handleScrollRef = useCallback(
 		(element: HTMLElement | null) => {
