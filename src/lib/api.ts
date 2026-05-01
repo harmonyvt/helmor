@@ -86,6 +86,7 @@ export type WorkspaceRow = {
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
+	intendedTargetBranch?: string | null;
 	pinnedAt?: string | null;
 	sessionCount?: number;
 	messageCount?: number;
