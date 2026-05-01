@@ -155,6 +155,15 @@ export function InspectorTabsSection({
 	// zoomed visual identity stays consistent while the size is changing — the
 	// collapsing panel looks exactly like the expanding one in reverse.
 	const [isZoomPresented, setIsZoomPresented] = useState(false);
+	// Clamped zoom height as a percentage of wrapperRef's height. Normally
+	// `TABS_HOVER_ZOOM_MULTIPLIER * 100` (200%), but reduced in full-screen
+	// mode (or whenever the wrapper is tall) so the expanding panel never
+	// overflows the viewport top and gets clipped by the root overflow-hidden.
+	// Stays in `%` units so the CSS height transition always interpolates
+	// between the same unit type (100% → N%).
+	const [clampedZoomHeightPercent, setClampedZoomHeightPercent] = useState(
+		TABS_HOVER_ZOOM_MULTIPLIER * 100,
+	);
 	// Short-lived flag that applies a gaussian blur to the inner
 	// header+body while the panel is mid-transition. Masks the frames where
 	// xterm's canvas is being GPU-scaled and then re-fit, which would
@@ -258,6 +267,27 @@ export function InspectorTabsSection({
 			triggerContentBlurPulse();
 			if (target) {
 				clearPresentationClearTimer();
+				// Clamp the zoom height so the expanding panel never overflows
+				// the top of the viewport. In full-screen (or on tall displays)
+				// the wrapperRef can be so tall that 200% of its height would
+				// exceed the distance from the wrapper's bottom to the screen
+				// top, clipping the Setup/Run/Terminal header off-screen.
+				//
+				// `rect.bottom` is the distance from the viewport top to the
+				// bottom of the wrapperRef (≡ the maximum height the
+				// absolute bottom-0 container can have before its top goes
+				// negative). Convert that cap back to a percentage of the
+				// wrapper so the CSS transition stays in the same unit (% → %)
+				// and interpolates correctly.
+				if (wrapperRef.current) {
+					const rect = wrapperRef.current.getBoundingClientRect();
+					if (rect.height > 0) {
+						const idealHeight = rect.height * TABS_HOVER_ZOOM_MULTIPLIER;
+						const maxHeight = rect.bottom; // viewport-top → wrapper-bottom
+						const safeHeight = Math.min(idealHeight, maxHeight);
+						setClampedZoomHeightPercent((safeHeight / rect.height) * 100);
+					}
+				}
 				setIsZoomPresented(true);
 			} else {
 				clearPresentationClearTimer();
@@ -268,7 +298,7 @@ export function InspectorTabsSection({
 			}
 			setIsHoverExpanded(target);
 		},
-		[clearPresentationClearTimer, triggerContentBlurPulse],
+		[wrapperRef, clearPresentationClearTimer, triggerContentBlurPulse],
 	);
 
 	// Hover trigger is bound to the BODY only (not the header) so moving the
@@ -393,7 +423,12 @@ export function InspectorTabsSection({
 		releaseTerminalFitLock,
 	]);
 
+	// Width always uses the unclamped 200% (expands leftward into the panel;
+	// never clips horizontally on typical screen widths).
 	const zoomedSize = `${TABS_HOVER_ZOOM_MULTIPLIER * 100}%`;
+	// Height uses the viewport-clamped percentage computed in setZoomTarget so
+	// the expanding panel's top never goes above y=0 in full-screen mode.
+	const zoomedHeightSize = `${clampedZoomHeightPercent}%`;
 
 	// Smart tab click: closed → open + activate; open + clicking the active
 	// tab → collapse; open + different tab → just switch. Lets the user use
@@ -459,7 +494,7 @@ export function InspectorTabsSection({
 				)}
 				style={{
 					width: isHoverExpanded ? zoomedSize : "100%",
-					height: isHoverExpanded ? zoomedSize : "100%",
+					height: isHoverExpanded ? zoomedHeightSize : "100%",
 					// `height` only transitions during hover-zoom; outside of
 					// zoom the toggle's web-animation drives wrapper height
 					// and inner must follow instantly.
