@@ -799,6 +799,15 @@ fn sys_no_subtype() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+#[test]
+fn sys_codex_missing_response_item_recovery_notice() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({ "subtype": "codex_missing_response_item_recovery" }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // ============================================================================
 // 7. Merge boundaries
 // ============================================================================
