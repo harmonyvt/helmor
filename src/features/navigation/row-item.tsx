@@ -24,6 +24,7 @@ import {
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { HyperText } from "@/components/ui/hyper-text";
+import { ShinyFlash } from "@/components/ui/shiny-flash";
 import {
 	Tooltip,
 	TooltipContent,
@@ -68,6 +69,8 @@ export type WorkspaceRowItemProps = {
 	isInteractionRequired?: boolean;
 	/** When true, displays the PR number extracted from `row.prUrl` as a badge. */
 	showPrNumber?: boolean;
+	/** When true, the row title plays the shiny-flash animation once. */
+	isFlashing?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -117,6 +120,7 @@ export const WorkspaceRowItem = memo(
 		isSending,
 		isInteractionRequired,
 		showPrNumber,
+		isFlashing,
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -258,7 +262,9 @@ export const WorkspaceRowItem = memo(
 										: "font-medium",
 							)}
 						>
-							<HyperText text={displayTitle} className="inline" />
+							<ShinyFlash active={isFlashing ?? false}>
+								<HyperText text={displayTitle} className="inline" />
+							</ShinyFlash>
 						</span>
 					</div>
 					{prNumber !== null && (
@@ -436,6 +442,7 @@ export const WorkspaceRowItem = memo(
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
 			previous.isInteractionRequired === next.isInteractionRequired &&
+			previous.isFlashing === next.isFlashing &&
 			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&
