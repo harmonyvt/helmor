@@ -60,6 +60,7 @@ import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
+import { DataSourceSettingsRow } from "./panels/data-source";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
@@ -273,6 +274,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 						<div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-8 pt-1 pb-6">
 							{activeSection === "general" && (
 								<SettingsGroup>
+									<DataSourceSettingsRow />
 									<SettingsRow
 										title="Desktop Notifications"
 										description="Show system notifications when sessions complete or need input"

@@ -8,14 +8,32 @@
 
 use std::fs;
 use std::path::PathBuf;
+#[cfg(not(test))]
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
+
+mod bootstrap;
+#[cfg(test)]
+mod tests;
+
+pub use bootstrap::{
+    bootstrap_settings_path, data_dir_locked_by_env, data_dir_preference, set_data_dir_preference,
+    DataDirPreference,
+};
 
 #[cfg(test)]
 pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Name of the database file inside the data directory.
 const DB_FILENAME: &str = "helmor.db";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DataMode {
+    Production,
+    Development,
+    Custom,
+}
 
 /// Default top-level directory name for Helmor app data.
 const fn default_data_dir_name() -> &'static str {
@@ -28,7 +46,7 @@ const fn default_data_dir_name() -> &'static str {
 
 /// Returns the resolved data directory, creating it if necessary.
 pub fn data_dir() -> Result<PathBuf> {
-    let dir = resolve_data_dir()?;
+    let dir = active_data_dir()?;
 
     if !dir.exists() {
         fs::create_dir_all(&dir)
@@ -128,21 +146,81 @@ pub fn is_dev() -> bool {
     cfg!(debug_assertions)
 }
 
+/// Returns a human-readable description of the compiled build mode.
+pub fn build_mode_label() -> &'static str {
+    if cfg!(debug_assertions) {
+        "development"
+    } else {
+        "release"
+    }
+}
+
+pub fn default_data_mode_label() -> &'static str {
+    if cfg!(debug_assertions) {
+        "development"
+    } else {
+        "production"
+    }
+}
+
+#[cfg(not(test))]
+static ACTIVE_DATA_DIR: LazyLock<std::result::Result<PathBuf, String>> =
+    LazyLock::new(|| resolve_data_dir_uncached().map_err(|error| error.to_string()));
+
+#[cfg(not(test))]
+static ACTIVE_DATA_MODE: LazyLock<DataMode> = LazyLock::new(effective_data_mode_uncached);
+
+fn active_data_dir() -> Result<PathBuf> {
+    #[cfg(test)]
+    {
+        resolve_data_dir_uncached()
+    }
+    #[cfg(not(test))]
+    {
+        ACTIVE_DATA_DIR
+            .as_ref()
+            .map(PathBuf::clone)
+            .map_err(|message| anyhow::anyhow!(message.clone()))
+    }
+}
+
 /// Resolve the data directory path without creating it.
-fn resolve_data_dir() -> Result<PathBuf> {
+fn resolve_data_dir_uncached() -> Result<PathBuf> {
     // 1. Environment variable override
     if let Ok(dir) = std::env::var("HELMOR_DATA_DIR") {
         return Ok(PathBuf::from(dir));
     }
 
-    // 2. Build profile based
+    // 2. User preference, falling back to build profile.
     let home = dirs_home().context("Could not determine home directory")?;
+    let dir_name = match data_dir_preference() {
+        DataDirPreference::Automatic => default_data_dir_name(),
+        DataDirPreference::Production => "helmor",
+        DataDirPreference::Development => "helmor-dev",
+    };
 
-    Ok(home.join(default_data_dir_name()))
+    Ok(home.join(dir_name))
 }
 
 fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn effective_data_mode_uncached() -> DataMode {
+    if data_dir_locked_by_env() {
+        return DataMode::Custom;
+    }
+    match data_dir_preference() {
+        DataDirPreference::Automatic => {
+            if cfg!(debug_assertions) {
+                DataMode::Development
+            } else {
+                DataMode::Production
+            }
+        }
+        DataDirPreference::Production => DataMode::Production,
+        DataDirPreference::Development => DataMode::Development,
+    }
 }
 
 /// Ensure all required subdirectories exist.
@@ -162,56 +240,19 @@ pub fn workspace_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
 
 /// Returns a human-readable description of the data mode.
 pub fn data_mode_label() -> &'static str {
-    if cfg!(debug_assertions) {
-        "development"
-    } else {
-        "production"
+    #[cfg(test)]
+    let mode = effective_data_mode_uncached();
+    #[cfg(not(test))]
+    let mode = *ACTIVE_DATA_MODE;
+
+    match mode {
+        DataMode::Production => "production",
+        DataMode::Development => "development",
+        DataMode::Custom => "custom",
     }
 }
 
 /// Returns the path to the data directory as resolved (for display/info).
 pub fn data_dir_display() -> Result<String> {
     Ok(data_dir()?.display().to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Test path construction without touching environment variables.
-    /// This avoids races with other test modules that also set HELMOR_DATA_DIR.
-
-    #[test]
-    fn db_filename_is_helmor_db() {
-        assert_eq!(DB_FILENAME, "helmor.db");
-    }
-
-    #[test]
-    fn is_dev_returns_true_in_debug() {
-        // In test (debug) builds, this should be true
-        assert!(is_dev());
-    }
-
-    #[test]
-    fn data_mode_label_returns_development_in_debug() {
-        assert_eq!(data_mode_label(), "development");
-    }
-
-    #[test]
-    fn default_data_dir_name_returns_dev_directory_in_debug() {
-        assert_eq!(default_data_dir_name(), "helmor-dev");
-    }
-
-    #[test]
-    fn conductor_source_db_path_returns_option() {
-        // Just verify it doesn't panic — the result depends on whether
-        // Conductor is installed on the build machine.
-        let _ = conductor_source_db_path();
-    }
-
-    #[test]
-    fn dirs_home_returns_some() {
-        // HOME should be set in any normal test environment
-        assert!(dirs_home().is_some());
-    }
 }

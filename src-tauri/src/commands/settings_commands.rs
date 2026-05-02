@@ -1,6 +1,8 @@
 use anyhow::Context;
 
-use crate::{agents::ActionKind, db, rate_limits::throttle::Throttle, settings};
+use crate::{
+    agents::ActionKind, data_dir::DataDirPreference, db, rate_limits::throttle::Throttle, settings,
+};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -52,6 +54,11 @@ pub async fn update_app_settings(
         Ok(())
     })
     .await
+}
+
+#[tauri::command]
+pub async fn set_data_dir_preference(preference: DataDirPreference) -> CmdResult<()> {
+    run_blocking(move || crate::data_dir::set_data_dir_preference(preference)).await
 }
 
 /// Read the account-global Codex rate-limit snapshot. Each call attempts

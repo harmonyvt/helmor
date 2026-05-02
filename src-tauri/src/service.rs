@@ -33,10 +33,15 @@ pub use crate::workspaces::{
 pub fn get_data_info() -> Result<DataInfo> {
     let data_dir = crate::data_dir::data_dir()?;
     let db_path = crate::data_dir::db_path()?;
+    let data_dir_preference_path = crate::data_dir::bootstrap_settings_path()?;
     Ok(DataInfo {
         data_mode: crate::data_dir::data_mode_label().to_string(),
+        default_data_mode: crate::data_dir::default_data_mode_label().to_string(),
         data_dir: data_dir.display().to_string(),
         db_path: db_path.display().to_string(),
+        data_dir_preference: crate::data_dir::data_dir_preference(),
+        data_dir_preference_path: data_dir_preference_path.display().to_string(),
+        data_dir_locked_by_env: crate::data_dir::data_dir_locked_by_env(),
     })
 }
 

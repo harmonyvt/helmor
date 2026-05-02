@@ -107,11 +107,16 @@ export type WorkspaceGroup = {
 	rows: WorkspaceRow[];
 };
 
+export type DataDirPreference = "automatic" | "production" | "development";
+
 export type DataInfo = {
 	dataMode: string;
-	dataRoot: string;
+	defaultDataMode: "production" | "development";
+	dataDir: string;
 	dbPath: string;
-	archiveRoot: string;
+	dataDirPreference: DataDirPreference;
+	dataDirPreferencePath: string;
+	dataDirLockedByEnv: boolean;
 };
 
 export type AgentProvider = "claude" | "codex";
@@ -710,6 +715,16 @@ export async function loadDataInfo(): Promise<DataInfo | null> {
 	} catch {
 		return null;
 	}
+}
+
+export async function setDataDirPreference(
+	preference: DataDirPreference,
+): Promise<void> {
+	await invoke("set_data_dir_preference", { preference });
+}
+
+export async function restartApp(force = false): Promise<void> {
+	await invoke("restart_app", { force });
 }
 
 export type CliStatus = {
