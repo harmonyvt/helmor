@@ -23,7 +23,10 @@
 
 import { describe, expect, test } from "bun:test";
 import type { OnNotification, OnRequest } from "./codex-app-server.js";
-import { CodexAppServerManager } from "./codex-app-server-manager.js";
+import {
+	CodexAppServerManager,
+	isMissingCodexResponseItemError,
+} from "./codex-app-server-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 
 interface PendingRpc {
@@ -179,6 +182,123 @@ const userPromptTypes = (events: object[]) =>
 			return typeof t === "string";
 		})
 		.map((e) => e.type);
+
+const missingResponseItemMessage = JSON.stringify({
+	error: {
+		message:
+			"Item with id 'rs_00629e933a78a0a40069f5c9a25b0c81958607efa9c44a022f' not found.",
+		type: "invalid_request_error",
+		param: "input",
+		code: null,
+	},
+});
+
+describe("Codex missing response item recovery", () => {
+	test("classifies Azure Responses missing-item errors", () => {
+		expect(isMissingCodexResponseItemError(missingResponseItemMessage)).toBe(
+			true,
+		);
+		expect(
+			isMissingCodexResponseItemError("Item with id 'rs_test' not found."),
+		).toBe(true);
+		expect(
+			isMissingCodexResponseItemError(
+				JSON.stringify({
+					error: {
+						message: "Item with id 'rs_test' not found.",
+						type: "invalid_request_error",
+						param: "model",
+					},
+				}),
+			),
+		).toBe(false);
+	});
+
+	test("auto-compacts and retries once after a missing response item", async () => {
+		const { fake, events, sendMessagePromise } = await driveToSendMessage("s1");
+
+		await fake.fireNotification("error", {
+			error: { message: missingResponseItemMessage },
+		});
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(events).toContainEqual({
+			id: "stream-rid-1",
+			type: "system",
+			subtype: "codex_missing_response_item_recovery",
+		});
+		expect(fake.resolveNext("thread/compact/start", {})).toBe(true);
+		await fake.fireNotification("thread/compacted", { threadId: "thread-xyz" });
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(fake.resolveNext("turn/start", { turn: { id: "turn-retry" } })).toBe(
+			true,
+		);
+		await new Promise((r) => setTimeout(r, 0));
+
+		fake.fireNotification("turn/completed", { turn: { id: "turn-retry" } });
+		await sendMessagePromise;
+
+		expect(
+			events.filter((e) => (e as { type?: string }).type === "error"),
+		).toHaveLength(0);
+		expect(events.at(-1)).toEqual({ id: "stream-rid-1", type: "end" });
+	});
+
+	test("falls back to the provider error when recovery compaction fails", async () => {
+		const { fake, events, sendMessagePromise } = await driveToSendMessage("s1");
+
+		await fake.fireNotification("error", {
+			error: { message: missingResponseItemMessage },
+		});
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(
+			fake.rejectNext("thread/compact/start", new Error("compaction failed")),
+		).toBe(true);
+		await sendMessagePromise;
+
+		expect(events).toContainEqual({
+			id: "stream-rid-1",
+			type: "error",
+			message: missingResponseItemMessage,
+		});
+	});
+
+	test("does not retry the same turn more than once", async () => {
+		const { fake, events, sendMessagePromise } = await driveToSendMessage("s1");
+
+		await fake.fireNotification("error", {
+			error: { message: missingResponseItemMessage },
+		});
+		await new Promise((r) => setTimeout(r, 0));
+		expect(fake.resolveNext("thread/compact/start", {})).toBe(true);
+		await fake.fireNotification("thread/compacted", { threadId: "thread-xyz" });
+		await new Promise((r) => setTimeout(r, 0));
+		expect(fake.resolveNext("turn/start", { turn: { id: "turn-retry" } })).toBe(
+			true,
+		);
+		await new Promise((r) => setTimeout(r, 0));
+
+		await fake.fireNotification("error", {
+			error: { message: missingResponseItemMessage },
+		});
+		await sendMessagePromise;
+
+		expect(
+			events.filter(
+				(e) =>
+					(e as { type?: string; subtype?: string }).subtype ===
+					"codex_missing_response_item_recovery",
+			),
+		).toHaveLength(1);
+		expect(events).toContainEqual({
+			id: "stream-rid-1",
+			type: "error",
+			message: missingResponseItemMessage,
+		});
+	});
+});
 
 describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 	test("notifications during turn/steer RPC land AFTER synthetic user_prompt", async () => {

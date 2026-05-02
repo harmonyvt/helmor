@@ -40,6 +40,7 @@ const CODEX_BIN_PATH = process.env.HELMOR_CODEX_BIN_PATH || "codex";
  *  synthetic heartbeats while Codex owns its retry loop. */
 const RETRY_SUPPRESSION_MS = 30_000;
 const RETRY_NOTICE_DEDUPE_MS = 1_000;
+const MISSING_ITEM_COMPACTION_TIMEOUT_MS = 60_000;
 
 const HELMOR_CLIENT_INFO = {
 	clientInfo: {
@@ -74,6 +75,48 @@ function codexErrorMessage(params: unknown): string {
 			? (errObj as Record<string, unknown>).message
 			: undefined;
 	return typeof nested === "string" ? nested : "Unknown Codex error";
+}
+
+export function isMissingCodexResponseItemError(message: string): boolean {
+	const parsed = parseProviderErrorMessage(message);
+	if (parsed) {
+		const nestedMessage = stringField(parsed, "message");
+		return (
+			stringField(parsed, "type") === "invalid_request_error" &&
+			stringField(parsed, "param") === "input" &&
+			isMissingResponseItemMessage(nestedMessage)
+		);
+	}
+
+	return isMissingResponseItemMessage(message);
+}
+
+function parseProviderErrorMessage(
+	message: string,
+): Record<string, unknown> | null {
+	try {
+		const parsed = JSON.parse(message) as unknown;
+		if (!parsed || typeof parsed !== "object") return null;
+		const error = (parsed as Record<string, unknown>).error;
+		return error && typeof error === "object"
+			? (error as Record<string, unknown>)
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+function stringField(
+	object: Record<string, unknown>,
+	field: string,
+): string | null {
+	const value = object[field];
+	return typeof value === "string" ? value : null;
+}
+
+function isMissingResponseItemMessage(message: string | null): boolean {
+	if (!message) return false;
+	return /Item with id ['"]rs_[A-Za-z0-9_-]+['"] not found\.?/.test(message);
 }
 
 function reconnectSuffix(message: string): string | null {
@@ -328,8 +371,12 @@ export class CodexAppServerManager implements SessionManager {
 		// synthetic user passthrough on the correct request id / emitter.
 		ctx.activeRequestId = requestId;
 		ctx.activeEmitter = emitter;
+		let recoveryCompactionTimeout: ReturnType<typeof setTimeout> | null = null;
 
 		return new Promise<void>((resolve, reject) => {
+			let missingItemRecoveryAttempted = false;
+			let recoveryCompactionResolve: (() => void) | null = null;
+
 			ctx.turnResolve = resolve;
 			ctx.turnReject = (err) => {
 				aborted = true;
@@ -338,6 +385,81 @@ export class CodexAppServerManager implements SessionManager {
 
 			const emit = (event: object) => {
 				emitter.passthrough(requestId, event);
+			};
+
+			const finishWithError = (msg: string) => {
+				emitter.error(requestId, msg);
+				ctx.activeTurnId = null;
+				ctx.turnResolve?.();
+				ctx.turnResolve = null;
+				ctx.turnReject = null;
+			};
+
+			const waitForRecoveryCompaction = () =>
+				new Promise<void>((compactionResolve, compactionReject) => {
+					recoveryCompactionResolve = () => {
+						if (recoveryCompactionTimeout) {
+							clearTimeout(recoveryCompactionTimeout);
+							recoveryCompactionTimeout = null;
+						}
+						recoveryCompactionResolve = null;
+						compactionResolve();
+					};
+					recoveryCompactionTimeout = setTimeout(() => {
+						recoveryCompactionResolve = null;
+						recoveryCompactionTimeout = null;
+						compactionReject(
+							new Error("Timed out waiting for Codex context compaction"),
+						);
+					}, MISSING_ITEM_COMPACTION_TIMEOUT_MS);
+				});
+
+			const startTurn = (label: string) => {
+				ctx.server
+					.sendRequest("turn/start", turnStartParams)
+					.then((response) => {
+						const turnId = deepGet(response, "turn", "id");
+						if (typeof turnId === "string") {
+							ctx.activeTurnId = turnId;
+						}
+					})
+					.catch((err) => {
+						logger.error(`${label} failed`, errorDetails(err));
+						reject(err);
+					});
+			};
+
+			const recoverMissingResponseItem = async (originalMessage: string) => {
+				missingItemRecoveryAttempted = true;
+				ctx.activeTurnId = null;
+				emitMissingResponseItemRecoveryNotice(ctx, requestId);
+
+				try {
+					const compacted = waitForRecoveryCompaction();
+					await ctx.server.sendRequest(
+						"thread/compact/start",
+						{ threadId: ctx.providerThreadId },
+						20_000,
+					);
+					await compacted;
+					logger.info("Codex missing response item recovered via compaction", {
+						requestId,
+						sessionId,
+						threadId: ctx.providerThreadId,
+					});
+					startTurn("turn/start retry after context compaction");
+				} catch (err) {
+					if (recoveryCompactionTimeout) {
+						clearTimeout(recoveryCompactionTimeout);
+						recoveryCompactionTimeout = null;
+					}
+					recoveryCompactionResolve = null;
+					logger.error(
+						"Codex missing response item recovery failed",
+						errorDetails(err),
+					);
+					finishWithError(originalMessage);
+				}
 			};
 
 			const handleNotification = async (n: JsonRpcNotification) => {
@@ -382,11 +504,16 @@ export class CodexAppServerManager implements SessionManager {
 						);
 						return;
 					}
-					emitter.error(requestId, msg);
-					ctx.activeTurnId = null;
-					ctx.turnResolve?.();
-					ctx.turnResolve = null;
-					ctx.turnReject = null;
+					if (
+						!isCompactCommand &&
+						!missingItemRecoveryAttempted &&
+						ctx.providerThreadId &&
+						isMissingCodexResponseItemError(msg)
+					) {
+						void recoverMissingResponseItem(msg);
+						return;
+					}
+					finishWithError(msg);
 					return;
 				}
 
@@ -449,6 +576,10 @@ export class CodexAppServerManager implements SessionManager {
 				}
 
 				if (n.method === "thread/compacted") {
+					if (recoveryCompactionResolve) {
+						recoveryCompactionResolve();
+						return;
+					}
 					ctx.activeTurnId = null;
 					ctx.turnResolve?.();
 					ctx.turnResolve = null;
@@ -517,29 +648,24 @@ export class CodexAppServerManager implements SessionManager {
 				return;
 			}
 
-			const requestPromise = isCompactCommand
-				? ctx.server.sendRequest(
+			if (isCompactCommand) {
+				ctx.server
+					.sendRequest(
 						"thread/compact/start",
 						{ threadId: ctx.providerThreadId },
 						20_000,
 					)
-				: ctx.server.sendRequest("turn/start", turnStartParams);
-
-			requestPromise
-				.then((response) => {
-					const turnId = deepGet(response, "turn", "id");
-					if (typeof turnId === "string") {
-						ctx.activeTurnId = turnId;
-					}
-				})
-				.catch((err) => {
-					logger.error(
-						`${isCompactCommand ? "thread/compact/start" : "turn/start"} failed`,
-						errorDetails(err),
-					);
-					reject(err);
-				});
+					.catch((err) => {
+						logger.error("thread/compact/start failed", errorDetails(err));
+						reject(err);
+					});
+			} else {
+				startTurn("turn/start");
+			}
 		}).finally(() => {
+			if (recoveryCompactionTimeout) {
+				clearTimeout(recoveryCompactionTimeout);
+			}
 			if (aborted) {
 				emitter.aborted(requestId, "user_requested");
 			} else {
@@ -989,6 +1115,16 @@ function emitRetryNotice(
 		max_retries: max,
 		retry_delay_ms: 0,
 		error: message,
+	});
+}
+
+function emitMissingResponseItemRecoveryNotice(
+	ctx: AppServerContext,
+	requestId: string,
+): void {
+	ctx.activeEmitter?.passthrough(requestId, {
+		type: "system",
+		subtype: "codex_missing_response_item_recovery",
 	});
 }
 
