@@ -1,5 +1,6 @@
 ---
 source: tests/schema_migrations.rs
+assertion_line: 92
 expression: browser_tab_schema(&connection)
 ---
 columns:
@@ -44,6 +45,8 @@ columns:
     primaryKey: false
     type: TEXT
 indexes:
+  - name: idx_workspace_browser_tabs_one_active
+    sql: CREATE UNIQUE INDEX idx_workspace_browser_tabs_one_active ON workspace_browser_tabs(workspace_id) WHERE active = 1
   - name: idx_workspace_browser_tabs_workspace_order
     sql: "CREATE INDEX idx_workspace_browser_tabs_workspace_order ON workspace_browser_tabs(workspace_id, display_order)"
   - name: sqlite_autoindex_workspace_browser_tabs_1

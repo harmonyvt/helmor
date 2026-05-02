@@ -1,5 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BrowserTabPanel } from "@/features/browser-tabs";
+import {
+	browserIdFromToolTabId,
+	browserToolTabId,
+} from "@/features/browser-tabs/ids";
+import { closeBrowserWebviewForTab } from "@/features/browser-tabs/runtime";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -20,17 +26,12 @@ import type { DiffOpenOptions } from "@/lib/editor-session";
 import { workspaceBrowserTabsQueryOptions } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
-import {
-	browserWebviewLabel,
-	closeBrowserWebview,
-} from "./browser-webview-runtime";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
 import { useScriptStatus } from "./hooks/use-script-status";
 import { useSetupAutoRun } from "./hooks/use-setup-auto-run";
 import { HorizontalResizeHandle, InspectorTabsSection } from "./layout";
 import type { ScriptStatus } from "./script-store";
 import { ActionsSection } from "./sections/actions";
-import { BrowserTabPanel } from "./sections/browser";
 import { ChangesSection } from "./sections/changes";
 import { OpenDevServerButton, RunTab } from "./sections/run";
 import { SetupTab } from "./sections/setup";
@@ -42,18 +43,6 @@ import {
 	TERMINAL_INSTANCE_LIMIT,
 	type TerminalInstance,
 } from "./terminal-store";
-
-const BROWSER_TAB_PREFIX = "browser:";
-
-function browserToolTabId(tabId: string): string {
-	return `${BROWSER_TAB_PREFIX}${tabId}`;
-}
-
-function browserIdFromToolTabId(tabId: string): string | null {
-	return tabId.startsWith(BROWSER_TAB_PREFIX)
-		? tabId.slice(BROWSER_TAB_PREFIX.length)
-		: null;
-}
 
 // ── Review-all prompt builder ─────────────────────────────────────────────────
 
@@ -303,7 +292,7 @@ export function WorkspaceInspectorSidebar({
 	const handleCloseBrowserTab = useCallback(
 		(tabId: string) => {
 			if (!workspaceId) return;
-			void closeBrowserWebview(browserWebviewLabel(tabId));
+			void closeBrowserWebviewForTab(tabId);
 			if (activeTab === browserToolTabId(tabId)) {
 				const idx = browserTabs.findIndex((tab) => tab.id === tabId);
 				const fallback = browserTabs[idx + 1] ?? browserTabs[idx - 1];
@@ -315,7 +304,7 @@ export function WorkspaceInspectorSidebar({
 					setActiveTab("setup");
 				}
 			}
-			void closeBrowserTab(workspaceId, tabId);
+			void closeBrowserTab(tabId);
 		},
 		[activeTab, browserTabs, terminalInstances, workspaceId, setActiveTab],
 	);

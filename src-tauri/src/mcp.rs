@@ -6,10 +6,19 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
+use std::sync::OnceLock;
+use tauri::AppHandle;
 
 use crate::agents::AgentStreamEvent;
+use crate::commands::browser_commands;
 use crate::pipeline::types::{ExtendedMessagePart, MessagePart};
 use crate::service;
+
+static MCP_APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+pub fn set_app_handle(app: AppHandle) {
+    let _ = MCP_APP_HANDLE.set(app);
+}
 
 pub fn run_mcp_server() -> Result<()> {
     // Bootstrap DB (same as CLI)
@@ -229,7 +238,11 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                 .ok_or_else(|| anyhow::anyhow!("Missing required param: workspace"))?;
             let ws_id = service::resolve_workspace_ref(ws_ref)?;
             let url = args["url"].as_str();
-            let tab = service::create_browser_tab(&ws_id, url)?;
+            let tab = if let Some(app) = MCP_APP_HANDLE.get() {
+                browser_commands::create_browser_tab_and_publish(app, &ws_id, url)?
+            } else {
+                service::create_browser_tab(&ws_id, url)?
+            };
             Ok(serde_json::to_string_pretty(&tab)?)
         }
         "helmor_browser_navigate" => {
@@ -239,14 +252,22 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
             let url = args["url"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing required param: url"))?;
-            let tab = service::navigate_browser_tab(tab_id, url)?;
+            let tab = if let Some(app) = MCP_APP_HANDLE.get() {
+                browser_commands::navigate_browser_tab_and_publish(app, tab_id, url)?
+            } else {
+                service::navigate_browser_tab(tab_id, url)?
+            };
             Ok(serde_json::to_string_pretty(&tab)?)
         }
         "helmor_browser_close" => {
             let tab_id = args["tab_id"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing required param: tab_id"))?;
-            let fallback = service::close_browser_tab(tab_id)?;
+            let fallback = if let Some(app) = MCP_APP_HANDLE.get() {
+                browser_commands::close_browser_tab_and_publish(app, tab_id)?
+            } else {
+                service::close_browser_tab(tab_id)?
+            };
             Ok(serde_json::to_string_pretty(&fallback)?)
         }
         "helmor_send" => {

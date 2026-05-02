@@ -357,6 +357,12 @@ pub(crate) fn delete_workspace_and_session_rows(workspace_id: &str) -> Result<()
         )
         .context("Failed to delete create-flow sessions")?;
     transaction
+        .execute(
+            "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete create-flow browser tabs")?;
+    transaction
         .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
         .context("Failed to delete create-flow workspace")?;
 

@@ -962,6 +962,12 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
             [workspace_id],
         )
         .context("Failed to delete workspace sessions")?;
+    transaction
+        .execute(
+            "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete workspace browser tabs")?;
     let deleted_rows = transaction
         .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
         .context("Failed to delete workspace row")?;
