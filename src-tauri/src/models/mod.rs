@@ -1,3 +1,4 @@
+pub mod browser_tabs;
 pub mod db;
 pub mod repos;
 pub mod sessions;

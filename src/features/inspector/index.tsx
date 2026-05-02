@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -9,18 +10,27 @@ import {
 } from "@/features/shortcuts/use-app-shortcuts";
 import {
 	type ChangeRequestInfo,
+	closeBrowserTab,
+	createBrowserTab,
 	createSession,
 	type PrComment,
+	selectBrowserTab,
 } from "@/lib/api";
 import type { DiffOpenOptions } from "@/lib/editor-session";
+import { workspaceBrowserTabsQueryOptions } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import {
+	browserWebviewLabel,
+	closeBrowserWebview,
+} from "./browser-webview-runtime";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
 import { useScriptStatus } from "./hooks/use-script-status";
 import { useSetupAutoRun } from "./hooks/use-setup-auto-run";
 import { HorizontalResizeHandle, InspectorTabsSection } from "./layout";
 import type { ScriptStatus } from "./script-store";
 import { ActionsSection } from "./sections/actions";
+import { BrowserTabPanel } from "./sections/browser";
 import { ChangesSection } from "./sections/changes";
 import { OpenDevServerButton, RunTab } from "./sections/run";
 import { SetupTab } from "./sections/setup";
@@ -32,6 +42,18 @@ import {
 	TERMINAL_INSTANCE_LIMIT,
 	type TerminalInstance,
 } from "./terminal-store";
+
+const BROWSER_TAB_PREFIX = "browser:";
+
+function browserToolTabId(tabId: string): string {
+	return `${BROWSER_TAB_PREFIX}${tabId}`;
+}
+
+function browserIdFromToolTabId(tabId: string): string | null {
+	return tabId.startsWith(BROWSER_TAB_PREFIX)
+		? tabId.slice(BROWSER_TAB_PREFIX.length)
+		: null;
+}
 
 // ── Review-all prompt builder ─────────────────────────────────────────────────
 
@@ -220,6 +242,20 @@ export function WorkspaceInspectorSidebar({
 		});
 	}, [workspaceId]);
 
+	const browserTabsQuery = useQuery({
+		...workspaceBrowserTabsQueryOptions(workspaceId ?? ""),
+		enabled: !!workspaceId,
+	});
+	const browserTabs = browserTabsQuery.data ?? [];
+	const restoredBrowserWorkspaceRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (!workspaceId || !browserTabsQuery.isFetched) return;
+		if (restoredBrowserWorkspaceRef.current === workspaceId) return;
+		restoredBrowserWorkspaceRef.current = workspaceId;
+		const activeBrowserTab = browserTabs.find((tab) => tab.active);
+		if (activeBrowserTab) setActiveTab(browserToolTabId(activeBrowserTab.id));
+	}, [workspaceId, browserTabsQuery.isFetched, browserTabs, setActiveTab]);
+
 	const canSpawnTerminal =
 		!!repoId &&
 		!!workspaceId &&
@@ -245,6 +281,43 @@ export function WorkspaceInspectorSidebar({
 			closeTerminal(repoId, workspaceId, instanceId);
 		},
 		[repoId, workspaceId, activeTab, terminalInstances, setActiveTab],
+	);
+
+	const handleToolTabChange = useCallback(
+		(tabId: string) => {
+			setActiveTab(tabId);
+			const browserTabId = browserIdFromToolTabId(tabId);
+			if (browserTabId)
+				void selectBrowserTab(browserTabId).catch(() => undefined);
+		},
+		[setActiveTab],
+	);
+
+	const handleAddBrowserTab = useCallback(() => {
+		if (!workspaceId) return;
+		void createBrowserTab(workspaceId).then((tab) => {
+			setActiveTab(browserToolTabId(tab.id));
+		});
+	}, [workspaceId, setActiveTab]);
+
+	const handleCloseBrowserTab = useCallback(
+		(tabId: string) => {
+			if (!workspaceId) return;
+			void closeBrowserWebview(browserWebviewLabel(tabId));
+			if (activeTab === browserToolTabId(tabId)) {
+				const idx = browserTabs.findIndex((tab) => tab.id === tabId);
+				const fallback = browserTabs[idx + 1] ?? browserTabs[idx - 1];
+				if (fallback) {
+					setActiveTab(browserToolTabId(fallback.id));
+				} else if (terminalInstances.length > 0) {
+					setActiveTab(terminalInstances[terminalInstances.length - 1].id);
+				} else {
+					setActiveTab("setup");
+				}
+			}
+			void closeBrowserTab(workspaceId, tabId);
+		},
+		[activeTab, browserTabs, terminalInstances, workspaceId, setActiveTab],
 	);
 
 	const isTerminalTabActive = terminalInstances.some((t) => t.id === activeTab);
@@ -400,9 +473,15 @@ export function WorkspaceInspectorSidebar({
 	// a terminal tab was active in the previous one.
 	useEffect(() => {
 		if (activeTab === "setup" || activeTab === "run") return;
+		const browserTabId = browserIdFromToolTabId(activeTab);
+		if (browserTabId) {
+			if (browserTabs.some((tab) => tab.id === browserTabId)) return;
+			setActiveTab("setup");
+			return;
+		}
 		if (terminalInstances.some((t) => t.id === activeTab)) return;
 		setActiveTab("setup");
-	}, [activeTab, terminalInstances, setActiveTab]);
+	}, [activeTab, browserTabs, terminalInstances, setActiveTab]);
 
 	// Only allow hover-to-zoom when the active tab has real terminal output.
 	// "idle" = script configured but never run; "no-script" = nothing to run.
@@ -412,9 +491,11 @@ export function WorkspaceInspectorSidebar({
 		activeTab === "setup" ? setupScriptState : runScriptState;
 	const canHoverExpand = isTerminalTabActive
 		? true
-		: scriptTabState === "running" ||
-			scriptTabState === "success" ||
-			scriptTabState === "failure";
+		: browserIdFromToolTabId(activeTab)
+			? false
+			: scriptTabState === "running" ||
+				scriptTabState === "success" ||
+				scriptTabState === "failure";
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 
@@ -477,13 +558,16 @@ export function WorkspaceInspectorSidebar({
 				open={tabsOpen}
 				onToggle={handleToggleTabs}
 				activeTab={activeTab}
-				onTabChange={setActiveTab}
+				onTabChange={handleToolTabChange}
 				tabActions={runTabActions}
 				setupScriptState={setupScriptState}
 				runScriptState={runScriptState}
 				terminalInstances={terminalInstances}
+				browserTabs={browserTabs}
 				onAddTerminal={handleAddTerminal}
 				onCloseTerminal={handleCloseTerminal}
+				onAddBrowserTab={handleAddBrowserTab}
+				onCloseBrowserTab={handleCloseBrowserTab}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
 			>
@@ -510,6 +594,13 @@ export function WorkspaceInspectorSidebar({
 						workspaceId={workspaceId ?? null}
 						instance={instance}
 						isActive={activeTab === instance.id}
+					/>
+				))}
+				{browserTabs.map((tab) => (
+					<BrowserTabPanel
+						key={tab.id}
+						tab={tab}
+						isActive={activeTab === browserToolTabId(tab.id)}
 					/>
 				))}
 			</InspectorTabsSection>

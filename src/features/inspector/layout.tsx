@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, X } from "lucide-react";
+import { ChevronDown, Globe, Plus, Terminal, X } from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -17,6 +17,7 @@ import {
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
+import type { BrowserTabRecord } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { ScriptIconState } from "./hooks/use-script-status";
@@ -111,10 +112,13 @@ type InspectorTabsSectionProps = {
 	 * activeTab value. Display labels are positional (`getTerminalDisplayTitle`).
 	 */
 	terminalInstances: TerminalInstance[];
+	browserTabs: BrowserTabRecord[];
 	/** Spawn a new terminal and switch to it. */
 	onAddTerminal: () => void;
 	/** SIGTERM the shell and remove its tab. */
 	onCloseTerminal: (instanceId: string) => void;
+	onAddBrowserTab: () => void;
+	onCloseBrowserTab: (tabId: string) => void;
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
 	/**
@@ -136,8 +140,11 @@ export function InspectorTabsSection({
 	setupScriptState,
 	runScriptState,
 	terminalInstances,
+	browserTabs,
 	onAddTerminal,
 	onCloseTerminal,
+	onAddBrowserTab,
+	onCloseBrowserTab,
 	canSpawnTerminal,
 	canHoverExpand,
 	children,
@@ -456,6 +463,11 @@ export function InspectorTabsSection({
 		onAddTerminal();
 	}, [open, onAddTerminal, onToggle]);
 
+	const handleNewBrowserClick = useCallback(() => {
+		if (!open) onToggle();
+		onAddBrowserTab();
+	}, [open, onAddBrowserTab, onToggle]);
+
 	return (
 		<div
 			ref={wrapperRef}
@@ -631,6 +643,7 @@ export function InspectorTabsSection({
 											"shrink-0 disabled:cursor-not-allowed disabled:opacity-50",
 										)}
 									>
+										<Terminal className="size-3" strokeWidth={1.8} />
 										Terminal
 									</button>
 								) : (
@@ -690,6 +703,55 @@ export function InspectorTabsSection({
 										);
 									})
 								)}
+								{browserTabs.map((tab, index) => {
+									const label = tab.title?.trim() || `Browser ${index + 1}`;
+									const tabActiveId = `browser:${tab.id}`;
+									const isActive = activeTab === tabActiveId;
+									return (
+										<div
+											key={tab.id}
+											role="tab"
+											id={`inspector-tab-browser-${tab.id}`}
+											aria-controls={`inspector-panel-browser-${tab.id}`}
+											aria-selected={isActive}
+											tabIndex={isActive ? 0 : -1}
+											className={cn(
+												"group/tab relative flex h-full min-w-[6rem] shrink-0 transform-gpu cursor-pointer items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
+												isActive && "text-foreground",
+											)}
+											onClick={() => handleTabClick(tabActiveId)}
+											onKeyDown={(event) => {
+												if (event.key === "Enter" || event.key === " ") {
+													event.preventDefault();
+													handleTabClick(tabActiveId);
+												}
+											}}
+										>
+											<span className="terminal-tab-fade flex min-w-0 flex-1 items-center justify-center gap-1.5">
+												<Globe className="size-3 shrink-0" strokeWidth={1.8} />
+												<span className="truncate">{label}</span>
+											</span>
+											<button
+												type="button"
+												aria-label={`Close ${label}`}
+												onClick={(event) => {
+													event.stopPropagation();
+													onCloseBrowserTab(tab.id);
+												}}
+												className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-pointer items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
+											>
+												<X className="size-3" strokeWidth={2} />
+											</button>
+											<span
+												aria-hidden="true"
+												className={cn(
+													"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+													isActive && "opacity-100",
+												)}
+											/>
+										</div>
+									);
+								})}
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<button
@@ -713,6 +775,24 @@ export function InspectorTabsSection({
 												className="text-background/60"
 											/>
 										) : null}
+									</TooltipContent>
+								</Tooltip>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<button
+											type="button"
+											aria-label="New browser tab"
+											onClick={handleNewBrowserClick}
+											className="flex h-full w-6 shrink-0 cursor-pointer items-center justify-center self-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0"
+										>
+											<Globe className="size-3.5" strokeWidth={1.8} />
+										</button>
+									</TooltipTrigger>
+									<TooltipContent
+										side="bottom"
+										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+									>
+										<span>New browser tab</span>
 									</TooltipContent>
 								</Tooltip>
 							</div>

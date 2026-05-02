@@ -28,8 +28,11 @@ describe("InspectorTabsSection", () => {
 				setupScriptState="idle"
 				runScriptState="running"
 				terminalInstances={[]}
+				browserTabs={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
+				onAddBrowserTab={vi.fn()}
+				onCloseBrowserTab={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand
 			>
@@ -73,8 +76,11 @@ describe("InspectorTabsSection", () => {
 				setupScriptState="idle"
 				runScriptState="running"
 				terminalInstances={[]}
+				browserTabs={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
+				onAddBrowserTab={vi.fn()}
+				onCloseBrowserTab={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand
 			>
@@ -106,8 +112,11 @@ describe("InspectorTabsSection", () => {
 				setupScriptState="idle"
 				runScriptState="running"
 				terminalInstances={[]}
+				browserTabs={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
+				onAddBrowserTab={vi.fn()}
+				onCloseBrowserTab={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand={false}
 			>
