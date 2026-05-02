@@ -5,6 +5,7 @@ repo_root="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 app_name="Helmor.app"
 built_app="$repo_root/src-tauri/target/release/bundle/macos/$app_name"
 installed_app="/Applications/$app_name"
+entitlements="$repo_root/src-tauri/Entitlements.plist"
 
 cd "$repo_root" || exit 1
 
@@ -49,10 +50,11 @@ echo "==> Installing to $installed_app"
 ditto "$built_app" "$installed_app"
 
 echo "==> Ad-hoc signing installed app"
-codesign --force --deep --sign - "$installed_app"
+codesign --force --deep --options runtime --entitlements "$entitlements" --sign - "$installed_app"
 
 echo "==> Verifying installed app"
 codesign --verify --deep --strict --verbose=2 "$installed_app"
+codesign -d --entitlements :- "$installed_app" >/dev/null
 defaults read "$installed_app/Contents/Info" CFBundleShortVersionString
 defaults read "$installed_app/Contents/Info" CFBundleIdentifier
 du -sh "$installed_app"
