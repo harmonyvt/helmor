@@ -606,7 +606,10 @@ fn pi_auth_status() -> bool {
     let Some(obj) = root.as_object() else {
         return false;
     };
-    obj.contains_key("anthropic") || obj.contains_key("openai-codex") || obj.contains_key("openai")
+    obj.contains_key("anthropic")
+        || obj.contains_key("azure-openai-responses")
+        || obj.contains_key("openai-codex")
+        || obj.contains_key("openai")
 }
 
 fn claude_login_ready() -> bool {

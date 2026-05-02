@@ -263,9 +263,16 @@ function parsePiModelId(modelId: string | undefined): {
 	const raw = (modelId || "anthropic/claude-opus-4-7").replace(/^pi:/, "");
 	const slash = raw.indexOf("/");
 	if (slash > 0) {
-		return { provider: raw.slice(0, slash), model: raw.slice(slash + 1) };
+		const provider = raw.slice(0, slash);
+		return {
+			provider:
+				provider === "openai-codex" ? "azure-openai-responses" : provider,
+			model: raw.slice(slash + 1),
+		};
 	}
-	if (raw.startsWith("gpt-")) return { provider: "openai-codex", model: raw };
+	if (raw.startsWith("gpt-")) {
+		return { provider: "azure-openai-responses", model: raw };
+	}
 	return { provider: "anthropic", model: raw };
 }
 

@@ -110,21 +110,27 @@ fn pi_section() -> AgentModelSection {
                 false,
             ),
             pi_model(
-                "pi:openai-codex/gpt-5.5",
+                "pi:azure-openai-responses/gpt-5.5",
                 "Pi · GPT-5.5",
-                "openai-codex/gpt-5.5",
+                "azure-openai-responses/gpt-5.5",
                 true,
             ),
             pi_model(
-                "pi:openai-codex/gpt-5.4",
+                "pi:azure-openai-responses/gpt-5.4",
                 "Pi · GPT-5.4",
-                "openai-codex/gpt-5.4",
+                "azure-openai-responses/gpt-5.4",
                 true,
             ),
             pi_model(
-                "pi:openai-codex/gpt-5.3-codex",
+                "pi:azure-openai-responses/gpt-5.4-mini",
+                "Pi · GPT-5.4-Mini",
+                "azure-openai-responses/gpt-5.4-mini",
+                true,
+            ),
+            pi_model(
+                "pi:azure-openai-responses/gpt-5.3-codex",
                 "Pi · GPT-5.3-Codex",
-                "openai-codex/gpt-5.3-codex",
+                "azure-openai-responses/gpt-5.3-codex",
                 true,
             ),
         ],
@@ -224,6 +230,10 @@ pub struct ResolvedModel {
 /// IDs are exact matches; unknown IDs keep the legacy `gpt-*` → Codex,
 /// everything else → Claude fallback.
 pub fn resolve_model(model_id: &str) -> ResolvedModel {
+    if let Some(model) = legacy_pi_azure_model(model_id) {
+        return model;
+    }
+
     if let Some(model) = super::custom_providers::resolve(model_id) {
         return ResolvedModel {
             id: model.id,
@@ -263,6 +273,18 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         claude_base_url: None,
         claude_auth_token: None,
     }
+}
+
+fn legacy_pi_azure_model(model_id: &str) -> Option<ResolvedModel> {
+    let model = model_id.strip_prefix("pi:openai-codex/")?;
+    Some(ResolvedModel {
+        id: format!("pi:azure-openai-responses/{model}"),
+        provider: "pi".to_string(),
+        cli_model: format!("azure-openai-responses/{model}"),
+        supports_effort: true,
+        claude_base_url: None,
+        claude_auth_token: None,
+    })
 }
 
 #[cfg(test)]
@@ -322,9 +344,10 @@ mod tests {
             vec![
                 "pi:anthropic/claude-opus-4-7",
                 "pi:anthropic/claude-sonnet-4-6",
-                "pi:openai-codex/gpt-5.5",
-                "pi:openai-codex/gpt-5.4",
-                "pi:openai-codex/gpt-5.3-codex",
+                "pi:azure-openai-responses/gpt-5.5",
+                "pi:azure-openai-responses/gpt-5.4",
+                "pi:azure-openai-responses/gpt-5.4-mini",
+                "pi:azure-openai-responses/gpt-5.3-codex",
             ]
         );
     }
@@ -408,10 +431,18 @@ mod tests {
 
     #[test]
     fn resolve_pi_model_routes_to_pi() {
-        let m = resolve_model("pi:openai-codex/gpt-5.4");
+        let m = resolve_model("pi:azure-openai-responses/gpt-5.4");
         assert_eq!(m.provider, "pi");
-        assert_eq!(m.cli_model, "openai-codex/gpt-5.4");
-        assert_eq!(m.id, "pi:openai-codex/gpt-5.4");
+        assert_eq!(m.cli_model, "azure-openai-responses/gpt-5.4");
+        assert_eq!(m.id, "pi:azure-openai-responses/gpt-5.4");
+    }
+
+    #[test]
+    fn resolve_legacy_pi_codex_model_routes_to_azure_pi() {
+        let m = resolve_model("pi:openai-codex/gpt-5.5");
+        assert_eq!(m.provider, "pi");
+        assert_eq!(m.cli_model, "azure-openai-responses/gpt-5.5");
+        assert_eq!(m.id, "pi:azure-openai-responses/gpt-5.5");
     }
 
     #[test]

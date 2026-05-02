@@ -56,7 +56,7 @@ export function AgentLoginStep({
 		<section
 			aria-label="Agent login"
 			aria-hidden={step !== "agents"}
-			className={`absolute inset-x-0 top-[calc(50vh-40px)] z-20 flex origin-top flex-col items-center px-8 pb-12 pt-8 transition-transform duration-1000 ease-[cubic-bezier(.22,.82,.2,1)] ${
+			className={`absolute inset-x-0 top-[calc(50vh-260px)] z-20 flex origin-top flex-col items-center px-8 pb-12 pt-8 transition-transform duration-1000 ease-[cubic-bezier(.22,.82,.2,1)] ${
 				step === "corner"
 					? "pointer-events-none -translate-x-[50vw] translate-y-[126vh] opacity-100"
 					: step === "agents"
