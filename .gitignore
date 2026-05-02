@@ -6,6 +6,9 @@ logs
 node_modules
 dist
 dist-ssr
+!apps/mobile/dist/
+apps/mobile/dist/*
+!apps/mobile/dist/.gitkeep
 *.local
 *.local.*
 .env

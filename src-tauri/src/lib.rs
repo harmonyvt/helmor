@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod models;
 pub mod pipeline;
 pub mod rate_limits;
+pub mod remote;
 pub mod schema;
 pub mod service;
 mod shell_env;
@@ -73,6 +74,7 @@ pub fn run() {
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
+        .manage(remote::RemoteServerManager::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .setup(|app| {
@@ -165,6 +167,11 @@ pub fn run() {
 
             if let Err(error) = ui_sync::start_listener(app.handle().clone()) {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
+            }
+
+            let remote_manager = app.state::<remote::RemoteServerManager>();
+            if let Err(error) = remote_manager.start_if_enabled(app.handle().clone()) {
+                tracing::error!(error = %format!("{error:#}"), "Failed to start remote mobile server");
             }
 
             // On macOS, the default app-menu Quit item goes straight to
@@ -317,6 +324,9 @@ pub fn run() {
             commands::settings_commands::save_auto_close_action_kinds,
             commands::settings_commands::load_auto_close_opt_in_asked,
             commands::settings_commands::save_auto_close_opt_in_asked,
+            remote::get_remote_access_config,
+            remote::update_remote_access_config,
+            remote::rotate_remote_access_token,
             global_hotkey::sync_global_hotkey,
             ui_sync::subscribe_ui_mutations,
             commands::updater_commands::get_app_update_status,

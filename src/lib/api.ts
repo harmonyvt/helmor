@@ -114,6 +114,15 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
+export type RemoteAccessStatus = {
+	enabled: boolean;
+	bindAddr: string;
+	port: number;
+	token: string;
+	url: string;
+	running: boolean;
+};
+
 export type AgentProvider = "claude" | "codex";
 
 export type AgentModelOption = {
@@ -1785,6 +1794,22 @@ export type PendingCliSend = {
  */
 export async function drainPendingCliSends(): Promise<PendingCliSend[]> {
 	return invoke<PendingCliSend[]>("drain_pending_cli_sends");
+}
+
+export async function getRemoteAccessConfig(): Promise<RemoteAccessStatus> {
+	return invoke<RemoteAccessStatus>("get_remote_access_config");
+}
+
+export async function updateRemoteAccessConfig(input: {
+	enabled: boolean;
+	bindAddr: string;
+	port: number;
+}): Promise<RemoteAccessStatus> {
+	return invoke<RemoteAccessStatus>("update_remote_access_config", input);
+}
+
+export async function rotateRemoteAccessToken(): Promise<RemoteAccessStatus> {
+	return invoke<RemoteAccessStatus>("rotate_remote_access_token");
 }
 
 export async function permanentlyDeleteWorkspace(

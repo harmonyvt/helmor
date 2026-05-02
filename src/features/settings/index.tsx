@@ -61,6 +61,7 @@ import { AppUpdatesPanel } from "./panels/app-updates";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DevToolsPanel } from "./panels/dev-tools";
+import { MobileRemotePanel } from "./panels/mobile-remote";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
@@ -73,6 +74,7 @@ export type SettingsSection =
 	| "shortcuts"
 	| "appearance"
 	| "model"
+	| "mobile"
 	| "git"
 	| "experimental"
 	| "import"
@@ -182,6 +184,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"general",
 		"appearance",
 		"model",
+		"mobile",
 		"shortcuts",
 		"git",
 		"experimental",
@@ -552,6 +555,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 									<ClaudeCustomProvidersPanel />
 								</SettingsGroup>
 							)}
+
+							{activeSection === "mobile" && <MobileRemotePanel />}
 
 							{activeSection === "git" && (
 								<SettingsGroup>
