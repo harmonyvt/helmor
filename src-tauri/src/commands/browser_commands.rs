@@ -5,6 +5,53 @@ use crate::ui_sync::{self, UiMutationEvent};
 
 use super::common::{run_blocking, CmdResult};
 
+pub fn create_browser_tab_and_publish(
+    app: &AppHandle,
+    workspace_id: &str,
+    initial_url: Option<&str>,
+) -> anyhow::Result<BrowserTabRecord> {
+    let tab = browser_tabs::create_browser_tab(workspace_id, initial_url)?;
+    ui_sync::publish(
+        app,
+        UiMutationEvent::WorkspaceBrowserTabsChanged {
+            workspace_id: tab.workspace_id.clone(),
+        },
+    );
+    Ok(tab)
+}
+
+pub fn navigate_browser_tab_and_publish(
+    app: &AppHandle,
+    tab_id: &str,
+    url: &str,
+) -> anyhow::Result<BrowserTabRecord> {
+    let tab = browser_tabs::navigate_browser_tab(tab_id, url)?;
+    ui_sync::publish(
+        app,
+        UiMutationEvent::WorkspaceBrowserTabsChanged {
+            workspace_id: tab.workspace_id.clone(),
+        },
+    );
+    Ok(tab)
+}
+
+pub fn close_browser_tab_and_publish(
+    app: &AppHandle,
+    tab_id: &str,
+) -> anyhow::Result<Option<BrowserTabRecord>> {
+    let result = browser_tabs::close_browser_tab_with_workspace(tab_id)?;
+    if let Some(result) = result {
+        ui_sync::publish(
+            app,
+            UiMutationEvent::WorkspaceBrowserTabsChanged {
+                workspace_id: result.workspace_id,
+            },
+        );
+        return Ok(result.fallback);
+    }
+    Ok(None)
+}
+
 #[tauri::command]
 pub async fn list_workspace_browser_tabs(workspace_id: String) -> CmdResult<Vec<BrowserTabRecord>> {
     run_blocking(move || browser_tabs::list_workspace_browser_tabs(&workspace_id)).await
@@ -16,17 +63,11 @@ pub async fn create_browser_tab(
     workspace_id: String,
     initial_url: Option<String>,
 ) -> CmdResult<BrowserTabRecord> {
-    let publish_workspace_id = workspace_id.clone();
+    let app_for_blocking = app.clone();
     let tab = run_blocking(move || {
-        browser_tabs::create_browser_tab(&workspace_id, initial_url.as_deref())
+        create_browser_tab_and_publish(&app_for_blocking, &workspace_id, initial_url.as_deref())
     })
     .await?;
-    ui_sync::publish(
-        &app,
-        UiMutationEvent::WorkspaceBrowserTabsChanged {
-            workspace_id: publish_workspace_id,
-        },
-    );
     Ok(tab)
 }
 
@@ -48,13 +89,10 @@ pub async fn navigate_browser_tab(
     tab_id: String,
     url: String,
 ) -> CmdResult<BrowserTabRecord> {
-    let tab = run_blocking(move || browser_tabs::navigate_browser_tab(&tab_id, &url)).await?;
-    ui_sync::publish(
-        &app,
-        UiMutationEvent::WorkspaceBrowserTabsChanged {
-            workspace_id: tab.workspace_id.clone(),
-        },
-    );
+    let app_for_blocking = app.clone();
+    let tab =
+        run_blocking(move || navigate_browser_tab_and_publish(&app_for_blocking, &tab_id, &url))
+            .await?;
     Ok(tab)
 }
 
@@ -81,14 +119,11 @@ pub async fn update_browser_tab_title(
 #[tauri::command]
 pub async fn close_browser_tab(
     app: AppHandle,
-    workspace_id: String,
     tab_id: String,
 ) -> CmdResult<Option<BrowserTabRecord>> {
-    let fallback = run_blocking(move || browser_tabs::close_browser_tab(&tab_id)).await?;
-    ui_sync::publish(
-        &app,
-        UiMutationEvent::WorkspaceBrowserTabsChanged { workspace_id },
-    );
+    let app_for_blocking = app.clone();
+    let fallback =
+        run_blocking(move || close_browser_tab_and_publish(&app_for_blocking, &tab_id)).await?;
     Ok(fallback)
 }
 

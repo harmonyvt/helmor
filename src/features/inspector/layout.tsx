@@ -14,6 +14,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { BrowserTabStripItem } from "@/features/browser-tabs/tab-strip-item";
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
@@ -703,55 +704,16 @@ export function InspectorTabsSection({
 										);
 									})
 								)}
-								{browserTabs.map((tab, index) => {
-									const label = tab.title?.trim() || `Browser ${index + 1}`;
-									const tabActiveId = `browser:${tab.id}`;
-									const isActive = activeTab === tabActiveId;
-									return (
-										<div
-											key={tab.id}
-											role="tab"
-											id={`inspector-tab-browser-${tab.id}`}
-											aria-controls={`inspector-panel-browser-${tab.id}`}
-											aria-selected={isActive}
-											tabIndex={isActive ? 0 : -1}
-											className={cn(
-												"group/tab relative flex h-full min-w-[6rem] shrink-0 transform-gpu cursor-pointer items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
-												isActive && "text-foreground",
-											)}
-											onClick={() => handleTabClick(tabActiveId)}
-											onKeyDown={(event) => {
-												if (event.key === "Enter" || event.key === " ") {
-													event.preventDefault();
-													handleTabClick(tabActiveId);
-												}
-											}}
-										>
-											<span className="terminal-tab-fade flex min-w-0 flex-1 items-center justify-center gap-1.5">
-												<Globe className="size-3 shrink-0" strokeWidth={1.8} />
-												<span className="truncate">{label}</span>
-											</span>
-											<button
-												type="button"
-												aria-label={`Close ${label}`}
-												onClick={(event) => {
-													event.stopPropagation();
-													onCloseBrowserTab(tab.id);
-												}}
-												className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-pointer items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
-											>
-												<X className="size-3" strokeWidth={2} />
-											</button>
-											<span
-												aria-hidden="true"
-												className={cn(
-													"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
-													isActive && "opacity-100",
-												)}
-											/>
-										</div>
-									);
-								})}
+								{browserTabs.map((tab, index) => (
+									<BrowserTabStripItem
+										key={tab.id}
+										tab={tab}
+										index={index}
+										activeTab={activeTab}
+										onSelect={handleTabClick}
+										onClose={onCloseBrowserTab}
+									/>
+								))}
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<button

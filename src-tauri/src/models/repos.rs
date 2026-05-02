@@ -800,6 +800,11 @@ pub fn delete_repository_cascade(repo_id: &str) -> Result<()> {
         "DELETE FROM pending_cli_sends WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
         [repo_id],
     ).context("Failed to delete pending sends for repository")?;
+    tx.execute(
+        "DELETE FROM workspace_browser_tabs WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
+        [repo_id],
+    )
+    .context("Failed to delete browser tabs for repository")?;
     tx.execute("DELETE FROM workspaces WHERE repository_id = ?1", [repo_id])
         .context("Failed to delete workspaces for repository")?;
     tx.execute("DELETE FROM repos WHERE id = ?1", [repo_id])

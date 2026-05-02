@@ -559,6 +559,7 @@ CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(sess
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_browser_tabs_workspace_order ON workspace_browser_tabs(workspace_id, display_order);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_browser_tabs_one_active ON workspace_browser_tabs(workspace_id) WHERE active = 1;
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
 CREATE TRIGGER IF NOT EXISTS update_repos_updated_at

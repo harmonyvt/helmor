@@ -2828,13 +2828,9 @@ export async function updateBrowserTabTitle(
 }
 
 export async function closeBrowserTab(
-	workspaceId: string,
 	tabId: string,
 ): Promise<BrowserTabRecord | null> {
-	return invoke<BrowserTabRecord | null>("close_browser_tab", {
-		workspaceId,
-		tabId,
-	});
+	return invoke<BrowserTabRecord | null>("close_browser_tab", { tabId });
 }
 
 export async function browserSnapshot(

@@ -1,6 +1,7 @@
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { Webview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { browserWebviewLabel } from "./ids";
 
 export type BrowserWebviewBounds = {
 	x: number;
@@ -9,12 +10,7 @@ export type BrowserWebviewBounds = {
 	height: number;
 };
 
-const WEBVIEW_LABEL_PREFIX = "helmor_browser_";
 const MIN_VISIBLE_SIZE = 24;
-
-export function browserWebviewLabel(tabId: string): string {
-	return `${WEBVIEW_LABEL_PREFIX}${tabId.replaceAll("-", "_")}`;
-}
 
 export function measureBrowserWebviewBounds(
 	element: HTMLElement,
@@ -56,8 +52,8 @@ export async function createBrowserWebview(
 	return webview;
 }
 
-export async function closeBrowserWebview(label: string): Promise<void> {
-	const existing = await Webview.getByLabel(label);
+export async function closeBrowserWebviewForTab(tabId: string): Promise<void> {
+	const existing = await Webview.getByLabel(browserWebviewLabel(tabId));
 	await existing?.close().catch(() => undefined);
 }
 
@@ -67,4 +63,19 @@ export async function positionBrowserWebview(
 ): Promise<void> {
 	await webview.setPosition(new LogicalPosition(bounds.x, bounds.y));
 	await webview.setSize(new LogicalSize(bounds.width, bounds.height));
+}
+
+export type BrowserRuntimeMetadataHandlers = {
+	onTitleChange?: (title: string | null) => void;
+	onLocationChange?: (url: string) => void;
+	onLoadStateChange?: (loading: boolean) => void;
+};
+
+export type UnlistenBrowserRuntimeMetadata = () => void;
+
+export async function listenBrowserRuntimeMetadata(
+	_webview: Webview,
+	_handlers: BrowserRuntimeMetadataHandlers,
+): Promise<UnlistenBrowserRuntimeMetadata> {
+	return () => {};
 }

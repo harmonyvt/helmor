@@ -166,6 +166,7 @@ pub fn run() {
             if let Err(error) = ui_sync::start_listener(app.handle().clone()) {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
+            mcp::set_app_handle(app.handle().clone());
 
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.

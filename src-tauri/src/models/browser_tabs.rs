@@ -21,6 +21,13 @@ pub struct BrowserTabRecord {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosedBrowserTabResult {
+    pub workspace_id: String,
+    pub fallback: Option<BrowserTabRecord>,
+}
+
 fn record_from_row(row: &Row<'_>) -> rusqlite::Result<BrowserTabRecord> {
     Ok(BrowserTabRecord {
         id: row.get("id")?,
@@ -97,10 +104,7 @@ pub fn create_browser_tab_on(
         [workspace_id],
         |row| row.get(0),
     )?;
-    tx.execute(
-        "UPDATE workspace_browser_tabs SET active = 0 WHERE workspace_id = ?1",
-        [workspace_id],
-    )?;
+    clear_active_browser_tab_on(tx, workspace_id)?;
     tx.execute(
         r#"
         INSERT INTO workspace_browser_tabs (id, workspace_id, url, title, display_order, active)
@@ -118,10 +122,7 @@ pub fn select_browser_tab(tab_id: &str) -> Result<BrowserTabRecord> {
 pub fn select_browser_tab_on(tx: &Transaction<'_>, tab_id: &str) -> Result<BrowserTabRecord> {
     let tab = load_browser_tab_on(tx, tab_id)?
         .with_context(|| format!("Browser tab not found: {tab_id}"))?;
-    tx.execute(
-        "UPDATE workspace_browser_tabs SET active = 0 WHERE workspace_id = ?1",
-        [tab.workspace_id.as_str()],
-    )?;
+    clear_active_browser_tab_on(tx, &tab.workspace_id)?;
     tx.execute(
         "UPDATE workspace_browser_tabs SET active = 1 WHERE id = ?1",
         [tab_id],
@@ -141,10 +142,7 @@ pub fn navigate_browser_tab_on(
 ) -> Result<BrowserTabRecord> {
     let tab = load_browser_tab_on(tx, tab_id)?
         .with_context(|| format!("Browser tab not found: {tab_id}"))?;
-    tx.execute(
-        "UPDATE workspace_browser_tabs SET active = 0 WHERE workspace_id = ?1",
-        [tab.workspace_id.as_str()],
-    )?;
+    clear_active_browser_tab_on(tx, &tab.workspace_id)?;
     tx.execute(
         "UPDATE workspace_browser_tabs SET url = ?1, title = NULL, active = 1 WHERE id = ?2",
         params![url, tab_id],
@@ -169,19 +167,40 @@ pub fn update_browser_tab_title(
 }
 
 pub fn close_browser_tab(tab_id: &str) -> Result<Option<BrowserTabRecord>> {
-    db::write_transaction(|tx| close_browser_tab_on(tx, tab_id))
+    Ok(close_browser_tab_with_workspace(tab_id)?.and_then(|result| result.fallback))
+}
+
+pub fn close_browser_tab_with_workspace(tab_id: &str) -> Result<Option<ClosedBrowserTabResult>> {
+    db::write_transaction(|tx| close_browser_tab_with_workspace_on(tx, tab_id))
+}
+
+pub fn close_browser_tab_with_workspace_on(
+    tx: &Transaction<'_>,
+    tab_id: &str,
+) -> Result<Option<ClosedBrowserTabResult>> {
+    close_browser_tab_with_workspace_inner(tx, tab_id)
 }
 
 pub fn close_browser_tab_on(
     tx: &Transaction<'_>,
     tab_id: &str,
 ) -> Result<Option<BrowserTabRecord>> {
+    Ok(close_browser_tab_with_workspace_on(tx, tab_id)?.and_then(|result| result.fallback))
+}
+
+fn close_browser_tab_with_workspace_inner(
+    tx: &Transaction<'_>,
+    tab_id: &str,
+) -> Result<Option<ClosedBrowserTabResult>> {
     let Some(tab) = load_browser_tab_on(tx, tab_id)? else {
         return Ok(None);
     };
     tx.execute("DELETE FROM workspace_browser_tabs WHERE id = ?1", [tab_id])?;
     if !tab.active {
-        return Ok(None);
+        return Ok(Some(ClosedBrowserTabResult {
+            workspace_id: tab.workspace_id,
+            fallback: None,
+        }));
     }
     let fallback_id: Option<String> = tx
         .query_row(
@@ -200,10 +219,22 @@ pub fn close_browser_tab_on(
             |row| row.get(0),
         )
         .optional()?;
-    match fallback_id {
-        Some(fallback_id) => Ok(Some(select_browser_tab_on(tx, &fallback_id)?)),
-        None => Ok(None),
-    }
+    let fallback = match fallback_id {
+        Some(fallback_id) => Some(select_browser_tab_on(tx, &fallback_id)?),
+        None => None,
+    };
+    Ok(Some(ClosedBrowserTabResult {
+        workspace_id: tab.workspace_id,
+        fallback,
+    }))
+}
+
+fn clear_active_browser_tab_on(tx: &Transaction<'_>, workspace_id: &str) -> Result<()> {
+    tx.execute(
+        "UPDATE workspace_browser_tabs SET active = 0 WHERE workspace_id = ?1 AND active = 1",
+        [workspace_id],
+    )?;
+    Ok(())
 }
 
 fn ensure_workspace_exists(connection: &Connection, workspace_id: &str) -> Result<()> {
@@ -254,6 +285,16 @@ mod tests {
         (connection, dir)
     }
 
+    fn active_count(connection: &Connection, workspace_id: &str) -> i64 {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_browser_tabs WHERE workspace_id = ?1 AND active = 1",
+                [workspace_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
     #[test]
     fn normalize_adds_https_and_rejects_non_web_schemes() {
         assert_eq!(
@@ -270,17 +311,59 @@ mod tests {
         let tx = connection.transaction().unwrap();
         let first = create_browser_tab_on(&tx, "ws-1", "https://example.com/").unwrap();
         let second = create_browser_tab_on(&tx, "ws-1", "https://example.org/").unwrap();
+        assert_eq!(active_count(&tx, "ws-1"), 1);
         assert!(!load_browser_tab_on(&tx, &first.id).unwrap().unwrap().active);
         assert!(second.active);
 
         let first = select_browser_tab_on(&tx, &first.id).unwrap();
+        assert_eq!(active_count(&tx, "ws-1"), 1);
         assert!(first.active);
         let first = navigate_browser_tab_on(&tx, &first.id, "https://example.net/").unwrap();
+        assert_eq!(active_count(&tx, "ws-1"), 1);
         assert_eq!(first.url, "https://example.net/");
 
         let fallback = close_browser_tab_on(&tx, &first.id).unwrap().unwrap();
         assert_eq!(fallback.id, second.id);
         assert!(fallback.active);
+        assert_eq!(active_count(&tx, "ws-1"), 1);
         tx.commit().unwrap();
+    }
+
+    #[test]
+    fn partial_unique_index_rejects_two_active_tabs_per_workspace() {
+        let (connection, _dir) = setup();
+        connection
+            .execute(
+                r#"
+                INSERT INTO workspace_browser_tabs (id, workspace_id, url, active)
+                VALUES ('tab-1', 'ws-1', 'https://example.com/', 1)
+                "#,
+                [],
+            )
+            .unwrap();
+        let result = connection.execute(
+            r#"
+            INSERT INTO workspace_browser_tabs (id, workspace_id, url, active)
+            VALUES ('tab-2', 'ws-1', 'https://example.org/', 1)
+            "#,
+            [],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn closing_inactive_tab_reports_workspace_without_fallback() {
+        let (mut connection, _dir) = setup();
+        let tx = connection.transaction().unwrap();
+        let first = create_browser_tab_on(&tx, "ws-1", "https://example.com/").unwrap();
+        let second = create_browser_tab_on(&tx, "ws-1", "https://example.org/").unwrap();
+        assert!(second.active);
+
+        let result = close_browser_tab_with_workspace_on(&tx, &first.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.workspace_id, "ws-1");
+        assert!(result.fallback.is_none());
+        assert_eq!(active_count(&tx, "ws-1"), 1);
     }
 }
