@@ -43,6 +43,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
 import type { SidebarLayoutMode } from "./hooks/use-controller";
+import { useWorkspacePrFlash } from "./hooks/use-workspace-pr-flash";
 import {
 	createInitialSectionOpenState,
 	readStoredSectionOpenState,
@@ -172,6 +173,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 }) {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
+	const flashingIds = useWorkspacePrFlash();
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const [sectionOpenState, setSectionOpenState] = useState(() => ({
 		...createInitialSectionOpenState(groups),
@@ -509,6 +511,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 							item.row.id,
 						)}
+						isFlashing={flashingIds.has(item.row.id)}
 						onSelect={onSelectWorkspace}
 						onPrefetch={onPrefetchWorkspace}
 						onArchiveWorkspace={onArchiveWorkspace}
@@ -538,6 +541,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			selectedWorkspaceId,
 			sendingWorkspaceIds,
 			interactionRequiredWorkspaceIds,
+			flashingIds,
 			onSelectWorkspace,
 			onPrefetchWorkspace,
 			onArchiveWorkspace,
@@ -769,6 +773,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 									interactionRequiredWorkspaceIds={
 										interactionRequiredWorkspaceIds
 									}
+									flashingIds={flashingIds}
 									actions={{
 										onSelect: onSelectWorkspace,
 										onPrefetch: onPrefetchWorkspace,
