@@ -314,29 +314,50 @@ export function WorkspaceInspectorSidebar({
 
 	// Pinned-expand state: when true the InspectorTabsSection fills the full
 	// inspector column by hiding the Changes and Actions sections above it.
-	const [tabsExpanded, setTabsExpanded] = useState(false);
+	// Tracked as two independent sources so a hover-collapse doesn't clobber
+	// a button-pinned expansion, and vice-versa.
+	const [tabsExpandedByButton, setTabsExpandedByButton] = useState(false);
+	const [tabsExpandedByHover, setTabsExpandedByHover] = useState(false);
+	const tabsExpanded = tabsExpandedByButton || tabsExpandedByHover;
 
 	// Reset expand when workspace changes or when the active tab is no longer
 	// a terminal or browser (e.g. user switches to Setup while expanded).
 	useEffect(() => {
-		setTabsExpanded(false);
+		setTabsExpandedByButton(false);
+		setTabsExpandedByHover(false);
 	}, [workspaceId]);
 	useEffect(() => {
 		if (!isTerminalTabActive && !isBrowserTabActive) {
-			setTabsExpanded(false);
+			setTabsExpandedByButton(false);
+			setTabsExpandedByHover(false);
 		}
 	}, [isTerminalTabActive, isBrowserTabActive]);
+	// Hover-triggered fill expand only applies to the terminal tab. Reset it
+	// immediately when the user switches away so the sections reappear.
+	useEffect(() => {
+		if (!isTerminalTabActive) {
+			setTabsExpandedByHover(false);
+		}
+	}, [isTerminalTabActive]);
 
 	const canExpand = tabsOpen && (isTerminalTabActive || isBrowserTabActive);
 
 	const handleToggleTabsWithReset = useCallback(() => {
 		// Collapsing the panel always exits expand mode too.
-		if (tabsOpen) setTabsExpanded(false);
+		if (tabsOpen) {
+			setTabsExpandedByButton(false);
+			setTabsExpandedByHover(false);
+		}
 		handleToggleTabs();
 	}, [tabsOpen, handleToggleTabs]);
 
 	const handleExpandToggle = useCallback(() => {
-		setTabsExpanded((prev) => !prev);
+		setTabsExpandedByButton((prev) => !prev);
+	}, []);
+
+	// Called by layout.tsx when fill-mode hover activates or deactivates.
+	const handleHoverFill = useCallback((active: boolean) => {
+		setTabsExpandedByHover(active);
 	}, []);
 
 	// Terminal-scope shortcuts. Fire while focus is anywhere in the inspector
@@ -506,17 +527,22 @@ export function WorkspaceInspectorSidebar({
 	// that doesn't benefit from — and shouldn't trigger — the enlargement.
 	const scriptTabState =
 		activeTab === "setup" ? setupScriptState : runScriptState;
-	// Disable hover-zoom when the panel is already pinned-expanded (it fills
-	// the inspector column and 2× zoom would cover the chat area needlessly).
+	// Disable hover-expand when the panel is already pinned-expanded.
 	const canHoverExpand =
 		!tabsExpanded &&
 		(isTerminalTabActive
 			? true
 			: isBrowserTabActive
-				? false
+				? true // Browser uses the 2× zoom mode (hoverExpandMode="zoom")
 				: scriptTabState === "running" ||
 					scriptTabState === "success" ||
 					scriptTabState === "failure");
+
+	// Terminal hover triggers the full-screen pinned expand (fill mode);
+	// browser and script tabs use the 2× CSS zoom (zoom mode).
+	const hoverExpandMode: "zoom" | "fill" = isTerminalTabActive
+		? "fill"
+		: "zoom";
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 
@@ -598,6 +624,8 @@ export function WorkspaceInspectorSidebar({
 				onCloseBrowserTab={handleCloseBrowserTab}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
+				hoverExpandMode={hoverExpandMode}
+				onHoverFill={handleHoverFill}
 				canExpand={canExpand}
 				isExpanded={sectionsHidden}
 				onExpandToggle={handleExpandToggle}

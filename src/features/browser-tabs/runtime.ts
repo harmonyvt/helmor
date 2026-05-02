@@ -1,5 +1,5 @@
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
-import { Webview } from "@tauri-apps/api/webview";
+import { Webview, type WebviewOptions } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { browserWebviewLabel } from "./ids";
 
@@ -11,6 +11,56 @@ export type BrowserWebviewBounds = {
 };
 
 const MIN_VISIBLE_SIZE = 24;
+const FALLBACK_BROWSER_USER_AGENT =
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15";
+const APP_USER_AGENT_TOKENS =
+	/\s+(?:Helmor|Tauri|Wry|Electron|tauri)\/[\w.-]+/gi;
+
+function currentNavigator(): Navigator | null {
+	return typeof navigator === "undefined" ? null : navigator;
+}
+
+export function browserUserAgent(source?: string): string {
+	const rawAgent = source ?? currentNavigator()?.userAgent ?? "";
+	const cleanedAgent = rawAgent.replace(APP_USER_AGENT_TOKENS, "").trim();
+
+	if (!cleanedAgent) return FALLBACK_BROWSER_USER_AGENT;
+	if (/\bSafari\//.test(cleanedAgent) || /\bChrome\//.test(cleanedAgent)) {
+		return cleanedAgent;
+	}
+	if (/\bAppleWebKit\//.test(cleanedAgent)) {
+		return `${cleanedAgent} Version/17.6 Safari/605.1.15`;
+	}
+
+	return FALLBACK_BROWSER_USER_AGENT;
+}
+
+function supportsRelativeDataDirectory(): boolean {
+	const platform = currentNavigator()?.platform ?? "";
+	return !/^(Mac|iPhone|iPad|iPod)/i.test(platform);
+}
+
+export function browserWebviewOptions(
+	url: string,
+	bounds: BrowserWebviewBounds,
+): WebviewOptions {
+	return {
+		url,
+		x: bounds.x,
+		y: bounds.y,
+		width: bounds.width,
+		height: bounds.height,
+		focus: true,
+		acceptFirstMouse: true,
+		dragDropEnabled: false,
+		javascriptDisabled: false,
+		incognito: false,
+		userAgent: browserUserAgent(),
+		...(supportsRelativeDataDirectory()
+			? { dataDirectory: "workspace-browser" }
+			: {}),
+	};
+}
 
 export function measureBrowserWebviewBounds(
 	element: HTMLElement,
@@ -34,16 +84,11 @@ export async function createBrowserWebview(
 		await existing.close().catch(() => undefined);
 	}
 
-	const webview = new Webview(getCurrentWindow(), label, {
-		url,
-		x: bounds.x,
-		y: bounds.y,
-		width: bounds.width,
-		height: bounds.height,
-		focus: true,
-		acceptFirstMouse: true,
-		dragDropEnabled: false,
-	});
+	const webview = new Webview(
+		getCurrentWindow(),
+		label,
+		browserWebviewOptions(url, bounds),
+	);
 
 	await new Promise<void>((resolve, reject) => {
 		void webview.once("tauri://created", () => resolve());
