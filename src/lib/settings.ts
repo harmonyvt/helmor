@@ -40,6 +40,10 @@ export type AppSettings = {
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
+	/** Use the libghostty terminal rendering library instead of xterm.js.
+	 *  Enables GPU-accelerated rendering and improved font shaping.
+	 *  Requires a restart to take effect. */
+	libghosttyEnabled: boolean;
 };
 
 /**
@@ -72,6 +76,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customApiKey: "",
 		customModels: "",
 	},
+	libghosttyEnabled: false,
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -94,6 +99,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
+	libghosttyEnabled: "app.libghostty_enabled",
 };
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
@@ -203,6 +209,10 @@ export async function loadSettings(): Promise<AppSettings> {
 			claudeCustomProviders: parseClaudeCustomProviderSettings(
 				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
 			),
+			libghosttyEnabled:
+				raw[SETTINGS_KEY_MAP.libghosttyEnabled] !== undefined
+					? raw[SETTINGS_KEY_MAP.libghosttyEnabled] === "true"
+					: DEFAULT_SETTINGS.libghosttyEnabled,
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };

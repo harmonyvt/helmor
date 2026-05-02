@@ -609,6 +609,19 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 							{activeSection === "experimental" && (
 								<div className="flex flex-col gap-3">
+									<SettingsGroup>
+										<SettingsRow
+											title="libghostty renderer"
+											description="Use the libghostty terminal rendering library for GPU-accelerated rendering and improved font shaping. Requires a restart to take effect."
+										>
+											<Switch
+												checked={settings.libghosttyEnabled}
+												onCheckedChange={(checked) =>
+													updateSettings({ libghosttyEnabled: checked })
+												}
+											/>
+										</SettingsRow>
+									</SettingsGroup>
 									<CliInstallPanel />
 								</div>
 							)}

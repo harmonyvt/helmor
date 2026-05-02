@@ -1,4 +1,12 @@
-import { ChevronDown, Globe, Plus, Terminal, X } from "lucide-react";
+import {
+	ChevronDown,
+	Globe,
+	Maximize2,
+	Minimize2,
+	Plus,
+	Terminal,
+	X,
+} from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -128,6 +136,15 @@ type InspectorTabsSectionProps = {
 	 * enlarging (and not on the empty "Run setup" / "Open settings" placeholders).
 	 */
 	canHoverExpand: boolean;
+	/**
+	 * Show the expand/collapse button in the tab header. Only meaningful when
+	 * a terminal or browser tab is active — set to false for Setup / Run tabs.
+	 */
+	canExpand: boolean;
+	/** Whether the panel is currently pinned to fill the full inspector height. */
+	isExpanded: boolean;
+	/** Toggle the pinned-expand state. */
+	onExpandToggle: () => void;
 	children?: React.ReactNode;
 };
 
@@ -148,6 +165,9 @@ export function InspectorTabsSection({
 	onCloseBrowserTab,
 	canSpawnTerminal,
 	canHoverExpand,
+	canExpand,
+	isExpanded,
+	onExpandToggle,
 	children,
 }: InspectorTabsSectionProps) {
 	const { settings } = useSettings();
@@ -760,6 +780,36 @@ export function InspectorTabsSection({
 							</div>
 							<div className="ml-2 flex shrink-0 items-center gap-1 self-center">
 								{tabActions}
+								{canExpand && (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												type="button"
+												aria-label={
+													isExpanded
+														? "Collapse panel"
+														: "Expand to fill inspector"
+												}
+												onClick={onExpandToggle}
+												variant="ghost"
+												size="icon-sm"
+												className="shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+											>
+												{isExpanded ? (
+													<Minimize2 className="size-3.5" strokeWidth={1.9} />
+												) : (
+													<Maximize2 className="size-3.5" strokeWidth={1.9} />
+												)}
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent
+											side="bottom"
+											className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
+										>
+											{isExpanded ? "Collapse panel" : "Expand to fill"}
+										</TooltipContent>
+									</Tooltip>
+								)}
 								<Button
 									type="button"
 									aria-label="Toggle inspector tabs section"
