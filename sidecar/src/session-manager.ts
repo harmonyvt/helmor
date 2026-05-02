@@ -7,7 +7,7 @@
 
 import type { SidecarEmitter } from "./emitter.js";
 
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "pi";
 
 export interface SendMessageParams {
 	readonly sessionId: string;

@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 const providerLabels: Record<AgentLoginProvider, string> = {
 	claude: "Claude Code",
 	codex: "Codex",
+	pi: "Pi",
 };
 
 export function OnboardingTerminalPreview({

@@ -607,7 +607,7 @@ export const WorkspaceComposerContainer = memo(
 		// historical session) to a real AgentProvider before keying the
 		// query — anything else degrades to claude so we never miss the popup.
 		const slashProvider: AgentProvider =
-			provider === "codex" ? "codex" : "claude";
+			provider === "codex" || provider === "pi" ? provider : "claude";
 		// Slash command list — keyed by (provider, workingDirectory). The
 		// composer popup is hidden until this resolves; on error we fall back
 		// to an empty list and the popup never opens (no UI breakage).

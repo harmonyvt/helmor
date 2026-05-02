@@ -54,7 +54,15 @@ impl SidecarEvent {
     }
 
     pub fn session_id(&self) -> Option<&str> {
-        self.raw.get("session_id")?.as_str()
+        self.raw
+            .get("session_id")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                self.raw
+                    .get("thread")
+                    .and_then(|thread| thread.get("id"))
+                    .and_then(Value::as_str)
+            })
     }
 
     /// Claude SDK emits `system.init` to announce the authoritative session
@@ -641,6 +649,17 @@ mod tests {
         assert_eq!(event.id(), None);
         assert_eq!(event.event_type(), "unknown");
         assert_eq!(event.session_id(), None);
+    }
+
+    #[test]
+    fn sidecar_event_uses_thread_id_as_provider_session_fallback() {
+        let raw = serde_json::json!({
+            "id": "req-1",
+            "type": "thread/started",
+            "thread": {"id": "/tmp/pi-session.jsonl"},
+        });
+        let event = SidecarEvent { raw };
+        assert_eq!(event.session_id(), Some("/tmp/pi-session.jsonl"));
     }
 
     #[test]

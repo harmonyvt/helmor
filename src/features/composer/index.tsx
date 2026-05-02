@@ -154,7 +154,7 @@ type WorkspaceComposerProps = {
 	 *  context-usage ring for its hover-triggered live fetch. */
 	providerSessionId?: string | null;
 	/** Agent provider for this session — gates the Claude-only rich fetch. */
-	agentType?: "claude" | "codex" | null;
+	agentType?: "claude" | "codex" | "pi" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
 	/** Hotkey that submits the current draft with the opposite follow-up

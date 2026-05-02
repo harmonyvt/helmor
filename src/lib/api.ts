@@ -119,7 +119,7 @@ export type DataInfo = {
 	dataDirLockedByEnv: boolean;
 };
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "codex" | "pi";
 
 export type AgentModelOption = {
 	id: string;
@@ -807,11 +807,12 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex";
+export type AgentLoginProvider = "claude" | "codex" | "pi";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
+	pi: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
