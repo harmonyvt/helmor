@@ -37,8 +37,12 @@ pub enum CliInstallState {
 #[serde(rename_all = "camelCase")]
 pub struct DataInfo {
     pub data_mode: String,
+    pub default_data_mode: String,
     pub data_dir: String,
     pub db_path: String,
+    pub data_dir_preference: crate::data_dir::DataDirPreference,
+    pub data_dir_preference_path: String,
+    pub data_dir_locked_by_env: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -158,7 +162,7 @@ fn cli_status_for_paths(
         installed: install_state != CliInstallState::Missing,
         install_path: (install_state != CliInstallState::Missing)
             .then(|| install_path.display().to_string()),
-        build_mode: crate::data_dir::data_mode_label().to_string(),
+        build_mode: crate::data_dir::build_mode_label().to_string(),
         install_state,
     }
 }
@@ -884,11 +888,16 @@ fn applescript_string(value: &str) -> String {
 pub fn get_data_info() -> CmdResult<DataInfo> {
     let data_dir = crate::data_dir::data_dir()?;
     let db_path = crate::data_dir::db_path()?;
+    let data_dir_preference_path = crate::data_dir::bootstrap_settings_path()?;
 
     Ok(DataInfo {
         data_mode: crate::data_dir::data_mode_label().to_string(),
+        default_data_mode: crate::data_dir::default_data_mode_label().to_string(),
         data_dir: data_dir.display().to_string(),
         db_path: db_path.display().to_string(),
+        data_dir_preference: crate::data_dir::data_dir_preference(),
+        data_dir_preference_path: data_dir_preference_path.display().to_string(),
+        data_dir_locked_by_env: crate::data_dir::data_dir_locked_by_env(),
     })
 }
 
@@ -1061,6 +1070,31 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
 
     // 4. Done — terminate the process.
     app.exit(0);
+}
+
+#[tauri::command]
+pub async fn restart_app(app: tauri::AppHandle, force: bool) {
+    tracing::info!(force, "restart_app invoked from frontend");
+
+    app.state::<git_watcher::GitWatcherManager>().shutdown();
+
+    if force {
+        let sidecar = app.state::<sidecar::ManagedSidecar>();
+        let active = app.state::<agents::ActiveStreams>();
+        agents::abort_all_active_streams_blocking(
+            &sidecar,
+            &active,
+            std::time::Duration::from_millis(1500),
+        );
+    }
+
+    let sidecar = app.state::<sidecar::ManagedSidecar>();
+    sidecar.shutdown(
+        std::time::Duration::from_millis(1000),
+        std::time::Duration::from_millis(500),
+    );
+
+    app.request_restart();
 }
 
 // ---------------------------------------------------------------------------
