@@ -11,12 +11,10 @@ import {
 	ChevronDown,
 	ClipboardList,
 	MessageSquareMore,
-	Plus,
 	Square,
 	Zap,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -24,7 +22,6 @@ import {
 	DropdownMenuGroup,
 	DropdownMenuItem,
 	DropdownMenuLabel,
-	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ShimmerText } from "@/components/ui/shimmer-text";
@@ -84,6 +81,7 @@ import { $appendComposerInsertItems } from "./editor-ops";
 import type { ElicitationResponseHandler } from "./elicitation";
 import { ElicitationPanel } from "./elicitation-panel";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
+import { ModelPicker } from "./model-picker";
 import { UsageStatsIndicator } from "./usage-stats-indicator";
 
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
@@ -110,6 +108,8 @@ type WorkspaceComposerProps = {
 	modelSections: AgentModelSection[];
 	modelsLoading?: boolean;
 	onSelectModel: (modelId: string) => void;
+	favoriteModelIds?: string[];
+	onToggleFavorite?: (modelId: string) => void;
 	provider?: string;
 	effortLevel: string;
 	onSelectEffort: (level: string) => void;
@@ -196,6 +196,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	modelSections,
 	modelsLoading = false,
 	onSelectModel,
+	favoriteModelIds = [],
+	onToggleFavorite,
 	provider: _provider = "claude",
 	effortLevel,
 	onSelectEffort,
@@ -688,83 +690,26 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								</ShimmerText>
 							) : (
 								<>
-									<DropdownMenu
+									<ModelPicker
 										open={modelPickerOpen}
 										onOpenChange={setModelPickerOpen}
-									>
-										<DropdownMenuTrigger
-											disabled={toolbarDisabled}
-											className={cn(
-												`flex items-center gap-1.5 text-muted-foreground ${composerToolbarTriggerClassName}`,
-												toolbarDisabled &&
-													"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
-											)}
-										>
-											<ModelIcon
-												model={selectedModel}
-												className="size-[13px]"
-											/>
-											<span>
-												{selectedModel?.label ??
-													selectedModelId ??
-													"Select model"}
-											</span>
-											<ChevronDown
-												className="size-3 opacity-40"
-												strokeWidth={2}
-											/>
-										</DropdownMenuTrigger>
-
-										<DropdownMenuContent
-											side="top"
-											align="start"
-											sideOffset={4}
-											className="min-w-[17rem]"
-										>
-											{modelSections.map((section, index) => (
-												<DropdownMenuGroup key={section.id}>
-													{index > 0 ? <DropdownMenuSeparator /> : null}
-													<DropdownMenuLabel>{section.label}</DropdownMenuLabel>
-													{section.options.map((option) => (
-														<DropdownMenuItem
-															key={option.id}
-															disabled={toolbarDisabled}
-															onClick={() => {
-																onSelectModel(option.id);
-															}}
-															className="flex items-center justify-between gap-3"
-														>
-															<div className="grid min-w-0 grid-cols-[1rem_minmax(0,1fr)] items-center gap-3">
-																<span className="flex size-4 items-center justify-center text-muted-foreground">
-																	<ModelIcon
-																		model={option}
-																		className="size-4"
-																	/>
-																</span>
-																<span className="truncate font-mono tabular-nums">
-																	{option.label}
-																</span>
-															</div>
-														</DropdownMenuItem>
-													))}
-													{section.id === "claude" &&
-													!hasConfiguredClaudeProviderModels ? (
-														<DropdownMenuItem
-															onClick={handleOpenModelSettings}
-															className="flex items-center gap-3"
-														>
-															<span className="flex size-4 items-center justify-center text-muted-foreground">
-																<Plus className="size-4" strokeWidth={1.8} />
-															</span>
-															<span className="font-mono tabular-nums">
-																Add custom model...
-															</span>
-														</DropdownMenuItem>
-													) : null}
-												</DropdownMenuGroup>
-											))}
-										</DropdownMenuContent>
-									</DropdownMenu>
+										disabled={toolbarDisabled}
+										selectedModel={selectedModel}
+										selectedModelId={selectedModelId}
+										modelSections={modelSections}
+										hasConfiguredClaudeProviderModels={
+											hasConfiguredClaudeProviderModels
+										}
+										favoriteModelIds={favoriteModelIds}
+										onSelectModel={onSelectModel}
+										onToggleFavorite={onToggleFavorite ?? (() => {})}
+										onOpenModelSettings={handleOpenModelSettings}
+										triggerClassName={cn(
+											`flex items-center gap-1.5 text-muted-foreground ${composerToolbarTriggerClassName}`,
+											toolbarDisabled &&
+												"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
+										)}
+									/>
 
 									{onChangeFastMode && supportsFastMode && (
 										<Tooltip>

@@ -1073,6 +1073,7 @@ function parseSkillsResponse(result: unknown, cwd: string): SlashCommandInfo[] {
 				description: desc,
 				argumentHint: undefined,
 				source: "skill" as const,
+				sourceInfo: undefined,
 			},
 		];
 	});

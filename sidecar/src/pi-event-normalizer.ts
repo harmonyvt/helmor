@@ -6,14 +6,18 @@ export interface PiNormalizedEvent {
 }
 
 interface PiEventState {
+	requestId: string | null;
 	messageItemId: string | null;
 	reasoningItemId: string | null;
 	turnId: string | null;
 	turnIndex: number;
 }
 
-export function createPiEventState(): PiEventState {
+export function createPiEventState(
+	requestId: string | null = null,
+): PiEventState {
 	return {
+		requestId,
 		messageItemId: null,
 		reasoningItemId: null,
 		turnId: null,
@@ -29,7 +33,7 @@ export function normalizePiEvent(
 		case "turn_start": {
 			const rawEvent = event as AgentSessionEvent & { turnIndex?: number };
 			const turnIndex = rawEvent.turnIndex ?? state.turnIndex;
-			const turnId = `pi-turn-${turnIndex}`;
+			const turnId = piScopedId(state, "turn", turnIndex);
 			state.turnId = turnId;
 			state.turnIndex = turnIndex;
 			return [{ type: "turn/started", turn: { id: turnId } }];
@@ -55,6 +59,10 @@ export function normalizePiEvent(
 		case "message_end": {
 			const message = asRecord(event.message);
 			if (message?.role !== "assistant") return [];
+			const errorMessage = assistantErrorMessage(message);
+			if (errorMessage) {
+				return [{ type: "error", message: errorMessage }];
+			}
 			const id = state.messageItemId ?? piMessageId(message, state);
 			state.messageItemId = null;
 			return [
@@ -103,7 +111,7 @@ export function normalizePiEvent(
 				},
 			];
 		case "turn_end": {
-			const turnId = state.turnId ?? `pi-turn-${state.turnIndex}`;
+			const turnId = state.turnId ?? piScopedId(state, "turn", state.turnIndex);
 			const usage = asRecord(asRecord(event.message)?.usage);
 			return [
 				{
@@ -138,7 +146,7 @@ function normalizeAssistantMessageUpdate(
 		];
 	}
 	if (eventType === "thinking_start") {
-		const id = `pi-reasoning-${state.turnIndex}`;
+		const id = piScopedId(state, "reasoning", state.turnIndex);
 		state.reasoningItemId = id;
 		return [
 			{ type: "item/started", item: { id, type: "reasoning", text: "" } },
@@ -151,13 +159,16 @@ function normalizeAssistantMessageUpdate(
 		return [
 			{
 				type: "item/reasoning/textDelta",
-				itemId: state.reasoningItemId ?? `pi-reasoning-${state.turnIndex}`,
+				itemId:
+					state.reasoningItemId ??
+					piScopedId(state, "reasoning", state.turnIndex),
 				text,
 			},
 		];
 	}
 	if (eventType === "thinking_end") {
-		const id = state.reasoningItemId ?? `pi-reasoning-${state.turnIndex}`;
+		const id =
+			state.reasoningItemId ?? piScopedId(state, "reasoning", state.turnIndex);
 		state.reasoningItemId = null;
 		return [
 			{
@@ -246,13 +257,34 @@ function assistantText(message: Record<string, unknown> | undefined): string {
 		.join("");
 }
 
+function assistantErrorMessage(
+	message: Record<string, unknown> | undefined,
+): string | undefined {
+	const errorMessage = stringField(message, ["errorMessage"]);
+	if (!errorMessage) return undefined;
+	const stopReason = stringField(message, ["stopReason"]);
+	return stopReason
+		? `Pi ${stopReason}: ${errorMessage}`
+		: `Pi error: ${errorMessage}`;
+}
+
 function piMessageId(
 	message: Record<string, unknown> | undefined,
 	state: PiEventState,
 ): string {
 	const responseId =
 		typeof message?.responseId === "string" ? message.responseId : "";
-	return responseId || `pi-message-${state.turnIndex}`;
+	return responseId || piScopedId(state, "message", state.turnIndex);
+}
+
+function piScopedId(
+	state: PiEventState,
+	kind: "message" | "reasoning" | "turn",
+	turnIndex: number,
+): string {
+	return state.requestId
+		? `pi-${kind}-${state.requestId}-${turnIndex}`
+		: `pi-${kind}-${turnIndex}`;
 }
 
 function normalizeUsage(

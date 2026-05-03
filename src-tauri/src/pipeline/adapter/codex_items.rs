@@ -60,6 +60,7 @@ pub(super) fn render_item_completed(
         Some("plan") => render_plan(msg, item, result),
         Some("context_compaction") => render_context_compaction(msg, item, result),
         Some("image_generation") => render_image_generation(msg, item, result),
+        Some("generic_card") => render_generic_card(msg, item, result),
         _ => {}
     }
 }
@@ -388,6 +389,72 @@ fn render_image_generation(
             id: format!("{}:blk:0", msg.id),
             source,
             media_type,
+        })],
+        status: Some(MessageStatus {
+            status_type: "complete".to_string(),
+            reason: Some("stop".to_string()),
+        }),
+        streaming: None,
+    });
+}
+
+fn render_generic_card(
+    msg: &IntermediateMessage,
+    item: &Value,
+    result: &mut Vec<ThreadMessageLike>,
+) {
+    let title = item
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("Provider event")
+        .to_string();
+    let subtitle = item
+        .get("subtitle")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let body = item
+        .get("body")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let severity =
+        item.get("severity")
+            .and_then(Value::as_str)
+            .and_then(|severity| match severity {
+                "error" => Some(NoticeSeverity::Error),
+                "warning" => Some(NoticeSeverity::Warning),
+                "info" => Some(NoticeSeverity::Info),
+                _ => None,
+            });
+    let status = item
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let provider = item
+        .get("provider")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let details = item
+        .get("details")
+        .cloned()
+        .filter(|value| !value.is_null());
+
+    result.push(ThreadMessageLike {
+        role: MessageRole::Assistant,
+        id: Some(msg.id.clone()),
+        created_at: Some(msg.created_at.clone()),
+        content: vec![ExtendedMessagePart::Basic(MessagePart::GenericCard {
+            id: format!("{}:blk:0", msg.id),
+            title,
+            subtitle,
+            body,
+            severity,
+            status,
+            provider,
+            details,
         })],
         status: Some(MessageStatus {
             status_type: "complete".to_string(),

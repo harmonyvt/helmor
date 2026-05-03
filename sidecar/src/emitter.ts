@@ -69,7 +69,8 @@ export type SlashCommandEntry = {
 	readonly name: string;
 	readonly description: string;
 	readonly argumentHint: string | undefined;
-	readonly source: "builtin" | "skill";
+	readonly source: "builtin" | "extension" | "prompt" | "skill";
+	readonly sourceInfo?: Record<string, unknown>;
 };
 
 export type SlashCommandsListedEvent = {
@@ -138,7 +139,9 @@ export type ModelsListedEvent = {
 		readonly id: string;
 		readonly label: string;
 		readonly cliModel: string;
+		readonly providerKey?: string;
 		readonly effortLevels?: readonly string[];
+		readonly supportsFastMode?: boolean;
 	}>;
 };
 
@@ -249,7 +252,9 @@ export interface SidecarEmitter {
 			id: string;
 			label: string;
 			cliModel: string;
+			providerKey?: string;
 			effortLevels?: readonly string[];
+			supportsFastMode?: boolean;
 		}>,
 	): void;
 	contextUsageUpdated(

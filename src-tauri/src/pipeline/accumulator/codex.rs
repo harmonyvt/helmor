@@ -294,6 +294,9 @@ fn dispatch_item(acc: &mut StreamAccumulator, raw_line: &str, value: &Value, per
         Some("image_generation") => {
             handle_image_generation(acc, raw_line, item, item_id.as_deref(), persist);
         }
+        Some("generic_card") => {
+            handle_generic_card(acc, raw_line, item, item_id.as_deref(), persist);
+        }
         Some("error") => {
             handle_error_item(acc, raw_line, item, persist);
         }
@@ -886,6 +889,32 @@ fn handle_image_generation(
     }
 }
 
+fn handle_generic_card(
+    acc: &mut StreamAccumulator,
+    raw_line: &str,
+    item: &Value,
+    item_id: Option<&str>,
+    persist: bool,
+) {
+    let envelope = serde_json::json!({
+        "type": "item.completed",
+        "item": item,
+    });
+    let s = serde_json::to_string(&envelope).unwrap_or_default();
+    let card_id = item_id
+        .map(|id| format!("generic-card:{id}"))
+        .unwrap_or_else(|| format!("generic-card:{}", acc.line_count));
+    acc.collect_or_replace(&s, &envelope, MessageRole::Assistant, Some(card_id.clone()));
+
+    if persist {
+        acc.turns.push(CollectedTurn {
+            id: card_id,
+            role: MessageRole::Assistant,
+            content_json: raw_line.to_string(),
+        });
+    }
+}
+
 pub(super) fn handle_thread_compacted(acc: &mut StreamAccumulator, _raw_line: &str, value: &Value) {
     let synthetic = serde_json::json!({
         "type": "system",
@@ -1061,6 +1090,7 @@ fn normalize_item_type(t: &str) -> &str {
         "plan" => "plan",
         "contextCompaction" | "context_compaction" => "context_compaction",
         "imageGeneration" | "image_generation" => "image_generation",
+        "genericCard" | "generic_card" => "generic_card",
         "error" => "error",
         other => other,
     }

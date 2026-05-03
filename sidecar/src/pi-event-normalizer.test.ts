@@ -99,4 +99,70 @@ describe("Pi event normalization", () => {
 			},
 		]);
 	});
+
+	test("scopes fallback assistant message IDs by request ID", () => {
+		const first = createPiEventState("request-a");
+		const second = createPiEventState("request-b");
+
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_start",
+					message: { role: "assistant", content: [] },
+				} as unknown as AgentSessionEvent,
+				first,
+			),
+		).toEqual([
+			{
+				type: "item/started",
+				item: {
+					id: "pi-message-request-a-0",
+					type: "agent_message",
+					text: "",
+				},
+			},
+		]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_start",
+					message: { role: "assistant", content: [] },
+				} as unknown as AgentSessionEvent,
+				second,
+			),
+		).toEqual([
+			{
+				type: "item/started",
+				item: {
+					id: "pi-message-request-b-0",
+					type: "agent_message",
+					text: "",
+				},
+			},
+		]);
+	});
+
+	test("turns assistant error completions into sidecar errors", () => {
+		const state = createPiEventState("request-a");
+
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						stopReason: "error",
+						errorMessage: "Provider returned no chunks",
+						content: [],
+					},
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "error",
+				message: "Pi error: Provider returned no chunks",
+			},
+		]);
+	});
 });

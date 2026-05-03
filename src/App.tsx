@@ -60,6 +60,7 @@ import { GithubStatusMenu } from "@/shell/github-status-menu";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useGithubIdentity } from "@/shell/hooks/use-github-identity";
 import { useShellPanels } from "@/shell/hooks/use-panels";
+import { useRefreshPiModels } from "@/shell/hooks/use-refresh-pi-models";
 import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
 import {
 	findAdjacentSessionId,
@@ -636,6 +637,7 @@ function AppShell({
 	const appUpdateStatus = useAppUpdater();
 	useDockUnreadBadge();
 	useEnsureDefaultModel();
+	useRefreshPiModels();
 	const notify = useOsNotifications(appSettings);
 	const installedEditorsQuery = useQuery(detectedEditorsQueryOptions());
 	const installedEditors = installedEditorsQuery.data ?? [];

@@ -234,6 +234,10 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         return model;
     }
 
+    if let Some(model) = dynamic_pi_model(model_id) {
+        return model;
+    }
+
     if let Some(model) = super::custom_providers::resolve(model_id) {
         return ResolvedModel {
             id: model.id,
@@ -273,6 +277,18 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         claude_base_url: None,
         claude_auth_token: None,
     }
+}
+
+fn dynamic_pi_model(model_id: &str) -> Option<ResolvedModel> {
+    let cli_model = model_id.strip_prefix("pi:")?;
+    cli_model.contains('/').then(|| ResolvedModel {
+        id: model_id.to_string(),
+        provider: "pi".to_string(),
+        cli_model: cli_model.to_string(),
+        supports_effort: true,
+        claude_base_url: None,
+        claude_auth_token: None,
+    })
 }
 
 fn legacy_pi_azure_model(model_id: &str) -> Option<ResolvedModel> {
@@ -435,6 +451,14 @@ mod tests {
         assert_eq!(m.provider, "pi");
         assert_eq!(m.cli_model, "azure-openai-responses/gpt-5.4");
         assert_eq!(m.id, "pi:azure-openai-responses/gpt-5.4");
+    }
+
+    #[test]
+    fn resolve_dynamic_pi_model_routes_to_pi() {
+        let m = resolve_model("pi:custom-provider/custom-model");
+        assert_eq!(m.provider, "pi");
+        assert_eq!(m.cli_model, "custom-provider/custom-model");
+        assert_eq!(m.id, "pi:custom-provider/custom-model");
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod builtin_claude_providers;
 mod catalog;
 mod custom_providers;
 mod persistence;
+mod pi_models;
 mod queries;
 mod slash_commands;
 mod streaming;
@@ -203,6 +204,13 @@ struct ExchangeContext {
 #[tauri::command]
 pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
     Ok(queries::fetch_agent_model_sections())
+}
+
+#[tauri::command]
+pub fn check_pi_models(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+) -> CmdResult<pi_models::PiModelCheckResponse> {
+    Ok(pi_models::check(&sidecar))
 }
 
 #[tauri::command]

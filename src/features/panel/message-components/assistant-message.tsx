@@ -14,9 +14,11 @@ import {
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { ImageBlock, PlanReviewCard, TodoList } from "./content-parts";
+import { GenericCard } from "./generic-card";
 import type { RenderedMessage, StreamdownMode } from "./shared";
 import {
 	isCollapsedGroupPart,
+	isGenericCardPart,
 	isImagePart,
 	isPlanReviewPart,
 	isReasoningPart,
@@ -208,6 +210,9 @@ export function ChatAssistantMessage({
 				}
 				if (isPlanReviewPart(part)) {
 					return <PlanReviewCard key={key} part={part} />;
+				}
+				if (isGenericCardPart(part)) {
+					return <GenericCard key={key} part={part} />;
 				}
 				return null;
 			})}

@@ -2,19 +2,19 @@ import { basename, extname } from "node:path";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
-	AuthStorage,
 	createAgentSession,
-	ModelRegistry,
+	type ModelRegistry,
 	SessionManager as PiFileSessionManager,
+	type SlashCommandInfo as PiSlashCommandInfo,
 } from "@mariozechner/pi-coding-agent";
 import type { SidecarEmitter } from "./emitter.js";
 import { readImageWithResize } from "./image-resize.js";
 import { parseImageRefs } from "./images.js";
 import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
 import { errorDetails, logger } from "./logger.js";
-import { listProviderModels } from "./model-catalog.js";
-import { bootstrapPiAuth } from "./pi-auth-bootstrap.js";
 import { createPiEventState, normalizePiEvent } from "./pi-event-normalizer.js";
+import { bindPiExtensionsForHelmor } from "./pi-extension-host.js";
+import { createPiRuntimeResources } from "./pi-runtime.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
@@ -31,6 +31,14 @@ import {
 
 type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
 type PiImageContent = { type: "image"; data: string; mimeType: string };
+const PI_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+
+type PiModel = {
+	readonly id: string;
+	readonly name: string;
+	readonly provider: string;
+	readonly reasoning: boolean;
+};
 
 interface LivePiSession {
 	readonly session: AgentSession;
@@ -62,15 +70,15 @@ export class PiSessionManager implements SessionManager {
 			const sessionManager = buildPiFileSessionManager(params);
 			const providerSessionId =
 				sessionManager.getSessionFile() ?? sessionManager.getSessionId();
-			const authStorage = AuthStorage.create();
-			bootstrapPiAuth(authStorage);
-			const modelRegistry = ModelRegistry.create(authStorage);
+			const { authStorage, modelRegistry, resourceLoader } =
+				await createPiRuntimeResources(params.cwd);
 			const model = resolvePiModel(modelRegistry, params.model);
 			const tools = toolsForPermissionMode(params.permissionMode);
 			const { session } = await createAgentSession({
 				cwd: params.cwd,
 				authStorage,
 				modelRegistry,
+				resourceLoader,
 				sessionManager,
 				model,
 				thinkingLevel: normalizeThinkingLevel(params.effortLevel),
@@ -91,9 +99,12 @@ export class PiSessionManager implements SessionManager {
 				active: true,
 			};
 			this.sessions.set(params.sessionId, live);
+			await bindPiExtensionsForHelmor(session, emitter, requestId);
 
-			const state = createPiEventState();
+			const state = createPiEventState(requestId);
+			const trace = createPiTrace(requestId, params.model, params.cwd ?? "");
 			live.unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+				trace.record(event);
 				for (const normalized of normalizePiEvent(event, state)) {
 					emitter.passthrough(requestId, {
 						...normalized,
@@ -113,6 +124,15 @@ export class PiSessionManager implements SessionManager {
 				images,
 				source: "interactive",
 			});
+			trace.finish(session.agent.state.errorMessage);
+			if (trace.shouldEmitEmptyTurnNotice()) {
+				emitter.passthrough(requestId, {
+					type: "error",
+					message:
+						session.agent.state.errorMessage ??
+						"Pi completed without returning a visible assistant message.",
+				});
+			}
 			emitter.end(requestId);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
@@ -139,13 +159,13 @@ export class PiSessionManager implements SessionManager {
 		timeoutMs = TITLE_GENERATION_TIMEOUT_MS,
 		_options?: GenerateTitleOptions,
 	): Promise<void> {
-		const authStorage = AuthStorage.create();
-		bootstrapPiAuth(authStorage);
-		const modelRegistry = ModelRegistry.create(authStorage);
+		const { authStorage, modelRegistry, resourceLoader } =
+			await createPiRuntimeResources(process.cwd());
 		const model = resolvePiModel(modelRegistry, "anthropic/claude-haiku-4-5");
 		const { session } = await createAgentSession({
 			authStorage,
 			modelRegistry,
+			resourceLoader,
 			model,
 			sessionManager: PiFileSessionManager.inMemory(process.cwd()),
 			tools: [],
@@ -177,13 +197,42 @@ export class PiSessionManager implements SessionManager {
 	}
 
 	async listSlashCommands(
-		_params: ListSlashCommandsParams,
+		params: ListSlashCommandsParams,
 	): Promise<readonly SlashCommandInfo[]> {
-		return [];
+		const cwd = params.cwd || process.cwd();
+		const { authStorage, modelRegistry, resourceLoader } =
+			await createPiRuntimeResources(cwd);
+		const { session, extensionsResult } = await createAgentSession({
+			cwd,
+			authStorage,
+			modelRegistry,
+			resourceLoader,
+			sessionManager: PiFileSessionManager.inMemory(cwd),
+			tools: [],
+			noTools: "builtin",
+		});
+		try {
+			await session.bindExtensions({});
+			return normalizePiSlashCommands(extensionsResult.runtime.getCommands());
+		} finally {
+			session.dispose();
+		}
 	}
 
 	async listModels(): Promise<readonly ProviderModelInfo[]> {
-		return listProviderModels("pi");
+		const { modelRegistry } = await createPiRuntimeResources(process.cwd());
+		const loadError = modelRegistry.getError();
+		if (loadError) {
+			logger.info("Pi model registry reported errors", { error: loadError });
+		}
+
+		return modelRegistry
+			.getAvailable()
+			.sort((left, right) => {
+				const providerDelta = left.provider.localeCompare(right.provider);
+				return providerDelta || left.id.localeCompare(right.id);
+			})
+			.map(piModelInfo);
 	}
 
 	async stopSession(sessionId: string): Promise<void> {
@@ -230,6 +279,129 @@ export class PiSessionManager implements SessionManager {
 		}
 		this.sessions.clear();
 	}
+}
+
+function createPiTrace(
+	requestId: string,
+	model: string | undefined,
+	cwd: string,
+) {
+	const counts = new Map<string, number>();
+	let visibleAssistantMessageCount = 0;
+	let errorEventCount = 0;
+	return {
+		record(event: AgentSessionEvent) {
+			counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+			if (event.type === "message_end") {
+				const message = asRecord(event.message);
+				if (
+					message?.role === "assistant" &&
+					assistantHasVisibleContent(message)
+				) {
+					visibleAssistantMessageCount += 1;
+				}
+			}
+			if (event.type === "message_end") {
+				const message = asRecord(event.message);
+				if (
+					message?.role === "assistant" &&
+					typeof message.errorMessage === "string"
+				) {
+					errorEventCount += 1;
+				}
+			}
+		},
+		finish(errorMessage: string | undefined) {
+			logger.debug("Pi prompt event summary", {
+				requestId,
+				model,
+				cwd,
+				events: Object.fromEntries(counts),
+				visibleAssistantMessageCount,
+				errorEventCount,
+				errorMessage,
+			});
+		},
+		shouldEmitEmptyTurnNotice() {
+			return visibleAssistantMessageCount === 0 && errorEventCount === 0;
+		},
+	};
+}
+
+function assistantHasVisibleContent(message: Record<string, unknown>): boolean {
+	return extractAssistantText(message).trim().length > 0;
+}
+
+function extractAssistantText(message: Record<string, unknown>): string {
+	const content = message.content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((item) => asRecord(item))
+		.filter((item) => item?.type === "text" && typeof item.text === "string")
+		.map((item) => item?.text as string)
+		.join("");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function piModelInfo(model: PiModel): ProviderModelInfo {
+	return {
+		id: `pi:${model.provider}/${model.id}`,
+		label: `Pi · ${model.name || model.id}`,
+		cliModel: `${model.provider}/${model.id}`,
+		providerKey: model.provider,
+		effortLevels: model.reasoning ? PI_EFFORT_LEVELS : [],
+		supportsFastMode: piModelSupportsFastMode(model),
+	};
+}
+
+function piModelSupportsFastMode(model: PiModel): boolean {
+	return (
+		model.provider === "azure-openai-responses" ||
+		model.provider === "openai-codex"
+	);
+}
+
+export function normalizePiSlashCommands(
+	commands: readonly PiSlashCommandInfo[],
+): SlashCommandInfo[] {
+	const seen = new Set<string>();
+	const out: SlashCommandInfo[] = [];
+	for (const command of commands) {
+		if (!command.name || seen.has(command.name)) continue;
+		seen.add(command.name);
+		out.push({
+			name: command.name,
+			description: command.description ?? "",
+			argumentHint: piArgumentHint(command),
+			source: command.source,
+			sourceInfo: normalizeSourceInfo(command.sourceInfo),
+		});
+	}
+	return out;
+}
+
+function piArgumentHint(command: PiSlashCommandInfo): string | undefined {
+	const sourceInfo = command.sourceInfo as unknown as
+		| Record<string, unknown>
+		| undefined;
+	const frontmatter = sourceInfo?.frontmatter;
+	if (frontmatter && typeof frontmatter === "object") {
+		const hint = (frontmatter as Record<string, unknown>)["argument-hint"];
+		if (typeof hint === "string" && hint.trim()) return hint;
+	}
+	return undefined;
+}
+
+function normalizeSourceInfo(
+	sourceInfo: PiSlashCommandInfo["sourceInfo"],
+): Record<string, unknown> | undefined {
+	if (!sourceInfo || typeof sourceInfo !== "object") return undefined;
+	return { ...sourceInfo } as Record<string, unknown>;
 }
 
 function buildPiFileSessionManager(

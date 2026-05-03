@@ -741,6 +741,62 @@ describe("WorkspaceComposer", () => {
 		expect(zapIcon).not.toHaveClass("opacity-55");
 	});
 
+	it("groups Pi models by provider in the model picker", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={[
+						...MODEL_SECTIONS,
+						{
+							id: "pi",
+							label: "Pi",
+							options: [
+								{
+									id: "pi:anthropic/claude-sonnet-4-6",
+									provider: "pi",
+									label: "Pi · Claude Sonnet 4.6",
+									cliModel: "anthropic/claude-sonnet-4-6",
+									providerKey: "anthropic",
+								},
+								{
+									id: "pi:azure-openai-responses/gpt-5.4",
+									provider: "pi",
+									label: "Pi · GPT-5.4",
+									cliModel: "azure-openai-responses/gpt-5.4",
+									providerKey: "azure-openai-responses",
+								},
+							],
+						},
+					]}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await user.click(screen.getByText("Opus 4.7 1M"));
+
+		expect(screen.getByText("Pi · Anthropic")).toBeInTheDocument();
+		expect(screen.getByText("Pi · Azure OpenAI Responses")).toBeInTheDocument();
+		expect(screen.getByText("Pi · Claude Sonnet 4.6")).toBeInTheDocument();
+		expect(screen.getByText("Pi · GPT-5.4")).toBeInTheDocument();
+	});
+
 	it("does not render the fast mode lottie overlay when fast mode is only toggled on", () => {
 		const queryClient = createHelmorQueryClient();
 
