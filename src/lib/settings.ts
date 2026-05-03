@@ -52,6 +52,10 @@ export type AppSettings = {
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	/** Model IDs the user has starred for quick access. */
 	favoriteModelIds: string[];
+	remoteWorkspacesEnabled: boolean;
+	defaultWorkspaceLocation: "local" | "remote";
+	defaultRemoteWorkspaceProfileId: string | null;
+	defaultRemoteWorkspaceCopyPiConfig: boolean;
 	remoteWorkspaceProfiles: RemoteWorkspaceProfileSetting[];
 };
 
@@ -86,6 +90,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customModels: "",
 	},
 	favoriteModelIds: [],
+	remoteWorkspacesEnabled: true,
+	defaultWorkspaceLocation: "local",
+	defaultRemoteWorkspaceProfileId: null,
+	defaultRemoteWorkspaceCopyPiConfig: true,
 	remoteWorkspaceProfiles: [],
 };
 
@@ -110,6 +118,11 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	favoriteModelIds: "app.favorite_model_ids",
+	remoteWorkspacesEnabled: "app.remote_workspaces_enabled",
+	defaultWorkspaceLocation: "app.default_workspace_location",
+	defaultRemoteWorkspaceProfileId: "app.default_remote_workspace_profile_id",
+	defaultRemoteWorkspaceCopyPiConfig:
+		"app.default_remote_workspace_copy_pi_config",
 	remoteWorkspaceProfiles: "app.remote_workspace_profiles",
 };
 
@@ -272,6 +285,22 @@ export async function loadSettings(): Promise<AppSettings> {
 			favoriteModelIds: parseFavoriteModelIds(
 				raw[SETTINGS_KEY_MAP.favoriteModelIds],
 			),
+			remoteWorkspacesEnabled:
+				raw[SETTINGS_KEY_MAP.remoteWorkspacesEnabled] !== undefined
+					? raw[SETTINGS_KEY_MAP.remoteWorkspacesEnabled] === "true"
+					: DEFAULT_SETTINGS.remoteWorkspacesEnabled,
+			defaultWorkspaceLocation: (() => {
+				const value = raw[SETTINGS_KEY_MAP.defaultWorkspaceLocation];
+				return value === "remote" || value === "local"
+					? value
+					: DEFAULT_SETTINGS.defaultWorkspaceLocation;
+			})(),
+			defaultRemoteWorkspaceProfileId:
+				raw[SETTINGS_KEY_MAP.defaultRemoteWorkspaceProfileId] || null,
+			defaultRemoteWorkspaceCopyPiConfig:
+				raw[SETTINGS_KEY_MAP.defaultRemoteWorkspaceCopyPiConfig] !== undefined
+					? raw[SETTINGS_KEY_MAP.defaultRemoteWorkspaceCopyPiConfig] === "true"
+					: DEFAULT_SETTINGS.defaultRemoteWorkspaceCopyPiConfig,
 			remoteWorkspaceProfiles: parseRemoteWorkspaceProfiles(
 				raw[SETTINGS_KEY_MAP.remoteWorkspaceProfiles],
 			),

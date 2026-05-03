@@ -66,6 +66,7 @@ import {
 	ClaudeCustomProvidersPanel,
 	PiModelsCheckPanel,
 } from "./panels/model-providers";
+import { RemoteWorkspacesPanel } from "./panels/remote-workspaces";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
 const MIN_FONT_SIZE = 12;
@@ -101,116 +102,6 @@ function titleSectionLabel(
 	repos: RepositoryCreateOption[],
 ): string {
 	return sidebarSectionLabel(section, repos);
-}
-
-function RemoteProfilesPanel() {
-	const { settings, updateSettings } = useSettings();
-	const [name, setName] = useState("Docker default");
-	const [backend, setBackend] = useState<"docker" | "ssh">("docker");
-	const [target, setTarget] = useState("node:22-bookworm");
-	const [remoteRoot, setRemoteRoot] = useState("~/helmor-workspaces");
-
-	return (
-		<div className="flex flex-col gap-4 py-5">
-			<div>
-				<div className="text-[13px] font-medium leading-snug text-foreground">
-					Remote Workspace Profiles
-				</div>
-				<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-					Remote workspaces use Pi only and copy Pi config only when you opt in
-					during creation.
-				</div>
-			</div>
-			<div className="grid grid-cols-[1fr_120px_1fr] gap-2">
-				<Input value={name} onChange={(event) => setName(event.target.value)} />
-				<select
-					value={backend}
-					onChange={(event) => {
-						const next = event.target.value as "docker" | "ssh";
-						setBackend(next);
-						setTarget(next === "docker" ? "node:22-bookworm" : "user@host");
-					}}
-					className="h-9 cursor-pointer rounded-md border border-input bg-background px-2 text-[13px]"
-				>
-					<option value="docker">Docker</option>
-					<option value="ssh">SSH</option>
-				</select>
-				<Input
-					value={target}
-					onChange={(event) => setTarget(event.target.value)}
-					placeholder={backend === "docker" ? "Docker image" : "SSH host"}
-				/>
-			</div>
-			<div className="flex gap-2">
-				<Input
-					value={remoteRoot}
-					onChange={(event) => setRemoteRoot(event.target.value)}
-					placeholder="~/helmor-workspaces"
-				/>
-				<Button
-					type="button"
-					onClick={() => {
-						const id = `${backend}-${Date.now().toString(36)}`;
-						void updateSettings({
-							remoteWorkspaceProfiles: [
-								...settings.remoteWorkspaceProfiles,
-								{
-									id,
-									name: name.trim() || `${backend} profile`,
-									backend,
-									remoteRoot,
-									...(backend === "docker"
-										? { dockerImage: target.trim() }
-										: { sshHost: target.trim() }),
-								},
-							],
-						});
-					}}
-				>
-					Add profile
-				</Button>
-			</div>
-			<div className="flex flex-col gap-2">
-				{settings.remoteWorkspaceProfiles.length === 0 ? (
-					<div className="rounded-lg border border-dashed border-border/70 p-3 text-[12px] text-muted-foreground">
-						No remote profiles yet.
-					</div>
-				) : (
-					settings.remoteWorkspaceProfiles.map((profile) => (
-						<div
-							key={profile.id}
-							className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2"
-						>
-							<div className="min-w-0 text-[13px]">
-								<div className="font-medium">{profile.name}</div>
-								<div className="truncate text-[12px] text-muted-foreground">
-									{profile.backend === "docker"
-										? profile.dockerImage
-										: profile.sshHost}{" "}
-									· {profile.remoteRoot}
-								</div>
-							</div>
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								onClick={() =>
-									updateSettings({
-										remoteWorkspaceProfiles:
-											settings.remoteWorkspaceProfiles.filter(
-												(item) => item.id !== profile.id,
-											),
-									})
-								}
-							>
-								Remove
-							</Button>
-						</div>
-					))
-				)}
-			</div>
-		</div>
-	);
 }
 
 export const SettingsDialog = memo(function SettingsDialog({
@@ -723,11 +614,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 								</SettingsGroup>
 							)}
 
-							{activeSection === "remote" && (
-								<SettingsGroup>
-									<RemoteProfilesPanel />
-								</SettingsGroup>
-							)}
+							{activeSection === "remote" && <RemoteWorkspacesPanel />}
 
 							{activeSection === "experimental" && (
 								<div className="flex flex-col gap-3">

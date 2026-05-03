@@ -56,7 +56,9 @@ export function WorkspaceCreateDialog({
 	const [tab, setTab] = useState("new");
 	const [location, setLocation] = useState<"local" | "remote">("local");
 	const [profileId, setProfileId] = useState("");
-	const [copyPiConfig, setCopyPiConfig] = useState(true);
+	const [copyPiConfig, setCopyPiConfig] = useState(
+		settings.defaultRemoteWorkspaceCopyPiConfig,
+	);
 	const [remoteRepoId, setRemoteRepoId] = useState("");
 	const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
 	const [remoteBranch, setRemoteBranch] = useState("");
@@ -82,10 +84,30 @@ export function WorkspaceCreateDialog({
 		setPrRepoId((current) => current || firstRepoId);
 		setRemoteError(null);
 		setPrError(null);
-		setProfileId(
-			(current) => current || settings.remoteWorkspaceProfiles[0]?.id || "",
+		const defaultProfileId =
+			settings.remoteWorkspaceProfiles.find(
+				(profile) => profile.id === settings.defaultRemoteWorkspaceProfileId,
+			)?.id ||
+			settings.remoteWorkspaceProfiles[0]?.id ||
+			"";
+		setProfileId((current) => current || defaultProfileId);
+		setCopyPiConfig(settings.defaultRemoteWorkspaceCopyPiConfig);
+		setLocation(
+			settings.remoteWorkspacesEnabled &&
+				settings.defaultWorkspaceLocation === "remote" &&
+				defaultProfileId
+				? "remote"
+				: "local",
 		);
-	}, [open, repositories, settings.remoteWorkspaceProfiles]);
+	}, [
+		open,
+		repositories,
+		settings.defaultRemoteWorkspaceCopyPiConfig,
+		settings.defaultRemoteWorkspaceProfileId,
+		settings.defaultWorkspaceLocation,
+		settings.remoteWorkspaceProfiles,
+		settings.remoteWorkspacesEnabled,
+	]);
 
 	useEffect(() => {
 		if (!open || tab !== "new") {
@@ -189,7 +211,7 @@ export function WorkspaceCreateDialog({
 				(item) => item.id === profileId,
 			);
 			const remote =
-				location === "remote" && profile
+				location === "remote" && settings.remoteWorkspacesEnabled && profile
 					? { profile, copyPiConfig }
 					: undefined;
 			setSubmitting(true);
@@ -211,11 +233,13 @@ export function WorkspaceCreateDialog({
 			location,
 			profileId,
 			settings.remoteWorkspaceProfiles,
+			settings.remoteWorkspacesEnabled,
 			copyPiConfig,
 		],
 	);
 
-	const remoteDisabled = location === "remote" && !profileId;
+	const remoteDisabled =
+		location === "remote" && (!settings.remoteWorkspacesEnabled || !profileId);
 
 	const handleResolvePr = useCallback(async () => {
 		if (!prRepoId || !prInput.trim()) {
