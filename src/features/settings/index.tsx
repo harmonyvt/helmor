@@ -67,6 +67,7 @@ import {
 	PiModelsCheckPanel,
 } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
+import { WebDaemonPanel } from "./panels/web-daemon";
 
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 20;
@@ -79,6 +80,7 @@ export type SettingsSection =
 	| "model"
 	| "git"
 	| "experimental"
+	| "web"
 	| "import"
 	| "developer"
 	| "account"
@@ -189,6 +191,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"shortcuts",
 		"git",
 		"experimental",
+		"web",
 		...(conductorEnabled ? (["import"] as const) : []),
 		...(isDev ? (["developer"] as const) : []),
 		"account",
@@ -629,6 +632,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 									<CliInstallPanel />
 								</div>
 							)}
+
+							{activeSection === "web" && <WebDaemonPanel />}
 
 							{activeSection === "import" && <ConductorImportPanel />}
 

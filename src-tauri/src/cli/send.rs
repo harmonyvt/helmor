@@ -27,6 +27,7 @@ pub fn send(args: &SendArgs, cli: &Cli) -> Result<()> {
         model: args.model.clone(),
         permission_mode,
         linked_directories: args.linked_dirs.clone(),
+        delegate_to_running_app: true,
     };
 
     let mut stdout = std::io::stdout().lock();

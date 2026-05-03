@@ -21,6 +21,8 @@ mod shell_env;
 pub mod sidecar;
 pub mod ui_sync;
 pub mod updater;
+pub mod web;
+pub mod web_daemon;
 pub mod workspace;
 
 #[cfg(test)]
@@ -76,6 +78,7 @@ pub fn run() {
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
+        .manage(web_daemon::WebDaemonManager::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .setup(|app| {
@@ -210,6 +213,10 @@ pub fn run() {
             commands::settings_commands::set_data_dir_preference,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
+            web_daemon::get_web_daemon_status,
+            web_daemon::start_web_daemon,
+            web_daemon::stop_web_daemon,
+            web_daemon::delete_web_daemon,
             commands::system_commands::get_agent_login_status,
             commands::system_commands::get_helmor_skills_status,
             commands::system_commands::install_cli,

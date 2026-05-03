@@ -6,6 +6,7 @@ import { defineConfig } from "vitest/config";
 
 const host = process.env.TAURI_DEV_HOST;
 const devPort = Number.parseInt(process.env.HELMOR_DEV_PORT ?? "1420", 10);
+const webMode = process.env.VITE_HELMOR_WEB === "1";
 const WATCH_IGNORED = [
 	"**/src-tauri/**",
 	"**/.local/**",
@@ -28,6 +29,38 @@ export default defineConfig(async () => ({
 		dedupe: ["react", "react-dom"],
 		alias: {
 			"@": path.resolve(__dirname, "./src"),
+			...(webMode
+				? {
+						"@tauri-apps/api/core": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/core.ts",
+						),
+						"@tauri-apps/api/event": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/event.ts",
+						),
+						"@tauri-apps/api/window": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/window.ts",
+						),
+						"@tauri-apps/api/webview": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/webview.ts",
+						),
+						"@tauri-apps/plugin-dialog": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/plugin-dialog.ts",
+						),
+						"@tauri-apps/plugin-notification": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/plugin-notification.ts",
+						),
+						"@tauri-apps/plugin-opener": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/plugin-opener.ts",
+						),
+					}
+				: {}),
 			react: path.resolve(__dirname, "./node_modules/react"),
 			"react-dom": path.resolve(__dirname, "./node_modules/react-dom"),
 			"react/jsx-runtime": path.resolve(
@@ -64,6 +97,11 @@ export default defineConfig(async () => ({
 	// 1. prevent Vite from obscuring rust errors
 	clearScreen: false,
 	// 2. tauri expects a fixed port, fail if that port is not available
+	build: {
+		outDir: webMode ? "dist-web" : "dist",
+		emptyOutDir: true,
+	},
+
 	server: {
 		port: Number.isNaN(devPort) ? 1420 : devPort,
 		strictPort: true,

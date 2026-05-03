@@ -5,6 +5,8 @@ logs
 
 node_modules
 dist
+dist-web/*
+!dist-web/.gitkeep
 dist-ssr
 *.local
 *.local.*

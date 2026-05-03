@@ -121,6 +121,10 @@ pub struct SendMessageParams {
     /// Extra linked directories (`/add-dir`). When empty, persisted linked
     /// directories for the session are used instead.
     pub linked_directories: Vec<String>,
+    /// CLI/MCP calls should hand off to a running desktop app so the window can
+    /// stream the turn. The web daemon runs its own sidecar and must not hand
+    /// off, otherwise browser users would only see the queued optimistic turn.
+    pub delegate_to_running_app: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -194,7 +198,7 @@ pub fn send_message(
     // send and return immediately. The app's focus handler picks it up
     // and streams through its shared sidecar so the frontend sees live
     // updates. The CLI prints a short confirmation instead of streaming.
-    if is_app_running() {
+    if params.delegate_to_running_app && is_app_running() {
         // Persist user message so the app's conversation container
         // shows the optimistic user bubble right away.
         let conn = crate::models::db::write_conn()?;
