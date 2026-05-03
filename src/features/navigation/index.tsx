@@ -118,6 +118,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSelectWorkspace,
 	onPrefetchWorkspace,
 	onCreateWorkspace,
+	onCreateGoalWorkspace,
 	onArchiveWorkspace,
 	onMarkWorkspaceUnread,
 	onRestoreWorkspace,
@@ -156,6 +157,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onCreateWorkspace?: (
 		repoId: string,
 		source?: WorkspaceCreationSource,
+	) => Promise<void> | void;
+	onCreateGoalWorkspace?: (
+		repoId: string,
+		title: string,
+		description: string,
 	) => Promise<void> | void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
@@ -738,6 +744,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					}
 					return onCreateWorkspace?.(repoId);
 				}}
+				onCreateGoalWorkspace={(repoId, title, description) =>
+					onCreateGoalWorkspace?.(repoId, title, description)
+				}
 			/>
 
 			{/* Virtualized workspace list */}

@@ -6,6 +6,7 @@ import {
 	type AddRepositoryResponse,
 	addRepositoryFromLocalPath,
 	cloneRepositoryFromUrl,
+	finalizeGoalWorkspace,
 	finalizeWorkspaceFromRepo,
 	listenArchiveExecutionFailed,
 	listenArchiveExecutionSucceeded,
@@ -14,6 +15,7 @@ import {
 	permanentlyDeleteWorkspace,
 	pinWorkspace,
 	prepareArchiveWorkspace,
+	prepareGoalWorkspace,
 	prepareWorkspaceFromRepo,
 	prepareWorkspaceFromSource,
 	type RepositoryCreateOption,
@@ -697,6 +699,64 @@ export function useWorkspacesSidebarController({
 
 	// Stable ref so the conflict-recovery toast can call back into the latest
 	// version of handleCreateWorkspaceFromRepo without creating a circular dep.
+	const handleCreateGoalWorkspace = useCallback(
+		async (repoId: string, title: string, description: string) => {
+			if (creatingWorkspaceRepoId) return;
+			setCreatingWorkspaceRepoId(repoId);
+			try {
+				const prepared = await prepareGoalWorkspace({
+					repoId,
+					title,
+					description,
+				});
+				onSelectWorkspace(prepared.workspaceId);
+				await Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(prepared.workspaceId),
+					}),
+				]);
+				void finalizeGoalWorkspace(prepared.workspaceId, description)
+					.then(() =>
+						Promise.all([
+							queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceGroups,
+							}),
+							queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceDetail(prepared.workspaceId),
+							}),
+						]),
+					)
+					.catch((error) => {
+						pushWorkspaceToast(
+							describeUnknownError(error, "Unable to create Goal PR."),
+							"Goal setup failed",
+							"destructive",
+						);
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceGroups,
+						});
+					});
+			} catch (error) {
+				pushWorkspaceToast(
+					describeUnknownError(error, "Unable to create Goal workspace."),
+					"Goal creation failed",
+					"destructive",
+				);
+			} finally {
+				setCreatingWorkspaceRepoId(null);
+			}
+		},
+		[
+			creatingWorkspaceRepoId,
+			onSelectWorkspace,
+			pushWorkspaceToast,
+			queryClient,
+		],
+	);
+
 	const handleCreateWorkspaceFromRepoRef = useRef<
 		| ((
 				repoId: string,
@@ -1616,6 +1676,7 @@ export function useWorkspacesSidebarController({
 		handleArchiveWorkspace,
 		handleCloneFromUrl,
 		handleCreateWorkspaceFromRepo,
+		handleCreateGoalWorkspace,
 		handleDeleteWorkspace,
 		handleMarkWorkspaceUnread,
 		handleOpenCloneDialog,

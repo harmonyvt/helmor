@@ -16,6 +16,8 @@ export type GroupTone =
  * Kept as a string literal union so existing `ws.state === "archived"` checks
  * keep working without runtime changes.
  */
+export type WorkspaceKind = "code" | "goal";
+
 export type WorkspaceState =
 	| "initializing"
 	| "setup_pending"
@@ -63,6 +65,8 @@ export type WorkspaceRow = {
 	title: string;
 	avatar?: string;
 	directoryName?: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	repoName?: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
@@ -171,6 +175,8 @@ export type WorkspaceSummary = {
 	id: string;
 	title: string;
 	directoryName: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	repoName: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
@@ -349,6 +355,8 @@ export type WorkspaceDetail = {
 	defaultBranch?: string | null;
 	rootPath?: string | null;
 	directoryName: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	state: WorkspaceState;
 	hasUnread: boolean;
 	workspaceUnread: number;
@@ -455,6 +463,70 @@ export type PrepareWorkspaceResponse = {
 export type FinalizeWorkspaceResponse = {
 	workspaceId: string;
 	finalState: WorkspaceState;
+};
+
+export type PrepareGoalWorkspaceRequest = {
+	repoId: string;
+	title: string;
+	description: string;
+	targetBranch?: string | null;
+};
+
+export type PrepareGoalWorkspaceResponse = {
+	workspaceId: string;
+	initialSessionId: string;
+	repoId: string;
+	repoName: string;
+	directoryName: string;
+	branch: string;
+	defaultBranch: string;
+	intendedTargetBranch: string;
+	title: string;
+	description: string;
+	state: WorkspaceState;
+	repoScripts: RepoScripts;
+};
+
+export type FinalizeGoalWorkspaceResponse = {
+	workspaceId: string;
+	finalState: WorkspaceState;
+	prTitle: string;
+	prUrl?: string | null;
+	prSyncState: PrSyncState;
+};
+
+export type GoalCard = {
+	id: string;
+	goalWorkspaceId: string;
+	title: string;
+	description?: string | null;
+	lane: WorkspaceStatus;
+	sortOrder: number;
+	assignedProvider?: AgentProvider | string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	childWorkspaceId?: string | null;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type UpsertGoalCardInput = {
+	id?: string | null;
+	goalWorkspaceId: string;
+	title: string;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	sortOrder?: number | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	childWorkspaceId?: string | null;
+};
+
+export type GoalChildWorkspaceRequest = {
+	goalWorkspaceId: string;
+	goalCardId?: string | null;
+	title?: string | null;
 };
 
 export type WorkspaceCreationSource =
@@ -1937,6 +2009,52 @@ export async function completeWorkspaceSetup(
 	workspaceId: string,
 ): Promise<void> {
 	return invoke("complete_workspace_setup", { workspaceId });
+}
+
+export async function prepareGoalWorkspace(
+	request: PrepareGoalWorkspaceRequest,
+): Promise<PrepareGoalWorkspaceResponse> {
+	return invoke<PrepareGoalWorkspaceResponse>("prepare_goal_workspace", {
+		request,
+	});
+}
+
+export async function finalizeGoalWorkspace(
+	workspaceId: string,
+	description: string,
+): Promise<FinalizeGoalWorkspaceResponse> {
+	return invoke<FinalizeGoalWorkspaceResponse>("finalize_goal_workspace", {
+		workspaceId,
+		description,
+	});
+}
+
+export async function listGoalCards(workspaceId: string): Promise<GoalCard[]> {
+	return invoke<GoalCard[]>("list_goal_cards", { workspaceId });
+}
+
+export async function upsertGoalCard(
+	input: UpsertGoalCardInput,
+): Promise<GoalCard> {
+	return invoke<GoalCard>("upsert_goal_card", { input });
+}
+
+export async function linkGoalCardWorkspace(
+	goalCardId: string,
+	workspaceId: string,
+): Promise<GoalCard> {
+	return invoke<GoalCard>("link_goal_card_workspace", {
+		goalCardId,
+		workspaceId,
+	});
+}
+
+export async function createGoalChildWorkspace(
+	request: GoalChildWorkspaceRequest,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("create_goal_child_workspace", {
+		request,
+	});
 }
 
 export async function addRepositoryFromLocalPath(

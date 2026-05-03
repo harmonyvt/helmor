@@ -35,6 +35,7 @@ pub use models::sessions;
 pub use models::settings;
 pub use workspace::files as editor_files;
 pub use workspace::helpers;
+pub use workspace::kind as workspace_kind;
 pub use workspace::pr_sync as workspace_pr_sync;
 pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
@@ -228,6 +229,12 @@ pub fn run() {
             commands::forge_commands::get_workspace_forge_check_insert_text,
             commands::forge_commands::get_workspace_forge_deployment_insert_text,
             commands::forge_commands::get_workspace_pr_comments,
+            commands::goal_commands::prepare_goal_workspace,
+            commands::goal_commands::finalize_goal_workspace,
+            commands::goal_commands::list_goal_cards,
+            commands::goal_commands::upsert_goal_card,
+            commands::goal_commands::link_goal_card_workspace,
+            commands::goal_commands::create_goal_child_workspace,
             commands::forge_commands::get_workspace_pr_comment_insert_text,
             commands::forge_commands::merge_workspace_change_request,
             commands::forge_commands::close_workspace_change_request,

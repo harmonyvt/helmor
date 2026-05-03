@@ -35,6 +35,7 @@ import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
+import { GoalWorkspaceContainer } from "@/features/goals";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { AppOnboarding } from "@/features/onboarding";
@@ -2303,10 +2304,20 @@ function AppShell({
 													onError={handleEditorSurfaceError}
 												/>
 											)}
+											{workspaceViewMode !== "editor" &&
+											selectedWorkspaceDetailQuery.data?.workspaceKind ===
+												"goal" &&
+											selectedWorkspaceId ? (
+												<GoalWorkspaceContainer
+													workspaceId={selectedWorkspaceId}
+												/>
+											) : null}
 											<div
 												data-focus-scope="chat"
 												className={
-													workspaceViewMode === "editor"
+													workspaceViewMode === "editor" ||
+													selectedWorkspaceDetailQuery.data?.workspaceKind ===
+														"goal"
 														? "hidden"
 														: "flex min-h-0 flex-1 flex-col"
 												}

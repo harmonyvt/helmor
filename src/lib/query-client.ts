@@ -18,6 +18,7 @@ import {
 	getSessionContextUsage,
 	getWorkspaceForge,
 	getWorkspacePrComments,
+	listGoalCards,
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
@@ -55,6 +56,7 @@ export const helmorQueryKeys = {
 	agentModelSections: ["agentModelSections"] as const,
 	workspaceDetail: (workspaceId: string) =>
 		["workspaceDetail", workspaceId] as const,
+	goalCards: (workspaceId: string) => ["goalCards", workspaceId] as const,
 	workspaceSessions: (workspaceId: string) =>
 		["workspaceSessions", workspaceId] as const,
 	sessionContextUsage: (sessionId: string) =>
@@ -229,6 +231,15 @@ export function workspaceDetailQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 		queryFn: () => loadWorkspaceDetail(workspaceId),
+		staleTime: 0,
+	});
+}
+
+export function goalCardsQueryOptions(workspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.goalCards(workspaceId),
+		queryFn: () => listGoalCards(workspaceId),
+		initialData: [],
 		staleTime: 0,
 	});
 }

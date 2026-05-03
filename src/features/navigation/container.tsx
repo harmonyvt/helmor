@@ -49,6 +49,7 @@ export const WorkspacesSidebarContainer = memo(
 			handleArchiveWorkspace,
 			handleCloneFromUrl,
 			handleCreateWorkspaceFromRepo,
+			handleCreateGoalWorkspace,
 			handleDeleteWorkspace,
 			handleMarkWorkspaceUnread,
 			handleOpenCloneDialog,
@@ -96,6 +97,7 @@ export const WorkspacesSidebarContainer = memo(
 				onCreateWorkspace={(repoId, source) =>
 					handleCreateWorkspaceFromRepo(repoId, source)
 				}
+				onCreateGoalWorkspace={handleCreateGoalWorkspace}
 				onArchiveWorkspace={handleArchiveWorkspace}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}
 				onRestoreWorkspace={handleRestoreWorkspace}

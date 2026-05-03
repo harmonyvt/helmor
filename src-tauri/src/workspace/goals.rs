@@ -1,0 +1,509 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    db, git_ops, helpers,
+    models::{goals as goal_models, workspaces as workspace_models},
+    repos,
+    workspace_kind::WorkspaceKind,
+    workspace_pr_sync::PrSyncState,
+    workspace_state::WorkspaceState,
+    workspace_status::WorkspaceStatus,
+};
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareGoalWorkspaceRequest {
+    pub repo_id: String,
+    pub title: String,
+    pub description: String,
+    pub target_branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareGoalWorkspaceResponse {
+    pub workspace_id: String,
+    pub initial_session_id: String,
+    pub repo_id: String,
+    pub repo_name: String,
+    pub directory_name: String,
+    pub branch: String,
+    pub default_branch: String,
+    pub intended_target_branch: String,
+    pub title: String,
+    pub description: String,
+    pub state: WorkspaceState,
+    pub repo_scripts: repos::RepoScripts,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinalizeGoalWorkspaceResponse {
+    pub workspace_id: String,
+    pub final_state: WorkspaceState,
+    pub pr_title: String,
+    pub pr_url: Option<String>,
+    pub pr_sync_state: PrSyncState,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalChildWorkspaceRequest {
+    pub goal_workspace_id: String,
+    pub goal_card_id: Option<String>,
+    pub title: Option<String>,
+}
+
+pub use goal_models::{GoalCard, UpsertGoalCardInput};
+
+pub fn prepare_goal_workspace(
+    request: PrepareGoalWorkspaceRequest,
+) -> Result<PrepareGoalWorkspaceResponse> {
+    let repository = repos::load_repository_by_id(&request.repo_id)?
+        .with_context(|| format!("Repository not found: {}", request.repo_id))?;
+    let repo_root = PathBuf::from(repository.root_path.trim());
+    git_ops::ensure_git_repository(&repo_root)?;
+
+    let remote = repository
+        .remote
+        .clone()
+        .unwrap_or_else(|| "origin".to_string());
+    if !git_ops::has_remote(&repo_root, &remote)? {
+        bail!(
+            "Repository \"{}\" has no remote \"{remote}\". Goal workspaces require a remote for their draft PR.",
+            repository.name
+        );
+    }
+
+    let title = normalize_required(&request.title, "Goal title")?;
+    let description = normalize_required(&request.description, "Goal description")?;
+    let default_branch = repository
+        .default_branch
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "main".to_string());
+    let target_branch = request
+        .target_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default_branch.as_str())
+        .to_string();
+    let directory_name = allocate_goal_directory_name(&request.repo_id, &title)?;
+    let branch = helpers::next_available_branch_name(
+        &repo_root,
+        &format!("helmor/goal/{}", slugify(&title)),
+    )?;
+    let workspace_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = db::current_timestamp()?;
+
+    workspace_models::insert_initializing_workspace_and_session_with_metadata(
+        &repository,
+        &workspace_id,
+        &session_id,
+        &directory_name,
+        &branch,
+        workspace_models::InitializingWorkspaceMetadata {
+            initialization_parent_branch: &target_branch,
+            intended_target_branch: &target_branch,
+            workspace_kind: WorkspaceKind::Goal,
+            goal_workspace_id: None,
+            status: WorkspaceStatus::Backlog,
+            pr_title: Some(&title),
+            pr_sync_state: PrSyncState::None,
+            pr_url: None,
+            timestamp: &timestamp,
+        },
+    )?;
+
+    let repo_scripts = repos::load_repo_scripts(&request.repo_id, Some(&workspace_id)).unwrap_or(
+        repos::RepoScripts {
+            setup_script: None,
+            run_script: None,
+            archive_script: None,
+            setup_from_project: false,
+            run_from_project: false,
+            archive_from_project: false,
+            auto_run_setup: true,
+        },
+    );
+
+    Ok(PrepareGoalWorkspaceResponse {
+        workspace_id,
+        initial_session_id: session_id,
+        repo_id: repository.id,
+        repo_name: repository.name,
+        directory_name,
+        branch,
+        default_branch,
+        intended_target_branch: target_branch,
+        title,
+        description,
+        state: WorkspaceState::Initializing,
+        repo_scripts,
+    })
+}
+
+pub fn finalize_goal_workspace(
+    workspace_id: &str,
+    description: &str,
+) -> Result<FinalizeGoalWorkspaceResponse> {
+    let record = workspace_models::load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+    if record.workspace_kind != WorkspaceKind::Goal {
+        bail!("Workspace is not a Goal: {workspace_id}");
+    }
+
+    let finalized = super::lifecycle::finalize_workspace_from_repo_impl(workspace_id)?;
+    let refreshed = workspace_models::load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found after finalize: {workspace_id}"))?;
+    let workspace_dir =
+        crate::data_dir::workspace_dir(&refreshed.repo_name, &refreshed.directory_name)?;
+    let branch = refreshed
+        .branch
+        .as_deref()
+        .with_context(|| format!("Goal workspace {workspace_id} is missing branch"))?;
+    let remote = refreshed.remote.as_deref().unwrap_or("origin");
+    let title = refreshed
+        .pr_title
+        .clone()
+        .unwrap_or_else(|| helpers::display_title(&refreshed));
+    let body = build_goal_pr_body(description);
+
+    ensure_goal_empty_commit(&workspace_dir, branch, &title, description)?;
+    git_ops::run_git_with_timeout(
+        [
+            "-C",
+            workspace_dir.to_str().unwrap_or(""),
+            "push",
+            "-u",
+            remote,
+            branch,
+        ],
+        None,
+        git_ops::GIT_NETWORK_TIMEOUT,
+    )?;
+
+    let pr_url = create_draft_change_request(&workspace_dir, &title, &body, branch, &refreshed)?;
+    update_goal_pr_metadata(workspace_id, &title, pr_url.as_deref())?;
+
+    Ok(FinalizeGoalWorkspaceResponse {
+        workspace_id: workspace_id.to_string(),
+        final_state: finalized.final_state,
+        pr_title: title,
+        pr_url,
+        pr_sync_state: PrSyncState::Open,
+    })
+}
+
+pub fn list_goal_cards(goal_workspace_id: &str) -> Result<Vec<GoalCard>> {
+    goal_models::list_goal_cards(goal_workspace_id)
+}
+
+pub fn upsert_goal_card(input: UpsertGoalCardInput) -> Result<GoalCard> {
+    goal_models::upsert_goal_card(input)
+}
+
+pub fn link_goal_card_workspace(goal_card_id: &str, workspace_id: &str) -> Result<GoalCard> {
+    goal_models::link_goal_card_workspace(goal_card_id, workspace_id)
+}
+
+pub fn create_goal_child_workspace(
+    request: GoalChildWorkspaceRequest,
+) -> Result<super::lifecycle::PrepareWorkspaceResponse> {
+    let goal = workspace_models::load_workspace_record_by_id(&request.goal_workspace_id)?
+        .with_context(|| format!("Goal workspace not found: {}", request.goal_workspace_id))?;
+    if goal.workspace_kind != WorkspaceKind::Goal {
+        bail!("Workspace is not a Goal: {}", request.goal_workspace_id);
+    }
+    let repository = repos::load_repository_by_id(&goal.repo_id)?
+        .with_context(|| format!("Repository not found: {}", goal.repo_id))?;
+    let repo_root = PathBuf::from(repository.root_path.trim());
+    let goal_branch = goal
+        .branch
+        .as_deref()
+        .with_context(|| {
+            format!(
+                "Goal workspace {} is missing branch",
+                request.goal_workspace_id
+            )
+        })?
+        .to_string();
+    let default_branch = repository
+        .default_branch
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "main".to_string());
+    let directory_name = request
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|title| allocate_goal_directory_name(&repository.id, title))
+        .transpose()?
+        .unwrap_or_else(|| {
+            helpers::allocate_directory_name_for_repo(&repository.id)
+                .unwrap_or_else(|_| "workspace".to_string())
+        });
+    let branch_settings = crate::repos::load_repo_branch_prefix_settings(&repository.id)?;
+    let branch = helpers::next_available_branch_name(
+        &repo_root,
+        &helpers::branch_name_for_directory(&directory_name, &branch_settings),
+    )?;
+    let workspace_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = db::current_timestamp()?;
+
+    workspace_models::insert_initializing_workspace_and_session_with_metadata(
+        &repository,
+        &workspace_id,
+        &session_id,
+        &directory_name,
+        &branch,
+        workspace_models::InitializingWorkspaceMetadata {
+            initialization_parent_branch: &goal_branch,
+            intended_target_branch: &goal_branch,
+            workspace_kind: WorkspaceKind::Code,
+            goal_workspace_id: Some(&request.goal_workspace_id),
+            status: WorkspaceStatus::Backlog,
+            pr_title: request.title.as_deref(),
+            pr_sync_state: PrSyncState::None,
+            pr_url: None,
+            timestamp: &timestamp,
+        },
+    )?;
+
+    if let Some(card_id) = request.goal_card_id.as_deref() {
+        let _ = goal_models::link_goal_card_workspace(card_id, &workspace_id)?;
+    }
+
+    let repo_scripts = repos::load_repo_scripts(&repository.id, Some(&workspace_id)).unwrap_or(
+        repos::RepoScripts {
+            setup_script: None,
+            run_script: None,
+            archive_script: None,
+            setup_from_project: false,
+            run_from_project: false,
+            archive_from_project: false,
+            auto_run_setup: true,
+        },
+    );
+
+    Ok(super::lifecycle::PrepareWorkspaceResponse {
+        workspace_id,
+        initial_session_id: session_id,
+        repo_id: repository.id,
+        repo_name: repository.name,
+        directory_name,
+        branch,
+        default_branch,
+        intended_target_branch: goal_branch.clone(),
+        status: WorkspaceStatus::Backlog,
+        source_start_branch: Some(goal_branch),
+        pr_number: None,
+        pr_title: request.title,
+        pr_sync_state: PrSyncState::None,
+        pr_url: None,
+        state: WorkspaceState::Initializing,
+        repo_scripts,
+    })
+}
+
+fn update_goal_pr_metadata(workspace_id: &str, title: &str, pr_url: Option<&str>) -> Result<()> {
+    let connection = db::write_conn()?;
+    let updated = connection.execute(
+        r#"
+        UPDATE workspaces
+        SET pr_title = ?2,
+            pr_url = ?3,
+            pr_sync_state = ?4,
+            status = ?5,
+            updated_at = datetime('now')
+        WHERE id = ?1
+        "#,
+        (
+            workspace_id,
+            title,
+            pr_url,
+            PrSyncState::Open,
+            WorkspaceStatus::Review,
+        ),
+    )?;
+    if updated != 1 {
+        bail!("Workspace not found: {workspace_id}");
+    }
+    Ok(())
+}
+
+fn ensure_goal_empty_commit(
+    repo_root: &Path,
+    branch: &str,
+    title: &str,
+    description: &str,
+) -> Result<()> {
+    let message = format!("goal: {title}\n\n{description}");
+    git_ops::run_git(
+        [
+            "-C",
+            repo_root.to_str().unwrap_or(""),
+            "commit",
+            "--allow-empty",
+            "-m",
+            &message,
+        ],
+        None,
+    )
+    .with_context(|| format!("Failed to create empty Goal commit on {branch}"))?;
+    Ok(())
+}
+
+fn create_draft_change_request(
+    repo_root: &Path,
+    title: &str,
+    body: &str,
+    branch: &str,
+    record: &crate::models::workspaces::WorkspaceRecord,
+) -> Result<Option<String>> {
+    match record.forge_provider.as_deref() {
+        Some("gitlab") => create_gitlab_draft_mr(repo_root, title, body, branch, record),
+        _ => create_github_draft_pr(repo_root, title, body, branch, record),
+    }
+}
+
+fn create_github_draft_pr(
+    repo_root: &Path,
+    title: &str,
+    body: &str,
+    branch: &str,
+    record: &crate::models::workspaces::WorkspaceRecord,
+) -> Result<Option<String>> {
+    let base = record
+        .intended_target_branch
+        .as_deref()
+        .or(record.default_branch.as_deref())
+        .unwrap_or("main");
+    let output = std::process::Command::new("gh")
+        .arg("pr")
+        .arg("create")
+        .arg("--draft")
+        .arg("--title")
+        .arg(title)
+        .arg("--body")
+        .arg(body)
+        .arg("--base")
+        .arg(base)
+        .arg("--head")
+        .arg(branch)
+        .current_dir(repo_root)
+        .output()
+        .context("Failed to run gh pr create")?;
+    parse_change_request_create_output(output)
+}
+
+fn create_gitlab_draft_mr(
+    repo_root: &Path,
+    title: &str,
+    body: &str,
+    branch: &str,
+    record: &crate::models::workspaces::WorkspaceRecord,
+) -> Result<Option<String>> {
+    let target_branch = record
+        .intended_target_branch
+        .as_deref()
+        .or(record.default_branch.as_deref())
+        .unwrap_or("main");
+    let output = std::process::Command::new("glab")
+        .arg("mr")
+        .arg("create")
+        .arg("--draft")
+        .arg("--title")
+        .arg(title)
+        .arg("--description")
+        .arg(body)
+        .arg("--source-branch")
+        .arg(branch)
+        .arg("--target-branch")
+        .arg(target_branch)
+        .current_dir(repo_root)
+        .output()
+        .context("Failed to run glab mr create")?;
+    parse_change_request_create_output(output)
+}
+
+fn parse_change_request_create_output(output: std::process::Output) -> Result<Option<String>> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        bail!("Failed to create draft change request: {detail}");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .split_whitespace()
+        .find(|part| part.starts_with("http://") || part.starts_with("https://"))
+        .map(|value| value.trim().to_string()))
+}
+
+fn build_goal_pr_body(description: &str) -> String {
+    format!(
+        "{description}\n\n<!-- HELMOR_GOAL_CHILD_WORKSPACES:START -->\n## Helmor child workspaces\n\n_No child workspaces yet._\n<!-- HELMOR_GOAL_CHILD_WORKSPACES:END -->\n"
+    )
+}
+
+fn allocate_goal_directory_name(repo_id: &str, title: &str) -> Result<String> {
+    let base = format!("goal-{}", slugify(title));
+    let connection = db::read_conn()?;
+    for suffix in 0..=999 {
+        let candidate = if suffix == 0 {
+            base.clone()
+        } else {
+            format!("{base}-{suffix}")
+        };
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM workspaces WHERE repository_id = ?1 AND lower(directory_name) = lower(?2))",
+            (repo_id, &candidate),
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    bail!("No available Goal directory name found for {title}")
+}
+
+fn slugify(value: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            previous_dash = false;
+        } else if !previous_dash && !slug.is_empty() {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+    let trimmed = slug.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "goal".to_string()
+    } else {
+        trimmed
+            .chars()
+            .take(48)
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string()
+    }
+}
+
+fn normalize_required(value: &str, label: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("{label} is required");
+    }
+    Ok(trimmed.to_string())
+}
