@@ -472,6 +472,8 @@ pub struct SlashCommandEntry {
     pub description: String,
     pub argument_hint: Option<String>,
     pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_info: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -748,11 +750,13 @@ fn fetch_from_sidecar(
                                 .and_then(Value::as_str)
                                 .unwrap_or("builtin")
                                 .to_string();
+                            let source_info = entry.get("sourceInfo").cloned();
                             commands.push(SlashCommandEntry {
                                 name: name.to_string(),
                                 description,
                                 argument_hint,
                                 source,
+                                source_info,
                             });
                         }
                     }

@@ -62,7 +62,10 @@ import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DataSourceSettingsRow } from "./panels/data-source";
 import { DevToolsPanel } from "./panels/dev-tools";
-import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
+import {
+	ClaudeCustomProvidersPanel,
+	PiModelsCheckPanel,
+} from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
 const MIN_FONT_SIZE = 12;
@@ -551,6 +554,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</div>
 										</div>
 									</SettingsRow>
+									<PiModelsCheckPanel />
 									<ClaudeCustomProvidersPanel />
 								</SettingsGroup>
 							)}

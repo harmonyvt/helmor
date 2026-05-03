@@ -920,6 +920,7 @@ export class ClaudeSessionManager implements SessionManager {
 					description: c.description,
 					argumentHint: c.argumentHint || undefined,
 					source: "builtin",
+					sourceInfo: undefined,
 				});
 			}
 			return out;

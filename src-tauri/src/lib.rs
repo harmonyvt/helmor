@@ -178,6 +178,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
+            agents::check_pi_models,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
             agents::steer_agent_stream,
