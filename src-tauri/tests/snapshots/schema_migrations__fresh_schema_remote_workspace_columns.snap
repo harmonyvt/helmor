@@ -1,0 +1,28 @@
+---
+source: tests/schema_migrations.rs
+expression: remote_workspace_columns(&connection)
+---
+- - location_kind
+  - TEXT
+  - "'local'"
+- - remote_profile_id
+  - TEXT
+  - ~
+- - remote_backend
+  - TEXT
+  - ~
+- - remote_root_path
+  - TEXT
+  - ~
+- - remote_container_name
+  - TEXT
+  - ~
+- - remote_host
+  - TEXT
+  - ~
+- - remote_status
+  - TEXT
+  - ~
+- - remote_error
+  - TEXT
+  - ~

@@ -8,6 +8,7 @@ use crate::{
     helpers,
     models::workspaces::{self as workspace_models, WorkspaceRecord},
     sessions,
+    workspace::remote::{self, RemoteRuntimeInfo},
     workspace_pr_sync::PrSyncState,
     workspace_state::WorkspaceState,
     workspace_status::WorkspaceStatus,
@@ -29,12 +30,14 @@ pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,
     create_workspace_from_repo_impl, finalize_workspace_from_repo_impl,
     finalize_workspace_from_repo_with_options_impl, prepare_archive_plan,
-    prepare_workspace_from_repo_impl, prepare_workspace_from_source_impl, restore_workspace_impl,
+    prepare_workspace_from_repo_impl, prepare_workspace_from_source_impl,
+    prepare_workspace_from_source_with_remote_impl, restore_workspace_impl,
     validate_archive_workspace, validate_restore_workspace, ArchivePreparedPlan,
     ArchiveWorkspaceResponse, BranchRename, CreateWorkspaceResponse, FinalizeWorkspaceOptions,
     FinalizeWorkspaceResponse, PrepareWorkspaceResponse, RestoreWorkspaceResponse,
     TargetBranchConflict, ValidateRestoreResponse, WorkspaceCreationSource,
 };
+pub use super::remote::{RemoteWorkspaceCreateOptions, RemoteWorkspaceProfile};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +72,7 @@ pub struct WorkspaceSidebarRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
+    pub remote_runtime: Option<RemoteRuntimeInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,6 +115,7 @@ pub struct WorkspaceSummary {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
+    pub remote_runtime: Option<RemoteRuntimeInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,6 +151,7 @@ pub struct WorkspaceDetail {
     pub archive_commit: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
+    pub remote_runtime: Option<RemoteRuntimeInfo>,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -710,6 +716,7 @@ pub(crate) fn select_visible_workspace_for_repo(
 pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
     let title = helpers::display_title(&record);
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
+    let remote_runtime = remote::runtime_for_record(&record);
 
     WorkspaceSidebarRow {
         avatar: repo_initials.clone(),
@@ -742,11 +749,13 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         created_at: record.created_at,
         updated_at: record.updated_at,
         last_user_message_at: record.last_user_message_at,
+        remote_runtime,
     }
 }
 
 pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
+    let remote_runtime = remote::runtime_for_record(&record);
 
     WorkspaceSummary {
         title: helpers::display_title(&record),
@@ -777,6 +786,7 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
         created_at: record.created_at,
         updated_at: record.updated_at,
         last_user_message_at: record.last_user_message_at,
+        remote_runtime,
     }
 }
 
@@ -787,15 +797,20 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
     // correct workspace directory, not the source repository.
     // Archived workspaces have no worktree — return None so the frontend
     // knows agent messaging is unavailable.
-    let worktree_path = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-        .ok()
-        .and_then(|p| {
-            if p.is_dir() {
-                p.to_str().map(|s| s.to_string())
-            } else {
-                None
-            }
-        });
+    let remote_runtime = remote::runtime_for_record(&record);
+    let worktree_path = if remote_runtime.is_some() {
+        Some(remote::remote_uri(&record.id))
+    } else {
+        crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
+            .ok()
+            .and_then(|p| {
+                if p.is_dir() {
+                    p.to_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+    };
 
     WorkspaceDetail {
         title: helpers::display_title(&record),
@@ -828,6 +843,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         archive_commit: record.archive_commit,
         session_count: record.session_count,
         message_count: record.message_count,
+        remote_runtime,
     }
 }
 

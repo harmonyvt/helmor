@@ -46,6 +46,7 @@ export function createOptimisticCreatingWorkspaceDetail(
 		pinnedAt: row.pinnedAt ?? null,
 		prTitle: null,
 		archiveCommit: null,
+		remoteRuntime: row.remoteRuntime ?? null,
 		sessionCount: initialSessionId ? 1 : 0,
 		messageCount: 0,
 	};

@@ -136,6 +136,36 @@ export function parseSendMessageParams(
 		// "field absent" vs "no images" — both mean `[]`. The structured
 		// list is the single source of truth (see `parseImageRefs`).
 		images: parseOptionalStringArray(params, "images") ?? [],
+		remote: parseRemoteExecutionParams(params),
+	};
+}
+
+function parseRemoteExecutionParams(
+	params: Record<string, unknown>,
+): SendMessageParams["remote"] {
+	const value = params.remote;
+	if (value === undefined || value === null) return undefined;
+	if (typeof value !== "object" || Array.isArray(value)) {
+		throw new Error("params.remote must be an object");
+	}
+	const remote = value as Record<string, unknown>;
+	const backend = remote.backend;
+	if (backend !== "docker" && backend !== "ssh") {
+		throw new Error("params.remote.backend must be docker or ssh");
+	}
+	const cwd = remote.cwd;
+	if (typeof cwd !== "string" || !cwd.trim()) {
+		throw new Error("params.remote.cwd must be a string");
+	}
+	const containerName = remote.containerName;
+	const host = remote.host;
+	return {
+		backend,
+		cwd,
+		...(typeof containerName === "string" && containerName
+			? { containerName }
+			: {}),
+		...(typeof host === "string" && host ? { host } : {}),
 	};
 }
 

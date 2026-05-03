@@ -236,6 +236,17 @@ pub async fn send_agent_message_stream(
         .into());
     }
 
+    if let Some(session_id) = request.helmor_session_id.as_deref() {
+        if crate::workspace::remote::sidecar_execution_for_session(Some(session_id))?.is_some()
+            && request.provider != "pi"
+        {
+            return Err(anyhow::anyhow!(
+                "Remote workspaces only support Pi. Select a Pi model to continue."
+            )
+            .into());
+        }
+    }
+
     let working_directory = resolve_stream_working_directory(&request)?;
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();

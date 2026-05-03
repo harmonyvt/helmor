@@ -118,6 +118,9 @@ pub(super) fn stream_via_sidecar(
     };
 
     let images_for_wire = request.images.clone().unwrap_or_default();
+    let remote_sidecar = crate::workspace::remote::sidecar_execution_for_session(
+        request.helmor_session_id.as_deref(),
+    )?;
     let params = build_send_message_params(BuildSendMessageParamsInput {
         sidecar_session_id: &sidecar_session_id,
         prompt: &combined_prompt,
@@ -132,6 +135,7 @@ pub(super) fn stream_via_sidecar(
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
         images: &images_for_wire,
+        remote_sidecar: remote_sidecar.as_ref(),
     });
 
     // Surface the `/add-dir` decision in logs — we often debug linked-

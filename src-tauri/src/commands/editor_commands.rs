@@ -1,12 +1,18 @@
 use anyhow::Context;
 
-use crate::{editor_files, git_ops, models::workspaces as workspace_models};
+use crate::{editor_files, git_ops, models::workspaces as workspace_models, workspace::remote};
 
 use super::common::{run_blocking, CmdResult};
 
 #[tauri::command]
 pub async fn read_editor_file(path: String) -> CmdResult<editor_files::EditorFileReadResponse> {
-    run_blocking(move || editor_files::read_editor_file(&path)).await
+    run_blocking(move || {
+        if let Some((workspace_id, Some(relative_path))) = remote::parse_remote_uri(&path) {
+            return remote::read_file(&workspace_id, &relative_path);
+        }
+        editor_files::read_editor_file(&path)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -15,44 +21,81 @@ pub async fn read_file_at_ref(
     file_path: String,
     git_ref: String,
 ) -> CmdResult<Option<String>> {
-    run_blocking(move || editor_files::read_file_at_ref(&workspace_root_path, &file_path, &git_ref))
-        .await
+    run_blocking(move || {
+        if let Some((workspace_id, _)) = remote::parse_remote_uri(&workspace_root_path) {
+            let relative_path = remote::parse_remote_uri(&file_path)
+                .and_then(|(_, path)| path)
+                .unwrap_or(file_path);
+            return remote::read_file_at_ref(&workspace_id, &relative_path, &git_ref);
+        }
+        editor_files::read_file_at_ref(&workspace_root_path, &file_path, &git_ref)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn list_editor_files(
     workspace_root_path: String,
 ) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
-    run_blocking(move || editor_files::list_editor_files(&workspace_root_path)).await
+    run_blocking(move || {
+        if let Some((workspace_id, _)) = remote::parse_remote_uri(&workspace_root_path) {
+            return remote::list_editor_files(&workspace_id);
+        }
+        editor_files::list_editor_files(&workspace_root_path)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn list_workspace_files(
     workspace_root_path: String,
 ) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
-    run_blocking(move || editor_files::list_workspace_files(&workspace_root_path)).await
+    run_blocking(move || {
+        if let Some((workspace_id, _)) = remote::parse_remote_uri(&workspace_root_path) {
+            return remote::list_files(&workspace_id);
+        }
+        editor_files::list_workspace_files(&workspace_root_path)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn list_editor_files_with_content(
     workspace_root_path: String,
 ) -> CmdResult<editor_files::EditorFilesWithContentResponse> {
-    run_blocking(move || editor_files::list_editor_files_with_content(&workspace_root_path)).await
+    run_blocking(move || {
+        if let Some((workspace_id, _)) = remote::parse_remote_uri(&workspace_root_path) {
+            return remote::list_editor_files_with_content(&workspace_id);
+        }
+        editor_files::list_editor_files_with_content(&workspace_root_path)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn list_workspace_changes(
     workspace_root_path: String,
 ) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
-    run_blocking(move || editor_files::list_workspace_changes(&workspace_root_path)).await
+    run_blocking(move || {
+        if let Some((workspace_id, _)) = remote::parse_remote_uri(&workspace_root_path) {
+            return remote::list_changes(&workspace_id);
+        }
+        editor_files::list_workspace_changes(&workspace_root_path)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn list_workspace_changes_with_content(
     workspace_root_path: String,
 ) -> CmdResult<editor_files::EditorFilesWithContentResponse> {
-    run_blocking(move || editor_files::list_workspace_changes_with_content(&workspace_root_path))
-        .await
+    run_blocking(move || {
+        if let Some((workspace_id, _)) = remote::parse_remote_uri(&workspace_root_path) {
+            return remote::list_changes_with_content(&workspace_id);
+        }
+        editor_files::list_workspace_changes_with_content(&workspace_root_path)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -60,8 +103,13 @@ pub async fn discard_workspace_file(
     workspace_root_path: String,
     relative_path: String,
 ) -> CmdResult<()> {
-    run_blocking(move || editor_files::discard_workspace_file(&workspace_root_path, &relative_path))
-        .await
+    run_blocking(move || {
+        if let Some((workspace_id, _)) = remote::parse_remote_uri(&workspace_root_path) {
+            return remote::discard_file(&workspace_id, &relative_path);
+        }
+        editor_files::discard_workspace_file(&workspace_root_path, &relative_path)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -69,8 +117,13 @@ pub async fn stage_workspace_file(
     workspace_root_path: String,
     relative_path: String,
 ) -> CmdResult<()> {
-    run_blocking(move || editor_files::stage_workspace_file(&workspace_root_path, &relative_path))
-        .await
+    run_blocking(move || {
+        if let Some((workspace_id, _)) = remote::parse_remote_uri(&workspace_root_path) {
+            return remote::stage_file(&workspace_id, &relative_path);
+        }
+        editor_files::stage_workspace_file(&workspace_root_path, &relative_path)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -78,8 +131,13 @@ pub async fn unstage_workspace_file(
     workspace_root_path: String,
     relative_path: String,
 ) -> CmdResult<()> {
-    run_blocking(move || editor_files::unstage_workspace_file(&workspace_root_path, &relative_path))
-        .await
+    run_blocking(move || {
+        if let Some((workspace_id, _)) = remote::parse_remote_uri(&workspace_root_path) {
+            return remote::unstage_file(&workspace_id, &relative_path);
+        }
+        editor_files::unstage_workspace_file(&workspace_root_path, &relative_path)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -110,6 +168,9 @@ pub async fn get_workspace_git_action_status(
         // action on them anyway.
         if !record.state.is_operational() {
             return Ok(quiet_status());
+        }
+        if remote::is_remote_record(&record) {
+            return remote::git_action_status(&workspace_id);
         }
         let workspace_dir =
             crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
@@ -142,10 +203,22 @@ pub async fn write_editor_file(
     path: String,
     content: String,
 ) -> CmdResult<editor_files::EditorFileWriteResponse> {
-    run_blocking(move || editor_files::write_editor_file(&path, &content)).await
+    run_blocking(move || {
+        if let Some((workspace_id, Some(relative_path))) = remote::parse_remote_uri(&path) {
+            return remote::write_file(&workspace_id, &relative_path, &content);
+        }
+        editor_files::write_editor_file(&path, &content)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn stat_editor_file(path: String) -> CmdResult<editor_files::EditorFileStatResponse> {
-    run_blocking(move || editor_files::stat_editor_file(&path)).await
+    run_blocking(move || {
+        if let Some((workspace_id, Some(relative_path))) = remote::parse_remote_uri(&path) {
+            return remote::stat_file(&workspace_id, &relative_path);
+        }
+        editor_files::stat_editor_file(&path)
+    })
+    .await
 }

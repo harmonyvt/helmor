@@ -196,6 +196,7 @@ pub fn run() {
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_source,
+            commands::workspace_commands::prepare_remote_workspace_from_source,
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,

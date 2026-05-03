@@ -25,10 +25,12 @@ import {
 	listGithubPullRequestsForRepo,
 	listRemoteBranches,
 	prefetchRemoteRefs,
+	type RemoteWorkspaceCreateOptions,
 	type RepositoryCreateOption,
 	resolveGithubPullRequestForRepo,
 	type WorkspaceCreationSource,
 } from "@/lib/api";
+import { useSettings } from "@/lib/settings";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
 type WorkspaceCreateDialogProps = {
@@ -39,6 +41,7 @@ type WorkspaceCreateDialogProps = {
 	onCreateWorkspace: (
 		repoId: string,
 		source?: WorkspaceCreationSource,
+		remote?: RemoteWorkspaceCreateOptions,
 	) => Promise<void> | void;
 };
 
@@ -49,7 +52,11 @@ export function WorkspaceCreateDialog({
 	creating,
 	onCreateWorkspace,
 }: WorkspaceCreateDialogProps) {
+	const { settings } = useSettings();
 	const [tab, setTab] = useState("new");
+	const [location, setLocation] = useState<"local" | "remote">("local");
+	const [profileId, setProfileId] = useState("");
+	const [copyPiConfig, setCopyPiConfig] = useState(true);
 	const [remoteRepoId, setRemoteRepoId] = useState("");
 	const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
 	const [remoteBranch, setRemoteBranch] = useState("");
@@ -75,7 +82,10 @@ export function WorkspaceCreateDialog({
 		setPrRepoId((current) => current || firstRepoId);
 		setRemoteError(null);
 		setPrError(null);
-	}, [open, repositories]);
+		setProfileId(
+			(current) => current || settings.remoteWorkspaceProfiles[0]?.id || "",
+		);
+	}, [open, repositories, settings.remoteWorkspaceProfiles]);
 
 	useEffect(() => {
 		if (!open || tab !== "new") {
@@ -175,20 +185,37 @@ export function WorkspaceCreateDialog({
 	const handleCreate = useCallback(
 		async (repoId: string, source?: WorkspaceCreationSource) => {
 			if (submitting) return;
+			const profile = settings.remoteWorkspaceProfiles.find(
+				(item) => item.id === profileId,
+			);
+			const remote =
+				location === "remote" && profile
+					? { profile, copyPiConfig }
+					: undefined;
 			setSubmitting(true);
 			try {
 				if (source) {
-					await onCreateWorkspace(repoId, source);
+					await onCreateWorkspace(repoId, source, remote);
 				} else {
-					await onCreateWorkspace(repoId);
+					await onCreateWorkspace(repoId, undefined, remote);
 				}
 			} finally {
 				setSubmitting(false);
 				onOpenChange(false);
 			}
 		},
-		[onCreateWorkspace, onOpenChange, submitting],
+		[
+			onCreateWorkspace,
+			onOpenChange,
+			submitting,
+			location,
+			profileId,
+			settings.remoteWorkspaceProfiles,
+			copyPiConfig,
+		],
 	);
+
+	const remoteDisabled = location === "remote" && !profileId;
 
 	const handleResolvePr = useCallback(async () => {
 		if (!prRepoId || !prInput.trim()) {
@@ -230,6 +257,53 @@ export function WorkspaceCreateDialog({
 						request.
 					</DialogDescription>
 				</DialogHeader>
+				<div className="grid grid-cols-2 gap-2 rounded-lg border border-border/60 bg-muted/20 p-1">
+					<Button
+						type="button"
+						variant={location === "local" ? "secondary" : "ghost"}
+						onClick={() => setLocation("local")}
+						className="cursor-pointer"
+					>
+						Local
+					</Button>
+					<Button
+						type="button"
+						variant={location === "remote" ? "secondary" : "ghost"}
+						onClick={() => setLocation("remote")}
+						className="cursor-pointer"
+					>
+						Remote · Pi only
+					</Button>
+				</div>
+				{location === "remote" ? (
+					<div className="grid grid-cols-[1fr_auto] items-end gap-2 rounded-lg border border-border/60 p-2">
+						<div className="flex flex-col gap-1">
+							<Label className="text-[12px] font-medium tracking-[-0.01em]">
+								Remote profile
+							</Label>
+							<select
+								value={profileId}
+								onChange={(event) => setProfileId(event.target.value)}
+								className="h-8 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-[13px] outline-none"
+							>
+								<option value="">Select a profile</option>
+								{settings.remoteWorkspaceProfiles.map((profile) => (
+									<option key={profile.id} value={profile.id}>
+										{profile.name} · {profile.backend}
+									</option>
+								))}
+							</select>
+						</div>
+						<label className="flex cursor-pointer items-center gap-2 pb-1 text-[12px] text-muted-foreground">
+							<input
+								type="checkbox"
+								checked={copyPiConfig}
+								onChange={(event) => setCopyPiConfig(event.target.checked)}
+							/>
+							Copy Pi config
+						</label>
+					</div>
+				) : null}
 				<Tabs value={tab} onValueChange={setTab} className="min-w-0 w-full">
 					<TabsList className="grid w-full min-w-0 grid-cols-3">
 						<TabsTrigger value="new">
@@ -248,7 +322,7 @@ export function WorkspaceCreateDialog({
 					<TabsContent value="new" className="min-h-[340px] min-w-0">
 						<RepositoryList
 							repositories={repositories}
-							creating={busy}
+							creating={busy || remoteDisabled}
 							listRef={newRepoListRef}
 							onSelect={(repoId) => handleCreate(repoId)}
 						/>
@@ -285,7 +359,9 @@ export function WorkspaceCreateDialog({
 							<div className="flex justify-end">
 								<Button
 									size="sm"
-									disabled={!remoteRepoId || !remoteBranch || busy}
+									disabled={
+										!remoteRepoId || !remoteBranch || busy || remoteDisabled
+									}
 									onClick={() =>
 										handleCreate(remoteRepoId, {
 											type: "remoteBranch",
@@ -349,7 +425,9 @@ export function WorkspaceCreateDialog({
 							<div className="flex justify-end">
 								<Button
 									size="sm"
-									disabled={!prRepoId || !selectedPrNumber || busy}
+									disabled={
+										!prRepoId || !selectedPrNumber || busy || remoteDisabled
+									}
 									onClick={() =>
 										selectedPrNumber
 											? handleCreate(prRepoId, {

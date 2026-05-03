@@ -14,8 +14,10 @@ import {
 	permanentlyDeleteWorkspace,
 	pinWorkspace,
 	prepareArchiveWorkspace,
+	prepareRemoteWorkspaceFromSource,
 	prepareWorkspaceFromRepo,
 	prepareWorkspaceFromSource,
+	type RemoteWorkspaceCreateOptions,
 	type RepositoryCreateOption,
 	restoreWorkspace,
 	setWorkspaceStatus,
@@ -702,6 +704,7 @@ export function useWorkspacesSidebarController({
 				repoId: string,
 				source?: WorkspaceCreationSource,
 				migrateFromPath?: string,
+				remote?: RemoteWorkspaceCreateOptions,
 		  ) => Promise<void>)
 		| null
 	>(null);
@@ -711,6 +714,7 @@ export function useWorkspacesSidebarController({
 			repoId: string,
 			source: WorkspaceCreationSource = { type: "defaultBranch" },
 			migrateFromPath?: string,
+			remote?: RemoteWorkspaceCreateOptions,
 		) => {
 			if (creatingWorkspaceRepoId) {
 				return;
@@ -735,8 +739,9 @@ export function useWorkspacesSidebarController({
 				// the real workspace/session ids, directory name, branch,
 				// and repo scripts. Nothing is painted yet; the sidebar +
 				// panel are still showing the previously selected workspace.
-				prepareResponse =
-					source.type === "defaultBranch"
+				prepareResponse = remote
+					? await prepareRemoteWorkspaceFromSource(repoId, source, remote)
+					: source.type === "defaultBranch"
 						? await prepareWorkspaceFromRepo(repoId)
 						: await prepareWorkspaceFromSource(repoId, source);
 			} catch (error) {
@@ -880,18 +885,23 @@ export function useWorkspacesSidebarController({
 			// background so the UI is already interactive. State flips from
 			// "initializing" → "ready"/"setup_pending" when it completes;
 			// the only visible change is the composer enabling.
-			const finalizePromise = finalizeWorkspaceFromRepo(
-				prepareResponse.workspaceId,
-				prepareResponse.sourceStartBranch || migrateFromPath
+			const finalizeOptions =
+				prepareResponse.sourceStartBranch || migrateFromPath || remote
 					? {
 							...(prepareResponse.sourceStartBranch && {
 								startBranch: prepareResponse.sourceStartBranch,
 								fetchStartBranch: true,
 							}),
 							...(migrateFromPath && { migrateFromPath }),
+							...(remote && { remote }),
 						}
-					: undefined,
-			);
+					: undefined;
+			const finalizePromise = finalizeOptions
+				? finalizeWorkspaceFromRepo(
+						prepareResponse.workspaceId,
+						finalizeOptions,
+					)
+				: finalizeWorkspaceFromRepo(prepareResponse.workspaceId);
 			finalizePromise
 				.then((finalized) => {
 					queryClient.setQueryData<WorkspaceDetail | null>(
@@ -1641,6 +1651,7 @@ function createPreparedWorkspaceRow(
 		prTitle?: string | null;
 		prSyncState?: "none" | "open" | "closed" | "merged";
 		prUrl?: string | null;
+		remoteRuntime?: WorkspaceRow["remoteRuntime"];
 	},
 ): WorkspaceRow {
 	return {
@@ -1665,6 +1676,7 @@ function createPreparedWorkspaceRow(
 		prTitle: prepared.prTitle ?? null,
 		prSyncState: prepared.prSyncState ?? "none",
 		prUrl: prepared.prUrl ?? null,
+		remoteRuntime: prepared.remoteRuntime ?? null,
 		pinnedAt: null,
 		sessionCount: 1,
 		messageCount: 0,

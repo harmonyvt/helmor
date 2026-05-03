@@ -400,6 +400,24 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add pr_url column")?;
     }
 
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "location_kind")
+    {
+        connection
+            .execute_batch(
+                r#"
+                ALTER TABLE workspaces ADD COLUMN location_kind TEXT DEFAULT 'local';
+                ALTER TABLE workspaces ADD COLUMN remote_profile_id TEXT;
+                ALTER TABLE workspaces ADD COLUMN remote_backend TEXT;
+                ALTER TABLE workspaces ADD COLUMN remote_root_path TEXT;
+                ALTER TABLE workspaces ADD COLUMN remote_container_name TEXT;
+                ALTER TABLE workspaces ADD COLUMN remote_host TEXT;
+                ALTER TABLE workspaces ADD COLUMN remote_status TEXT;
+                ALTER TABLE workspaces ADD COLUMN remote_error TEXT;
+                "#,
+            )
+            .context("Failed to add remote workspace columns")?;
+    }
+
     let had_workspace_status =
         has_table(connection, "workspaces") && has_column(connection, "workspaces", "status");
     if has_table(connection, "workspaces") && !had_workspace_status {
@@ -510,6 +528,14 @@ CREATE TABLE IF NOT EXISTS workspaces (
     pr_url TEXT,
     archive_commit TEXT,
     linked_directory_paths TEXT,
+    location_kind TEXT DEFAULT 'local',
+    remote_profile_id TEXT,
+    remote_backend TEXT,
+    remote_root_path TEXT,
+    remote_container_name TEXT,
+    remote_host TEXT,
+    remote_status TEXT,
+    remote_error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

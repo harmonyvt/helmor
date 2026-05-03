@@ -36,6 +36,14 @@ export interface SendMessageParams {
 	 * attachments".
 	 */
 	readonly images: readonly string[];
+	readonly remote?: RemoteExecutionParams;
+}
+
+export interface RemoteExecutionParams {
+	readonly backend: "docker" | "ssh";
+	readonly cwd: string;
+	readonly containerName?: string;
+	readonly host?: string;
 }
 
 export interface ListSlashCommandsParams {

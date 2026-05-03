@@ -49,6 +49,28 @@ pub async fn prepare_workspace_from_source(
     Ok(result)
 }
 
+#[tauri::command]
+pub async fn prepare_remote_workspace_from_source(
+    app: AppHandle,
+    repo_id: String,
+    source: workspaces::WorkspaceCreationSource,
+    remote: workspaces::RemoteWorkspaceCreateOptions,
+) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
+    let result = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || {
+            workspaces::prepare_workspace_from_source_with_remote_impl(
+                &repo_id,
+                source,
+                Some(remote),
+            )
+        })
+        .await?
+    };
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
 /// Phase 2: slow (~200ms-2s) materialization. Creates the git worktree,
 /// probes `helmor.json` for a setup script, and flips
 /// the workspace row from `initializing` to `ready` / `setup_pending`. On

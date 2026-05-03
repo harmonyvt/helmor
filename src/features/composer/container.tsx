@@ -396,9 +396,39 @@ export const WorkspaceComposerContainer = memo(
 			],
 		);
 		const effectiveModel = pendingModel ?? selectedModel;
-		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
-		const provider =
-			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
+		const remoteWorkspace = Boolean(workspaceDetailQuery.data?.remoteRuntime);
+		const firstPiModel = useMemo(
+			() =>
+				modelSections
+					.flatMap((section) => section.options)
+					.find((option) => option.provider === "pi") ?? null,
+			[modelSections],
+		);
+		const remoteEffectiveModel = remoteWorkspace
+			? effectiveModel?.provider === "pi"
+				? effectiveModel
+				: firstPiModel
+			: effectiveModel;
+		const visibleModelSections = remoteWorkspace
+			? modelSections
+					.map((section) => ({
+						...section,
+						options: section.options.filter(
+							(option) => option.provider === "pi",
+						),
+					}))
+					.filter((section) => section.options.length > 0)
+			: modelSections;
+		const effectiveSelectedModelId =
+			remoteEffectiveModel?.id ?? effectiveModel?.id ?? selectedModelId;
+		const sessionProvider: AgentProvider =
+			currentSession?.agentType === "codex" ||
+			currentSession?.agentType === "pi"
+				? currentSession.agentType
+				: "claude";
+		const provider: AgentProvider = remoteWorkspace
+			? "pi"
+			: (remoteEffectiveModel?.provider ?? sessionProvider);
 		const cachedEffort = composerContextKey.startsWith("session:")
 			? effortLevels[composerContextKey]
 			: undefined;
@@ -410,7 +440,7 @@ export const WorkspaceComposerContainer = memo(
 		const effortLevel = clampEffortToModel(
 			rawEffort,
 			effectiveSelectedModelId,
-			modelSections,
+			visibleModelSections,
 		);
 		const cachedPermissionMode = composerContextKey.startsWith("session:")
 			? permissionModes[composerContextKey]
@@ -425,7 +455,7 @@ export const WorkspaceComposerContainer = memo(
 			pendingOverrideActive && pendingPromptForSession?.permissionMode
 				? pendingPromptForSession.permissionMode
 				: permissionMode;
-		const supportsFastMode = effectiveModel?.supportsFastMode === true;
+		const supportsFastMode = remoteEffectiveModel?.supportsFastMode === true;
 		const cachedFastMode = composerContextKey.startsWith("session:")
 			? fastModes[composerContextKey]
 			: undefined;
@@ -495,6 +525,12 @@ export const WorkspaceComposerContainer = memo(
 		const handleModelSelect = useCallback(
 			async (modelId: string) => {
 				const newModel = findModelOption(modelSections, modelId);
+				if (
+					workspaceDetailQuery.data?.remoteRuntime &&
+					newModel?.provider !== "pi"
+				) {
+					return;
+				}
 				const currentProvider = provider;
 				const newProvider = newModel?.provider;
 
@@ -587,6 +623,7 @@ export const WorkspaceComposerContainer = memo(
 			[
 				modelSections,
 				provider,
+				workspaceDetailQuery.data?.remoteRuntime,
 				currentSession,
 				displayedSessionId,
 				displayedWorkspaceId,
@@ -660,7 +697,7 @@ export const WorkspaceComposerContainer = memo(
 					oppositeFollowUp?: boolean;
 				},
 			) => {
-				if (!effectiveModel) {
+				if (!remoteEffectiveModel) {
 					return;
 				}
 				// Translate the per-submit "opposite" toggle into a concrete
@@ -689,7 +726,7 @@ export const WorkspaceComposerContainer = memo(
 					imagePaths,
 					filePaths,
 					customTags,
-					model: effectiveModel,
+					model: remoteEffectiveModel,
 					workingDirectory,
 					effortLevel,
 					permissionMode:
@@ -700,7 +737,7 @@ export const WorkspaceComposerContainer = memo(
 				});
 			},
 			[
-				effectiveModel,
+				remoteEffectiveModel,
 				onSubmit,
 				workingDirectory,
 				effortLevel,
@@ -729,7 +766,7 @@ export const WorkspaceComposerContainer = memo(
 				// Wait for the model sections query to resolve the queued model.
 				return;
 			}
-			if (!effectiveModel) {
+			if (!remoteEffectiveModel) {
 				// Wait for the model sections query to resolve.
 				return;
 			}
@@ -751,7 +788,7 @@ export const WorkspaceComposerContainer = memo(
 				imagePaths: [],
 				filePaths: [],
 				customTags: [],
-				model: effectiveModel,
+				model: remoteEffectiveModel,
 				workingDirectory,
 				effortLevel,
 				permissionMode: effectivePermissionMode,
@@ -761,7 +798,7 @@ export const WorkspaceComposerContainer = memo(
 			onPendingPromptConsumed?.();
 		}, [
 			displayedSessionId,
-			effectiveModel,
+			remoteEffectiveModel,
 			effectivePermissionMode,
 			effortLevel,
 			fastMode,
@@ -901,9 +938,7 @@ export const WorkspaceComposerContainer = memo(
 							contextKey={composerContextKey}
 							sessionId={displayedSessionId}
 							providerSessionId={currentSession?.providerSessionId ?? null}
-							agentType={
-								effectiveModel?.provider === "codex" ? "codex" : "claude"
-							}
+							agentType={provider}
 							focusShortcut={focusShortcut}
 							togglePlanShortcut={togglePlanShortcut}
 							toggleFollowUpShortcut={toggleFollowUpShortcut}
