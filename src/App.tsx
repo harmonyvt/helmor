@@ -2572,79 +2572,81 @@ function AppShell({
 										</div>
 									</section>
 
-									{!inspectorCollapsed && (
-										<>
-											<div
-												role="separator"
-												tabIndex={0}
-												aria-label="Resize inspector sidebar"
-												aria-orientation="vertical"
-												aria-valuemin={MIN_SIDEBAR_WIDTH}
-												aria-valuemax={MAX_SIDEBAR_WIDTH}
-												aria-valuenow={inspectorWidth}
-												onMouseDown={handleResizeStart("inspector")}
-												onKeyDown={handleResizeKeyDown("inspector")}
-												className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-												style={{
-													right: `${Math.max(0, inspectorWidth - SIDEBAR_RESIZE_HIT_AREA)}px`,
-													width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-												}}
-											>
-												<span
-													aria-hidden="true"
-													className={`pointer-events-none absolute inset-y-0 left-0 transition-[width,background-color,box-shadow] ${
-														isInspectorResizing
-															? "w-[2px] bg-transparent shadow-none"
-															: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
-													}`}
-												/>
-											</div>
+									{!inspectorCollapsed &&
+										selectedWorkspaceDetailQuery.data?.workspaceKind !==
+											"goal" && (
+											<>
+												<div
+													role="separator"
+													tabIndex={0}
+													aria-label="Resize inspector sidebar"
+													aria-orientation="vertical"
+													aria-valuemin={MIN_SIDEBAR_WIDTH}
+													aria-valuemax={MAX_SIDEBAR_WIDTH}
+													aria-valuenow={inspectorWidth}
+													onMouseDown={handleResizeStart("inspector")}
+													onKeyDown={handleResizeKeyDown("inspector")}
+													className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+													style={{
+														right: `${Math.max(0, inspectorWidth - SIDEBAR_RESIZE_HIT_AREA)}px`,
+														width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+													}}
+												>
+													<span
+														aria-hidden="true"
+														className={`pointer-events-none absolute inset-y-0 left-0 transition-[width,background-color,box-shadow] ${
+															isInspectorResizing
+																? "w-[2px] bg-transparent shadow-none"
+																: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
+														}`}
+													/>
+												</div>
 
-											<aside
-												aria-label="Inspector sidebar"
-												className="relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible"
-												style={{ width: `${inspectorWidth}px` }}
-											>
-												<WorkspaceInspectorSidebar
-													workspaceId={selectedWorkspaceId}
-													workspaceRootPath={workspaceRootPath}
-													workspaceState={
-														selectedWorkspaceDetailQuery.data?.state ?? null
-													}
-													repoId={
-														selectedWorkspaceDetailQuery.data?.repoId ?? null
-													}
-													workspaceBranch={
-														selectedWorkspaceDetailQuery.data?.branch ?? null
-													}
-													workspaceRemote={
-														selectedWorkspaceDetailQuery.data?.remote ?? null
-													}
-													workspaceTargetBranch={(() => {
-														const d = selectedWorkspaceDetailQuery.data;
-														const target =
-															d?.intendedTargetBranch ?? d?.defaultBranch;
-														if (!target) return null;
-														const remote = d?.remote ?? "origin";
-														return `${remote}/${target}`;
-													})()}
-													editorMode={workspaceViewMode === "editor"}
-													activeEditorPath={editorSession?.path ?? null}
-													onOpenEditorFile={handleOpenEditorFile}
-													onCommitAction={handleInspectorCommitAction}
-													currentSessionId={displayedSessionId}
-													onQueuePendingPromptForSession={
-														queuePendingPromptForSession
-													}
-													commitButtonMode={commitButtonMode}
-													commitButtonState={commitButtonState}
-													changeRequest={workspaceChangeRequest}
-													forgeIsRefreshing={workspaceForgeIsRefreshing}
-													onOpenSettings={handleOpenSettings}
-												/>
-											</aside>
-										</>
-									)}
+												<aside
+													aria-label="Inspector sidebar"
+													className="relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible"
+													style={{ width: `${inspectorWidth}px` }}
+												>
+													<WorkspaceInspectorSidebar
+														workspaceId={selectedWorkspaceId}
+														workspaceRootPath={workspaceRootPath}
+														workspaceState={
+															selectedWorkspaceDetailQuery.data?.state ?? null
+														}
+														repoId={
+															selectedWorkspaceDetailQuery.data?.repoId ?? null
+														}
+														workspaceBranch={
+															selectedWorkspaceDetailQuery.data?.branch ?? null
+														}
+														workspaceRemote={
+															selectedWorkspaceDetailQuery.data?.remote ?? null
+														}
+														workspaceTargetBranch={(() => {
+															const d = selectedWorkspaceDetailQuery.data;
+															const target =
+																d?.intendedTargetBranch ?? d?.defaultBranch;
+															if (!target) return null;
+															const remote = d?.remote ?? "origin";
+															return `${remote}/${target}`;
+														})()}
+														editorMode={workspaceViewMode === "editor"}
+														activeEditorPath={editorSession?.path ?? null}
+														onOpenEditorFile={handleOpenEditorFile}
+														onCommitAction={handleInspectorCommitAction}
+														currentSessionId={displayedSessionId}
+														onQueuePendingPromptForSession={
+															queuePendingPromptForSession
+														}
+														commitButtonMode={commitButtonMode}
+														commitButtonState={commitButtonState}
+														changeRequest={workspaceChangeRequest}
+														forgeIsRefreshing={workspaceForgeIsRefreshing}
+														onOpenSettings={handleOpenSettings}
+													/>
+												</aside>
+											</>
+										)}
 								</div>
 							</main>
 						)}
