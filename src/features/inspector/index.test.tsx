@@ -525,9 +525,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(pushButton).toBeDisabled();
 		expect(pushButton).toHaveAttribute("aria-busy", "true");
 		expect(
-			pushButton.querySelector(".animate-spin.text-current"),
+			pushButton.querySelector(".helmor-shimmer-text"),
 		).toBeInTheDocument();
-		expect(pushButton).not.toHaveTextContent("Push");
+		expect(pushButton).toHaveTextContent("Push");
 	});
 
 	it("shows a neutral loading spinner on commit-and-push while that lifecycle is busy", async () => {
@@ -552,9 +552,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(commitButton).toBeDisabled();
 		expect(commitButton).toHaveAttribute("aria-busy", "true");
 		expect(
-			commitButton.querySelector(".animate-spin.text-current"),
+			commitButton.querySelector(".helmor-shimmer-text"),
 		).toBeInTheDocument();
-		expect(commitButton).not.toHaveTextContent("Commit and push");
+		expect(commitButton).toHaveTextContent("Commit and push");
 	});
 
 	it("shows a neutral loading spinner on pull while sync is pending", async () => {
@@ -590,9 +590,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(pullButton).toBeDisabled();
 		expect(pullButton).toHaveAttribute("aria-busy", "true");
 		expect(
-			pullButton.querySelector(".animate-spin.text-current"),
+			pullButton.querySelector(".helmor-shimmer-text"),
 		).toBeInTheDocument();
-		expect(pullButton).not.toHaveTextContent("Pull");
+		expect(pullButton).toHaveTextContent("Pull");
 
 		resolveSync({
 			outcome: "updated",
@@ -921,11 +921,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		const tabsSection = screen.getByLabelText("Inspector section Tabs");
 
 		expect(filterLayer).not.toBeNull();
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
 
 		fireEvent.mouseEnter(tabsBody);
 		fireEvent.mouseLeave(tabsSection.parentElement as HTMLElement);
 
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
 	});
 });

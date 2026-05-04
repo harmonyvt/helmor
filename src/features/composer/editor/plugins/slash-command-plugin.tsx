@@ -94,6 +94,21 @@ function filterCommands(
 	return [...prefix, ...substring];
 }
 
+function sourceLabel(source: SlashCommandEntry["source"]): string | null {
+	switch (source) {
+		case "extension":
+			return "extension";
+		case "prompt":
+			return "prompt";
+		case "skill":
+			return "skill";
+		case "client-action":
+			return "helmor";
+		default:
+			return null;
+	}
+}
+
 export function SlashCommandPlugin({
 	commands,
 	isLoading = false,
@@ -299,12 +314,22 @@ export function SlashCommandPlugin({
 													<span className="min-w-0 shrink-0 truncate font-medium">
 														{cmd.name}
 													</span>
+													{cmd.argumentHint ? (
+														<span className="min-w-0 shrink truncate whitespace-nowrap font-mono text-[11px] text-muted-foreground/80">
+															{cmd.argumentHint}
+														</span>
+													) : null}
 													<span
 														className="min-w-0 flex-1 truncate whitespace-nowrap text-xs text-muted-foreground"
 														title={cmd.description}
 													>
 														{cmd.description}
 													</span>
+													{sourceLabel(cmd.source) ? (
+														<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+															{sourceLabel(cmd.source)}
+														</span>
+													) : null}
 												</CommandItem>
 											);
 										})}

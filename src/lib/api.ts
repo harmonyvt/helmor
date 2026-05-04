@@ -123,7 +123,7 @@ export type DataInfo = {
 	dataDirLockedByEnv: boolean;
 };
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "codex" | "pi";
 
 export type AgentModelOption = {
 	id: string;
@@ -143,6 +143,19 @@ export type AgentModelSection = {
 	label: string;
 	status?: AgentModelSectionStatus;
 	options: AgentModelOption[];
+};
+
+export type PiModelProviderSummary = {
+	key: string;
+	label: string;
+	modelCount: number;
+};
+
+export type PiModelCheckResponse = {
+	status: AgentModelSectionStatus;
+	providers: PiModelProviderSummary[];
+	models: AgentModelOption[];
+	error?: string | null;
 };
 
 export type AgentSendRequest = {
@@ -879,11 +892,12 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex";
+export type AgentLoginProvider = "claude" | "codex" | "pi";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
+	pi: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
@@ -1044,6 +1058,14 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	}
 }
 
+export async function checkPiModels(): Promise<PiModelCheckResponse> {
+	try {
+		return await invoke<PiModelCheckResponse>("check_pi_models");
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to check Pi models."));
+	}
+}
+
 export type SlashCommandEntry = {
 	name: string;
 	description: string;
@@ -1055,7 +1077,8 @@ export type SlashCommandEntry = {
 	 *   of inserting `/<name>` into the prompt (e.g. `/add-dir` opens the
 	 *   link-directories dialog).
 	 */
-	source: "builtin" | "skill" | "client-action";
+	source: "builtin" | "extension" | "prompt" | "skill" | "client-action";
+	sourceInfo?: Record<string, unknown> | null;
 };
 
 export type SlashCommandsResponse = {
@@ -2214,6 +2237,17 @@ export type PlanReviewPart = {
 	planFilePath?: string | null;
 	allowedPrompts?: PlanReviewAllowedPrompt[];
 };
+export type GenericCardPart = {
+	type: "generic-card";
+	id: string;
+	title: string;
+	subtitle?: string | null;
+	body?: string | null;
+	severity?: NoticeSeverity | null;
+	status?: string | null;
+	provider?: string | null;
+	details?: unknown;
+};
 export type MessagePart =
 	| TextPart
 	| ReasoningPart
@@ -2223,7 +2257,8 @@ export type MessagePart =
 	| ImagePart
 	| PromptSuggestionPart
 	| FileMentionPart
-	| PlanReviewPart;
+	| PlanReviewPart
+	| GenericCardPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";

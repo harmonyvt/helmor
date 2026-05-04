@@ -5,7 +5,7 @@
  * prefix) or start a clean new session.
  */
 
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Box } from "lucide-react";
 import { useState } from "react";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ type ProviderSwapDialogProps = {
 const PROVIDER_LABELS: Record<AgentProvider, string> = {
 	claude: "Claude",
 	codex: "OpenAI Codex",
+	pi: "Pi",
 };
 
 function ProviderIcon({
@@ -45,6 +46,11 @@ function ProviderIcon({
 }) {
 	if (provider === "codex") {
 		return <OpenAIIcon className={cn("size-4 shrink-0", className)} />;
+	}
+	if (provider === "pi") {
+		return (
+			<Box className={cn("size-4 shrink-0", className)} strokeWidth={1.8} />
+		);
 	}
 	return <ClaudeIcon className={cn("size-4 shrink-0", className)} />;
 }

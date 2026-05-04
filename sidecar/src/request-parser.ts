@@ -110,7 +110,7 @@ export function parseElicitationResultContent(
 }
 
 export function parseProvider(value: unknown): Provider {
-	if (value === "claude" || value === "codex") return value;
+	if (value === "claude" || value === "codex" || value === "pi") return value;
 	throw new Error(`unknown provider: ${String(value)}`);
 }
 

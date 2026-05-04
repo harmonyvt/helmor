@@ -46,6 +46,7 @@ fn model_sections_for_custom(
         .extend(custom_provider_options(custom));
     let mut sections = vec![claude_section];
     sections.push(codex_section());
+    sections.push(pi_section());
 
     sections
 }
@@ -86,6 +87,52 @@ fn codex_section() -> AgentModelSection {
             codex_model("gpt-5.3-codex", "GPT-5.3-Codex"),
             codex_model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"),
             codex_model("gpt-5.2", "GPT-5.2"),
+        ],
+    }
+}
+
+fn pi_section() -> AgentModelSection {
+    AgentModelSection {
+        id: "pi".to_string(),
+        label: "Pi".to_string(),
+        status: AgentModelSectionStatus::Ready,
+        options: vec![
+            pi_model(
+                "pi:anthropic/claude-opus-4-7",
+                "Pi · Claude Opus 4.7",
+                "anthropic/claude-opus-4-7",
+                false,
+            ),
+            pi_model(
+                "pi:anthropic/claude-sonnet-4-6",
+                "Pi · Claude Sonnet 4.6",
+                "anthropic/claude-sonnet-4-6",
+                false,
+            ),
+            pi_model(
+                "pi:azure-openai-responses/gpt-5.5",
+                "Pi · GPT-5.5",
+                "azure-openai-responses/gpt-5.5",
+                true,
+            ),
+            pi_model(
+                "pi:azure-openai-responses/gpt-5.4",
+                "Pi · GPT-5.4",
+                "azure-openai-responses/gpt-5.4",
+                true,
+            ),
+            pi_model(
+                "pi:azure-openai-responses/gpt-5.4-mini",
+                "Pi · GPT-5.4-Mini",
+                "azure-openai-responses/gpt-5.4-mini",
+                true,
+            ),
+            pi_model(
+                "pi:azure-openai-responses/gpt-5.3-codex",
+                "Pi · GPT-5.3-Codex",
+                "azure-openai-responses/gpt-5.3-codex",
+                true,
+            ),
         ],
     }
 }
@@ -145,6 +192,22 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
     }
 }
 
+fn pi_model(id: &str, label: &str, cli_model: &str, supports_fast_mode: bool) -> AgentModelOption {
+    AgentModelOption {
+        id: id.to_string(),
+        provider: "pi".to_string(),
+        label: label.to_string(),
+        cli_model: cli_model.to_string(),
+        provider_key: None,
+        effort_levels: ["low", "medium", "high", "xhigh"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        supports_fast_mode,
+        supports_context_usage: false,
+    }
+}
+
 fn claude_effort_levels() -> Vec<String> {
     ["low", "medium", "high", "xhigh", "max"]
         .into_iter()
@@ -163,10 +226,18 @@ pub struct ResolvedModel {
     pub claude_auth_token: Option<String>,
 }
 
-/// Resolve a model ID to provider + cli_model. Provider is inferred from the
-/// ID: `gpt-*` → codex, everything else → claude. The ID is passed through
-/// as cli_model directly — the sidecar/SDK handles the actual mapping.
+/// Resolve a model ID to provider + cli_model. Built-in and custom catalog
+/// IDs are exact matches; unknown IDs keep the legacy `gpt-*` → Codex,
+/// everything else → Claude fallback.
 pub fn resolve_model(model_id: &str) -> ResolvedModel {
+    if let Some(model) = legacy_pi_azure_model(model_id) {
+        return model;
+    }
+
+    if let Some(model) = dynamic_pi_model(model_id) {
+        return model;
+    }
+
     if let Some(model) = super::custom_providers::resolve(model_id) {
         return ResolvedModel {
             id: model.id,
@@ -175,6 +246,21 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
             supports_effort: true,
             claude_base_url: Some(model.base_url),
             claude_auth_token: Some(model.api_key),
+        };
+    }
+
+    if let Some(option) = static_model_sections()
+        .into_iter()
+        .flat_map(|section| section.options)
+        .find(|option| option.id == model_id)
+    {
+        return ResolvedModel {
+            id: option.id,
+            provider: option.provider,
+            cli_model: option.cli_model,
+            supports_effort: !option.effort_levels.is_empty(),
+            claude_base_url: None,
+            claude_auth_token: None,
         };
     }
 
@@ -193,6 +279,30 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
     }
 }
 
+fn dynamic_pi_model(model_id: &str) -> Option<ResolvedModel> {
+    let cli_model = model_id.strip_prefix("pi:")?;
+    cli_model.contains('/').then(|| ResolvedModel {
+        id: model_id.to_string(),
+        provider: "pi".to_string(),
+        cli_model: cli_model.to_string(),
+        supports_effort: true,
+        claude_base_url: None,
+        claude_auth_token: None,
+    })
+}
+
+fn legacy_pi_azure_model(model_id: &str) -> Option<ResolvedModel> {
+    let model = model_id.strip_prefix("pi:openai-codex/")?;
+    Some(ResolvedModel {
+        id: format!("pi:azure-openai-responses/{model}"),
+        provider: "pi".to_string(),
+        cli_model: format!("azure-openai-responses/{model}"),
+        supports_effort: true,
+        claude_base_url: None,
+        claude_auth_token: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,7 +311,7 @@ mod tests {
     fn static_model_sections_returns_hardcoded_catalog() {
         let sections = model_sections_for_custom(Vec::new());
 
-        assert_eq!(sections.len(), 2);
+        assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -238,6 +348,24 @@ mod tests {
             .options
             .iter()
             .all(|model| model.supports_fast_mode));
+
+        assert_eq!(sections[2].id, "pi");
+        assert_eq!(sections[2].status, AgentModelSectionStatus::Ready);
+        assert_eq!(
+            sections[2]
+                .options
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "pi:anthropic/claude-opus-4-7",
+                "pi:anthropic/claude-sonnet-4-6",
+                "pi:azure-openai-responses/gpt-5.5",
+                "pi:azure-openai-responses/gpt-5.4",
+                "pi:azure-openai-responses/gpt-5.4-mini",
+                "pi:azure-openai-responses/gpt-5.3-codex",
+            ]
+        );
     }
 
     #[test]
@@ -252,7 +380,7 @@ mod tests {
                 api_key: "sk-test".to_string(),
             }]);
 
-        assert_eq!(sections.len(), 2);
+        assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].label, "Claude Code");
         assert_eq!(
@@ -279,6 +407,7 @@ mod tests {
         );
         assert!(!sections[0].options[4].supports_context_usage);
         assert_eq!(sections[1].id, "codex");
+        assert_eq!(sections[2].id, "pi");
     }
 
     #[test]
@@ -314,6 +443,30 @@ mod tests {
     fn resolve_gpt_5_4_routes_to_codex() {
         let m = resolve_model("gpt-5.4");
         assert_eq!(m.provider, "codex");
+    }
+
+    #[test]
+    fn resolve_pi_model_routes_to_pi() {
+        let m = resolve_model("pi:azure-openai-responses/gpt-5.4");
+        assert_eq!(m.provider, "pi");
+        assert_eq!(m.cli_model, "azure-openai-responses/gpt-5.4");
+        assert_eq!(m.id, "pi:azure-openai-responses/gpt-5.4");
+    }
+
+    #[test]
+    fn resolve_dynamic_pi_model_routes_to_pi() {
+        let m = resolve_model("pi:custom-provider/custom-model");
+        assert_eq!(m.provider, "pi");
+        assert_eq!(m.cli_model, "custom-provider/custom-model");
+        assert_eq!(m.id, "pi:custom-provider/custom-model");
+    }
+
+    #[test]
+    fn resolve_legacy_pi_codex_model_routes_to_azure_pi() {
+        let m = resolve_model("pi:openai-codex/gpt-5.5");
+        assert_eq!(m.provider, "pi");
+        assert_eq!(m.cli_model, "azure-openai-responses/gpt-5.5");
+        assert_eq!(m.id, "pi:azure-openai-responses/gpt-5.5");
     }
 
     #[test]

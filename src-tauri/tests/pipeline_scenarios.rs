@@ -1462,3 +1462,26 @@ fn codex_file_change_empty_changes() {
     )];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
+
+#[test]
+fn asst_pi_generic_card_renders_extension_output() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi-extension-1",
+            "type": "generic_card",
+            "provider": "pi",
+            "title": "Pi extension notification",
+            "subtitle": "demo-extension",
+            "severity": "warning",
+            "body": "Custom UI is not available yet",
+            "details": { "action": "custom" }
+        }
+    });
+    let msgs = vec![make_record(
+        "pi-card-1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}

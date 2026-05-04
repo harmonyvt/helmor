@@ -40,6 +40,8 @@ export type AppSettings = {
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
+	/** Model IDs the user has starred for quick access. */
+	favoriteModelIds: string[];
 };
 
 /**
@@ -72,6 +74,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customApiKey: "",
 		customModels: "",
 	},
+	favoriteModelIds: [],
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -94,6 +97,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
+	favoriteModelIds: "app.favorite_model_ids",
 };
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
@@ -110,6 +114,17 @@ function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
 		) as ShortcutOverrides;
 	} catch {
 		return DEFAULT_SETTINGS.shortcuts;
+	}
+}
+
+function parseFavoriteModelIds(raw: string | undefined): string[] {
+	if (!raw) return DEFAULT_SETTINGS.favoriteModelIds;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed)) return DEFAULT_SETTINGS.favoriteModelIds;
+		return parsed.filter((item): item is string => typeof item === "string");
+	} catch {
+		return DEFAULT_SETTINGS.favoriteModelIds;
 	}
 }
 
@@ -203,6 +218,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			claudeCustomProviders: parseClaudeCustomProviderSettings(
 				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
 			),
+			favoriteModelIds: parseFavoriteModelIds(
+				raw[SETTINGS_KEY_MAP.favoriteModelIds],
+			),
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };
@@ -226,7 +244,9 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 		const value = patch[key as keyof Omit<AppSettings, "theme">];
 		if (value !== undefined) {
 			settings[dbKey] =
-				key === "shortcuts" || key === "claudeCustomProviders"
+				key === "shortcuts" ||
+				key === "claudeCustomProviders" ||
+				key === "favoriteModelIds"
 					? JSON.stringify(value)
 					: value === null
 						? ""
