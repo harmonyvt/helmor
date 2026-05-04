@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
+import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 
 const apiMockState = vi.hoisted(() => ({
@@ -229,13 +230,13 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
 		composerMockState.lastOnSelectModel = null;
+		apiMockState.listSlashCommands.mockReset();
+		apiMockState.listWorkspaceLinkedDirectories.mockReset();
+		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
 		apiMockState.createSession.mockReset();
 		apiMockState.createSession.mockResolvedValue({ sessionId: "session-new" });
 		apiMockState.loadSessionThreadMessages.mockReset();
 		apiMockState.loadSessionThreadMessages.mockResolvedValue([]);
-		apiMockState.listSlashCommands.mockReset();
-		apiMockState.listWorkspaceLinkedDirectories.mockReset();
-		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
 		apiMockState.setWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listSlashCommands.mockResolvedValue({
 			commands: [],
@@ -371,7 +372,7 @@ describe("WorkspaceComposerContainer", () => {
 		expect(onPendingPromptConsumed).toHaveBeenCalledTimes(1);
 	});
 
-	it("seeds the new session cache before selecting a switched provider model", async () => {
+	it("seeds the new session and empty thread cache before selecting a switched provider model", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
 			helmorQueryKeys.agentModelSections,
@@ -434,6 +435,10 @@ describe("WorkspaceComposerContainer", () => {
 			);
 		});
 		expect(onSwitchSession).toHaveBeenCalledWith("session-new");
+		expect(apiMockState.createSession).toHaveBeenCalledWith("workspace-1");
+		expect(apiMockState.loadSessionThreadMessages).toHaveBeenCalledWith(
+			"session-1",
+		);
 		expect(
 			queryClient
 				.getQueryData<typeof WORKSPACE_SESSIONS>(
@@ -442,10 +447,7 @@ describe("WorkspaceComposerContainer", () => {
 				?.some((session) => session.id === "session-new"),
 		).toBe(true);
 		expect(
-			queryClient.getQueryData([
-				...helmorQueryKeys.sessionMessages("session-new"),
-				"thread",
-			]),
+			queryClient.getQueryData(sessionThreadCacheKey("session-new")),
 		).toEqual([]);
 	});
 

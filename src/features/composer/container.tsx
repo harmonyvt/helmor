@@ -40,6 +40,7 @@ import {
 	workspaceLinkedDirectoriesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { useSettings } from "@/lib/settings";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
@@ -571,6 +572,8 @@ export const WorkspaceComposerContainer = memo(
 							workspace: workspaceDetailQuery.data ?? null,
 							existingSessions: sessionsQuery.data ?? [],
 						});
+
+						queryClient.setQueryData(sessionThreadCacheKey(newSessionId), []);
 
 						// Register the pending context transfer for the new session.
 						if (contextPrefix) {
