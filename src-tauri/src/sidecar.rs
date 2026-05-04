@@ -54,7 +54,15 @@ impl SidecarEvent {
     }
 
     pub fn session_id(&self) -> Option<&str> {
-        self.raw.get("session_id")?.as_str()
+        self.raw
+            .get("session_id")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                self.raw
+                    .get("thread")
+                    .and_then(|thread| thread.get("id"))
+                    .and_then(Value::as_str)
+            })
     }
 
     /// Claude SDK emits `system.init` to announce the authoritative session
@@ -81,6 +89,8 @@ struct BundledAgentPaths {
     claude_cli: Option<PathBuf>,
     codex_bin: Option<PathBuf>,
     bun_bin: Option<PathBuf>,
+    pi_package_dir: Option<PathBuf>,
+    pi_bin_dir: Option<PathBuf>,
 }
 
 fn resolve_bundled_agent_paths() -> BundledAgentPaths {
@@ -100,11 +110,15 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
     let claude_cli = resources_dir.join("vendor/claude-code/cli.js");
     let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
     let bun_bin = resources_dir.join(format!("vendor/bun/{bun_bin_name}"));
+    let pi_package_dir = resources_dir.join("vendor/pi/package");
+    let pi_bin_dir = resources_dir.join("vendor/pi/bin");
 
     Some(BundledAgentPaths {
         claude_cli: claude_cli.is_file().then_some(claude_cli),
         codex_bin: codex_bin.is_file().then_some(codex_bin),
         bun_bin: bun_bin.is_file().then_some(bun_bin),
+        pi_package_dir: pi_package_dir.is_dir().then_some(pi_package_dir),
+        pi_bin_dir: pi_bin_dir.is_dir().then_some(pi_bin_dir),
     })
 }
 
@@ -155,6 +169,8 @@ impl SidecarProcess {
                 claude_cli = ?bundled_paths.claude_cli,
                 codex_bin = ?bundled_paths.codex_bin,
                 bun_bin = ?bundled_paths.bun_bin,
+                pi_package_dir = ?bundled_paths.pi_package_dir,
+                pi_bin_dir = ?bundled_paths.pi_bin_dir,
                 "Resolved bundled agent paths"
             );
             if let Some(path) = bundled_paths.claude_cli {
@@ -165,6 +181,12 @@ impl SidecarProcess {
             }
             if let Some(path) = bundled_paths.bun_bin {
                 cmd.env("HELMOR_BUN_PATH", &path);
+            }
+            if let Some(path) = bundled_paths.pi_package_dir {
+                cmd.env("HELMOR_PI_PACKAGE_DIR", &path);
+            }
+            if let Some(path) = bundled_paths.pi_bin_dir {
+                cmd.env("HELMOR_PI_BIN_DIR", &path);
             }
         }
 
@@ -644,6 +666,17 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_event_uses_thread_id_as_provider_session_fallback() {
+        let raw = serde_json::json!({
+            "id": "req-1",
+            "type": "thread/started",
+            "thread": {"id": "/tmp/pi-session.jsonl"},
+        });
+        let event = SidecarEvent { raw };
+        assert_eq!(event.session_id(), Some("/tmp/pi-session.jsonl"));
+    }
+
+    #[test]
     fn is_claude_session_init_rejects_hook_events() {
         // Regression: SessionStart:resume hook notifications fire before
         // system.init with a transient session_id that does NOT map to any
@@ -799,6 +832,8 @@ mod tests {
         std::fs::create_dir_all(resources.join("claude-code")).unwrap();
         std::fs::create_dir_all(resources.join("codex")).unwrap();
         std::fs::create_dir_all(resources.join("bun")).unwrap();
+        std::fs::create_dir_all(resources.join("pi/package")).unwrap();
+        std::fs::create_dir_all(resources.join("pi/bin")).unwrap();
         std::fs::write(resources.join("claude-code/cli.js"), "").unwrap();
         std::fs::write(resources.join("codex/codex"), "").unwrap();
         std::fs::write(resources.join("bun/bun"), "").unwrap();
@@ -819,6 +854,16 @@ mod tests {
             paths.bun_bin.unwrap(),
             root.path()
                 .join("Helmor.app/Contents/Resources/vendor/bun/bun")
+        );
+        assert_eq!(
+            paths.pi_package_dir.unwrap(),
+            root.path()
+                .join("Helmor.app/Contents/Resources/vendor/pi/package")
+        );
+        assert_eq!(
+            paths.pi_bin_dir.unwrap(),
+            root.path()
+                .join("Helmor.app/Contents/Resources/vendor/pi/bin")
         );
     }
 }

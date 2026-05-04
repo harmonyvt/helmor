@@ -204,7 +204,7 @@ export const WorkspaceComposerContainer = memo(
 		onRemoveQueued,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
-		const { settings } = useSettings();
+		const { settings, updateSettings } = useSettings();
 
 		// -----------------------------------------------------------------------
 		// Mid-thread provider swap state
@@ -607,7 +607,7 @@ export const WorkspaceComposerContainer = memo(
 		// historical session) to a real AgentProvider before keying the
 		// query — anything else degrades to claude so we never miss the popup.
 		const slashProvider: AgentProvider =
-			provider === "codex" ? "codex" : "claude";
+			provider === "codex" || provider === "pi" ? provider : "claude";
 		// Slash command list — keyed by (provider, workingDirectory). The
 		// composer popup is hidden until this resolves; on error we fall back
 		// to an empty list and the popup never opens (no UI breakage).
@@ -780,6 +780,17 @@ export const WorkspaceComposerContainer = memo(
 			[handleModelSelect],
 		);
 
+		const handleToggleFavouriteInner = useCallback(
+			(modelId: string) => {
+				const current = settings.favoriteModelIds ?? [];
+				const next = current.includes(modelId)
+					? current.filter((id) => id !== modelId)
+					: [...current, modelId];
+				void updateSettings({ favoriteModelIds: next });
+			},
+			[settings.favoriteModelIds, updateSettings],
+		);
+
 		const handleSelectEffortInner = useCallback(
 			(level: string) => {
 				onSelectEffort(composerContextKey, level);
@@ -910,6 +921,8 @@ export const WorkspaceComposerContainer = memo(
 							modelSections={modelSections}
 							modelsLoading={modelsLoading}
 							onSelectModel={handleSelectModelInner}
+							favoriteModelIds={settings.favoriteModelIds}
+							onToggleFavorite={handleToggleFavouriteInner}
 							provider={provider}
 							effortLevel={effortLevel}
 							onSelectEffort={handleSelectEffortInner}

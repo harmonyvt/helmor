@@ -16,11 +16,11 @@ import {
 	Undo2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ShinyFlash } from "@/components/ui/shiny-flash";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -1190,37 +1190,4 @@ function LineStats({
 	);
 }
 
-function ShinyFlash({
-	active,
-	children,
-}: {
-	active: boolean;
-	children: React.ReactNode;
-}) {
-	const [shimmer, setShimmer] = useState(false);
-	const counterRef = useRef(0);
-
-	useEffect(() => {
-		if (!active) {
-			return;
-		}
-		counterRef.current += 1;
-		setShimmer(true);
-		const timeoutId = window.setTimeout(() => setShimmer(false), 3000);
-		return () => window.clearTimeout(timeoutId);
-	}, [active]);
-
-	if (!shimmer) {
-		return <span className="truncate">{children}</span>;
-	}
-
-	return (
-		<AnimatedShinyText
-			key={counterRef.current}
-			shimmerWidth={60}
-			className="!mx-0 !max-w-none truncate !text-neutral-500/80 ![animation-duration:1s] ![animation-iteration-count:3] ![animation-name:shiny-text-continuous] ![animation-timing-function:ease-in-out] dark:!text-neutral-500/80 dark:via-white via-black"
-		>
-			{children}
-		</AnimatedShinyText>
-	);
-}
+// ShinyFlash is re-exported from @/components/ui/shiny-flash — imported above.

@@ -5,7 +5,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "bun run scripts/stage-vendor.ts && bun build --compile src/index.ts --outfile dist/helmor-sidecar",
+		"build": "bun run scripts/stage-vendor.ts && bun build --compile src/bootstrap.ts --outfile dist/helmor-sidecar",
 		"dev:prepare": "bun run stage-vendor",
 		"stage-vendor": "bun run scripts/stage-vendor.ts",
 		"dev": "bun run src/index.ts",
@@ -15,6 +15,7 @@
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "0.2.111",
 		"@anthropic-ai/claude-code": "2.1.111",
+		"@mariozechner/pi-coding-agent": "0.72.0",
 		"@openai/codex": "0.124.0"
 	},
 	"devDependencies": {

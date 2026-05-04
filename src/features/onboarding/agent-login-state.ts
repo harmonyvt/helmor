@@ -1,3 +1,4 @@
+import { Box } from "lucide-react";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import type { AgentLoginStatusResult } from "@/lib/api";
 import type { AgentLoginItem } from "./types";
@@ -22,6 +23,13 @@ export function buildAgentLoginItems(
 			description: codexDescription(status),
 			status: status?.codex ? "ready" : "needsSetup",
 		},
+		{
+			icon: Box,
+			provider: "pi",
+			label: "Pi",
+			description: piDescription(status),
+			status: status?.pi ? "ready" : "needsSetup",
+		},
 	];
 }
 
@@ -34,4 +42,11 @@ function codexDescription(status?: AgentLoginStatusResult | null): string {
 		return "Signed in and ready to run OpenAI models in Helmor.";
 	}
 	return "Sign in to Codex or configure a Codex API-key provider to use Codex models in Helmor.";
+}
+
+function piDescription(status?: AgentLoginStatusResult | null): string {
+	if (status?.pi) {
+		return "Ready through existing Claude/Codex credentials or Pi auth.";
+	}
+	return "Pi uses your existing Claude or Codex setup; sign in to either provider to enable it.";
 }

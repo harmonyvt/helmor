@@ -547,11 +547,20 @@ export function InspectorTabsSection({
 							// header + body (but NOT the section with its bg/border)
 							// means the container's edges stay crisp while the
 							// content inside looks like it's "focusing in / out."
+							//
+							// IMPORTANT: use `none` (not `blur(0)`) at rest. Even
+							// `blur(0)` promotes the element to its own GPU compositing
+							// layer, forcing GPU rasterisation of all child text and
+							// making it look blurry. `filter: none` keeps text on the
+							// CPU paint path where font rendering is crisp.
+							// `will-change: filter` is likewise only set while the
+							// animation is live so the GPU layer is torn down as soon
+							// as the blur clears.
 							filter: isContentBlurred
 								? `blur(${TABS_BLUR_PEAK_PX}px)`
-								: "blur(0)",
+								: "none",
 							transition: `filter ${TABS_BLUR_FADE_MS}ms ease-out`,
-							willChange: "filter",
+							...(isContentBlurred ? { willChange: "filter" } : {}),
 						}}
 					>
 						<div

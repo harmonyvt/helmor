@@ -44,6 +44,8 @@ export type AppSettings = {
 	 *  Enables GPU-accelerated rendering and improved font shaping.
 	 *  Requires a restart to take effect. */
 	libghosttyEnabled: boolean;
+	/** Model IDs the user has starred for quick access. */
+	favoriteModelIds: string[];
 };
 
 /**
@@ -77,6 +79,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customModels: "",
 	},
 	libghosttyEnabled: false,
+	favoriteModelIds: [],
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -100,6 +103,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	libghosttyEnabled: "app.libghostty_enabled",
+	favoriteModelIds: "app.favorite_model_ids",
 };
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
@@ -116,6 +120,17 @@ function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
 		) as ShortcutOverrides;
 	} catch {
 		return DEFAULT_SETTINGS.shortcuts;
+	}
+}
+
+function parseFavoriteModelIds(raw: string | undefined): string[] {
+	if (!raw) return DEFAULT_SETTINGS.favoriteModelIds;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed)) return DEFAULT_SETTINGS.favoriteModelIds;
+		return parsed.filter((item): item is string => typeof item === "string");
+	} catch {
+		return DEFAULT_SETTINGS.favoriteModelIds;
 	}
 }
 
@@ -213,6 +228,9 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.libghosttyEnabled] !== undefined
 					? raw[SETTINGS_KEY_MAP.libghosttyEnabled] === "true"
 					: DEFAULT_SETTINGS.libghosttyEnabled,
+			favoriteModelIds: parseFavoriteModelIds(
+				raw[SETTINGS_KEY_MAP.favoriteModelIds],
+			),
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };
@@ -236,7 +254,9 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 		const value = patch[key as keyof Omit<AppSettings, "theme">];
 		if (value !== undefined) {
 			settings[dbKey] =
-				key === "shortcuts" || key === "claudeCustomProviders"
+				key === "shortcuts" ||
+				key === "claudeCustomProviders" ||
+				key === "favoriteModelIds"
 					? JSON.stringify(value)
 					: value === null
 						? ""

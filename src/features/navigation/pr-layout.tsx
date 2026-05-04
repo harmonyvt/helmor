@@ -175,6 +175,7 @@ export const PrVirtualItemRenderer = memo(function PrVirtualItemRenderer({
 	selectedWorkspaceId,
 	sendingWorkspaceIds,
 	interactionRequiredWorkspaceIds,
+	flashingIds,
 	actions,
 	onToggleSection,
 }: {
@@ -182,6 +183,7 @@ export const PrVirtualItemRenderer = memo(function PrVirtualItemRenderer({
 	selectedWorkspaceId?: string | null;
 	sendingWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
+	flashingIds?: Set<string>;
 	actions: PrRowActions;
 	onToggleSection: (key: string) => void;
 }) {
@@ -276,6 +278,7 @@ export const PrVirtualItemRenderer = memo(function PrVirtualItemRenderer({
 				isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 					stacked.row.id,
 				)}
+				isFlashing={flashingIds?.has(stacked.row.id)}
 				showPrNumber
 				workspaceActionsDisabled={Boolean(
 					actions.markingUnreadWorkspaceId || actions.restoringWorkspaceId,

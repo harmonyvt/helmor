@@ -7,7 +7,7 @@
 
 import type { SidecarEmitter } from "./emitter.js";
 
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "pi";
 
 export interface SendMessageParams {
 	readonly sessionId: string;
@@ -70,7 +70,8 @@ export interface SlashCommandInfo {
 	readonly name: string;
 	readonly description: string;
 	readonly argumentHint: string | undefined;
-	readonly source: "builtin" | "skill";
+	readonly source: "builtin" | "extension" | "prompt" | "skill";
+	readonly sourceInfo?: Record<string, unknown>;
 }
 
 /** A model entry returned by listModels. Provider is implicit. */
@@ -78,6 +79,7 @@ export interface ProviderModelInfo {
 	readonly id: string;
 	readonly label: string;
 	readonly cliModel: string;
+	readonly providerKey?: string;
 	readonly effortLevels?: readonly string[];
 	readonly supportsFastMode?: boolean;
 }

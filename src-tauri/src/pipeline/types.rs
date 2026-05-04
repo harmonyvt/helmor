@@ -213,6 +213,27 @@ pub enum MessagePart {
     /// Inline file reference from the composer's @-mention picker.
     #[serde(rename = "file-mention", rename_all = "camelCase")]
     FileMention { id: String, path: String },
+
+    /// Provider-specific structured event that Helmor does not yet have a
+    /// bespoke renderer for. Used first by Pi extensions so output remains
+    /// visible and persisted while a richer UI bridge evolves.
+    #[serde(rename = "generic-card", rename_all = "camelCase")]
+    GenericCard {
+        id: String,
+        title: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subtitle: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        severity: Option<NoticeSeverity>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<Value>,
+    },
 }
 
 impl MessagePart {
@@ -227,7 +248,8 @@ impl MessagePart {
             | Self::TodoList { id, .. }
             | Self::Image { id, .. }
             | Self::PromptSuggestion { id, .. }
-            | Self::FileMention { id, .. } => id,
+            | Self::FileMention { id, .. }
+            | Self::GenericCard { id, .. } => id,
             Self::ToolCall { tool_call_id, .. } => tool_call_id,
             Self::PlanReview { tool_use_id, .. } => tool_use_id,
         }

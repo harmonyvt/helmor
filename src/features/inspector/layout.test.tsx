@@ -52,12 +52,12 @@ describe("InspectorTabsSection", () => {
 			vi.advanceTimersByTime(TABS_BLUR_HOLD_UNTIL_MS);
 		});
 
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
 
 		fireEvent.mouseEnter(header);
 		fireEvent.mouseEnter(tabsBody);
 
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
 	});
 
 	it("stays zoomed when the active tab becomes non-zoomable until the pointer leaves", () => {

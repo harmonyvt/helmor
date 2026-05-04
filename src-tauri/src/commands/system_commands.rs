@@ -50,6 +50,7 @@ pub struct DataInfo {
 pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
+    pub pi: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -397,6 +398,7 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
         &AgentLoginStatus {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
+            pi: pi_auth_status(),
             codex_provider: None,
             codex_auth_method: None,
         },
@@ -454,6 +456,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
         let login = AgentLoginStatus {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
+            pi: pi_auth_status(),
             codex_provider: None,
             codex_auth_method: None,
         };
@@ -584,11 +587,29 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
         Ok(AgentLoginStatus {
             claude: claude_login_ready(),
             codex: codex.ready,
+            pi: pi_auth_status() || codex.ready || claude_login_ready(),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
         })
     })
     .await
+}
+
+fn pi_auth_status() -> bool {
+    let path = home_dir().join(".pi").join("agent").join("auth.json");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let Some(obj) = root.as_object() else {
+        return false;
+    };
+    obj.contains_key("anthropic")
+        || obj.contains_key("azure-openai-responses")
+        || obj.contains_key("openai-codex")
+        || obj.contains_key("openai")
 }
 
 fn claude_login_ready() -> bool {
@@ -728,6 +749,7 @@ fn agent_login_command(provider: &str) -> anyhow::Result<&'static str> {
     match provider {
         "claude" => Ok("claude auth login"),
         "codex" => Ok("codex login"),
+        "pi" => Ok("pi /login"),
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
     }
 }

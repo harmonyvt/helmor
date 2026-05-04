@@ -15,6 +15,7 @@ import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
+import { PiSessionManager } from "./pi-session-manager.js";
 import {
 	errorMessage,
 	optionalString,
@@ -37,9 +38,11 @@ import {
 
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
+const piManager = new PiSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
+	pi: piManager,
 };
 
 const emitter = createSidecarEmitter((event) => {
@@ -199,14 +202,28 @@ async function handleGenerateTitle(
 					`[${id}] generateTitle claude failed, trying codex: ${errorMessage(claudeErr)}`,
 				);
 			}
-			await managers.codex.generateTitle(
-				id,
-				userMessage,
-				branchRenamePrompt,
-				emitter,
-				TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
-			);
-			logger.debug(`[${id}] generateTitle completed (codex fallback)`);
+			try {
+				await managers.codex.generateTitle(
+					id,
+					userMessage,
+					branchRenamePrompt,
+					emitter,
+					TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+				);
+				logger.debug(`[${id}] generateTitle completed (codex fallback)`);
+			} catch (codexErr) {
+				logger.debug(
+					`[${id}] generateTitle codex failed, trying pi: ${errorMessage(codexErr)}`,
+				);
+				await managers.pi.generateTitle(
+					id,
+					userMessage,
+					branchRenamePrompt,
+					emitter,
+					TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+				);
+				logger.debug(`[${id}] generateTitle completed (pi fallback)`);
+			}
 		}
 	} catch (err) {
 		const msg = errorMessage(err);
