@@ -33,7 +33,6 @@ import {
 	type ForgeActionStatus,
 	getWorkspaceForgeCheckInsertText,
 	getWorkspaceForgeDeploymentInsertText,
-	getWorkspacePrCommentInsertText,
 	loadRepoPreferences,
 	type PrComment,
 	type PrCommentData,
@@ -59,6 +58,7 @@ import {
 	INSPECTOR_SECTION_HEADER_CLASS,
 	INSPECTOR_SECTION_TITLE_CLASS,
 } from "../layout";
+import { buildPrCommentInsertText } from "../pr-comments";
 
 interface GitStatusItem {
 	label: string;
@@ -337,14 +337,11 @@ export function ActionsSection({
 	);
 
 	const handleInsertComment = useCallback(
-		async (comment: PrComment) => {
+		(comment: PrComment) => {
 			if (!workspaceId) {
 				return;
 			}
-			const submitText = await getWorkspacePrCommentInsertText(
-				workspaceId,
-				comment.id,
-			);
+			const submitText = buildPrCommentInsertText(comment);
 			const label = comment.filePath
 				? `Comment on ${comment.filePath}`
 				: `Comment by @${comment.author}`;
