@@ -481,6 +481,19 @@ body {
 	}
 }
 
+/*
+ * SVG spinner fix: without transform-box:fill-box, WebKit calculates the
+ * rotation axis relative to the SVG viewport origin rather than the element's
+ * own visual center, causing the icon to visually orbit instead of spin in
+ * place. Setting fill-box anchors the transform-origin to the element's own
+ * fill bounding box so every animate-spin icon rotates cleanly around its
+ * actual center. Has no effect on non-SVG elements (fill-box == border-box).
+ */
+.animate-spin {
+	transform-box: fill-box;
+	transform-origin: center;
+}
+
 /* Effort max/xhigh animated gradient text */
 .effort-max-text {
 	background: linear-gradient(
