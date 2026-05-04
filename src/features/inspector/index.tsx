@@ -247,62 +247,7 @@ export function WorkspaceInspectorSidebar({
 		[repoId, workspaceId, activeTab, terminalInstances, setActiveTab],
 	);
 
-	const handleToolTabChange = useCallback(
-		(tabId: string) => {
-			setActiveTab(tabId);
-		},
-		[setActiveTab],
-	);
-
 	const isTerminalTabActive = terminalInstances.some((t) => t.id === activeTab);
-
-	// Pinned-expand state: when true the InspectorTabsSection fills the full
-	// inspector column by hiding the Changes and Actions sections above it.
-	// Tracked as two independent sources so a hover-collapse doesn't clobber
-	// a button-pinned expansion, and vice-versa.
-	const [tabsExpandedByButton, setTabsExpandedByButton] = useState(false);
-	const [tabsExpandedByHover, setTabsExpandedByHover] = useState(false);
-	const tabsExpanded = tabsExpandedByButton || tabsExpandedByHover;
-
-	// Reset expand when workspace changes or when the active tab is no longer
-	// a terminal (e.g. user switches to Setup while expanded).
-	useEffect(() => {
-		setTabsExpandedByButton(false);
-		setTabsExpandedByHover(false);
-	}, [workspaceId]);
-	useEffect(() => {
-		if (!isTerminalTabActive) {
-			setTabsExpandedByButton(false);
-			setTabsExpandedByHover(false);
-		}
-	}, [isTerminalTabActive]);
-	// Hover-triggered fill expand only applies to the terminal tab. Reset it
-	// immediately when the user switches away so the sections reappear.
-	useEffect(() => {
-		if (!isTerminalTabActive) {
-			setTabsExpandedByHover(false);
-		}
-	}, [isTerminalTabActive]);
-
-	const canExpand = tabsOpen && isTerminalTabActive;
-
-	const handleToggleTabsWithReset = useCallback(() => {
-		// Collapsing the panel always exits expand mode too.
-		if (tabsOpen) {
-			setTabsExpandedByButton(false);
-			setTabsExpandedByHover(false);
-		}
-		handleToggleTabs();
-	}, [tabsOpen, handleToggleTabs]);
-
-	const handleExpandToggle = useCallback(() => {
-		setTabsExpandedByButton((prev) => !prev);
-	}, []);
-
-	// Called by layout.tsx when fill-mode hover activates or deactivates.
-	const handleHoverFill = useCallback((active: boolean) => {
-		setTabsExpandedByHover(active);
-	}, []);
 
 	// Terminal-scope shortcuts. Fire while focus is anywhere in the inspector
 	// tabs section (Setup / Run / Terminal) — the `data-focus-scope="terminal"`
@@ -346,7 +291,7 @@ export function WorkspaceInspectorSidebar({
 		// 1. Empty state — bootstrap a new terminal.
 		if (terminalInstances.length === 0) {
 			if (!canSpawnTerminal) return;
-			if (!tabsOpen) handleToggleTabsWithReset();
+			if (!tabsOpen) handleToggleTabs();
 			handleAddTerminal();
 			return;
 		}
@@ -359,7 +304,7 @@ export function WorkspaceInspectorSidebar({
 		//    was on this terminal before collapsing) setActiveTab is a
 		//    no-op; either way the mount path auto-focuses.
 		if (!tabsOpen) {
-			handleToggleTabsWithReset();
+			handleToggleTabs();
 			if (activeTab !== target.id) setActiveTab(target.id);
 			return;
 		}
@@ -380,7 +325,7 @@ export function WorkspaceInspectorSidebar({
 
 		if (focusInsideTarget) {
 			// 5. Already focused in this terminal — second press collapses.
-			handleToggleTabsWithReset();
+			handleToggleTabs();
 		} else {
 			// 4. Pull focus into the existing, already-mounted xterm.
 			window.dispatchEvent(new Event("helmor:focus-active-terminal"));
@@ -389,7 +334,7 @@ export function WorkspaceInspectorSidebar({
 		terminalInstances,
 		canSpawnTerminal,
 		tabsOpen,
-		handleToggleTabsWithReset,
+		handleToggleTabs,
 		handleAddTerminal,
 		activeTab,
 		setActiveTab,
@@ -422,7 +367,7 @@ export function WorkspaceInspectorSidebar({
 			},
 			{
 				id: "inspector.toggleScripts",
-				callback: handleToggleTabsWithReset,
+				callback: handleToggleTabs,
 			},
 			{
 				id: "inspector.focusTerminal",
@@ -439,7 +384,7 @@ export function WorkspaceInspectorSidebar({
 			handleAddTerminal,
 			handleCloseTerminal,
 			handleFocusTerminal,
-			handleToggleTabsWithReset,
+			handleToggleTabs,
 			isTerminalTabActive,
 			navigateTerminal,
 			terminalInstances.length,
@@ -466,26 +411,13 @@ export function WorkspaceInspectorSidebar({
 	const scriptTabState =
 		activeTab === "setup" ? setupScriptState : runScriptState;
 
-	// Disable hover-expand when the panel is already pinned-expanded.
-	const canHoverExpand =
-		!tabsExpanded &&
-		(isTerminalTabActive ||
-			scriptTabState === "running" ||
+	const canHoverExpand = isTerminalTabActive
+		? true
+		: scriptTabState === "running" ||
 			scriptTabState === "success" ||
-			scriptTabState === "failure");
-
-	// Terminal hover triggers the full-screen pinned expand (fill mode);
-	// script tabs use the 2× CSS zoom (zoom mode).
-	const hoverExpandMode: "zoom" | "fill" = isTerminalTabActive
-		? "fill"
-		: "zoom";
+			scriptTabState === "failure";
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
-
-	// When pinned-expanded we keep Changes/Actions mounted but hidden via a
-	// `hidden` wrapper so layout is stable and their state is preserved. The
-	// InspectorTabsSection is the only visible flex child and takes flex-1.
-	const sectionsHidden = tabsExpanded && canExpand;
 
 	return (
 		<div
@@ -495,60 +427,58 @@ export function WorkspaceInspectorSidebar({
 				isResizing && "select-none",
 			)}
 		>
-			<div className={cn(sectionsHidden && "hidden")}>
-				<ChangesSection
-					bodyHeight={changesHeight}
-					workspaceId={workspaceId ?? null}
-					workspaceRootPath={workspaceRootPath ?? null}
-					workspaceTargetBranch={workspaceTargetBranch ?? null}
-					changes={changes}
-					editorMode={editorMode}
-					activeEditorPath={activeEditorPath}
-					onOpenEditorFile={onOpenEditorFile}
-					flashingPaths={flashingPaths}
-					onCommitAction={onCommitAction}
-					commitButtonMode={commitButtonMode}
-					commitButtonState={commitButtonState}
-					changeRequest={changeRequest ?? null}
-					forgeIsRefreshing={forgeIsRefreshing}
-				/>
+			<ChangesSection
+				bodyHeight={changesHeight}
+				workspaceId={workspaceId ?? null}
+				workspaceRootPath={workspaceRootPath ?? null}
+				workspaceTargetBranch={workspaceTargetBranch ?? null}
+				changes={changes}
+				editorMode={editorMode}
+				activeEditorPath={activeEditorPath}
+				onOpenEditorFile={onOpenEditorFile}
+				flashingPaths={flashingPaths}
+				onCommitAction={onCommitAction}
+				commitButtonMode={commitButtonMode}
+				commitButtonState={commitButtonState}
+				changeRequest={changeRequest ?? null}
+				forgeIsRefreshing={forgeIsRefreshing}
+			/>
 
+			<HorizontalResizeHandle
+				onMouseDown={handleResizeStart("actions")}
+				isActive={isActionsResizing}
+			/>
+
+			<ActionsSection
+				workspaceId={workspaceId ?? null}
+				workspaceState={workspaceState ?? null}
+				repoId={repoId ?? null}
+				workspaceRemote={workspaceRemote ?? null}
+				sectionRef={actionsRef}
+				bodyHeight={actionsHeight}
+				expanded={!tabsOpen}
+				onCommitAction={onCommitAction}
+				currentSessionId={currentSessionId ?? null}
+				onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+				commitButtonMode={commitButtonMode}
+				commitButtonState={commitButtonState}
+				changeRequest={changeRequest ?? null}
+				onReviewAllComments={handleReviewAllComments}
+			/>
+
+			{tabsOpen && (
 				<HorizontalResizeHandle
-					onMouseDown={handleResizeStart("actions")}
-					isActive={isActionsResizing}
+					onMouseDown={handleResizeStart("tabs")}
+					isActive={isTabsResizing}
 				/>
-
-				<ActionsSection
-					workspaceId={workspaceId ?? null}
-					workspaceState={workspaceState ?? null}
-					repoId={repoId ?? null}
-					workspaceRemote={workspaceRemote ?? null}
-					sectionRef={actionsRef}
-					bodyHeight={actionsHeight}
-					expanded={!tabsOpen}
-					onCommitAction={onCommitAction}
-					currentSessionId={currentSessionId ?? null}
-					onQueuePendingPromptForSession={onQueuePendingPromptForSession}
-					commitButtonMode={commitButtonMode}
-					commitButtonState={commitButtonState}
-					changeRequest={changeRequest ?? null}
-					onReviewAllComments={handleReviewAllComments}
-				/>
-
-				{tabsOpen && (
-					<HorizontalResizeHandle
-						onMouseDown={handleResizeStart("tabs")}
-						isActive={isTabsResizing}
-					/>
-				)}
-			</div>
+			)}
 
 			<InspectorTabsSection
 				wrapperRef={tabsWrapperRef}
 				open={tabsOpen}
-				onToggle={handleToggleTabsWithReset}
+				onToggle={handleToggleTabs}
 				activeTab={activeTab}
-				onTabChange={handleToolTabChange}
+				onTabChange={setActiveTab}
 				tabActions={runTabActions}
 				setupScriptState={setupScriptState}
 				runScriptState={runScriptState}
@@ -557,11 +487,6 @@ export function WorkspaceInspectorSidebar({
 				onCloseTerminal={handleCloseTerminal}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
-				hoverExpandMode={hoverExpandMode}
-				onHoverFill={handleHoverFill}
-				canExpand={canExpand}
-				isExpanded={sectionsHidden}
-				onExpandToggle={handleExpandToggle}
 			>
 				<SetupTab
 					repoId={repoId ?? null}

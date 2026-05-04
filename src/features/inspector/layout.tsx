@@ -1,11 +1,4 @@
-import {
-	ChevronDown,
-	Maximize2,
-	Minimize2,
-	Plus,
-	Terminal,
-	X,
-} from "lucide-react";
+import { ChevronDown, Plus, Terminal, X } from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -125,32 +118,11 @@ type InspectorTabsSectionProps = {
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
 	/**
-	 * Gate for the hover-to-expand effect. When false, hovering the body does
-	 * nothing — used so we only expand when there's actual content worth
+	 * Gate for the hover-to-zoom effect. When false, hovering the body does
+	 * nothing — used so we only zoom when there's actual terminal output worth
 	 * enlarging (and not on the empty "Run setup" / "Open settings" placeholders).
 	 */
 	canHoverExpand: boolean;
-	/**
-	 * Which expansion behavior to use when the user hovers:
-	 * - "zoom" (default) → 2× CSS zoom anchored to the bottom-right corner.
-	 * - "fill" → calls onHoverFill to trigger the full-screen pinned expand,
-	 *   hiding the Changes / Actions sections above.
-	 */
-	hoverExpandMode?: "zoom" | "fill";
-	/**
-	 * Called when fill-mode hover activates (true) or deactivates (false).
-	 * Only relevant when hoverExpandMode is "fill".
-	 */
-	onHoverFill?: (active: boolean) => void;
-	/**
-	 * Show the expand/collapse button in the tab header. Only meaningful when
-	 * a terminal tab is active — set to false for Setup / Run tabs.
-	 */
-	canExpand: boolean;
-	/** Whether the panel is currently pinned to fill the full inspector height. */
-	isExpanded: boolean;
-	/** Toggle the pinned-expand state. */
-	onExpandToggle: () => void;
 	children?: React.ReactNode;
 };
 
@@ -168,11 +140,6 @@ export function InspectorTabsSection({
 	onCloseTerminal,
 	canSpawnTerminal,
 	canHoverExpand,
-	hoverExpandMode = "zoom",
-	onHoverFill,
-	canExpand,
-	isExpanded,
-	onExpandToggle,
 	children,
 }: InspectorTabsSectionProps) {
 	const { settings } = useSettings();
@@ -215,9 +182,6 @@ export function InspectorTabsSection({
 	// and trigger the final fit.
 	const terminalFitReleaseRef = useRef<(() => void) | null>(null);
 	const fitReleaseTimerRef = useRef<number | null>(null);
-	// Tracks whether we're currently in a hover-triggered fill expansion.
-	// Kept as a ref (not state) since it only drives cleanup logic, not renders.
-	const fillExpandedRef = useRef(false);
 
 	const clearHoverTimer = useCallback(() => {
 		if (hoverTimerRef.current !== null) {
@@ -338,26 +302,11 @@ export function InspectorTabsSection({
 	);
 
 	// Hover trigger is bound to the BODY only (not the header) so moving the
-	// cursor across the Setup/Run tabs or the chevron doesn't start an expand.
-	// The 300ms "hover intent" timer gives us the linger-to-engage feel;
-	// the intent signal requires engaging with the actual output area.
-	//
-	// Fill mode: calls onHoverFill(true) after the intent timer — the parent
-	// triggers the full-screen pinned expand (hiding Changes / Actions sections).
-	// Zoom mode: the existing 2× CSS zoom anchored to the bottom-right corner.
+	// cursor across the Setup/Run tabs or the chevron doesn't start a zoom.
+	// The 300ms "hover intent" timer still gives us the linger-to-engage feel,
+	// but the intent signal now requires engaging with the actual output area.
 	const handleBodyMouseEnter = useCallback(() => {
 		if (!open || !canHoverExpand) return;
-		if (hoverExpandMode === "fill") {
-			if (fillExpandedRef.current) return;
-			clearHoverTimer();
-			hoverTimerRef.current = window.setTimeout(() => {
-				hoverTimerRef.current = null;
-				if (!pointerInsideContainerRef.current) return;
-				fillExpandedRef.current = true;
-				onHoverFill?.(true);
-			}, TABS_HOVER_ACTIVATION_MS);
-			return;
-		}
 		if (isHoverExpanded) return;
 		clearHoverTimer();
 		hoverTimerRef.current = window.setTimeout(() => {
@@ -368,12 +317,10 @@ export function InspectorTabsSection({
 	}, [
 		open,
 		canHoverExpand,
-		hoverExpandMode,
 		isHoverExpanded,
 		clearHoverTimer,
 		beginZoomAnimation,
 		setZoomTarget,
-		onHoverFill,
 	]);
 
 	// Mark the start of a potential text selection. Used to prevent the panel
@@ -382,9 +329,9 @@ export function InspectorTabsSection({
 		isSelectingRef.current = true;
 	}, []);
 
-	// Collapse fires only when the cursor leaves the whole panel (header +
-	// body). Moving from body up into the header keeps the expand alive so the
-	// Stop/Rerun action and the tab switcher stay reachable while expanded.
+	// Un-zoom fires only when the cursor leaves the whole panel (header +
+	// body). Moving from body up into the header keeps the zoom alive so the
+	// Stop/Rerun action and the tab switcher stay reachable while zoomed.
 	// Also skips collapsing if the user is actively selecting text.
 	const handleContainerMouseLeave = useCallback(() => {
 		pointerInsideContainerRef.current = false;
@@ -394,13 +341,6 @@ export function InspectorTabsSection({
 		// the container boundary during selection. The global mouseup handler
 		// will clear this flag, and then leaving will collapse normally.
 		if (isSelectingRef.current) {
-			return;
-		}
-		if (hoverExpandMode === "fill") {
-			if (fillExpandedRef.current) {
-				fillExpandedRef.current = false;
-				onHoverFill?.(false);
-			}
 			return;
 		}
 		if (hadPendingHoverIntent || (!isHoverExpanded && !isZoomPresented)) {
@@ -414,11 +354,9 @@ export function InspectorTabsSection({
 		isZoomPresented,
 		beginZoomAnimation,
 		setZoomTarget,
-		hoverExpandMode,
-		onHoverFill,
 	]);
 
-	// When the panel collapses we must drop any pending/active expand so it
+	// When the panel collapses we must drop any pending/active zoom so it
 	// doesn't linger over the neighbouring sections. Also release any
 	// outstanding terminal-fit lock immediately — the terminals are about to
 	// unmount or change size and shouldn't be held back.
@@ -431,10 +369,6 @@ export function InspectorTabsSection({
 			setIsHoverExpanded(false);
 			setIsZoomPresented(false);
 			setIsContentBlurred(false);
-			if (fillExpandedRef.current) {
-				fillExpandedRef.current = false;
-				onHoverFill?.(false);
-			}
 		}
 	}, [
 		open,
@@ -442,21 +376,14 @@ export function InspectorTabsSection({
 		clearPresentationClearTimer,
 		clearBlurTimer,
 		releaseTerminalFitLock,
-		onHoverFill,
 	]);
 
-	// If the active tab no longer has content worth expanding (e.g. user switched
+	// If the active tab no longer has output worth zooming (e.g. user switched
 	// from Run — with a live dev server — to Setup — never run), force the
-	// panel back to its resting state.
+	// panel back to its resting size through the normal collapse transition.
 	useEffect(() => {
 		if (canHoverExpand) return;
 		clearHoverTimer();
-		// Stale fill expansion: reset our local tracking ref. The parent already
-		// resets tabsExpandedByHover via its own effect when the terminal tab
-		// becomes inactive, so we don't need to call onHoverFill here.
-		if (fillExpandedRef.current) {
-			fillExpandedRef.current = false;
-		}
 		if (pointerInsideContainerRef.current) return;
 		if (!isHoverExpanded && !isZoomPresented) return;
 		beginZoomAnimation();
@@ -792,36 +719,6 @@ export function InspectorTabsSection({
 							</div>
 							<div className="ml-2 flex shrink-0 items-center gap-1 self-center">
 								{tabActions}
-								{canExpand && (
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<Button
-												type="button"
-												aria-label={
-													isExpanded
-														? "Collapse panel"
-														: "Expand to fill inspector"
-												}
-												onClick={onExpandToggle}
-												variant="ghost"
-												size="icon-sm"
-												className="shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-											>
-												{isExpanded ? (
-													<Minimize2 className="size-3.5" strokeWidth={1.9} />
-												) : (
-													<Maximize2 className="size-3.5" strokeWidth={1.9} />
-												)}
-											</Button>
-										</TooltipTrigger>
-										<TooltipContent
-											side="bottom"
-											className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
-										>
-											{isExpanded ? "Collapse panel" : "Expand to fill"}
-										</TooltipContent>
-									</Tooltip>
-								)}
 								<Button
 									type="button"
 									aria-label="Toggle inspector tabs section"

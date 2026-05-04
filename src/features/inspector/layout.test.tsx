@@ -32,9 +32,6 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand
-				canExpand={false}
-				isExpanded={false}
-				onExpandToggle={vi.fn()}
 			>
 				<div>Terminal body</div>
 			</InspectorTabsSection>,
@@ -80,9 +77,6 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand
-				canExpand={false}
-				isExpanded={false}
-				onExpandToggle={vi.fn()}
 			>
 				<div>Terminal body</div>
 			</InspectorTabsSection>,
@@ -116,9 +110,6 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand={false}
-				canExpand={false}
-				isExpanded={false}
-				onExpandToggle={vi.fn()}
 			>
 				<div>Placeholder body</div>
 			</InspectorTabsSection>,
