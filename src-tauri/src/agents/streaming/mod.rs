@@ -451,6 +451,7 @@ pub(super) fn stream_via_sidecar(
                         resolved_session_id.as_deref(),
                         sid,
                         hsid_copy.as_deref(),
+                        model_copy.provider.as_str() == "codex",
                     ) {
                         resolved_session_id = Some(sid.to_string());
                         if resume_only {
