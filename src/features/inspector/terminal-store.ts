@@ -254,3 +254,9 @@ export function resize(
 ) {
 	void resizeTerminal(repoId, workspaceId, instanceId, cols, rows);
 }
+
+export function _resetForTesting() {
+	instancesByWorkspace.clear();
+	listeners.clear();
+	workspaceListListeners.clear();
+}
