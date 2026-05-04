@@ -89,6 +89,7 @@ struct BundledAgentPaths {
     claude_cli: Option<PathBuf>,
     codex_bin: Option<PathBuf>,
     bun_bin: Option<PathBuf>,
+    pi_package_dir: Option<PathBuf>,
 }
 
 fn resolve_bundled_agent_paths() -> BundledAgentPaths {
@@ -108,11 +109,16 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
     let claude_cli = resources_dir.join("vendor/claude-code/cli.js");
     let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
     let bun_bin = resources_dir.join(format!("vendor/bun/{bun_bin_name}"));
+    let pi_package_dir = resources_dir.join("vendor/pi-coding-agent");
 
     Some(BundledAgentPaths {
         claude_cli: claude_cli.is_file().then_some(claude_cli),
         codex_bin: codex_bin.is_file().then_some(codex_bin),
         bun_bin: bun_bin.is_file().then_some(bun_bin),
+        pi_package_dir: pi_package_dir
+            .join("package.json")
+            .is_file()
+            .then_some(pi_package_dir),
     })
 }
 
@@ -163,6 +169,7 @@ impl SidecarProcess {
                 claude_cli = ?bundled_paths.claude_cli,
                 codex_bin = ?bundled_paths.codex_bin,
                 bun_bin = ?bundled_paths.bun_bin,
+                pi_package_dir = ?bundled_paths.pi_package_dir,
                 "Resolved bundled agent paths"
             );
             if let Some(path) = bundled_paths.claude_cli {
@@ -173,6 +180,9 @@ impl SidecarProcess {
             }
             if let Some(path) = bundled_paths.bun_bin {
                 cmd.env("HELMOR_BUN_PATH", &path);
+            }
+            if let Some(path) = bundled_paths.pi_package_dir {
+                cmd.env("PI_PACKAGE_DIR", &path);
             }
         }
 
@@ -818,9 +828,11 @@ mod tests {
         std::fs::create_dir_all(resources.join("claude-code")).unwrap();
         std::fs::create_dir_all(resources.join("codex")).unwrap();
         std::fs::create_dir_all(resources.join("bun")).unwrap();
+        std::fs::create_dir_all(resources.join("pi-coding-agent")).unwrap();
         std::fs::write(resources.join("claude-code/cli.js"), "").unwrap();
         std::fs::write(resources.join("codex/codex"), "").unwrap();
         std::fs::write(resources.join("bun/bun"), "").unwrap();
+        std::fs::write(resources.join("pi-coding-agent/package.json"), "").unwrap();
 
         let paths = resolve_bundled_agent_paths_for_exe(&exe).unwrap();
 
@@ -838,6 +850,11 @@ mod tests {
             paths.bun_bin.unwrap(),
             root.path()
                 .join("Helmor.app/Contents/Resources/vendor/bun/bun")
+        );
+        assert_eq!(
+            paths.pi_package_dir.unwrap(),
+            root.path()
+                .join("Helmor.app/Contents/Resources/vendor/pi-coding-agent")
         );
     }
 }

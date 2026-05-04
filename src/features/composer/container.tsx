@@ -902,7 +902,11 @@ export const WorkspaceComposerContainer = memo(
 							sessionId={displayedSessionId}
 							providerSessionId={currentSession?.providerSessionId ?? null}
 							agentType={
-								effectiveModel?.provider === "codex" ? "codex" : "claude"
+								provider === "claude" ||
+								provider === "codex" ||
+								provider === "pi"
+									? provider
+									: null
 							}
 							focusShortcut={focusShortcut}
 							togglePlanShortcut={togglePlanShortcut}

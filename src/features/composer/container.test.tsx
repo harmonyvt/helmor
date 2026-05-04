@@ -38,6 +38,7 @@ const composerMockState = vi.hoisted(() => ({
 	lastOnRemoveLinkedDirectory: null as RemoveHandler | null,
 	lastAddDirCandidates: [] as readonly unknown[],
 	lastOnPickAddDir: null as PickHandler | null,
+	lastAgentType: null as "claude" | "codex" | "pi" | null,
 }));
 
 vi.mock("./index", async () => {
@@ -50,6 +51,7 @@ vi.mock("./index", async () => {
 			fastMode?: boolean;
 			disabled?: boolean;
 			submitDisabled?: boolean;
+			agentType?: "claude" | "codex" | "pi" | null;
 			slashCommands?: readonly {
 				name: string;
 				description: string;
@@ -70,6 +72,7 @@ vi.mock("./index", async () => {
 				...(props.addDirCandidates ?? []),
 			];
 			composerMockState.lastOnPickAddDir = props.onPickAddDir ?? null;
+			composerMockState.lastAgentType = props.agentType ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -118,6 +121,22 @@ const MODEL_SECTIONS = [
 				cliModel: "gpt-5.4",
 				effortLevels: ["low", "medium", "high"],
 				supportsFastMode: true,
+			},
+		],
+	},
+	{
+		id: "pi",
+		label: "Pi",
+		options: [
+			{
+				id: "pi:azure-openai-responses/gpt-5.4",
+				provider: "pi",
+				label: "Pi · GPT-5.4",
+				cliModel: "azure-openai-responses/gpt-5.4",
+				providerKey: "azure-openai-responses",
+				effortLevels: ["low", "medium", "high", "xhigh"],
+				supportsFastMode: true,
+				supportsContextUsage: false,
 			},
 		],
 	},
@@ -193,6 +212,7 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.renders = [];
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
+		composerMockState.lastAgentType = null;
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
@@ -379,6 +399,54 @@ describe("WorkspaceComposerContainer", () => {
 				workspaceId: "workspace-1",
 			}),
 		);
+	});
+
+	it("passes Pi as the active composer agent type when a Pi model is selected", () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{
+						"session:session-1": "pi:azure-openai-responses/gpt-5.4",
+					}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByTestId("workspace-composer-mock")).toHaveTextContent(
+			"session:session-1:pi:azure-openai-responses/gpt-5.4",
+		);
+		expect(composerMockState.lastAgentType).toBe("pi");
 	});
 
 	it("uses the default fast mode setting for new sessions", () => {

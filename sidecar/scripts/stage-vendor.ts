@@ -1,4 +1,4 @@
-// Stage claude-code + codex + bun + gh + glab into `sidecar/dist/vendor/`
+// Stage claude-code + codex + bun + pi package assets + gh + glab into `sidecar/dist/vendor/`
 // for Tauri to ship as bundle resources. macOS host only.
 //
 // Cross-arch staging: in CI the host is always Apple Silicon (macos-26
@@ -159,6 +159,12 @@ function copyFile(src: string, dest: string): void {
 function copyDir(src: string, dest: string): void {
 	mkdirSync(dirname(dest), { recursive: true });
 	cpSync(src, dest, { recursive: true });
+}
+
+function copyIfExists(src: string, dest: string): void {
+	if (existsSync(src)) {
+		copyFile(src, dest);
+	}
 }
 
 function humanSize(path: string): string {
@@ -468,6 +474,47 @@ for (const sub of ccVendorSubdirs) {
 	}
 }
 
+// ----- Pi package assets -----
+//
+// @mariozechner/pi-coding-agent detects Bun compiled binaries and resolves
+// package.json, themes, image assets, and export templates relative to
+// PI_PACKAGE_DIR. The Helmor sidecar is the compiled binary, so we stage the
+// package's binary-runtime asset shape as bundle resources and Rust points
+// PI_PACKAGE_DIR at this directory before spawning the sidecar.
+const piSrc = join(NODE_MODULES, "@mariozechner/pi-coding-agent");
+const piDest = join(DIST_VENDOR, "pi-coding-agent");
+ensureExists(
+	join(piSrc, "package.json"),
+	"@mariozechner/pi-coding-agent/package.json",
+);
+
+copyFile(join(piSrc, "package.json"), join(piDest, "package.json"));
+copyIfExists(join(piSrc, "README.md"), join(piDest, "README.md"));
+copyIfExists(join(piSrc, "CHANGELOG.md"), join(piDest, "CHANGELOG.md"));
+
+copyDir(
+	join(piSrc, "dist", "modes", "interactive", "theme"),
+	join(piDest, "theme"),
+);
+copyDir(
+	join(piSrc, "dist", "modes", "interactive", "assets"),
+	join(piDest, "assets"),
+);
+copyDir(
+	join(piSrc, "dist", "core", "export-html"),
+	join(piDest, "export-html"),
+);
+if (existsSync(join(piSrc, "docs"))) {
+	copyDir(join(piSrc, "docs"), join(piDest, "docs"));
+}
+if (existsSync(join(piSrc, "examples"))) {
+	copyDir(join(piSrc, "examples"), join(piDest, "examples"));
+}
+copyIfExists(
+	join(NODE_MODULES, "@silvia-odwyer", "photon-node", "photon_rs_bg.wasm"),
+	join(piDest, "photon_rs_bg.wasm"),
+);
+
 // ----- Codex -----
 stageCodexBinary(target);
 
@@ -496,6 +543,7 @@ stageGlabBinary(target.glabArch);
 // ----- Summary -----
 console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);
 console.log(`  claude-code ${humanSize(ccDest)}`);
+console.log(`  pi assets   ${humanSize(piDest)}`);
 console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
 console.log(`  bun         ${humanSize(join(DIST_VENDOR, "bun"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
