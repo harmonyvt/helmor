@@ -921,11 +921,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		const tabsSection = screen.getByLabelText("Inspector section Tabs");
 
 		expect(filterLayer).not.toBeNull();
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
 
 		fireEvent.mouseEnter(tabsBody);
 		fireEvent.mouseLeave(tabsSection.parentElement as HTMLElement);
 
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
 	});
 });
