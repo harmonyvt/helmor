@@ -2,12 +2,16 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import {
 	createTauriConfigOverride,
+	DEV_WEB_DAEMON_PORT,
 	derivePreviewIdentity,
+	derivePreviewWebDaemonPort,
 	PREVIEW_DATA_DIR_NAME,
 	PREVIEW_MCP_PORT_BLOCK_SIZE,
 	PREVIEW_MCP_PORT_START,
 	PREVIEW_VITE_PORT_SPAN,
 	PREVIEW_VITE_PORT_START,
+	PREVIEW_WEB_DAEMON_PORT_SPAN,
+	PREVIEW_WEB_DAEMON_PORT_START,
 } from "./dev-preview";
 
 describe("dev preview identity", () => {
@@ -42,6 +46,13 @@ describe("dev preview identity", () => {
 		expect(identity.mcpBasePort).toBeGreaterThanOrEqual(PREVIEW_MCP_PORT_START);
 		expect(identity.mcpBasePort).toBeLessThan(50_000);
 		expect(identity.mcpBasePort % PREVIEW_MCP_PORT_BLOCK_SIZE).toBe(0);
+		expect(identity.webDaemonPort).toBeGreaterThanOrEqual(
+			PREVIEW_WEB_DAEMON_PORT_START,
+		);
+		expect(identity.webDaemonPort).toBeLessThan(
+			PREVIEW_WEB_DAEMON_PORT_START + PREVIEW_WEB_DAEMON_PORT_SPAN,
+		);
+		expect(identity.webDaemonPort).not.toBe(DEV_WEB_DAEMON_PORT);
 	});
 
 	test("places preview data under the home preview directory", () => {
@@ -52,6 +63,9 @@ describe("dev preview identity", () => {
 
 		expect(identity.dataDir).toBe(
 			path.join("/Users/harmony", PREVIEW_DATA_DIR_NAME, identity.key),
+		);
+		expect(identity.webDaemonPort).toBe(
+			derivePreviewWebDaemonPort(identity.dataDir),
 		);
 	});
 

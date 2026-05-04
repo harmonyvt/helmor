@@ -1701,6 +1701,10 @@ export function useWorkspacesSidebarController({
 		creatingWorkspaceRepoId,
 		cloneDefaultDirectory,
 		groups,
+		// True whenever either workspace list query is fetching — covers both
+		// the initial load and every background poll. Used to drive the sidebar
+		// polling shimmer so users know the list is live.
+		isWorkspacesFetching: groupsQuery.isFetching || archivedQuery.isFetching,
 		layoutMode,
 		setLayoutMode,
 		projectGroups,

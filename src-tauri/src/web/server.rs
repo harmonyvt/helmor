@@ -64,7 +64,10 @@ pub async fn serve(options: WebServerOptions) -> Result<()> {
 struct WebDaemonPidFile {
     pid: u32,
     url: String,
+    open_url: String,
+    reachable_urls: Vec<String>,
     host: String,
+    listen_host: String,
     port: u16,
     data_dir: String,
     frontend_dir: String,
@@ -75,10 +78,15 @@ struct WebDaemonPidFile {
 fn write_pid_file(addr: SocketAddr, frontend_dir: &std::path::Path) -> Result<()> {
     let run_dir = crate::data_dir::run_dir()?;
     let data_dir = crate::data_dir::data_dir()?;
+    let reachability =
+        crate::web_daemon::web_reachability(addr.ip().to_string().as_str(), addr.port());
     let body = WebDaemonPidFile {
         pid: process::id(),
-        url: format!("http://{addr}"),
+        url: reachability.open_url.clone(),
+        open_url: reachability.open_url,
+        reachable_urls: reachability.reachable_urls,
         host: addr.ip().to_string(),
+        listen_host: addr.ip().to_string(),
         port: addr.port(),
         data_dir: data_dir.display().to_string(),
         frontend_dir: frontend_dir.display().to_string(),
@@ -543,6 +551,12 @@ async fn dispatch_invoke(command: &str, args: Value) -> Result<Value> {
             ))
         }
         "drain_pending_cli_sends" => json_any(crate::service::drain_pending_cli_sends()),
+        // Slash commands need a live sidecar + in-memory cache — neither is
+        // available in the web companion. Return an empty list so the composer
+        // loads without autocomplete rather than showing a 400 error.
+        "list_slash_commands" | "prewarm_slash_commands_for_workspace" => {
+            json_value(serde_json::json!({ "commands": [] }))
+        }
         "stop_agent_stream"
         | "steer_agent_stream"
         | "respond_to_permission_request"

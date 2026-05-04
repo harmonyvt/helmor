@@ -53,7 +53,8 @@
 		"release:version": "changeset version && bun run release:sync-versions",
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build",
-		"dev:web": "VITE_HELMOR_WEB=1 VITE_HELMOR_WEB_API_BASE=http://127.0.0.1:17777 vite --host 127.0.0.1 --port 1421",
+		"dev:web": "bun scripts/dev-web.ts",
+		"dev:web:preview": "bun scripts/dev-web.ts --preview",
 		"build:web": "VITE_HELMOR_WEB=1 tsc && VITE_HELMOR_WEB=1 vite build",
 		"web": "cd src-tauri && cargo run --bin helmor-web -- --frontend-dir ../dist-web"
 	},

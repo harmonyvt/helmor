@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
@@ -24,6 +25,23 @@ export default defineConfig(async () => ({
 			plugins: [["babel-plugin-react-compiler", {}]],
 		}),
 		tailwindcss(),
+		// When building the web bundle, Vite preserves the source filename
+		// (index-web.html → dist-web/index-web.html). The web daemon checks
+		// for dist-web/index.html, so rename it after the bundle is written.
+		...(webMode
+			? [
+					{
+						name: "rename-web-index",
+						closeBundle() {
+							const src = path.resolve(__dirname, "dist-web/index-web.html");
+							const dest = path.resolve(__dirname, "dist-web/index.html");
+							if (fs.existsSync(src)) {
+								fs.renameSync(src, dest);
+							}
+						},
+					},
+				]
+			: []),
 	],
 	resolve: {
 		dedupe: ["react", "react-dom"],
@@ -100,6 +118,13 @@ export default defineConfig(async () => ({
 	build: {
 		outDir: webMode ? "dist-web" : "dist",
 		emptyOutDir: true,
+		...(webMode
+			? {
+					rollupOptions: {
+						input: path.resolve(__dirname, "./index-web.html"),
+					},
+				}
+			: {}),
 	},
 
 	server: {

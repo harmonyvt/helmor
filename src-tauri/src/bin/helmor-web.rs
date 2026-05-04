@@ -9,7 +9,7 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(name = "helmor-web", about = "Serve the Helmor web companion UI")]
 struct Args {
-    /// Address to bind. Defaults to localhost; expose via Tailscale/SSH proxy.
+    /// Address to bind. Use 0.0.0.0 for tailnet/LAN access.
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
 

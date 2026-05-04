@@ -194,6 +194,12 @@ export const helmorQueryPersister = createAsyncStoragePersister({
 	key: "helmor-query-cache",
 });
 
+// On desktop, workspace list changes arrive instantly via UiMutationEvent push.
+// On web (no Tauri IPC), threads created by other clients never appear without
+// polling. A 5-second interval keeps both surfaces live — fast enough to feel
+// collaborative, infrequent enough not to hammer the backend.
+const WORKSPACE_LIST_POLL_INTERVAL = 5_000;
+
 export function workspaceGroupsQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceGroups,
@@ -201,6 +207,7 @@ export function workspaceGroupsQueryOptions() {
 		initialData: DEFAULT_WORKSPACE_GROUPS,
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
+		refetchInterval: WORKSPACE_LIST_POLL_INTERVAL,
 	});
 }
 
@@ -211,6 +218,7 @@ export function archivedWorkspacesQueryOptions() {
 		initialData: [],
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
+		refetchInterval: WORKSPACE_LIST_POLL_INTERVAL,
 	});
 }
 

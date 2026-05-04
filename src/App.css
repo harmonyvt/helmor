@@ -211,6 +211,31 @@ body {
 	animation: helmor-shimmer-sweep 2.4s ease-in-out infinite;
 }
 
+/*
+ * Workspace polling indicator — a single-pixel hairline that sweeps left→right
+ * while the workspace groups query is fetching in the background. Kept ambient
+ * (muted-foreground at low opacity) so it never competes with content.
+ */
+.workspace-poll-bar {
+	background: linear-gradient(
+		90deg,
+		transparent 0%,
+		color-mix(in oklch, var(--muted-foreground) 35%, transparent) 50%,
+		transparent 100%
+	);
+	background-size: 200% 100%;
+	animation: workspace-poll-sweep 1.8s ease-in-out infinite;
+}
+
+@keyframes workspace-poll-sweep {
+	0% {
+		background-position: -100% 50%;
+	}
+	100% {
+		background-position: 200% 50%;
+	}
+}
+
 .assistant-markdown-scale {
 	--assistant-paragraph-line-height: 1.82;
 	line-height: 1.5;
@@ -662,6 +687,40 @@ body {
 /* Lexical composer: remove default paragraph margins */
 .composer-paragraph {
 	margin: 0;
+}
+
+/*
+ * Web-surface: safe-area-inset-top spacer.
+ *
+ * In regular Safari browser mode the browser chrome sits outside the web
+ * viewport; env(safe-area-inset-top) is zero (browser handles its own
+ * chrome) so the spacer is invisible by default.  In standalone PWA mode
+ * (added to Home Screen) the viewport expands behind the Dynamic Island /
+ * notch, making the spacer necessary to push chrome below the safe area.
+ */
+.web-safe-area-top {
+	padding-top: 0;
+}
+
+@media (display-mode: standalone) {
+	.web-safe-area-top {
+		padding-top: env(safe-area-inset-top);
+	}
+}
+
+/*
+ * Prevent iOS Safari auto-zoom when the Lexical composer receives focus.
+ *
+ * iOS zooms in on any focusable element whose computed font-size is < 16px.
+ * The composer ContentEditable uses 14px for visual density on desktop; on
+ * iOS this triggers an unwanted zoom animation every time the user taps to
+ * type.  -webkit-touch-callout is iOS-exclusive, so this block targets only
+ * iOS Safari without affecting macOS Safari or other WebKit browsers.
+ */
+@supports (-webkit-touch-callout: none) {
+	.composer-editor {
+		font-size: 16px;
+	}
 }
 
 /* Accessibility: respect prefers-reduced-motion (WCAG 2.3.3).

@@ -217,6 +217,7 @@ pub fn run() {
             web_daemon::start_web_daemon,
             web_daemon::stop_web_daemon,
             web_daemon::delete_web_daemon,
+            web_daemon::cleanup_web_daemon,
             commands::system_commands::get_agent_login_status,
             commands::system_commands::get_helmor_skills_status,
             commands::system_commands::install_cli,

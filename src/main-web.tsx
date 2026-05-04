@@ -1,13 +1,11 @@
+import "./App.css";
 import "./lib/crypto-polyfill";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
-import { initDevReactScan } from "./lib/dev-react-scan";
-
-initDevReactScan();
+import WebApp from "./web/app";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 	<React.StrictMode>
-		<App />
+		<WebApp />
 	</React.StrictMode>,
 );

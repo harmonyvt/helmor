@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 export const PREVIEW_DATA_DIR_NAME = "helmor-dev-previews";
 export const PREVIEW_VITE_PORT_START = 15_000;
 export const PREVIEW_VITE_PORT_SPAN = 5_000;
+export const DEV_WEB_DAEMON_PORT = 17_778;
+export const PREVIEW_WEB_DAEMON_PORT_START = 18_000;
+export const PREVIEW_WEB_DAEMON_PORT_SPAN = 5_000;
 export const PREVIEW_MCP_PORT_START = 20_000;
 export const PREVIEW_MCP_PORT_BLOCK_SIZE = 100;
 export const PREVIEW_MCP_PORT_BLOCK_COUNT = 300;
@@ -20,6 +23,7 @@ export type PreviewIdentity = {
 	key: string;
 	dataDir: string;
 	vitePortBase: number;
+	webDaemonPort: number;
 	mcpBasePort: number;
 	productName: string;
 	identifier: string;
@@ -60,6 +64,13 @@ export function deriveMcpBasePort(hash: string): number {
 	);
 }
 
+export function derivePreviewWebDaemonPort(dataDir: string): number {
+	return (
+		PREVIEW_WEB_DAEMON_PORT_START +
+		(stableHashToPort(dataDir) % PREVIEW_WEB_DAEMON_PORT_SPAN)
+	);
+}
+
 export function derivePreviewIdentity(
 	worktreeRoot: string,
 	homeDir = homedir(),
@@ -76,6 +87,9 @@ export function derivePreviewIdentity(
 		key,
 		dataDir: path.join(homeDir, PREVIEW_DATA_DIR_NAME, key),
 		vitePortBase: deriveVitePortBase(hash),
+		webDaemonPort: derivePreviewWebDaemonPort(
+			path.join(homeDir, PREVIEW_DATA_DIR_NAME, key),
+		),
 		mcpBasePort: deriveMcpBasePort(hash),
 		productName: `Helmor Preview ${key}`,
 		identifier: `ai.helmor.preview.${key}`,
@@ -129,6 +143,8 @@ async function main(extraTauriArgs: string[]): Promise<void> {
 		...process.env,
 		HELMOR_DATA_DIR: identity.dataDir,
 		HELMOR_DEV_PORT: String(vitePort),
+		HELMOR_WEB_HOST: process.env.HELMOR_WEB_HOST || "127.0.0.1",
+		HELMOR_WEB_PORT: String(identity.webDaemonPort),
 		HELMOR_MCP_BASE_PORT: String(identity.mcpBasePort),
 	};
 
@@ -153,6 +169,15 @@ async function main(extraTauriArgs: string[]): Promise<void> {
 
 function hashToInt(hash: string): number {
 	return Number.parseInt(hash.slice(0, 8), 16);
+}
+
+function stableHashToPort(input: string): number {
+	let hash = 2_166_136_261;
+	for (const byte of Buffer.from(input)) {
+		hash ^= byte;
+		hash = Math.imul(hash, 16_777_619) >>> 0;
+	}
+	return hash;
 }
 
 function normalizePath(value: string): string {
@@ -249,6 +274,10 @@ function printPreviewSummary(
 	console.log(`  Worktree: ${identity.worktreeRoot}`);
 	console.log(`  Data dir: ${identity.dataDir}`);
 	console.log(`  Vite dev URL: http://localhost:${vitePort}`);
+	console.log(
+		`  Web companion URL: http://127.0.0.1:${identity.webDaemonPort}`,
+	);
+	console.log(`  Web companion port: ${identity.webDaemonPort}`);
 	console.log(
 		`  MCP bridge base port: ${identity.mcpBasePort} (range ${identity.mcpBasePort}-${mcpEndPort})`,
 	);

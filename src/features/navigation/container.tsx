@@ -42,6 +42,7 @@ export const WorkspacesSidebarContainer = memo(
 			creatingWorkspaceRepoId,
 			cloneDefaultDirectory,
 			groups,
+			isWorkspacesFetching,
 			layoutMode,
 			setLayoutMode,
 			projectGroups,
@@ -75,6 +76,7 @@ export const WorkspacesSidebarContainer = memo(
 				availableRepositories={availableRepositories}
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
+				isPolling={isWorkspacesFetching}
 				layoutMode={layoutMode}
 				onSetLayoutMode={setLayoutMode}
 				projectGroups={projectGroups}

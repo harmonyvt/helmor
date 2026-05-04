@@ -4,8 +4,18 @@ type InvokeEnvelope<T> =
 	| { ok: true; data: T }
 	| { ok: false; error?: { message?: string } };
 
-const apiBase =
-	import.meta.env.VITE_HELMOR_WEB_API_BASE?.replace(/\/$/, "") ?? "";
+const configuredApiBase = import.meta.env.VITE_HELMOR_WEB_API_BASE?.replace(
+	/\/$/,
+	"",
+);
+const configuredApiPort = import.meta.env.VITE_HELMOR_WEB_API_PORT;
+const apiBase = configuredApiBase ?? apiBaseFromLocation(configuredApiPort);
+
+function apiBaseFromLocation(port?: string): string {
+	if (!port) return "";
+	if (typeof window === "undefined") return `http://127.0.0.1:${port}`;
+	return `${window.location.protocol}//${window.location.hostname}:${port}`;
+}
 
 export class Channel<T = unknown> {
 	onmessage: ChannelHandler<T> = null;

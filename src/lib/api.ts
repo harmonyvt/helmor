@@ -127,7 +127,10 @@ export type WebDaemonStatus = {
 	state: "running" | "stopped";
 	pid: number | null;
 	url: string;
+	openUrl: string;
+	reachableUrls: string[];
 	host: string;
+	listenHost: string;
 	port: number;
 	dataDir: string;
 	frontendDir: string;
@@ -906,6 +909,10 @@ export async function stopWebDaemon(): Promise<WebDaemonStatus> {
 
 export async function deleteWebDaemon(): Promise<WebDaemonStatus> {
 	return invoke<WebDaemonStatus>("delete_web_daemon");
+}
+
+export async function cleanupWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("cleanup_web_daemon");
 }
 
 export async function restartApp(force = false): Promise<void> {
