@@ -214,7 +214,7 @@ describe("Codex missing response item recovery", () => {
 		).toBe(false);
 	});
 
-	test("auto-compacts and retries once after a missing response item", async () => {
+	test("forks and retries after a missing response item", async () => {
 		const { fake, events, sendMessagePromise } = await driveToSendMessage("s1");
 
 		await fake.fireNotification("error", {
@@ -227,6 +227,35 @@ describe("Codex missing response item recovery", () => {
 			type: "system",
 			subtype: "codex_missing_response_item_recovery",
 		});
+		expect(
+			fake.resolveNext("thread/fork", { thread: { id: "thread-recovered" } }),
+		).toBe(true);
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(fake.resolveNext("turn/start", { turn: { id: "turn-retry" } })).toBe(
+			true,
+		);
+		await new Promise((r) => setTimeout(r, 0));
+
+		fake.fireNotification("turn/completed", { turn: { id: "turn-retry" } });
+		await sendMessagePromise;
+
+		expect(
+			events.filter((e) => (e as { type?: string }).type === "error"),
+		).toHaveLength(0);
+		expect(events.at(-1)).toEqual({ id: "stream-rid-1", type: "end" });
+	});
+
+	test("falls back to compaction when fork recovery fails", async () => {
+		const { fake, events, sendMessagePromise } = await driveToSendMessage("s1");
+
+		await fake.fireNotification("error", {
+			error: { message: missingResponseItemMessage },
+		});
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(fake.rejectNext("thread/fork", new Error("fork failed"))).toBe(true);
+		await new Promise((r) => setTimeout(r, 0));
 		expect(fake.resolveNext("thread/compact/start", {})).toBe(true);
 		await fake.fireNotification("thread/compacted", { threadId: "thread-xyz" });
 		await new Promise((r) => setTimeout(r, 0));
@@ -253,6 +282,8 @@ describe("Codex missing response item recovery", () => {
 		});
 		await new Promise((r) => setTimeout(r, 0));
 
+		expect(fake.rejectNext("thread/fork", new Error("fork failed"))).toBe(true);
+		await new Promise((r) => setTimeout(r, 0));
 		expect(
 			fake.rejectNext("thread/compact/start", new Error("compaction failed")),
 		).toBe(true);
@@ -265,15 +296,16 @@ describe("Codex missing response item recovery", () => {
 		});
 	});
 
-	test("does not retry the same turn more than once", async () => {
+	test("starts a fresh thread when recovered history still references a missing item", async () => {
 		const { fake, events, sendMessagePromise } = await driveToSendMessage("s1");
 
 		await fake.fireNotification("error", {
 			error: { message: missingResponseItemMessage },
 		});
 		await new Promise((r) => setTimeout(r, 0));
-		expect(fake.resolveNext("thread/compact/start", {})).toBe(true);
-		await fake.fireNotification("thread/compacted", { threadId: "thread-xyz" });
+		expect(
+			fake.resolveNext("thread/fork", { thread: { id: "thread-recovered" } }),
+		).toBe(true);
 		await new Promise((r) => setTimeout(r, 0));
 		expect(fake.resolveNext("turn/start", { turn: { id: "turn-retry" } })).toBe(
 			true,
@@ -283,6 +315,17 @@ describe("Codex missing response item recovery", () => {
 		await fake.fireNotification("error", {
 			error: { message: missingResponseItemMessage },
 		});
+		await new Promise((r) => setTimeout(r, 0));
+		expect(
+			fake.resolveNext("thread/start", { thread: { id: "thread-fresh" } }),
+		).toBe(true);
+		await new Promise((r) => setTimeout(r, 0));
+		expect(fake.resolveNext("turn/start", { turn: { id: "turn-fresh" } })).toBe(
+			true,
+		);
+		await new Promise((r) => setTimeout(r, 0));
+
+		fake.fireNotification("turn/completed", { turn: { id: "turn-fresh" } });
 		await sendMessagePromise;
 
 		expect(
@@ -291,12 +334,11 @@ describe("Codex missing response item recovery", () => {
 					(e as { type?: string; subtype?: string }).subtype ===
 					"codex_missing_response_item_recovery",
 			),
-		).toHaveLength(1);
-		expect(events).toContainEqual({
-			id: "stream-rid-1",
-			type: "error",
-			message: missingResponseItemMessage,
-		});
+		).toHaveLength(2);
+		expect(
+			events.filter((e) => (e as { type?: string }).type === "error"),
+		).toHaveLength(0);
+		expect(events.at(-1)).toEqual({ id: "stream-rid-1", type: "end" });
 	});
 });
 
