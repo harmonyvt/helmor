@@ -16,6 +16,11 @@ import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ShimmerText } from "@/components/ui/shimmer-text";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -360,10 +365,17 @@ export function ActionsSection({
 		[workspaceId],
 	);
 
+	const [reviewAllLoading, setReviewAllLoading] = useState(false);
+
 	const handleReviewAll = useCallback(async () => {
-		if (!onReviewAllComments) return;
-		await onReviewAllComments(prCommentData.comments);
-	}, [onReviewAllComments, prCommentData.comments]);
+		if (!onReviewAllComments || reviewAllLoading) return;
+		setReviewAllLoading(true);
+		try {
+			await onReviewAllComments(prCommentData.comments);
+		} finally {
+			setReviewAllLoading(false);
+		}
+	}, [onReviewAllComments, prCommentData.comments, reviewAllLoading]);
 
 	return (
 		<section
@@ -474,10 +486,22 @@ export function ActionsSection({
 								<button
 									type="button"
 									onClick={() => void handleReviewAll()}
-									className="cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80"
+									disabled={reviewAllLoading}
+									className="cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
 									aria-label="Review all PR comments"
+									aria-busy={reviewAllLoading || undefined}
 								>
-									Review all
+									{reviewAllLoading ? (
+										<span className="inline-flex items-center gap-1">
+											<LoaderCircleIcon
+												className="size-3 animate-spin"
+												strokeWidth={2}
+											/>
+											<ShimmerText>Reviewing…</ShimmerText>
+										</span>
+									) : (
+										"Review all"
+									)}
 								</button>
 							)}
 						</div>
@@ -854,38 +878,58 @@ function CommentRow({
 		? "success"
 		: "pending";
 
+	const bodyPreview =
+		comment.body.length > 220
+			? `${comment.body.slice(0, 220).trimEnd()}…`
+			: comment.body;
+
 	return (
-		<div className="group/comment-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
-			<div className="flex min-w-0 flex-1 items-center gap-1.5">
-				<StatusIcon status={statusKind} />
-				<span
-					className="min-w-0 truncate whitespace-nowrap text-primary"
-					title={label}
-				>
-					{label}
+		<Tooltip delayDuration={400}>
+			<TooltipTrigger asChild>
+				<div className="group/comment-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+					<div className="flex min-w-0 flex-1 items-center gap-1.5">
+						<StatusIcon status={statusKind} />
+						<span className="min-w-0 truncate whitespace-nowrap text-primary">
+							{label}
+						</span>
+					</div>
+					<div className="flex shrink-0 items-center justify-end gap-0">
+						<AppendContextButton
+							subjectLabel={label}
+							getPayload={() => onInsertToComposer(comment)}
+							errorTitle="Couldn't insert comment"
+							className={appendActionButtonClassName}
+						/>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon-xs"
+							aria-label={`Open comment by @${comment.author}`}
+							onClick={() => {
+								void openUrl(comment.url);
+							}}
+							className={cn("shrink-0", actionButtonClassName)}
+						>
+							<ArrowUpRightIcon strokeWidth={1.8} />
+						</Button>
+					</div>
+				</div>
+			</TooltipTrigger>
+			<TooltipContent
+				side="left"
+				className="flex-col items-start gap-1 py-2 leading-snug"
+			>
+				<span className="font-semibold">
+					@{comment.author}
+					{comment.filePath && (
+						<span className="ml-1 font-normal opacity-70">
+							· {comment.filePath.split("/").pop()}
+						</span>
+					)}
 				</span>
-			</div>
-			<div className="flex shrink-0 items-center justify-end gap-0">
-				<AppendContextButton
-					subjectLabel={label}
-					getPayload={() => onInsertToComposer(comment)}
-					errorTitle="Couldn't insert comment"
-					className={appendActionButtonClassName}
-				/>
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon-xs"
-					aria-label={`Open comment by @${comment.author}`}
-					onClick={() => {
-						void openUrl(comment.url);
-					}}
-					className={cn("shrink-0", actionButtonClassName)}
-				>
-					<ArrowUpRightIcon strokeWidth={1.8} />
-				</Button>
-			</div>
-		</div>
+				<span className="whitespace-pre-wrap opacity-90">{bodyPreview}</span>
+			</TooltipContent>
+		</Tooltip>
 	);
 }
 
