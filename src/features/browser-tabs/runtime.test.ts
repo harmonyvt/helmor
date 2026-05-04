@@ -30,4 +30,20 @@ describe("browserWebviewOptions", () => {
 			userAgent: expect.stringContaining("Safari/605.1.15"),
 		});
 	});
+
+	it("uses workspace-specific browser profile metadata when provided", () => {
+		expect(
+			browserWebviewOptions("https://example.com", bounds, {
+				workspaceId: "11111111-1111-4111-8111-111111111111",
+				dataDirectory: "workspace-browser/11111111-1111-4111-8111-111111111111",
+				dataStoreIdentifier: [
+					1, 1, 1, 1, 17, 17, 65, 17, 129, 17, 17, 17, 17, 17, 17, 17,
+				],
+			}),
+		).toMatchObject({
+			dataStoreIdentifier: [
+				1, 1, 1, 1, 17, 17, 65, 17, 129, 17, 17, 17, 17, 17, 17, 17,
+			],
+		});
+	});
 });

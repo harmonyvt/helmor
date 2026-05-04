@@ -326,7 +326,23 @@ pub async fn permanently_delete_workspace(app: AppHandle, workspace_id: String) 
     let _lock = ws_lock.lock().await;
     let manager = app.state::<git_watcher::GitWatcherManager>();
     manager.unwatch(&workspace_id);
+    let deleted_workspace_id = workspace_id.clone();
     run_blocking(move || workspaces::permanently_delete_workspace(&workspace_id)).await?;
+    remove_workspace_browser_data_store(&app, &deleted_workspace_id).await;
     git_watcher::notify_workspace_changed(&app);
     Ok(())
 }
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+async fn remove_workspace_browser_data_store(app: &AppHandle, workspace_id: &str) {
+    let Ok(identifier) = crate::browser_profile::workspace_data_store_identifier(workspace_id)
+    else {
+        return;
+    };
+    if let Err(error) = app.remove_data_store(identifier).await {
+        tracing::warn!(workspace_id, error = %format!("{error:#}"), "Failed to remove browser data store");
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+async fn remove_workspace_browser_data_store(_app: &AppHandle, _workspace_id: &str) {}

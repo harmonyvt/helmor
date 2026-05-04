@@ -2786,6 +2786,12 @@ export type BrowserRuntimeActionResponse = {
 	message: string;
 };
 
+export type BrowserProfileOptions = {
+	workspaceId: string;
+	dataDirectory: string;
+	dataStoreIdentifier: number[];
+};
+
 export async function listWorkspaceBrowserTabs(
 	workspaceId: string,
 ): Promise<BrowserTabRecord[]> {
@@ -2831,6 +2837,14 @@ export async function closeBrowserTab(
 	tabId: string,
 ): Promise<BrowserTabRecord | null> {
 	return invoke<BrowserTabRecord | null>("close_browser_tab", { tabId });
+}
+
+export async function getWorkspaceBrowserProfile(
+	workspaceId: string,
+): Promise<BrowserProfileOptions> {
+	return invoke<BrowserProfileOptions>("get_workspace_browser_profile", {
+		workspaceId,
+	});
 }
 
 export async function browserSnapshot(

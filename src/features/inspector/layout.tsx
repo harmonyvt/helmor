@@ -1,6 +1,5 @@
 import {
 	ChevronDown,
-	Globe,
 	Maximize2,
 	Minimize2,
 	Plus,
@@ -22,11 +21,9 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { BrowserTabStripItem } from "@/features/browser-tabs/tab-strip-item";
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import type { BrowserTabRecord } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { ScriptIconState } from "./hooks/use-script-status";
@@ -121,13 +118,10 @@ type InspectorTabsSectionProps = {
 	 * activeTab value. Display labels are positional (`getTerminalDisplayTitle`).
 	 */
 	terminalInstances: TerminalInstance[];
-	browserTabs: BrowserTabRecord[];
 	/** Spawn a new terminal and switch to it. */
 	onAddTerminal: () => void;
 	/** SIGTERM the shell and remove its tab. */
 	onCloseTerminal: (instanceId: string) => void;
-	onAddBrowserTab: () => void;
-	onCloseBrowserTab: (tabId: string) => void;
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
 	/**
@@ -150,7 +144,7 @@ type InspectorTabsSectionProps = {
 	onHoverFill?: (active: boolean) => void;
 	/**
 	 * Show the expand/collapse button in the tab header. Only meaningful when
-	 * a terminal or browser tab is active — set to false for Setup / Run tabs.
+	 * a terminal tab is active — set to false for Setup / Run tabs.
 	 */
 	canExpand: boolean;
 	/** Whether the panel is currently pinned to fill the full inspector height. */
@@ -170,11 +164,8 @@ export function InspectorTabsSection({
 	setupScriptState,
 	runScriptState,
 	terminalInstances,
-	browserTabs,
 	onAddTerminal,
 	onCloseTerminal,
-	onAddBrowserTab,
-	onCloseBrowserTab,
 	canSpawnTerminal,
 	canHoverExpand,
 	hoverExpandMode = "zoom",
@@ -538,11 +529,6 @@ export function InspectorTabsSection({
 		onAddTerminal();
 	}, [open, onAddTerminal, onToggle]);
 
-	const handleNewBrowserClick = useCallback(() => {
-		if (!open) onToggle();
-		onAddBrowserTab();
-	}, [open, onAddBrowserTab, onToggle]);
-
 	return (
 		<div
 			ref={wrapperRef}
@@ -778,16 +764,6 @@ export function InspectorTabsSection({
 										);
 									})
 								)}
-								{browserTabs.map((tab, index) => (
-									<BrowserTabStripItem
-										key={tab.id}
-										tab={tab}
-										index={index}
-										activeTab={activeTab}
-										onSelect={handleTabClick}
-										onClose={onCloseBrowserTab}
-									/>
-								))}
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<button
@@ -811,24 +787,6 @@ export function InspectorTabsSection({
 												className="text-background/60"
 											/>
 										) : null}
-									</TooltipContent>
-								</Tooltip>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<button
-											type="button"
-											aria-label="New browser tab"
-											onClick={handleNewBrowserClick}
-											className="flex h-full w-6 shrink-0 cursor-pointer items-center justify-center self-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0"
-										>
-											<Globe className="size-3.5" strokeWidth={1.8} />
-										</button>
-									</TooltipTrigger>
-									<TooltipContent
-										side="bottom"
-										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-									>
-										<span>New browser tab</span>
 									</TooltipContent>
 								</Tooltip>
 							</div>

@@ -1,5 +1,6 @@
 use tauri::AppHandle;
 
+use crate::browser_profile::BrowserProfileOptions;
 use crate::models::browser_tabs::{self, BrowserTabRecord};
 use crate::ui_sync::{self, UiMutationEvent};
 
@@ -125,6 +126,13 @@ pub async fn close_browser_tab(
     let fallback =
         run_blocking(move || close_browser_tab_and_publish(&app_for_blocking, &tab_id)).await?;
     Ok(fallback)
+}
+
+#[tauri::command]
+pub async fn get_workspace_browser_profile(
+    workspace_id: String,
+) -> CmdResult<BrowserProfileOptions> {
+    run_blocking(move || crate::browser_profile::get_workspace_browser_profile(&workspace_id)).await
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

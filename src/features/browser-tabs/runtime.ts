@@ -1,6 +1,7 @@
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { Webview, type WebviewOptions } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { BrowserProfileOptions } from "@/lib/api";
 import { browserWebviewLabel } from "./ids";
 
 export type BrowserWebviewBounds = {
@@ -43,6 +44,7 @@ function supportsRelativeDataDirectory(): boolean {
 export function browserWebviewOptions(
 	url: string,
 	bounds: BrowserWebviewBounds,
+	profile?: BrowserProfileOptions | null,
 ): WebviewOptions {
 	return {
 		url,
@@ -56,8 +58,11 @@ export function browserWebviewOptions(
 		javascriptDisabled: false,
 		incognito: false,
 		userAgent: browserUserAgent(),
-		...(supportsRelativeDataDirectory()
-			? { dataDirectory: "workspace-browser" }
+		...(profile?.dataStoreIdentifier.length === 16
+			? { dataStoreIdentifier: profile.dataStoreIdentifier }
+			: {}),
+		...(profile?.dataDirectory && supportsRelativeDataDirectory()
+			? { dataDirectory: profile.dataDirectory }
 			: {}),
 	};
 }
@@ -78,6 +83,7 @@ export async function createBrowserWebview(
 	label: string,
 	url: string,
 	bounds: BrowserWebviewBounds,
+	profile?: BrowserProfileOptions | null,
 ): Promise<Webview> {
 	const existing = await Webview.getByLabel(label);
 	if (existing) {
@@ -87,7 +93,7 @@ export async function createBrowserWebview(
 	const webview = new Webview(
 		getCurrentWindow(),
 		label,
-		browserWebviewOptions(url, bounds),
+		browserWebviewOptions(url, bounds, profile),
 	);
 
 	await new Promise<void>((resolve, reject) => {

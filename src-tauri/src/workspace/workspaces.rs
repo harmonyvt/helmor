@@ -984,6 +984,13 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     super::branching::clear_prefetch_rate_limit(workspace_id);
     db::remove_workspace_lock(workspace_id);
 
+    // Filesystem browser profile cleanup is best-effort. WKWebView data stores
+    // are removed by the Tauri command path, where an AppHandle is available.
+    if let Err(error) = crate::browser_profile::remove_workspace_browser_profile_files(workspace_id)
+    {
+        tracing::warn!(workspace_id, error = %format!("{error:#}"), "Failed to remove browser profile files");
+    }
+
     // Filesystem cleanup (best-effort)
     if let Some((repo_name, directory_name, _state)) = record {
         // Remove worktree directory
@@ -1357,6 +1364,47 @@ mod tests {
 
         assert!(sync_workspace_pr_state("w-pr", None).unwrap());
         assert_eq!(workspace_pr_metadata(&env, "w-pr"), (None, None));
+    }
+
+    #[test]
+    fn permanently_delete_workspace_removes_browser_tabs_and_profile_files() {
+        let env = TestEnv::new("delete-browser-profile");
+        let conn = env.db_connection();
+        let workspace_id = "11111111-1111-4111-8111-111111111111";
+        insert_repo(&conn, "r1", "demo", None);
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: workspace_id,
+                repo_id: "r1",
+                directory_name: "alpha",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/alpha"),
+                intended_target_branch: None,
+            },
+        );
+        conn.execute(
+            "INSERT INTO workspace_browser_tabs (id, workspace_id, url, active) VALUES ('tab-1', ?1, 'https://example.com/', 1)",
+            [workspace_id],
+        )
+        .unwrap();
+        let profile_dir =
+            crate::browser_profile::workspace_browser_profile_dir(workspace_id).unwrap();
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::write(profile_dir.join("Cookies"), b"cookie-db").unwrap();
+
+        permanently_delete_workspace(workspace_id).unwrap();
+
+        let connection = env.db_connection();
+        let tab_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_browser_tabs WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tab_count, 0);
+        assert!(!profile_dir.exists());
     }
 
     fn workspace_statuses(env: &TestEnv, id: &str) -> (String, String) {

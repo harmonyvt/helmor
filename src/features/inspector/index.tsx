@@ -1,11 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BrowserTabPanel } from "@/features/browser-tabs";
-import {
-	browserIdFromToolTabId,
-	browserToolTabId,
-} from "@/features/browser-tabs/ids";
-import { closeBrowserWebviewForTab } from "@/features/browser-tabs/runtime";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -16,14 +9,10 @@ import {
 } from "@/features/shortcuts/use-app-shortcuts";
 import {
 	type ChangeRequestInfo,
-	closeBrowserTab,
-	createBrowserTab,
 	createSession,
 	type PrComment,
-	selectBrowserTab,
 } from "@/lib/api";
 import type { DiffOpenOptions } from "@/lib/editor-session";
-import { workspaceBrowserTabsQueryOptions } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
@@ -231,20 +220,6 @@ export function WorkspaceInspectorSidebar({
 		});
 	}, [workspaceId]);
 
-	const browserTabsQuery = useQuery({
-		...workspaceBrowserTabsQueryOptions(workspaceId ?? ""),
-		enabled: !!workspaceId,
-	});
-	const browserTabs = browserTabsQuery.data ?? [];
-	const restoredBrowserWorkspaceRef = useRef<string | null>(null);
-	useEffect(() => {
-		if (!workspaceId || !browserTabsQuery.isFetched) return;
-		if (restoredBrowserWorkspaceRef.current === workspaceId) return;
-		restoredBrowserWorkspaceRef.current = workspaceId;
-		const activeBrowserTab = browserTabs.find((tab) => tab.active);
-		if (activeBrowserTab) setActiveTab(browserToolTabId(activeBrowserTab.id));
-	}, [workspaceId, browserTabsQuery.isFetched, browserTabs, setActiveTab]);
-
 	const canSpawnTerminal =
 		!!repoId &&
 		!!workspaceId &&
@@ -275,42 +250,11 @@ export function WorkspaceInspectorSidebar({
 	const handleToolTabChange = useCallback(
 		(tabId: string) => {
 			setActiveTab(tabId);
-			const browserTabId = browserIdFromToolTabId(tabId);
-			if (browserTabId)
-				void selectBrowserTab(browserTabId).catch(() => undefined);
 		},
 		[setActiveTab],
 	);
 
-	const handleAddBrowserTab = useCallback(() => {
-		if (!workspaceId) return;
-		void createBrowserTab(workspaceId).then((tab) => {
-			setActiveTab(browserToolTabId(tab.id));
-		});
-	}, [workspaceId, setActiveTab]);
-
-	const handleCloseBrowserTab = useCallback(
-		(tabId: string) => {
-			if (!workspaceId) return;
-			void closeBrowserWebviewForTab(tabId);
-			if (activeTab === browserToolTabId(tabId)) {
-				const idx = browserTabs.findIndex((tab) => tab.id === tabId);
-				const fallback = browserTabs[idx + 1] ?? browserTabs[idx - 1];
-				if (fallback) {
-					setActiveTab(browserToolTabId(fallback.id));
-				} else if (terminalInstances.length > 0) {
-					setActiveTab(terminalInstances[terminalInstances.length - 1].id);
-				} else {
-					setActiveTab("setup");
-				}
-			}
-			void closeBrowserTab(tabId);
-		},
-		[activeTab, browserTabs, terminalInstances, workspaceId, setActiveTab],
-	);
-
 	const isTerminalTabActive = terminalInstances.some((t) => t.id === activeTab);
-	const isBrowserTabActive = !!browserIdFromToolTabId(activeTab);
 
 	// Pinned-expand state: when true the InspectorTabsSection fills the full
 	// inspector column by hiding the Changes and Actions sections above it.
@@ -321,17 +265,17 @@ export function WorkspaceInspectorSidebar({
 	const tabsExpanded = tabsExpandedByButton || tabsExpandedByHover;
 
 	// Reset expand when workspace changes or when the active tab is no longer
-	// a terminal or browser (e.g. user switches to Setup while expanded).
+	// a terminal (e.g. user switches to Setup while expanded).
 	useEffect(() => {
 		setTabsExpandedByButton(false);
 		setTabsExpandedByHover(false);
 	}, [workspaceId]);
 	useEffect(() => {
-		if (!isTerminalTabActive && !isBrowserTabActive) {
+		if (!isTerminalTabActive) {
 			setTabsExpandedByButton(false);
 			setTabsExpandedByHover(false);
 		}
-	}, [isTerminalTabActive, isBrowserTabActive]);
+	}, [isTerminalTabActive]);
 	// Hover-triggered fill expand only applies to the terminal tab. Reset it
 	// immediately when the user switches away so the sections reappear.
 	useEffect(() => {
@@ -340,7 +284,7 @@ export function WorkspaceInspectorSidebar({
 		}
 	}, [isTerminalTabActive]);
 
-	const canExpand = tabsOpen && (isTerminalTabActive || isBrowserTabActive);
+	const canExpand = tabsOpen && isTerminalTabActive;
 
 	const handleToggleTabsWithReset = useCallback(() => {
 		// Collapsing the panel always exits expand mode too.
@@ -511,15 +455,9 @@ export function WorkspaceInspectorSidebar({
 	// a terminal tab was active in the previous one.
 	useEffect(() => {
 		if (activeTab === "setup" || activeTab === "run") return;
-		const browserTabId = browserIdFromToolTabId(activeTab);
-		if (browserTabId) {
-			if (browserTabs.some((tab) => tab.id === browserTabId)) return;
-			setActiveTab("setup");
-			return;
-		}
 		if (terminalInstances.some((t) => t.id === activeTab)) return;
 		setActiveTab("setup");
-	}, [activeTab, browserTabs, terminalInstances, setActiveTab]);
+	}, [activeTab, terminalInstances, setActiveTab]);
 
 	// Only allow hover-to-zoom when the active tab has real terminal output.
 	// "idle" = script configured but never run; "no-script" = nothing to run.
@@ -527,19 +465,17 @@ export function WorkspaceInspectorSidebar({
 	// that doesn't benefit from — and shouldn't trigger — the enlargement.
 	const scriptTabState =
 		activeTab === "setup" ? setupScriptState : runScriptState;
+
 	// Disable hover-expand when the panel is already pinned-expanded.
 	const canHoverExpand =
 		!tabsExpanded &&
-		(isTerminalTabActive
-			? true
-			: isBrowserTabActive
-				? true // Browser uses the 2× zoom mode (hoverExpandMode="zoom")
-				: scriptTabState === "running" ||
-					scriptTabState === "success" ||
-					scriptTabState === "failure");
+		(isTerminalTabActive ||
+			scriptTabState === "running" ||
+			scriptTabState === "success" ||
+			scriptTabState === "failure");
 
 	// Terminal hover triggers the full-screen pinned expand (fill mode);
-	// browser and script tabs use the 2× CSS zoom (zoom mode).
+	// script tabs use the 2× CSS zoom (zoom mode).
 	const hoverExpandMode: "zoom" | "fill" = isTerminalTabActive
 		? "fill"
 		: "zoom";
@@ -617,11 +553,8 @@ export function WorkspaceInspectorSidebar({
 				setupScriptState={setupScriptState}
 				runScriptState={runScriptState}
 				terminalInstances={terminalInstances}
-				browserTabs={browserTabs}
 				onAddTerminal={handleAddTerminal}
 				onCloseTerminal={handleCloseTerminal}
-				onAddBrowserTab={handleAddBrowserTab}
-				onCloseBrowserTab={handleCloseBrowserTab}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
 				hoverExpandMode={hoverExpandMode}
@@ -653,13 +586,6 @@ export function WorkspaceInspectorSidebar({
 						workspaceId={workspaceId ?? null}
 						instance={instance}
 						isActive={activeTab === instance.id}
-					/>
-				))}
-				{browserTabs.map((tab) => (
-					<BrowserTabPanel
-						key={tab.id}
-						tab={tab}
-						isActive={activeTab === browserToolTabId(tab.id)}
 					/>
 				))}
 			</InspectorTabsSection>
