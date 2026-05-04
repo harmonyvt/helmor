@@ -1,11 +1,19 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
 import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 
 const apiMockState = vi.hoisted(() => ({
+	createSession: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	listSlashCommands: vi.fn(),
 	listWorkspaceLinkedDirectories: vi.fn(),
 	setWorkspaceLinkedDirectories: vi.fn(),
@@ -15,11 +23,35 @@ vi.mock("@/lib/api", async () => {
 	const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
 	return {
 		...actual,
+		createSession: apiMockState.createSession,
+		loadSessionThreadMessages: apiMockState.loadSessionThreadMessages,
 		listSlashCommands: apiMockState.listSlashCommands,
 		listWorkspaceLinkedDirectories: apiMockState.listWorkspaceLinkedDirectories,
 		setWorkspaceLinkedDirectories: apiMockState.setWorkspaceLinkedDirectories,
 	};
 });
+
+vi.mock("./provider-swap-dialog", () => ({
+	ProviderSwapDialog: ({
+		onChoose,
+		onCancel,
+	}: {
+		onChoose: (choice: "bring-history" | "start-fresh") => void;
+		onCancel: () => void;
+	}) => (
+		<div data-testid="provider-swap-dialog">
+			<button type="button" onClick={() => onChoose("bring-history")}>
+				Bring history
+			</button>
+			<button type="button" onClick={() => onChoose("start-fresh")}>
+				Start fresh
+			</button>
+			<button type="button" onClick={onCancel}>
+				Cancel
+			</button>
+		</div>
+	),
+}));
 
 type PickHandler = (entry: unknown) => void;
 type RemoveHandler = (path: string) => void;
@@ -38,6 +70,7 @@ const composerMockState = vi.hoisted(() => ({
 	lastOnRemoveLinkedDirectory: null as RemoveHandler | null,
 	lastAddDirCandidates: [] as readonly unknown[],
 	lastOnPickAddDir: null as PickHandler | null,
+	lastOnSelectModel: null as ((modelId: string) => void) | null,
 }));
 
 vi.mock("./index", async () => {
@@ -47,6 +80,7 @@ vi.mock("./index", async () => {
 		WorkspaceComposer: (props: {
 			contextKey: string;
 			selectedModelId: string | null;
+			onSelectModel: (modelId: string) => void;
 			fastMode?: boolean;
 			disabled?: boolean;
 			submitDisabled?: boolean;
@@ -70,6 +104,7 @@ vi.mock("./index", async () => {
 				...(props.addDirCandidates ?? []),
 			];
 			composerMockState.lastOnPickAddDir = props.onPickAddDir ?? null;
+			composerMockState.lastOnSelectModel = props.onSelectModel;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -193,6 +228,11 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.renders = [];
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
+		composerMockState.lastOnSelectModel = null;
+		apiMockState.createSession.mockReset();
+		apiMockState.createSession.mockResolvedValue({ sessionId: "session-new" });
+		apiMockState.loadSessionThreadMessages.mockReset();
+		apiMockState.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
@@ -329,6 +369,84 @@ describe("WorkspaceComposerContainer", () => {
 			}),
 		);
 		expect(onPendingPromptConsumed).toHaveBeenCalledTimes(1);
+	});
+
+	it("seeds the new session cache before selecting a switched provider model", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+		apiMockState.loadSessionThreadMessages.mockResolvedValue([
+			{
+				id: "m1",
+				role: "user",
+				content: [{ type: "text", id: "m1:t", text: "hello" }],
+				createdAt: "2026-04-05T00:00:00Z",
+			},
+		]);
+
+		const onSelectModel = vi.fn();
+		const onSwitchSession = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={onSelectModel}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSwitchSession={onSwitchSession}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(composerMockState.lastOnSelectModel).not.toBeNull();
+		composerMockState.lastOnSelectModel?.("gpt-5.4");
+		fireEvent.click(await screen.findByText("Bring history"));
+
+		await waitFor(() => {
+			expect(onSelectModel).toHaveBeenCalledWith(
+				"session:session-new",
+				"gpt-5.4",
+			);
+		});
+		expect(onSwitchSession).toHaveBeenCalledWith("session-new");
+		expect(
+			queryClient
+				.getQueryData<typeof WORKSPACE_SESSIONS>(
+					helmorQueryKeys.workspaceSessions("workspace-1"),
+				)
+				?.some((session) => session.id === "session-new"),
+		).toBe(true);
+		expect(
+			queryClient.getQueryData([
+				...helmorQueryKeys.sessionMessages("session-new"),
+				"thread",
+			]),
+		).toEqual([]);
 	});
 
 	it("loads slash commands when the composer mounts", async () => {

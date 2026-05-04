@@ -8,6 +8,7 @@ import { ShimmerText } from "@/components/ui/shimmer-text";
 import { ShineBorder } from "@/components/ui/shine-border";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import {
 	getShortcut,
 	getShortcutConflicts,
@@ -227,6 +228,9 @@ export const WorkspaceComposerContainer = memo(
 			modelId: string;
 			resolve: (choice: ProviderSwapChoice | null) => void;
 		} | null>(null);
+		const [providerSwitchStatus, setProviderSwitchStatus] = useState<
+			string | null
+		>(null);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -494,6 +498,8 @@ export const WorkspaceComposerContainer = memo(
 
 		const handleModelSelect = useCallback(
 			async (modelId: string) => {
+				if (providerSwitchStatus) return;
+
 				const newModel = findModelOption(modelSections, modelId);
 				const currentProvider = provider;
 				const newProvider = newModel?.provider;
@@ -523,11 +529,16 @@ export const WorkspaceComposerContainer = memo(
 					// User cancelled — leave everything as-is.
 					if (choice === null) return;
 
+					const toastId = toast.loading("Preparing provider switch…");
+					setProviderSwitchStatus("Preparing provider switch…");
+
 					try {
 						// Build the context-transfer prefix BEFORE creating the new
 						// session so any load failure doesn't leave an orphaned session.
 						let contextPrefix: string | null = null;
 						if (choice === "bring-history") {
+							setProviderSwitchStatus("Loading conversation history…");
+							toast.loading("Loading conversation history…", { id: toastId });
 							try {
 								const msgs =
 									await loadSessionThreadMessages(displayedSessionId);
@@ -538,13 +549,28 @@ export const WorkspaceComposerContainer = memo(
 								if (prefix) {
 									contextPrefix = prefix;
 								}
-							} catch {
-								// Best-effort: if loading history fails, continue without it.
+							} catch (error) {
+								console.warn(
+									"[composer] failed to load provider-swap history:",
+									error,
+								);
+								toast.warning("Could not load history; switching without it.", {
+									id: toastId,
+								});
 							}
 						}
 
+						setProviderSwitchStatus("Creating a new session…");
+						toast.loading("Creating a new session…", { id: toastId });
 						const { sessionId: newSessionId } =
 							await createSession(displayedWorkspaceId);
+						seedNewSessionInCache({
+							queryClient,
+							workspaceId: displayedWorkspaceId,
+							sessionId: newSessionId,
+							workspace: workspaceDetailQuery.data ?? null,
+							existingSessions: sessionsQuery.data ?? [],
+						});
 
 						// Register the pending context transfer for the new session.
 						if (contextPrefix) {
@@ -554,7 +580,18 @@ export const WorkspaceComposerContainer = memo(
 							);
 						}
 
-						await Promise.all([
+						setProviderSwitchStatus("Switching composer to new provider…");
+						toast.loading("Switching composer to new provider…", {
+							id: toastId,
+						});
+						const newContextKey = getComposerContextKey(
+							displayedWorkspaceId,
+							newSessionId,
+						);
+						onSelectModel(newContextKey, modelId);
+						onSwitchSession?.(newSessionId);
+
+						void Promise.all([
 							queryClient.invalidateQueries({
 								queryKey:
 									helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
@@ -570,15 +607,21 @@ export const WorkspaceComposerContainer = memo(
 									]
 								: []),
 						]);
-						onSwitchSession?.(newSessionId);
-						const newContextKey = getComposerContextKey(
-							displayedWorkspaceId,
-							newSessionId,
-						);
-						onSelectModel(newContextKey, modelId);
+						toast.success("Provider switched. Send a message to continue.", {
+							id: toastId,
+						});
 						return;
-					} catch {
-						// Fall through to just update model
+					} catch (error) {
+						console.error("[composer] provider switch failed:", error);
+						toast.error(
+							error instanceof Error
+								? error.message
+								: "Failed to switch provider.",
+							{ id: toastId },
+						);
+						return;
+					} finally {
+						setProviderSwitchStatus(null);
 					}
 				}
 
@@ -594,7 +637,10 @@ export const WorkspaceComposerContainer = memo(
 				onSelectModel,
 				onSwitchSession,
 				queryClient,
+				workspaceDetailQuery.data,
 				workspaceDetailQuery.data?.repoId,
+				sessionsQuery.data,
+				providerSwitchStatus,
 			],
 		);
 
@@ -889,6 +935,13 @@ export const WorkspaceComposerContainer = memo(
 					) : null}
 
 					<div className="relative z-10">
+						{providerSwitchStatus ? (
+							<div className="mb-2 flex items-center justify-center rounded-xl border border-border bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground">
+								<ShimmerText durationMs={1700}>
+									{providerSwitchStatus}
+								</ShimmerText>
+							</div>
+						) : null}
 						<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex justify-center">
 							<SubmitQueueList
 								items={queueItems}
@@ -913,7 +966,8 @@ export const WorkspaceComposerContainer = memo(
 							submitDisabled={
 								disabled ||
 								loadingConversationContext ||
-								composerAwaitingFinalize
+								composerAwaitingFinalize ||
+								Boolean(providerSwitchStatus)
 							}
 							onStop={onStop}
 							sending={sending}
