@@ -2627,6 +2627,7 @@ function AppShell({
 													onQueuePendingPromptForSession={
 														queuePendingPromptForSession
 													}
+													onSelectSession={handleSelectSession}
 													commitButtonMode={commitButtonMode}
 													commitButtonState={commitButtonState}
 													changeRequest={workspaceChangeRequest}

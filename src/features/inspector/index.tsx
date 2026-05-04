@@ -111,6 +111,9 @@ type WorkspaceInspectorSidebarProps = {
 	 */
 	forgeIsRefreshing?: boolean;
 	onOpenSettings?: () => void;
+	/** Called after a new session is created (e.g. "Review all") so the app
+	 * can navigate to it and the queued prompt actually fires. */
+	onSelectSession?: (sessionId: string) => void;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -126,6 +129,7 @@ export function WorkspaceInspectorSidebar({
 	onCommitAction,
 	currentSessionId,
 	onQueuePendingPromptForSession,
+	onSelectSession,
 	commitButtonMode,
 	commitButtonState,
 	changeRequest,
@@ -198,10 +202,13 @@ export function WorkspaceInspectorSidebar({
 			onQueuePendingPromptForSession({
 				sessionId,
 				prompt: buildReviewAllPrompt(comments),
-				forceQueue: false,
+				// Force-queue so the prompt fires even if a turn is currently streaming.
+				forceQueue: true,
 			});
+			// Navigate to the new session so the pending prompt is consumed.
+			onSelectSession?.(sessionId);
 		},
-		[workspaceId, onQueuePendingPromptForSession],
+		[workspaceId, onQueuePendingPromptForSession, onSelectSession],
 	);
 
 	// Live list of Terminal sub-tabs for the current workspace, observed at
