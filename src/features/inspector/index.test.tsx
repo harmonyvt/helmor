@@ -6,18 +6,21 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ComponentProps } from "react";
+import type { ComponentProps, MutableRefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForgeActionStatus, WorkspaceGitActionStatus } from "@/lib/api";
 import { ComposerInsertProvider } from "@/lib/composer-insert-context";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { WorkspaceInspectorSidebar } from "./index";
+import { _resetTabsUiStateForTesting } from "./tabs-ui-state-store";
+import { _resetForTesting as resetTerminalStoreForTesting } from "./terminal-store";
 
 const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChangesWithContent: vi.fn(),
 	getWorkspaceForgeCheckInsertText: vi.fn(),
 	loadWorkspaceGitActionStatus: vi.fn(),
 	loadWorkspaceForgeActionStatus: vi.fn(),
+	getWorkspacePrComments: vi.fn(),
 	syncWorkspaceWithTargetBranch: vi.fn(),
 }));
 
@@ -38,9 +41,35 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
 		loadWorkspaceGitActionStatus: apiMocks.loadWorkspaceGitActionStatus,
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
+		getWorkspacePrComments: apiMocks.getWorkspacePrComments,
 		syncWorkspaceWithTargetBranch: apiMocks.syncWorkspaceWithTargetBranch,
 	};
 });
+
+vi.mock("@/components/terminal-output", () => ({
+	TerminalOutput: ({
+		className,
+		terminalRef,
+	}: {
+		className?: string;
+		terminalRef?: MutableRefObject<{
+			clear: () => void;
+			focus: () => void;
+			refit: () => void;
+			write: (data: string) => void;
+		} | null>;
+	}) => {
+		if (terminalRef) {
+			terminalRef.current = {
+				clear: vi.fn(),
+				focus: vi.fn(),
+				refit: vi.fn(),
+				write: vi.fn(),
+			};
+		}
+		return <div data-testid="terminal" className={className} />;
+	},
+}));
 
 function cleanGitStatus(): WorkspaceGitActionStatus {
 	return {
@@ -103,10 +132,13 @@ function expectTextBefore(
 
 describe("WorkspaceInspectorSidebar Actions section", () => {
 	beforeEach(() => {
+		_resetTabsUiStateForTesting();
+		resetTerminalStoreForTesting();
 		apiMocks.listWorkspaceChangesWithContent.mockReset();
 		apiMocks.getWorkspaceForgeCheckInsertText.mockReset();
 		apiMocks.loadWorkspaceGitActionStatus.mockReset();
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
+		apiMocks.getWorkspacePrComments.mockReset();
 		apiMocks.syncWorkspaceWithTargetBranch.mockReset();
 		openerMocks.openUrl.mockReset();
 
@@ -119,6 +151,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		);
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue(cleanGitStatus());
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(emptyPrStatus());
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			comments: [],
+			prNumber: null,
+			prUrl: null,
+		});
 		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
 			outcome: "updated",
 			targetBranch: "main",
@@ -927,5 +964,66 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		fireEvent.mouseLeave(tabsSection.parentElement as HTMLElement);
 
 		expect(filterLayer).toHaveStyle({ filter: "none" });
+	});
+
+	it("restores the open terminal tab when switching back to a workspace", async () => {
+		const user = userEvent.setup();
+		const { rerender } = renderWithProviders(
+			<WorkspaceInspectorSidebar
+				workspaceId="workspace-1"
+				repoId="repo-1"
+				workspaceRootPath="/tmp/workspace-1"
+				workspaceBranch="feature/one"
+				workspaceTargetBranch="main"
+				workspaceRemote="origin"
+				editorMode={false}
+				onOpenEditorFile={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole("tab", { name: "Terminal" }));
+		expect(
+			await screen.findByRole("tab", { name: "Terminal" }),
+		).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
+
+		rerender(
+			<WorkspaceInspectorSidebar
+				workspaceId="workspace-2"
+				repoId="repo-1"
+				workspaceRootPath="/tmp/workspace-2"
+				workspaceBranch="feature/two"
+				workspaceTargetBranch="main"
+				workspaceRemote="origin"
+				editorMode={false}
+				onOpenEditorFile={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByRole("tab", { name: "Setup" })).toHaveAttribute(
+			"aria-selected",
+			"true",
+		);
+		expect(
+			screen.queryByLabelText("Inspector tabs body"),
+		).not.toBeInTheDocument();
+
+		rerender(
+			<WorkspaceInspectorSidebar
+				workspaceId="workspace-1"
+				repoId="repo-1"
+				workspaceRootPath="/tmp/workspace-1"
+				workspaceBranch="feature/one"
+				workspaceTargetBranch="main"
+				workspaceRemote="origin"
+				editorMode={false}
+				onOpenEditorFile={vi.fn()}
+			/>,
+		);
+
+		expect(
+			await screen.findByRole("tab", { name: "Terminal" }),
+		).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
 	});
 });
