@@ -376,7 +376,11 @@ export const WorkspaceConversationContainer = memo(
 							pendingDeferredTool={effectivePendingDeferredTool}
 							onDeferredToolResponse={effectiveDeferredToolResponse}
 							planReview={planReview}
-							onImplementPlanInCleanThread={handleImplementPlanInCleanThread}
+							onImplementPlanInCleanThread={
+								displayedWorkspaceId && onQueuePendingPromptForSession
+									? handleImplementPlanInCleanThread
+									: undefined
+							}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}

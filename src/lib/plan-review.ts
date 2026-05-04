@@ -1,4 +1,4 @@
-import type { PlanReviewPart, ThreadMessageLike } from "./api";
+import type { PlanReviewPart, ThreadMessageLike } from "@/lib/api";
 
 /** Latest unresolved plan-review card, or null when a user has answered it. */
 export function getUnresolvedPlanReview(

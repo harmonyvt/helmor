@@ -164,4 +164,30 @@ describe("WorkspaceConversationContainer", () => {
 		});
 		expect(onSelectSession).toHaveBeenCalledWith("session-clean");
 	});
+
+	it("does not expose clean-thread implementation when queueing is unavailable", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			[planReviewMessage()],
+		);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceConversationContainer
+					selectedWorkspaceId="workspace-1"
+					displayedWorkspaceId="workspace-1"
+					selectedSessionId="session-1"
+					displayedSessionId="session-1"
+					onSelectSession={vi.fn()}
+					onResolveDisplayedSession={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => {
+			expect(composerMockState.lastPlanReview?.plan).toBe("1. Update the UI");
+		});
+		expect(composerMockState.lastOnImplementPlanInCleanThread).toBeNull();
+	});
 });

@@ -15,6 +15,7 @@ import {
 	Zap,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -427,6 +428,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					"[composer] failed to implement plan in clean thread:",
 					error,
 				);
+				toast.error("Could not implement plan in a clean thread", {
+					description:
+						error instanceof Error
+							? error.message
+							: "Check the logs for details.",
+				});
 			},
 		);
 	}, [onImplementPlanInCleanThread, planReview]);

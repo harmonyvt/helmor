@@ -14,6 +14,10 @@ import type { PendingElicitation } from "@/features/conversation/pending-elicita
 import { createHelmorQueryClient } from "@/lib/query-client";
 import { getComposerDraftStorageKey } from "./draft-storage";
 
+const toastMocks = vi.hoisted(() => ({
+	error: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn(),
 	convertFileSrc: vi.fn((path: string) => `asset://localhost${path}`),
@@ -46,12 +50,19 @@ vi.mock("@/components/ai/code-block", () => ({
 	),
 }));
 
+vi.mock("sonner", () => ({
+	toast: {
+		error: toastMocks.error,
+	},
+}));
+
 import { WorkspaceComposer } from "./index";
 
 afterEach(() => {
 	cleanup();
 	window.localStorage.clear();
 	vi.useRealTimers();
+	vi.clearAllMocks();
 });
 
 const MODEL_SECTIONS = [
@@ -1394,6 +1405,66 @@ describe("WorkspaceComposer", () => {
 		);
 
 		expect(onImplementPlanInCleanThread).toHaveBeenCalledWith(planReview);
+	});
+
+	it("shows a toast when clean-thread implementation fails", async () => {
+		const queryClient = createHelmorQueryClient();
+		const error = new Error("Could not create session");
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
+		const onImplementPlanInCleanThread = vi.fn().mockRejectedValue(error);
+		const planReview = {
+			type: "plan-review" as const,
+			toolUseId: "tool-plan-1",
+			toolName: "ExitPlanMode",
+			plan: "1. Do the thing",
+			planFilePath: null,
+			allowedPrompts: [],
+		};
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					planReview={planReview}
+					onImplementPlanInCleanThread={onImplementPlanInCleanThread}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "Implement options" }),
+		);
+		await userEvent.click(
+			screen.getByRole("menuitem", { name: "Implement in Clean Thread" }),
+		);
+
+		await waitFor(() => {
+			expect(toastMocks.error).toHaveBeenCalledWith(
+				"Could not implement plan in a clean thread",
+				{ description: "Could not create session" },
+			);
+		});
+		expect(consoleError).toHaveBeenCalledWith(
+			"[composer] failed to implement plan in clean thread:",
+			error,
+		);
 	});
 
 	it("disables Request Changes when input is empty", () => {
