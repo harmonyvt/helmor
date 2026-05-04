@@ -1423,48 +1423,52 @@ describe("WorkspaceComposer", () => {
 			allowedPrompts: [],
 		};
 
-		render(
-			<QueryClientProvider client={queryClient}>
-				<WorkspaceComposer
-					contextKey="session:session-1"
-					onSubmit={vi.fn()}
-					disabled={false}
-					submitDisabled={false}
-					sending={false}
-					selectedModelId="opus-1m"
-					modelSections={MODEL_SECTIONS}
-					onSelectModel={vi.fn()}
-					provider="claude"
-					effortLevel="high"
-					onSelectEffort={vi.fn()}
-					permissionMode="plan"
-					onChangePermissionMode={vi.fn()}
-					restoreImages={[]}
-					restoreFiles={[]}
-					restoreCustomTags={[]}
-					planReview={planReview}
-					onImplementPlanInCleanThread={onImplementPlanInCleanThread}
-				/>
-			</QueryClientProvider>,
-		);
-
-		await userEvent.click(
-			screen.getByRole("button", { name: "Implement options" }),
-		);
-		await userEvent.click(
-			screen.getByRole("menuitem", { name: "Implement in Clean Thread" }),
-		);
-
-		await waitFor(() => {
-			expect(toastMocks.error).toHaveBeenCalledWith(
-				"Could not implement plan in a clean thread",
-				{ description: "Could not create session" },
+		try {
+			render(
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposer
+						contextKey="session:session-1"
+						onSubmit={vi.fn()}
+						disabled={false}
+						submitDisabled={false}
+						sending={false}
+						selectedModelId="opus-1m"
+						modelSections={MODEL_SECTIONS}
+						onSelectModel={vi.fn()}
+						provider="claude"
+						effortLevel="high"
+						onSelectEffort={vi.fn()}
+						permissionMode="plan"
+						onChangePermissionMode={vi.fn()}
+						restoreImages={[]}
+						restoreFiles={[]}
+						restoreCustomTags={[]}
+						planReview={planReview}
+						onImplementPlanInCleanThread={onImplementPlanInCleanThread}
+					/>
+				</QueryClientProvider>,
 			);
-		});
-		expect(consoleError).toHaveBeenCalledWith(
-			"[composer] failed to implement plan in clean thread:",
-			error,
-		);
+
+			await userEvent.click(
+				screen.getByRole("button", { name: "Implement options" }),
+			);
+			await userEvent.click(
+				screen.getByRole("menuitem", { name: "Implement in Clean Thread" }),
+			);
+
+			await waitFor(() => {
+				expect(toastMocks.error).toHaveBeenCalledWith(
+					"Could not implement plan in a clean thread",
+					{ description: "Could not create session" },
+				);
+			});
+			expect(consoleError).toHaveBeenCalledWith(
+				"[composer] failed to implement plan in clean thread:",
+				error,
+			);
+		} finally {
+			consoleError.mockRestore();
+		}
 	});
 
 	it("disables Request Changes when input is empty", () => {
