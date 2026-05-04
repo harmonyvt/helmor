@@ -692,20 +692,16 @@ body {
 /*
  * Web-surface: safe-area-inset-top spacer.
  *
- * In regular Safari browser mode the browser chrome sits outside the web
- * viewport; env(safe-area-inset-top) is zero (browser handles its own
- * chrome) so the spacer is invisible by default.  In standalone PWA mode
- * (added to Home Screen) the viewport expands behind the Dynamic Island /
- * notch, making the spacer necessary to push chrome below the safe area.
+ * index-web.html sets viewport-fit=cover, which extends the layout viewport
+ * behind the Dynamic Island / notch in BOTH regular Safari browser mode AND
+ * standalone PWA mode.  Because of this, env(safe-area-inset-top) reports the
+ * full Dynamic Island height (~59px on iPhone 15 Pro) in both modes — the
+ * browser does NOT automatically protect that region for us.  The spacer must
+ * therefore be unconditional; restricting it to display-mode: standalone hides
+ * the header behind the Dynamic Island in browser mode.
  */
 .web-safe-area-top {
-	padding-top: 0;
-}
-
-@media (display-mode: standalone) {
-	.web-safe-area-top {
-		padding-top: env(safe-area-inset-top);
-	}
+	padding-top: env(safe-area-inset-top);
 }
 
 /*

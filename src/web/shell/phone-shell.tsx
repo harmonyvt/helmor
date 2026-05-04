@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import WorkspaceChatPage from "../pages/workspace-chat-page";
 import WorkspaceListPage from "../pages/workspace-list-page";
 import type { WebPage, WebShellProps } from "../types";
@@ -8,8 +8,15 @@ export default function PhoneShell({
 	selectedSessionId,
 	onWorkspaceSelect,
 	onSessionSelect,
+	onBackToList,
 }: WebShellProps) {
-	const [page, setPage] = useState<WebPage>("list");
+	const [page, setPage] = useState<WebPage>(() =>
+		selectedWorkspaceId ? "chat" : "list",
+	);
+
+	useEffect(() => {
+		setPage(selectedWorkspaceId ? "chat" : "list");
+	}, [selectedWorkspaceId]);
 
 	const handleWorkspaceSelect = (id: string) => {
 		onWorkspaceSelect(id);
@@ -17,6 +24,7 @@ export default function PhoneShell({
 	};
 
 	const handleBack = () => {
+		onBackToList();
 		setPage("list");
 	};
 

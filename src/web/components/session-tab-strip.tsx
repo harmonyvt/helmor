@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 interface SessionTabStripProps {
 	workspaceId: string;
 	selectedSessionId: string | null;
-	onSessionSelect: (id: string | null) => void;
+	onSessionSelect: (id: string | null, options?: { replace?: boolean }) => void;
 	onNewSession: () => void;
 }
 

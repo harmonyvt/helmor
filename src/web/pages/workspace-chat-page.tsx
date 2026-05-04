@@ -14,7 +14,7 @@ import { WebHeader } from "@/web/shell/web-header";
 interface WorkspaceChatPageProps {
 	workspaceId: string | null;
 	sessionId: string | null;
-	onSessionSelect: (id: string | null) => void;
+	onSessionSelect: (id: string | null, options?: { replace?: boolean }) => void;
 	onBack?: () => void;
 	isTablet?: boolean;
 }
@@ -75,7 +75,7 @@ export default function WorkspaceChatPage({
 			sessions.find((s) => !s.isHidden && !s.actionKind)?.id ??
 			null;
 		if (targetId) {
-			onSessionSelect(targetId);
+			onSessionSelect(targetId, { replace: true });
 		}
 	}, [
 		workspaceId,
