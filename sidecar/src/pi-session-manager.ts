@@ -226,13 +226,24 @@ export class PiSessionManager implements SessionManager {
 			logger.info("Pi model registry reported errors", { error: loadError });
 		}
 
-		return modelRegistry
+		const mapped = modelRegistry
 			.getAvailable()
 			.sort((left, right) => {
 				const providerDelta = left.provider.localeCompare(right.provider);
 				return providerDelta || left.id.localeCompare(right.id);
 			})
 			.map(piModelInfo);
+
+		// The Pi registry can return multiple raw entries that normalize to the
+		// same output id (e.g. both "openrouter/auto" and "pi:openrouter/auto"
+		// map to "pi:openrouter/auto"). Deduplicate by normalized id, keeping
+		// the first occurrence from the sorted order.
+		const seen = new Set<string>();
+		return mapped.filter((model) => {
+			if (seen.has(model.id)) return false;
+			seen.add(model.id);
+			return true;
+		});
 	}
 
 	async stopSession(sessionId: string): Promise<void> {

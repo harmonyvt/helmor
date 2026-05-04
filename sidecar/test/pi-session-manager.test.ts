@@ -182,6 +182,29 @@ describe("PiSessionManager.listModels", () => {
 		]);
 	});
 
+	test("deduplicates models whose raw ids normalize to the same output id", async () => {
+		registryState.models = [
+			{
+				id: "openrouter/auto",
+				name: "Auto",
+				provider: "openrouter",
+				reasoning: false,
+			},
+			// "pi:openrouter/auto" normalizes to the same output id as "openrouter/auto"
+			{
+				id: "pi:openrouter/auto",
+				name: "Auto (duplicate)",
+				provider: "openrouter",
+				reasoning: false,
+			},
+		];
+
+		const models = await new PiSessionManager().listModels();
+
+		expect(models).toHaveLength(1);
+		expect(models[0]?.id).toBe("pi:openrouter/auto");
+	});
+
 	test("returns an empty list when no Pi auth is configured", async () => {
 		const models = await new PiSessionManager().listModels();
 
