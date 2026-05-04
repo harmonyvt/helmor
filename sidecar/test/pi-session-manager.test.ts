@@ -158,6 +158,53 @@ describe("PiSessionManager.listModels", () => {
 		]);
 	});
 
+	test("normalizes Pi model metadata from the registry", async () => {
+		registryState.models = [
+			{
+				id: "pi:azure-openai-responses/gpt-5.5",
+				name: "",
+				provider: "",
+				reasoning: false,
+			},
+		];
+
+		const models = await new PiSessionManager().listModels();
+
+		expect(models).toEqual([
+			{
+				id: "pi:azure-openai-responses/gpt-5.5",
+				label: "Pi · gpt-5.5",
+				cliModel: "azure-openai-responses/gpt-5.5",
+				providerKey: "azure-openai-responses",
+				effortLevels: [],
+				supportsFastMode: true,
+			},
+		]);
+	});
+
+	test("deduplicates models whose raw ids normalize to the same output id", async () => {
+		registryState.models = [
+			{
+				id: "openrouter/auto",
+				name: "Auto",
+				provider: "openrouter",
+				reasoning: false,
+			},
+			// "pi:openrouter/auto" normalizes to the same output id as "openrouter/auto"
+			{
+				id: "pi:openrouter/auto",
+				name: "Auto (duplicate)",
+				provider: "openrouter",
+				reasoning: false,
+			},
+		];
+
+		const models = await new PiSessionManager().listModels();
+
+		expect(models).toHaveLength(1);
+		expect(models[0]?.id).toBe("pi:openrouter/auto");
+	});
+
 	test("returns an empty list when no Pi auth is configured", async () => {
 		const models = await new PiSessionManager().listModels();
 

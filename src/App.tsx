@@ -601,8 +601,12 @@ function AppShell({
 				return Promise.all(invalidations);
 			})
 			.catch((error) => {
-				// Roll back the optimistic patch and reset dedupe so a retry can
-				// succeed.
+				// Roll back the optimistic patch. Do NOT clear lastMarkedReadSessionIdRef
+				// here — doing so causes an infinite retry loop when the IPC keeps
+				// failing (each rollback triggers a re-render, which re-fires the
+				// effect because the ref is null again). The ref stays set so this
+				// session is skipped until the user navigates away and back (which
+				// naturally resets the ref via the "!displayedSessionId" early return).
 				queryClient.setQueryData(
 					helmorQueryKeys.workspaceGroups,
 					previousGroups,
@@ -616,9 +620,6 @@ function AppShell({
 						helmorQueryKeys.workspaceSessions(workspaceId),
 						previousSessions,
 					);
-				}
-				if (lastMarkedReadSessionIdRef.current === sessionId) {
-					lastMarkedReadSessionIdRef.current = null;
 				}
 				console.error("[app] mark session read on view:", error);
 			});

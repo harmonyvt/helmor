@@ -201,40 +201,52 @@ export const WorkspaceConversationContainer = memo(
 
 		const handleSelectModel = useCallback(
 			(contextKey: string, modelId: string) => {
-				setComposerModelSelections((current) => ({
-					...current,
-					[contextKey]: modelId,
-				}));
+				setComposerModelSelections((current) => {
+					if (current[contextKey] === modelId) return current;
+					return {
+						...current,
+						[contextKey]: modelId,
+					};
+				});
 			},
 			[],
 		);
 
 		const handleSelectEffort = useCallback(
 			(contextKey: string, level: string) => {
-				setComposerEffortLevels((current) => ({
-					...current,
-					[contextKey]: level,
-				}));
+				setComposerEffortLevels((current) => {
+					if (current[contextKey] === level) return current;
+					return {
+						...current,
+						[contextKey]: level,
+					};
+				});
 			},
 			[],
 		);
 
 		const handleChangePermissionMode = useCallback(
 			(contextKey: string, mode: string) => {
-				setComposerPermissionModes((current) => ({
-					...current,
-					[contextKey]: mode,
-				}));
+				setComposerPermissionModes((current) => {
+					if (current[contextKey] === mode) return current;
+					return {
+						...current,
+						[contextKey]: mode,
+					};
+				});
 			},
 			[],
 		);
 
 		const handleChangeFastMode = useCallback(
 			(contextKey: string, enabled: boolean) => {
-				setComposerFastModes((current) => ({
-					...current,
-					[contextKey]: enabled,
-				}));
+				setComposerFastModes((current) => {
+					if (current[contextKey] === enabled) return current;
+					return {
+						...current,
+						[contextKey]: enabled,
+					};
+				});
 			},
 			[],
 		);

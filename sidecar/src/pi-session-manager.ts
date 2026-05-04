@@ -35,9 +35,9 @@ const PI_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 
 type PiModel = {
 	readonly id: string;
-	readonly name: string;
+	readonly name?: string;
 	readonly provider: string;
-	readonly reasoning: boolean;
+	readonly reasoning?: boolean;
 };
 
 interface LivePiSession {
@@ -226,13 +226,24 @@ export class PiSessionManager implements SessionManager {
 			logger.info("Pi model registry reported errors", { error: loadError });
 		}
 
-		return modelRegistry
+		const mapped = modelRegistry
 			.getAvailable()
 			.sort((left, right) => {
 				const providerDelta = left.provider.localeCompare(right.provider);
 				return providerDelta || left.id.localeCompare(right.id);
 			})
 			.map(piModelInfo);
+
+		// The Pi registry can return multiple raw entries that normalize to the
+		// same output id (e.g. both "openrouter/auto" and "pi:openrouter/auto"
+		// map to "pi:openrouter/auto"). Deduplicate by normalized id, keeping
+		// the first occurrence from the sorted order.
+		const seen = new Set<string>();
+		return mapped.filter((model) => {
+			if (seen.has(model.id)) return false;
+			seen.add(model.id);
+			return true;
+		});
 	}
 
 	async stopSession(sessionId: string): Promise<void> {
@@ -349,21 +360,42 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function piModelInfo(model: PiModel): ProviderModelInfo {
+	const provider = normalizePiProvider(model.provider, model.id);
+	const id = normalizePiModelId(model.id, provider);
+	const cliModel = `${provider}/${id}`;
 	return {
-		id: `pi:${model.provider}/${model.id}`,
-		label: `Pi · ${model.name || model.id}`,
-		cliModel: `${model.provider}/${model.id}`,
-		providerKey: model.provider,
-		effortLevels: model.reasoning ? PI_EFFORT_LEVELS : [],
+		id: `pi:${cliModel}`,
+		label: `Pi · ${normalizePiModelLabel(model.name, id)}`,
+		cliModel,
+		providerKey: provider,
+		effortLevels: model.reasoning === true ? [...PI_EFFORT_LEVELS] : [],
 		supportsFastMode: piModelSupportsFastMode(model),
 	};
 }
 
 function piModelSupportsFastMode(model: PiModel): boolean {
-	return (
-		model.provider === "azure-openai-responses" ||
-		model.provider === "openai-codex"
-	);
+	const provider = normalizePiProvider(model.provider, model.id);
+	return provider === "azure-openai-responses" || provider === "openai-codex";
+}
+
+function normalizePiProvider(provider: string | undefined, id: string): string {
+	const trimmed = provider?.trim();
+	if (trimmed) return trimmed;
+	const raw = id.replace(/^pi:/, "");
+	const slash = raw.indexOf("/");
+	if (slash > 0) return raw.slice(0, slash);
+	if (raw.startsWith("gpt-")) return "azure-openai-responses";
+	return "anthropic";
+}
+
+function normalizePiModelId(id: string, provider: string): string {
+	const raw = id.replace(/^pi:/, "").trim();
+	const prefix = `${provider}/`;
+	return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
+}
+
+function normalizePiModelLabel(name: string | undefined, id: string): string {
+	return name?.trim() || id;
 }
 
 export function normalizePiSlashCommands(

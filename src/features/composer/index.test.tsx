@@ -71,6 +71,25 @@ const MODEL_SECTIONS = [
 	},
 ] satisfies import("@/lib/api").AgentModelSection[];
 
+const PI_MODEL_SECTIONS = [
+	...MODEL_SECTIONS,
+	{
+		id: "pi",
+		label: "Pi",
+		options: [
+			{
+				id: "pi:azure-openai-responses/gpt-5.4",
+				provider: "pi",
+				label: "Pi · GPT-5.4",
+				cliModel: "azure-openai-responses/gpt-5.4",
+				providerKey: "azure-openai-responses",
+				effortLevels: ["low", "medium", "high", "xhigh"],
+				supportsFastMode: true,
+			},
+		],
+	},
+] satisfies import("@/lib/api").AgentModelSection[];
+
 function createAskUserQuestionDeferredTool(): PendingDeferredTool {
 	return {
 		provider: "claude",
@@ -185,6 +204,61 @@ function createUrlElicitation(): PendingElicitation {
 describe("WorkspaceComposer", () => {
 	afterEach(() => {
 		openerMocks.openUrl.mockReset();
+	});
+
+	it("clamps Pi effort once when persisted effort is unsupported", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onSelectEffort = vi.fn();
+		const { rerender } = render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:pi-session"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="pi:azure-openai-responses/gpt-5.4"
+					modelSections={PI_MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="pi"
+					effortLevel="max"
+					onSelectEffort={onSelectEffort}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => expect(onSelectEffort).toHaveBeenCalledWith("xhigh"));
+		expect(onSelectEffort).toHaveBeenCalledTimes(1);
+
+		rerender(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:pi-session"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="pi:azure-openai-responses/gpt-5.4"
+					modelSections={PI_MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="pi"
+					effortLevel="max"
+					onSelectEffort={onSelectEffort}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(onSelectEffort).toHaveBeenCalledTimes(1);
 	});
 
 	it("renders custom tag insertions as badges and expands them on submit", async () => {

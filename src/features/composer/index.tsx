@@ -296,15 +296,26 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],
 	);
+	const lastEffortCorrectionRef = useRef<string | null>(null);
 	// When model changes and effort gets clamped, write it back — but only
 	// after model metadata has loaded and the model exposes effort levels,
 	// otherwise we'd loop on a value the user can't even change.
 	useEffect(() => {
-		if (!selectedModel) return;
-		if (!supportsEffort) return;
-		if (effectiveEffort !== effortLevel) {
-			onSelectEffort(effectiveEffort);
+		if (!selectedModel || !supportsEffort) {
+			lastEffortCorrectionRef.current = null;
+			return;
 		}
+		if (effectiveEffort === effortLevel) {
+			lastEffortCorrectionRef.current = null;
+			return;
+		}
+
+		const correctionKey = `${selectedModel.id}:${effortLevel}->${effectiveEffort}`;
+		if (lastEffortCorrectionRef.current === correctionKey) {
+			return;
+		}
+		lastEffortCorrectionRef.current = correctionKey;
+		onSelectEffort(effectiveEffort);
 	}, [
 		selectedModel,
 		supportsEffort,
