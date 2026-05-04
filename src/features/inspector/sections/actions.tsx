@@ -15,6 +15,7 @@ import {
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ShimmerText } from "@/components/ui/shimmer-text";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -433,13 +434,10 @@ export function ActionsSection({
 								>
 									<span className="inline-flex items-center gap-1">
 										{isActionBusy ? (
-											<LoaderCircleIcon
-												aria-hidden="true"
-												className="size-3 animate-spin text-current opacity-70"
-												strokeWidth={2}
-											/>
-										) : null}
-										{isActionBusy ? null : action.label}
+											<ShimmerText>{action.label}</ShimmerText>
+										) : (
+											action.label
+										)}
 									</span>
 								</button>
 							)}
