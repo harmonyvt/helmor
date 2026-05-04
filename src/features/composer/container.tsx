@@ -18,6 +18,7 @@ import type {
 	AgentModelSection,
 	AgentProvider,
 	CandidateDirectory,
+	PlanReviewPart,
 	SlashCommandEntry,
 } from "@/lib/api";
 import {
@@ -106,7 +107,8 @@ type WorkspaceComposerContainerProps = {
 	elicitationResponsePending?: boolean;
 	pendingDeferredTool?: PendingDeferredTool | null;
 	onDeferredToolResponse?: DeferredToolResponseHandler;
-	hasPlanReview?: boolean;
+	planReview?: PlanReviewPart | null;
+	onImplementPlanInCleanThread?: (plan: PlanReviewPart) => void | Promise<void>;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
@@ -184,7 +186,8 @@ export const WorkspaceComposerContainer = memo(
 		elicitationResponsePending = false,
 		pendingDeferredTool = null,
 		onDeferredToolResponse = noopDeferredToolResponse,
-		hasPlanReview = false,
+		planReview = null,
+		onImplementPlanInCleanThread,
 		modelSelections,
 		effortLevels = {},
 		permissionModes = {},
@@ -800,7 +803,8 @@ export const WorkspaceComposerContainer = memo(
 				model: effectiveModel,
 				workingDirectory,
 				effortLevel,
-				permissionMode: effectivePermissionMode,
+				permissionMode:
+					pendingPromptForSession.permissionMode ?? effectivePermissionMode,
 				fastMode: supportsFastMode ? fastMode : false,
 				forceQueue: pendingPromptForSession.forceQueue,
 			});
@@ -857,7 +861,6 @@ export const WorkspaceComposerContainer = memo(
 			},
 			[onChangeFastMode, composerContextKey],
 		);
-
 		const autoCloseHelpText =
 			"When enabled, action sessions will close automatically when finished.";
 
@@ -998,7 +1001,8 @@ export const WorkspaceComposerContainer = memo(
 							elicitationResponsePending={elicitationResponsePending}
 							pendingDeferredTool={pendingDeferredTool}
 							onDeferredToolResponse={onDeferredToolResponse}
-							hasPlanReview={hasPlanReview}
+							planReview={planReview}
+							onImplementPlanInCleanThread={onImplementPlanInCleanThread}
 							pendingInsertRequests={pendingInsertRequests}
 							onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
 							slashCommands={slashCommands}

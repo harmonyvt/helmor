@@ -71,6 +71,8 @@ const composerMockState = vi.hoisted(() => ({
 	lastAddDirCandidates: [] as readonly unknown[],
 	lastOnPickAddDir: null as PickHandler | null,
 	lastOnSelectModel: null as ((modelId: string) => void) | null,
+	lastPlanReview: null as unknown,
+	lastOnImplementPlanInCleanThread: null as ((plan: unknown) => void) | null,
 }));
 
 vi.mock("./index", async () => {
@@ -94,6 +96,8 @@ vi.mock("./index", async () => {
 			onRemoveLinkedDirectory?: RemoveHandler;
 			addDirCandidates?: readonly unknown[];
 			onPickAddDir?: PickHandler;
+			planReview?: unknown;
+			onImplementPlanInCleanThread?: (plan: unknown) => void;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -105,6 +109,9 @@ vi.mock("./index", async () => {
 			];
 			composerMockState.lastOnPickAddDir = props.onPickAddDir ?? null;
 			composerMockState.lastOnSelectModel = props.onSelectModel;
+			composerMockState.lastPlanReview = props.planReview ?? null;
+			composerMockState.lastOnImplementPlanInCleanThread =
+				props.onImplementPlanInCleanThread ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -229,17 +236,19 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
 		composerMockState.lastOnSelectModel = null;
+		composerMockState.lastPlanReview = null;
+		composerMockState.lastOnImplementPlanInCleanThread = null;
 		apiMockState.createSession.mockReset();
 		apiMockState.createSession.mockResolvedValue({ sessionId: "session-new" });
 		apiMockState.loadSessionThreadMessages.mockReset();
 		apiMockState.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMockState.listSlashCommands.mockReset();
-		apiMockState.listWorkspaceLinkedDirectories.mockReset();
-		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
-		apiMockState.setWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listSlashCommands.mockResolvedValue({
 			commands: [],
 		});
+		apiMockState.listWorkspaceLinkedDirectories.mockReset();
+		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
+		apiMockState.setWorkspaceLinkedDirectories.mockReset();
 	});
 
 	afterEach(() => {
@@ -447,6 +456,120 @@ describe("WorkspaceComposerContainer", () => {
 				"thread",
 			]),
 		).toEqual([]);
+	});
+
+	it("passes through pending prompt permission mode without a model override", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		const onSubmit = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={onSubmit}
+					pendingPromptForSession={{
+						sessionId: "session-1",
+						prompt: "Implement this plan",
+						permissionMode: "bypassPermissions",
+					}}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Implement this plan",
+				permissionMode: "bypassPermissions",
+			}),
+		);
+	});
+
+	it("creates a clean implementation prompt for plan review actions", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		const onImplementPlanInCleanThread = vi.fn();
+		const planReview = {
+			type: "plan-review" as const,
+			toolUseId: "tool-plan-1",
+			toolName: "ExitPlanMode",
+			plan: "1. Do the thing",
+			planFilePath: "/tmp/plan.md",
+			allowedPrompts: [],
+		};
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={vi.fn()}
+					planReview={planReview}
+					onImplementPlanInCleanThread={onImplementPlanInCleanThread}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(composerMockState.lastPlanReview).toBe(planReview);
+		composerMockState.lastOnImplementPlanInCleanThread?.(planReview);
+
+		expect(onImplementPlanInCleanThread).toHaveBeenCalledWith(planReview);
 	});
 
 	it("loads slash commands when the composer mounts", async () => {

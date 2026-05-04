@@ -1349,6 +1349,53 @@ describe("WorkspaceComposer", () => {
 		);
 	});
 
+	it("calls clean-thread handler from Implement options", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onImplementPlanInCleanThread = vi.fn();
+		const planReview = {
+			type: "plan-review" as const,
+			toolUseId: "tool-plan-1",
+			toolName: "ExitPlanMode",
+			plan: "1. Do the thing",
+			planFilePath: null,
+			allowedPrompts: [],
+		};
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					planReview={planReview}
+					onImplementPlanInCleanThread={onImplementPlanInCleanThread}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "Implement options" }),
+		);
+		await userEvent.click(
+			screen.getByRole("menuitem", { name: "Implement in Clean Thread" }),
+		);
+
+		expect(onImplementPlanInCleanThread).toHaveBeenCalledWith(planReview);
+	});
+
 	it("disables Request Changes when input is empty", () => {
 		const queryClient = createHelmorQueryClient();
 

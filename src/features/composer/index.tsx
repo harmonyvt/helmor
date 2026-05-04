@@ -38,6 +38,7 @@ import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type {
 	AgentModelSection,
 	CandidateDirectory,
+	PlanReviewPart,
 	SlashCommandEntry,
 } from "@/lib/api";
 import type {
@@ -144,6 +145,8 @@ type WorkspaceComposerProps = {
 	pendingDeferredTool?: PendingDeferredTool | null;
 	onDeferredToolResponse?: DeferredToolResponseHandler;
 	hasPlanReview?: boolean;
+	planReview?: PlanReviewPart | null;
+	onImplementPlanInCleanThread?: (plan: PlanReviewPart) => void | Promise<void>;
 	/** When true, the ring is always rendered next to the send button.
 	 *  When false (the default), the ring auto-reveals only after usage
 	 *  crosses the threshold defined inside the ring component. */
@@ -230,6 +233,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	pendingDeferredTool = null,
 	onDeferredToolResponse = noopDeferredToolResponse,
 	hasPlanReview = false,
+	planReview = null,
+	onImplementPlanInCleanThread,
 	alwaysShowContextUsage = false,
 	sessionId = null,
 	providerSessionId = null,
@@ -238,6 +243,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	togglePlanShortcut = null,
 	toggleFollowUpShortcut = null,
 }: WorkspaceComposerProps) {
+	const hasActivePlanReview = hasPlanReview || planReview !== null;
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
@@ -405,16 +411,28 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	}, [onPendingInsertRequestsConsumed, pendingInsertRequests]);
 
 	const handlePlanImplement = useCallback(() => {
-		if (!hasPlanReview) return;
+		if (!hasActivePlanReview) return;
 		onChangePermissionMode("bypassPermissions");
 		clearPersistedDraft(contextKey);
 		onSubmit("Go ahead with the plan.", [], [], [], {
 			permissionModeOverride: "bypassPermissions",
 		});
-	}, [contextKey, hasPlanReview, onChangePermissionMode, onSubmit]);
+	}, [contextKey, hasActivePlanReview, onChangePermissionMode, onSubmit]);
+
+	const handlePlanImplementCleanThread = useCallback(() => {
+		if (!planReview || !onImplementPlanInCleanThread) return;
+		void Promise.resolve(onImplementPlanInCleanThread(planReview)).catch(
+			(error) => {
+				console.error(
+					"[composer] failed to implement plan in clean thread:",
+					error,
+				);
+			},
+		);
+	}, [onImplementPlanInCleanThread, planReview]);
 
 	const handlePlanRequestChanges = useCallback(() => {
-		if (!hasPlanReview) return;
+		if (!hasActivePlanReview) return;
 		const editor = editorRef.current;
 		let feedback = "";
 		if (editor) {
@@ -433,7 +451,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			clearPersistedDraft(contextKey);
 			setHasContent(false);
 		}
-	}, [hasPlanReview, onSubmit, contextKey]);
+	}, [hasActivePlanReview, onSubmit, contextKey]);
 
 	const submitDraft = useCallback(
 		(options?: { oppositeFollowUp?: boolean }) => {
@@ -612,7 +630,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								}
 								placeholder={
 									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground/70">
-										{hasPlanReview && permissionMode === "plan"
+										{hasActivePlanReview && permissionMode === "plan"
 											? "Describe what to change, then click Request Changes"
 											: "Ask to make changes, @mention files, run /commands"}
 									</div>
@@ -847,7 +865,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							    indicators to the left don't — that pulls the perceived gap in
 							    by ~6 px. ml-1.5 reserves the missing space so the row reads as
 							    evenly spaced. */}
-							{hasPlanReview && permissionMode === "plan" ? (
+							{hasActivePlanReview && permissionMode === "plan" ? (
 								<div className="ml-1.5 flex items-center gap-2">
 									<Button
 										variant="ghost"
@@ -860,17 +878,42 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
 										Request Changes
 									</Button>
-									<Button
-										variant="default"
-										size="sm"
-										aria-label="Implement"
-										onClick={handlePlanImplement}
-										disabled={disabled}
-										className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none"
-									>
-										<Check className="size-3.5" strokeWidth={2} />
-										Implement
-									</Button>
+									<div className="my-0.5 flex h-7 overflow-hidden rounded-lg">
+										<Button
+											variant="default"
+											size="sm"
+											aria-label="Implement"
+											onClick={handlePlanImplement}
+											disabled={disabled}
+											className="h-7 cursor-pointer gap-1 rounded-r-none px-2 text-[12px] transition-none"
+										>
+											<Check className="size-3.5" strokeWidth={2} />
+											Implement
+										</Button>
+										<DropdownMenu>
+											<DropdownMenuTrigger asChild>
+												<Button
+													variant="default"
+													size="icon"
+													aria-label="Implement options"
+													disabled={disabled || !onImplementPlanInCleanThread}
+													className="h-7 w-7 cursor-pointer rounded-l-none border-l border-primary-foreground/20 transition-none"
+												>
+													<ChevronDown className="size-3.5" strokeWidth={2} />
+												</Button>
+											</DropdownMenuTrigger>
+											<DropdownMenuContent align="end" className="w-56">
+												<DropdownMenuItem
+													onSelect={handlePlanImplementCleanThread}
+													disabled={
+														!planReview || !onImplementPlanInCleanThread
+													}
+												>
+													Implement in Clean Thread
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									</div>
 								</div>
 							) : sending ? (
 								<div className="ml-1.5 flex items-center gap-1.5">
