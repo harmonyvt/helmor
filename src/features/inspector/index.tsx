@@ -28,6 +28,7 @@ import { TerminalInstancePanel } from "./sections/terminal";
 import {
 	closeTerminal,
 	createTerminal,
+	getTerminals,
 	subscribeToWorkspaceList,
 	TERMINAL_INSTANCE_LIMIT,
 	type TerminalInstance,
@@ -111,6 +112,9 @@ type WorkspaceInspectorSidebarProps = {
 	 */
 	forgeIsRefreshing?: boolean;
 	onOpenSettings?: () => void;
+	/** Called after a new session is created (e.g. "Review all") so the app
+	 * can navigate to it and the queued prompt actually fires. */
+	onSelectSession?: (sessionId: string) => void;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -126,6 +130,7 @@ export function WorkspaceInspectorSidebar({
 	onCommitAction,
 	currentSessionId,
 	onQueuePendingPromptForSession,
+	onSelectSession,
 	commitButtonMode,
 	commitButtonState,
 	changeRequest,
@@ -198,10 +203,13 @@ export function WorkspaceInspectorSidebar({
 			onQueuePendingPromptForSession({
 				sessionId,
 				prompt: buildReviewAllPrompt(comments),
-				forceQueue: false,
+				// Force-queue so the prompt fires even if a turn is currently streaming.
+				forceQueue: true,
 			});
+			// Navigate to the new session so the pending prompt is consumed.
+			onSelectSession?.(sessionId);
 		},
-		[workspaceId, onQueuePendingPromptForSession],
+		[workspaceId, onQueuePendingPromptForSession, onSelectSession],
 	);
 
 	// Live list of Terminal sub-tabs for the current workspace, observed at
@@ -396,13 +404,20 @@ export function WorkspaceInspectorSidebar({
 	});
 
 	// Reset to "setup" when the active tab is a terminal id that no longer
-	// matches any current instance — happens when switching workspaces while
-	// a terminal tab was active in the previous one.
+	// matches any current instance. Read the terminal store synchronously too:
+	// on workspace switches the persisted tab id may restore before this
+	// component's subscribed terminal list has received its first snapshot.
 	useEffect(() => {
 		if (activeTab === "setup" || activeTab === "run") return;
 		if (terminalInstances.some((t) => t.id === activeTab)) return;
+		if (
+			workspaceId &&
+			getTerminals(workspaceId).some((t) => t.id === activeTab)
+		) {
+			return;
+		}
 		setActiveTab("setup");
-	}, [activeTab, terminalInstances, setActiveTab]);
+	}, [activeTab, terminalInstances, workspaceId, setActiveTab]);
 
 	// Only allow hover-to-zoom when the active tab has real terminal output.
 	// "idle" = script configured but never run; "no-script" = nothing to run.

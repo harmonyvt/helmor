@@ -18,6 +18,11 @@ import {
 	TABS_EASING,
 } from "../layout";
 import { getScriptState, startScript, stopScript } from "../script-store";
+import {
+	getInspectorTabsUiState,
+	type InspectorTabsUiState,
+	updateInspectorTabsUiState,
+} from "../tabs-ui-state-store";
 
 const DEFAULT_CHANGES_RATIO = 0.6;
 const DEFAULT_ACTIONS_RATIO = 0.4;
@@ -42,11 +47,57 @@ export function useWorkspaceInspectorSidebar({
 	workspaceId,
 	repoId,
 }: UseWorkspaceInspectorSidebarArgs) {
-	const [tabsOpen, setTabsOpen] = useState(false);
-	const [activeTab, setActiveTab] = useState("setup");
+	const [tabsUiState, setTabsUiState] = useState<InspectorTabsUiState>(() =>
+		getInspectorTabsUiState(workspaceId),
+	);
 	const [changesHeight, setChangesHeight] = useState(0);
 	const [actionsHeight, setActionsHeight] = useState(0);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
+	const tabsOpen = tabsUiState.tabsOpen;
+	const activeTab = tabsUiState.activeTab;
+
+	useEffect(() => {
+		setTabsUiState(getInspectorTabsUiState(workspaceId));
+	}, [workspaceId]);
+
+	const updateTabsUiState = useCallback(
+		(updater: (current: InspectorTabsUiState) => InspectorTabsUiState) => {
+			setTabsUiState((current) => {
+				const base = workspaceId
+					? getInspectorTabsUiState(workspaceId)
+					: current;
+				const next = updater(base);
+				if (workspaceId) {
+					updateInspectorTabsUiState(workspaceId, () => next);
+				}
+				return next;
+			});
+		},
+		[workspaceId],
+	);
+
+	const setTabsOpen = useCallback(
+		(nextOpen: boolean | ((current: boolean) => boolean)) => {
+			updateTabsUiState((current) => ({
+				...current,
+				tabsOpen:
+					typeof nextOpen === "function"
+						? nextOpen(current.tabsOpen)
+						: nextOpen,
+			}));
+		},
+		[updateTabsUiState],
+	);
+
+	const setActiveTab = useCallback(
+		(nextActiveTab: string) => {
+			updateTabsUiState((current) => ({
+				...current,
+				activeTab: nextActiveTab,
+			}));
+		},
+		[updateTabsUiState],
+	);
 
 	const containerRef = useRef<HTMLDivElement>(null);
 	const tabsWrapperRef = useRef<HTMLDivElement>(null);
@@ -212,7 +263,7 @@ export function useWorkspaceInspectorSidebar({
 		if (actionsElement && actionsFrom !== actionsTo) {
 			animateSection(actionsElement, actionsFrom, actionsTo);
 		}
-	}, []);
+	}, [setTabsOpen]);
 
 	useEffect(() => {
 		if (!resizeState) {
