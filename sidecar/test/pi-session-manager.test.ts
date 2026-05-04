@@ -158,6 +158,30 @@ describe("PiSessionManager.listModels", () => {
 		]);
 	});
 
+	test("normalizes Pi model metadata from the registry", async () => {
+		registryState.models = [
+			{
+				id: "pi:azure-openai-responses/gpt-5.5",
+				name: "",
+				provider: "",
+				reasoning: false,
+			},
+		];
+
+		const models = await new PiSessionManager().listModels();
+
+		expect(models).toEqual([
+			{
+				id: "pi:azure-openai-responses/gpt-5.5",
+				label: "Pi · gpt-5.5",
+				cliModel: "azure-openai-responses/gpt-5.5",
+				providerKey: "azure-openai-responses",
+				effortLevels: [],
+				supportsFastMode: true,
+			},
+		]);
+	});
+
 	test("returns an empty list when no Pi auth is configured", async () => {
 		const models = await new PiSessionManager().listModels();
 
