@@ -39,6 +39,7 @@ import {
 	workspaceLinkedDirectoriesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { useSettings } from "@/lib/settings";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
@@ -546,6 +547,8 @@ export const WorkspaceComposerContainer = memo(
 						const { sessionId: newSessionId } =
 							await createSession(displayedWorkspaceId);
 
+						queryClient.setQueryData(sessionThreadCacheKey(newSessionId), []);
+
 						// Register the pending context transfer for the new session.
 						if (contextPrefix) {
 							pendingContextTransferRef.current.set(
@@ -570,6 +573,7 @@ export const WorkspaceComposerContainer = memo(
 									]
 								: []),
 						]);
+
 						onSwitchSession?.(newSessionId);
 						const newContextKey = getComposerContextKey(
 							displayedWorkspaceId,

@@ -1,13 +1,17 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
+import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 
 const apiMockState = vi.hoisted(() => ({
 	listSlashCommands: vi.fn(),
 	listWorkspaceLinkedDirectories: vi.fn(),
+	createSession: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	setWorkspaceLinkedDirectories: vi.fn(),
 }));
 
@@ -15,6 +19,8 @@ vi.mock("@/lib/api", async () => {
 	const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
 	return {
 		...actual,
+		createSession: apiMockState.createSession,
+		loadSessionThreadMessages: apiMockState.loadSessionThreadMessages,
 		listSlashCommands: apiMockState.listSlashCommands,
 		listWorkspaceLinkedDirectories: apiMockState.listWorkspaceLinkedDirectories,
 		setWorkspaceLinkedDirectories: apiMockState.setWorkspaceLinkedDirectories,
@@ -38,6 +44,7 @@ const composerMockState = vi.hoisted(() => ({
 	lastOnRemoveLinkedDirectory: null as RemoveHandler | null,
 	lastAddDirCandidates: [] as readonly unknown[],
 	lastOnPickAddDir: null as PickHandler | null,
+	lastOnSelectModel: null as ((modelId: string) => void) | null,
 }));
 
 vi.mock("./index", async () => {
@@ -60,6 +67,7 @@ vi.mock("./index", async () => {
 			onRemoveLinkedDirectory?: RemoveHandler;
 			addDirCandidates?: readonly unknown[];
 			onPickAddDir?: PickHandler;
+			onSelectModel?: (modelId: string) => void;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -70,6 +78,7 @@ vi.mock("./index", async () => {
 				...(props.addDirCandidates ?? []),
 			];
 			composerMockState.lastOnPickAddDir = props.onPickAddDir ?? null;
+			composerMockState.lastOnSelectModel = props.onSelectModel ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -193,9 +202,14 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.renders = [];
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
+		composerMockState.lastOnSelectModel = null;
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
+		apiMockState.createSession.mockReset();
+		apiMockState.createSession.mockResolvedValue({ sessionId: "session-new" });
+		apiMockState.loadSessionThreadMessages.mockReset();
+		apiMockState.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMockState.setWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listSlashCommands.mockResolvedValue({
 			commands: [],
@@ -329,6 +343,87 @@ describe("WorkspaceComposerContainer", () => {
 			}),
 		);
 		expect(onPendingPromptConsumed).toHaveBeenCalledTimes(1);
+	});
+
+	it("seeds an empty thread cache when switching providers into a new session", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+		queryClient.setQueryData(sessionThreadCacheKey("session-1"), [
+			{
+				role: "user",
+				id: "u1",
+				content: [{ type: "text", text: "Previous question" }],
+			},
+		]);
+		apiMockState.loadSessionThreadMessages.mockResolvedValue([
+			{
+				role: "user",
+				id: "u1",
+				content: [{ type: "text", text: "Previous question" }],
+			},
+		]);
+
+		const onSwitchSession = vi.fn();
+		const onSelectModel = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={onSelectModel}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSwitchSession={onSwitchSession}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		composerMockState.lastOnSelectModel?.("gpt-5.4");
+		await screen.findByRole("dialog");
+		await user.click(
+			screen.getByRole("button", { name: /switch & continue/i }),
+		);
+
+		await waitFor(() =>
+			expect(onSwitchSession).toHaveBeenCalledWith("session-new"),
+		);
+		expect(apiMockState.createSession).toHaveBeenCalledWith("workspace-1");
+		expect(apiMockState.loadSessionThreadMessages).toHaveBeenCalledWith(
+			"session-1",
+		);
+		expect(
+			queryClient.getQueryData(sessionThreadCacheKey("session-new")),
+		).toEqual([]);
+		expect(onSelectModel).toHaveBeenCalledWith(
+			"session:session-new",
+			"gpt-5.4",
+		);
 	});
 
 	it("loads slash commands when the composer mounts", async () => {

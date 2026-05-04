@@ -57,6 +57,7 @@ import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
+const STREAM_START_PLACEHOLDER_TEXT = "Working…";
 
 function buildTitleSeed(prompt: string): string {
 	const normalized = prompt
@@ -74,6 +75,26 @@ function buildTitleSeed(prompt: string): string {
 	}
 
 	return `${normalized.slice(0, 33).trimEnd()}...`;
+}
+
+function createStreamStartPlaceholder(id: string): ThreadMessageLike {
+	return {
+		...createLiveThreadMessage({
+			id,
+			role: "assistant",
+			text: STREAM_START_PLACEHOLDER_TEXT,
+			createdAt: new Date().toISOString(),
+		}),
+		streaming: true,
+	};
+}
+
+function hasAssistantProgress(messages: ThreadMessageLike[]): boolean {
+	return messages.some(
+		(message) =>
+			message.role === "assistant" &&
+			(message.streaming === true || message.content.length > 0),
+	);
 }
 
 export type PendingPermission = {
@@ -1220,6 +1241,7 @@ export function useConversationStreaming({
 					.join("\n\n") || null;
 			const now = new Date().toISOString();
 			const userMessageId = crypto.randomUUID();
+			const streamStartPlaceholderId = crypto.randomUUID();
 			const optimisticUserMessage = createLiveThreadMessage({
 				id: userMessageId,
 				role: "user",
@@ -1241,6 +1263,13 @@ export function useConversationStreaming({
 				cacheSessionId,
 				optimisticUserMessage,
 			);
+			const streamStartPlaceholder = createStreamStartPlaceholder(
+				streamStartPlaceholderId,
+			);
+			replaceStreamingTail(queryClient, cacheSessionId, userMessageId, [
+				optimisticUserMessage,
+				streamStartPlaceholder,
+			]);
 			if (!isOverride) {
 				setComposerRestoreState(null);
 			}
@@ -1327,10 +1356,15 @@ export function useConversationStreaming({
 					const rendered = pendingPartial
 						? stabilizeStreamingMessages([...baseMessages, pendingPartial])
 						: baseMessages;
-					replaceStreamingTail(queryClient, cacheSessionId, userMessageId, [
-						optimisticUserMessage,
-						...rendered,
-					]);
+					const turn = hasAssistantProgress(rendered)
+						? [optimisticUserMessage, ...rendered]
+						: [optimisticUserMessage, ...rendered, streamStartPlaceholder];
+					replaceStreamingTail(
+						queryClient,
+						cacheSessionId,
+						userMessageId,
+						turn,
+					);
 				};
 
 				const scheduleFlush = () => {
