@@ -1,9 +1,5 @@
 # Product
 
-## Register
-
-product
-
 ## Users
 
 Developers running local AI agent workflows — software engineers who use Claude Code or OpenAI Codex to automate engineering tasks across multiple workspaces, branches, and PRs. They live in their terminal and editor all day, dispatch agents to parallel workspaces, and use Helmor to manage, prioritize, monitor progress, review streamed output and diffs, inspect PR status and comments, send follow-up prompts, and track AI-driven work across a project. They are keyboard-first power users who value a dense, keyboard-navigable desktop UI when context-switching between workspaces is expensive.
