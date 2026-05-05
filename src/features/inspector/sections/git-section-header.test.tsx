@@ -391,6 +391,62 @@ describe("GitSectionHeader forge onboarding", () => {
 		expect(screen.getByTestId("git-header-shimmer")).toBeInTheDocument();
 	});
 
+	it("shows refresh PR status beside Git even when create PR actions are hidden", async () => {
+		const onRefreshPrStatus = vi.fn().mockResolvedValue(undefined);
+
+		renderWithProviders(
+			<GitSectionHeader
+				commitButtonMode="create-pr"
+				commitButtonState="idle"
+				changeRequest={null}
+				forgeDetection={githubDetection({
+					cli: {
+						status: "ready",
+						provider: "github",
+						host: "github.com",
+						cliName: "gh",
+						login: "octo",
+						version: "2.65.0",
+						message: "Connected.",
+					},
+				})}
+				workspaceId="workspace-1"
+				onRefreshPrStatus={onRefreshPrStatus}
+			/>,
+		);
+
+		expect(screen.getByText("Git")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Refresh PR status" }));
+
+		await waitFor(() => {
+			expect(onRefreshPrStatus).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it("keeps refresh PR status visible while forge setup needs attention", async () => {
+		const onRefreshPrStatus = vi.fn().mockResolvedValue(undefined);
+
+		renderWithProviders(
+			<GitSectionHeader
+				commitButtonMode="create-pr"
+				commitButtonState="idle"
+				changeRequest={null}
+				forgeDetection={githubDetection()}
+				workspaceId="workspace-1"
+				onRefreshPrStatus={onRefreshPrStatus}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Connect GitHub" }),
+		).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Refresh PR status" }));
+
+		await waitFor(() => {
+			expect(onRefreshPrStatus).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	it("does not shimmer in idle / busy / done states", () => {
 		const { rerender } = renderWithProviders(
 			<GitSectionHeader

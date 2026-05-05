@@ -65,6 +65,42 @@ function getShortcutIdForCommitMode(
 	}
 }
 
+function PrStatusRefreshButton({
+	isRefreshing,
+	onRefresh,
+}: {
+	isRefreshing: boolean;
+	onRefresh: () => Promise<void>;
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon"
+					aria-label="Refresh PR status"
+					className="size-6 shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
+					disabled={isRefreshing}
+					onClick={() => void onRefresh()}
+				>
+					<RefreshCw
+						size={12}
+						strokeWidth={2}
+						className={isRefreshing ? "animate-spin" : ""}
+					/>
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent
+				side="bottom"
+				className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
+			>
+				Refresh PR status
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
 export type GitSectionHeaderProps = {
 	commitButtonMode: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
@@ -163,6 +199,7 @@ export function GitSectionHeader({
 		showForgeOnboarding;
 	const isMergeRequest = forgeDetection?.provider === "gitlab";
 	const showChangeRequest = changeRequest !== null && !showForgeOnboarding;
+	const showRefreshPrStatus = Boolean(onRefreshPrStatus);
 	const showContinue = commitButtonMode === "merged" && showChangeRequest;
 	const headerRef = useRef<HTMLDivElement | null>(null);
 	const changeRequestRef = useRef<HTMLDivElement | null>(null);
@@ -276,9 +313,19 @@ export function GitSectionHeader({
 				className="flex shrink-0 items-center gap-1.5"
 			>
 				{!showChangeRequest ? (
-					<span className={cn(INSPECTOR_SECTION_TITLE_CLASS, "translate-y-px")}>
-						Git
-					</span>
+					<>
+						<span
+							className={cn(INSPECTOR_SECTION_TITLE_CLASS, "translate-y-px")}
+						>
+							Git
+						</span>
+						{showRefreshPrStatus && (
+							<PrStatusRefreshButton
+								isRefreshing={isRefreshingPr}
+								onRefresh={handleRefreshPrStatus}
+							/>
+						)}
+					</>
 				) : (
 					(() => {
 						const button = (
@@ -324,18 +371,28 @@ export function GitSectionHeader({
 							? "Open merge request"
 							: "Open pull request";
 						return (
-							<Tooltip>
-								<TooltipTrigger asChild>{button}</TooltipTrigger>
-								<TooltipContent
-									side="bottom"
-									className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
-								>
-									<span className="truncate">{openLabel}</span>
-									{openChangeRequestShortcut ? (
-										<InlineShortcutDisplay hotkey={openChangeRequestShortcut} />
-									) : null}
-								</TooltipContent>
-							</Tooltip>
+							<>
+								<Tooltip>
+									<TooltipTrigger asChild>{button}</TooltipTrigger>
+									<TooltipContent
+										side="bottom"
+										className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
+									>
+										<span className="truncate">{openLabel}</span>
+										{openChangeRequestShortcut ? (
+											<InlineShortcutDisplay
+												hotkey={openChangeRequestShortcut}
+											/>
+										) : null}
+									</TooltipContent>
+								</Tooltip>
+								{showRefreshPrStatus && (
+									<PrStatusRefreshButton
+										isRefreshing={isRefreshingPr}
+										onRefresh={handleRefreshPrStatus}
+									/>
+								)}
+							</>
 						);
 					})()
 				)}
@@ -376,33 +433,6 @@ export function GitSectionHeader({
 									{CONTINUE_LABEL}
 								</span>
 							</Button>
-						)}
-						{commitButtonMode === "create-pr" && onRefreshPrStatus && (
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button
-										type="button"
-										variant="ghost"
-										size="icon"
-										aria-label="Refresh PR status"
-										className="size-6 shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
-										disabled={isRefreshingPr}
-										onClick={() => void handleRefreshPrStatus()}
-									>
-										<RefreshCw
-											size={12}
-											strokeWidth={2}
-											className={isRefreshingPr ? "animate-spin" : ""}
-										/>
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent
-									side="bottom"
-									className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
-								>
-									Refresh PR status
-								</TooltipContent>
-							</Tooltip>
 						)}
 						<div ref={commitButtonRef} className="flex shrink-0 items-center">
 							<Tooltip>

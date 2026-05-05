@@ -238,9 +238,16 @@ async function handleListModels(
 ): Promise<void> {
 	try {
 		const provider = parseProvider(params.provider);
+		logger.info(`[${id}] listModels requested`, { provider });
 		logger.debug(`[${id}] listModels`, { provider });
 		const models = await managers[provider].listModels();
 		emitter.modelsListed(id, provider, models);
+		logger.info(`[${id}] listModels completed`, {
+			provider,
+			count: models.length,
+			firstModel: models[0]?.id ?? null,
+			lastModel: models.at(-1)?.id ?? null,
+		});
 		logger.debug(`[${id}] listModels → ${models.length} entries (${provider})`);
 	} catch (err) {
 		const msg = errorMessage(err);

@@ -32,6 +32,10 @@ type CleanCacheOptions = {
 	includeGlobalCaches: boolean;
 };
 
+const COCOINDEX_PROJECT_CACHE_ENTRIES: CacheEntry[] = [
+	{ label: "CocoIndex Code project index", relativePath: ".cocoindex_code" },
+];
+
 const BUILD_CACHE_ENTRIES: CacheEntry[] = [
 	{ label: "Vite build output", relativePath: "dist" },
 	{ label: "Vite SSR build output", relativePath: "dist-ssr" },
@@ -78,7 +82,11 @@ const DEP_CACHE_ENTRIES: CacheEntry[] = [
 function main(argv: string[]): void {
 	const options = parseArgs(argv);
 	const repoRoot = resolveRepoRoot();
-	const entries = discoverExistingEntries(repoRoot, options.includeDeps);
+	const entries = discoverExistingEntries(
+		repoRoot,
+		options.includeDeps,
+		options.includeGlobalCaches,
+	);
 	const globalEntries = options.includeGlobalCaches
 		? discoverGlobalCacheEntries()
 		: [];
@@ -186,7 +194,7 @@ function printUsage(): void {
 			"  --dry-run        Show what would be deleted without deleting anything",
 			"  --include-deps   Also remove cache folders inside node_modules",
 			"  --include-global-caches",
-			"                  Also clear Bun, Cargo, and sccache caches shared by other repos",
+			"                  Also clear Bun, Cargo, and sccache caches plus the /cc project index",
 			"  --help, -h       Show this help message",
 			"",
 			"Examples:",
@@ -194,6 +202,7 @@ function printUsage(): void {
 			"  bun run clean:cache --dry-run",
 			"  bun run clean:cache --include-deps",
 			"  bun run clean:cache --include-global-caches --dry-run",
+			"  bun run archive:clean --dry-run",
 			"",
 		].join("\n"),
 	);
@@ -213,10 +222,14 @@ function resolveRepoRoot(): string {
 function discoverExistingEntries(
 	repoRoot: string,
 	includeDeps: boolean,
+	includeGlobalCaches = false,
 ): ExistingCacheEntry[] {
-	const cacheEntries = includeDeps
+	const baseEntries = includeDeps
 		? [...BUILD_CACHE_ENTRIES, ...DEP_CACHE_ENTRIES]
 		: BUILD_CACHE_ENTRIES;
+	const cacheEntries = includeGlobalCaches
+		? [...baseEntries, ...COCOINDEX_PROJECT_CACHE_ENTRIES]
+		: baseEntries;
 
 	return cacheEntries.flatMap((entry) => {
 		const fullPath = path.resolve(repoRoot, entry.relativePath);

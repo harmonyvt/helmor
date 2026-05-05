@@ -41,6 +41,7 @@ const CODEX_BIN_PATH = process.env.HELMOR_CODEX_BIN_PATH || "codex";
 const RETRY_SUPPRESSION_MS = 30_000;
 const RETRY_NOTICE_DEDUPE_MS = 1_000;
 const MISSING_ITEM_COMPACTION_TIMEOUT_MS = 60_000;
+const MISSING_ITEM_THREAD_RECOVERY_TIMEOUT_MS = 20_000;
 
 const HELMOR_CLIENT_INFO = {
 	clientInfo: {
@@ -374,7 +375,7 @@ export class CodexAppServerManager implements SessionManager {
 		let recoveryCompactionTimeout: ReturnType<typeof setTimeout> | null = null;
 
 		return new Promise<void>((resolve, reject) => {
-			let missingItemRecoveryAttempted = false;
+			let missingItemRecoveryAttempts = 0;
 			let recoveryCompactionResolve: (() => void) | null = null;
 
 			ctx.turnResolve = resolve;
@@ -415,6 +416,11 @@ export class CodexAppServerManager implements SessionManager {
 				});
 
 			const startTurn = (label: string) => {
+				if (!ctx.providerThreadId) {
+					reject(new Error("Cannot start a Codex turn without a thread id"));
+					return;
+				}
+				turnStartParams.threadId = ctx.providerThreadId;
 				ctx.server
 					.sendRequest("turn/start", turnStartParams)
 					.then((response) => {
@@ -429,25 +435,102 @@ export class CodexAppServerManager implements SessionManager {
 					});
 			};
 
+			const forkThreadForRecovery = async () => {
+				if (!ctx.providerThreadId) {
+					throw new Error("Cannot fork a Codex thread without a thread id");
+				}
+				const response = await ctx.server.sendRequest<Record<string, unknown>>(
+					"thread/fork",
+					buildThreadRecoveryParams(
+						ctx.providerThreadId,
+						workDir,
+						permissionMode,
+						model,
+						effectiveFastMode,
+					),
+					MISSING_ITEM_THREAD_RECOVERY_TIMEOUT_MS,
+				);
+				const threadId = deepGet(response, "thread", "id");
+				if (typeof threadId !== "string" || !threadId) {
+					throw new Error("thread/fork did not return a thread id");
+				}
+				ctx.providerThreadId = threadId;
+			};
+
+			const compactThreadForRecovery = async () => {
+				const compacted = waitForRecoveryCompaction();
+				await ctx.server.sendRequest(
+					"thread/compact/start",
+					{ threadId: ctx.providerThreadId },
+					MISSING_ITEM_THREAD_RECOVERY_TIMEOUT_MS,
+				);
+				await compacted;
+			};
+
+			const startFreshThreadForRecovery = async () => {
+				const response = await ctx.server.sendRequest<Record<string, unknown>>(
+					"thread/start",
+					buildThreadStartParams(
+						workDir,
+						permissionMode,
+						model,
+						effectiveFastMode,
+					),
+					MISSING_ITEM_THREAD_RECOVERY_TIMEOUT_MS,
+				);
+				const threadId = deepGet(response, "thread", "id");
+				if (typeof threadId !== "string" || !threadId) {
+					throw new Error("thread/start did not return a thread id");
+				}
+				ctx.providerThreadId = threadId;
+			};
+
 			const recoverMissingResponseItem = async (originalMessage: string) => {
-				missingItemRecoveryAttempted = true;
+				const recoveryAttempt = missingItemRecoveryAttempts++;
 				ctx.activeTurnId = null;
 				emitMissingResponseItemRecoveryNotice(ctx, requestId);
 
 				try {
-					const compacted = waitForRecoveryCompaction();
-					await ctx.server.sendRequest(
-						"thread/compact/start",
-						{ threadId: ctx.providerThreadId },
-						20_000,
+					if (recoveryAttempt === 0) {
+						try {
+							await forkThreadForRecovery();
+							logger.info(
+								"Codex missing response item recovered via thread fork",
+								{
+									requestId,
+									sessionId,
+									threadId: ctx.providerThreadId,
+								},
+							);
+						} catch (forkError) {
+							logger.info(
+								"Codex missing response item fork recovery failed; trying compaction",
+								errorDetails(forkError),
+							);
+							await compactThreadForRecovery();
+							logger.info(
+								"Codex missing response item recovered via compaction",
+								{
+									requestId,
+									sessionId,
+									threadId: ctx.providerThreadId,
+								},
+							);
+						}
+						startTurn("turn/start retry after context recovery");
+						return;
+					}
+
+					await startFreshThreadForRecovery();
+					logger.info(
+						"Codex missing response item recovered via fresh thread",
+						{
+							requestId,
+							sessionId,
+							threadId: ctx.providerThreadId,
+						},
 					);
-					await compacted;
-					logger.info("Codex missing response item recovered via compaction", {
-						requestId,
-						sessionId,
-						threadId: ctx.providerThreadId,
-					});
-					startTurn("turn/start retry after context compaction");
+					startTurn("turn/start retry after fresh thread recovery");
 				} catch (err) {
 					if (recoveryCompactionTimeout) {
 						clearTimeout(recoveryCompactionTimeout);
@@ -506,7 +589,7 @@ export class CodexAppServerManager implements SessionManager {
 					}
 					if (
 						!isCompactCommand &&
-						!missingItemRecoveryAttempted &&
+						missingItemRecoveryAttempts < 2 &&
 						ctx.providerThreadId &&
 						isMissingCodexResponseItemError(msg)
 					) {
@@ -1040,17 +1123,9 @@ export class CodexAppServerManager implements SessionManager {
 				cwd,
 				model: model ?? "(default)",
 			});
-			const threadStartParams: Record<string, unknown> = {
-				cwd,
-				approvalPolicy: toCodexApprovalPolicy(permissionMode) ?? "never",
-				sandbox:
-					permissionMode === "plan" ? "workspace-write" : "danger-full-access",
-			};
-			if (model) threadStartParams.model = model;
-			if (fastMode) threadStartParams.serviceTier = "fast";
 			const response = await server.sendRequest<Record<string, unknown>>(
 				"thread/start",
-				threadStartParams,
+				buildThreadStartParams(cwd, permissionMode, model, fastMode === true),
 			);
 			threadId = (deepGet(response, "thread", "id") as string) ?? null;
 			logger.info("Codex thread started", { threadId: threadId ?? "(none)" });
@@ -1126,6 +1201,36 @@ function emitMissingResponseItemRecoveryNotice(
 		type: "system",
 		subtype: "codex_missing_response_item_recovery",
 	});
+}
+
+function buildThreadStartParams(
+	cwd: string,
+	permissionMode: string | undefined,
+	model: string | undefined,
+	fastMode: boolean,
+): Record<string, unknown> {
+	const params: Record<string, unknown> = {
+		cwd,
+		approvalPolicy: toCodexApprovalPolicy(permissionMode) ?? "never",
+		sandbox:
+			permissionMode === "plan" ? "workspace-write" : "danger-full-access",
+	};
+	if (model) params.model = model;
+	if (fastMode) params.serviceTier = "fast";
+	return params;
+}
+
+function buildThreadRecoveryParams(
+	threadId: string,
+	cwd: string,
+	permissionMode: string | undefined,
+	model: string | undefined,
+	fastMode: boolean,
+): Record<string, unknown> {
+	return {
+		threadId,
+		...buildThreadStartParams(cwd, permissionMode, model, fastMode),
+	};
 }
 
 function flattenNotification(

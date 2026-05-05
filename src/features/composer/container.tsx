@@ -8,6 +8,7 @@ import { ShimmerText } from "@/components/ui/shimmer-text";
 import { ShineBorder } from "@/components/ui/shine-border";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import {
 	getShortcut,
 	getShortcutConflicts,
@@ -39,6 +40,7 @@ import {
 	workspaceLinkedDirectoriesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { useSettings } from "@/lib/settings";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
@@ -87,6 +89,37 @@ const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	ADD_DIR_COMMAND,
 	CODEX_COMPACT_COMMAND,
 ];
+
+function debugNowMs(): number {
+	return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function summarizeModelSections(
+	sections: readonly AgentModelSection[],
+): Record<string, number> {
+	return Object.fromEntries(
+		sections.map((section) => [section.id, section.options.length]),
+	);
+}
+
+function modelProviderCounts(
+	sections: readonly AgentModelSection[],
+): Record<string, number> {
+	const counts: Record<string, number> = {};
+	for (const section of sections) {
+		for (const option of section.options) {
+			counts[option.provider] = (counts[option.provider] ?? 0) + 1;
+		}
+	}
+	return counts;
+}
+
+function logComposerDebug(
+	event: string,
+	payload?: Record<string, unknown>,
+): void {
+	console.info(`[composer-debug] ${event}`, payload ?? {});
+}
 
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
@@ -205,6 +238,12 @@ export const WorkspaceComposerContainer = memo(
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const { settings, updateSettings } = useSettings();
+		const renderDebugRef = useRef({
+			count: 0,
+			startedAt: debugNowMs(),
+			lastBurstWarningAt: 0,
+		});
+		renderDebugRef.current.count += 1;
 
 		// -----------------------------------------------------------------------
 		// Mid-thread provider swap state
@@ -227,6 +266,9 @@ export const WorkspaceComposerContainer = memo(
 			modelId: string;
 			resolve: (choice: ProviderSwapChoice | null) => void;
 		} | null>(null);
+		const [providerSwitchStatus, setProviderSwitchStatus] = useState<
+			string | null
+		>(null);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -472,6 +514,38 @@ export const WorkspaceComposerContainer = memo(
 			? autoCloseActionKinds.has(sessionActionKind)
 			: false;
 
+		useEffect(() => {
+			logComposerDebug("model sections state", {
+				status: modelSectionsQuery.status,
+				fetchStatus: modelSectionsQuery.fetchStatus,
+				sectionCounts: summarizeModelSections(modelSections),
+				providerCounts: modelProviderCounts(modelSections),
+				selectedModelId,
+				effectiveSelectedModelId,
+				effectiveModelProvider: effectiveModel?.provider ?? null,
+				modelsLoading,
+			});
+		}, [
+			effectiveModel?.provider,
+			effectiveSelectedModelId,
+			modelSections,
+			modelSectionsQuery.fetchStatus,
+			modelSectionsQuery.status,
+			modelsLoading,
+			selectedModelId,
+		]);
+
+		useEffect(() => {
+			if (!swapDialogState) return;
+			logComposerDebug("provider swap dialog visible", {
+				fromProvider: swapDialogState.fromProvider,
+				toProvider: swapDialogState.toProvider,
+				modelId: swapDialogState.modelId,
+				workspaceId: displayedWorkspaceId,
+				sessionId: displayedSessionId,
+			});
+		}, [displayedSessionId, displayedWorkspaceId, swapDialogState]);
+
 		const handleToggleAutoClose = useCallback(async () => {
 			if (!sessionActionKind) return;
 			const currentKinds = Array.from(autoCloseActionKinds);
@@ -494,9 +568,35 @@ export const WorkspaceComposerContainer = memo(
 
 		const handleModelSelect = useCallback(
 			async (modelId: string) => {
+				if (providerSwitchStatus) {
+					logComposerDebug("model select ignored during provider switch", {
+						modelId,
+						providerSwitchStatus,
+						workspaceId: displayedWorkspaceId,
+						sessionId: displayedSessionId,
+					});
+					return;
+				}
+
 				const newModel = findModelOption(modelSections, modelId);
 				const currentProvider = provider;
 				const newProvider = newModel?.provider;
+				logComposerDebug("model select requested", {
+					modelId,
+					modelFound: Boolean(newModel),
+					currentProvider,
+					newProvider: newProvider ?? null,
+					currentSessionId: currentSession?.id ?? null,
+					currentSessionAgentType: currentSession?.agentType ?? null,
+					currentSessionModel: currentSession?.model ?? null,
+					currentSessionStatus: currentSession?.status ?? null,
+					isNewSession: isNewSession(currentSession),
+					workspaceId: displayedWorkspaceId,
+					sessionId: displayedSessionId,
+					contextKey: composerContextKey,
+					sectionCounts: summarizeModelSections(modelSections),
+					providerCounts: modelProviderCounts(modelSections),
+				});
 
 				// Only create a new session when provider changes AND the session
 				// already has messages. New/empty sessions just switch in-place.
@@ -508,29 +608,63 @@ export const WorkspaceComposerContainer = memo(
 					displayedSessionId &&
 					displayedWorkspaceId
 				) {
-					// Ask the user for consent before switching providers.
+					// Ask the user for consent before switching providers. Defer the
+					// dialog one tick so the model popover can finish closing first;
+					// otherwise Radix focus scopes can fight when a large Pi list is
+					// open, tripping React's nested-update guard.
 					const choice = await new Promise<ProviderSwapChoice | null>(
 						(resolve) => {
-							setSwapDialogState({
-								fromProvider: currentProvider as AgentProvider,
-								toProvider: newProvider as AgentProvider,
-								modelId,
-								resolve,
-							});
+							window.setTimeout(() => {
+								logComposerDebug("opening provider swap dialog", {
+									fromProvider: currentProvider,
+									toProvider: newProvider,
+									modelId,
+									workspaceId: displayedWorkspaceId,
+									sessionId: displayedSessionId,
+								});
+								setSwapDialogState({
+									fromProvider: currentProvider as AgentProvider,
+									toProvider: newProvider as AgentProvider,
+									modelId,
+									resolve,
+								});
+							}, 0);
 						},
 					);
 
 					// User cancelled — leave everything as-is.
+					logComposerDebug("provider swap dialog resolved", {
+						choice,
+						fromProvider: currentProvider,
+						toProvider: newProvider,
+						modelId,
+						workspaceId: displayedWorkspaceId,
+						sessionId: displayedSessionId,
+					});
 					if (choice === null) return;
+
+					const toastId = toast.loading("Preparing provider switch…");
+					setProviderSwitchStatus("Preparing provider switch…");
 
 					try {
 						// Build the context-transfer prefix BEFORE creating the new
 						// session so any load failure doesn't leave an orphaned session.
 						let contextPrefix: string | null = null;
 						if (choice === "bring-history") {
+							setProviderSwitchStatus("Loading conversation history…");
+							toast.loading("Loading conversation history…", { id: toastId });
+							logComposerDebug("loading provider swap history", {
+								sessionId: displayedSessionId,
+								fromProvider: currentProvider,
+								toProvider: newProvider,
+							});
 							try {
 								const msgs =
 									await loadSessionThreadMessages(displayedSessionId);
+								logComposerDebug("provider swap history loaded", {
+									sessionId: displayedSessionId,
+									messageCount: msgs.length,
+								});
 								const prefix = buildContextTransferPrefix(
 									msgs,
 									currentProvider as AgentProvider,
@@ -538,13 +672,44 @@ export const WorkspaceComposerContainer = memo(
 								if (prefix) {
 									contextPrefix = prefix;
 								}
-							} catch {
-								// Best-effort: if loading history fails, continue without it.
+								logComposerDebug("provider swap history prefix built", {
+									sessionId: displayedSessionId,
+									hasContextPrefix: Boolean(contextPrefix),
+									contextPrefixLength: contextPrefix?.length ?? 0,
+								});
+							} catch (error) {
+								console.warn(
+									"[composer] failed to load provider-swap history:",
+									error,
+								);
+								toast.warning("Could not load history; switching without it.", {
+									id: toastId,
+								});
 							}
 						}
 
+						setProviderSwitchStatus("Creating a new session…");
+						toast.loading("Creating a new session…", { id: toastId });
+						logComposerDebug("creating provider swap session", {
+							workspaceId: displayedWorkspaceId,
+							modelId,
+							toProvider: newProvider,
+						});
 						const { sessionId: newSessionId } =
 							await createSession(displayedWorkspaceId);
+						logComposerDebug("provider swap session created", {
+							workspaceId: displayedWorkspaceId,
+							newSessionId,
+						});
+						seedNewSessionInCache({
+							queryClient,
+							workspaceId: displayedWorkspaceId,
+							sessionId: newSessionId,
+							workspace: workspaceDetailQuery.data ?? null,
+							existingSessions: sessionsQuery.data ?? [],
+						});
+
+						queryClient.setQueryData(sessionThreadCacheKey(newSessionId), []);
 
 						// Register the pending context transfer for the new session.
 						if (contextPrefix) {
@@ -554,7 +719,24 @@ export const WorkspaceComposerContainer = memo(
 							);
 						}
 
-						await Promise.all([
+						setProviderSwitchStatus("Switching composer to new provider…");
+						toast.loading("Switching composer to new provider…", {
+							id: toastId,
+						});
+						const newContextKey = getComposerContextKey(
+							displayedWorkspaceId,
+							newSessionId,
+						);
+						logComposerDebug("applying provider swap model selection", {
+							newSessionId,
+							newContextKey,
+							modelId,
+							toProvider: newProvider,
+						});
+						onSelectModel(newContextKey, modelId);
+						onSwitchSession?.(newSessionId);
+
+						void Promise.all([
 							queryClient.invalidateQueries({
 								queryKey:
 									helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
@@ -570,18 +752,38 @@ export const WorkspaceComposerContainer = memo(
 									]
 								: []),
 						]);
-						onSwitchSession?.(newSessionId);
-						const newContextKey = getComposerContextKey(
-							displayedWorkspaceId,
+						toast.success("Provider switched. Send a message to continue.", {
+							id: toastId,
+						});
+						logComposerDebug("provider swap completed", {
+							workspaceId: displayedWorkspaceId,
+							oldSessionId: displayedSessionId,
 							newSessionId,
-						);
-						onSelectModel(newContextKey, modelId);
+							modelId,
+							fromProvider: currentProvider,
+							toProvider: newProvider,
+						});
 						return;
-					} catch {
-						// Fall through to just update model
+					} catch (error) {
+						console.error("[composer] provider switch failed:", error);
+						toast.error(
+							error instanceof Error
+								? error.message
+								: "Failed to switch provider.",
+							{ id: toastId },
+						);
+						return;
+					} finally {
+						setProviderSwitchStatus(null);
 					}
 				}
 
+				logComposerDebug("model select applied in current context", {
+					contextKey: composerContextKey,
+					modelId,
+					currentProvider,
+					newProvider: newProvider ?? null,
+				});
 				onSelectModel(composerContextKey, modelId);
 			},
 			[
@@ -594,7 +796,10 @@ export const WorkspaceComposerContainer = memo(
 				onSelectModel,
 				onSwitchSession,
 				queryClient,
+				workspaceDetailQuery.data,
 				workspaceDetailQuery.data?.repoId,
+				sessionsQuery.data,
+				providerSwitchStatus,
 			],
 		);
 
@@ -646,8 +851,84 @@ export const WorkspaceComposerContainer = memo(
 		const slashCommandsError =
 			Boolean(workingDirectory) && slashCommandsQuery.isError;
 		const refetchSlashCommands = useCallback(() => {
+			logComposerDebug("slash commands retry requested", {
+				provider: slashProvider,
+				workingDirectory,
+				workspaceId: displayedWorkspaceId,
+			});
 			void slashCommandsQuery.refetch();
-		}, [slashCommandsQuery]);
+		}, [
+			displayedWorkspaceId,
+			slashCommandsQuery,
+			slashProvider,
+			workingDirectory,
+		]);
+
+		useEffect(() => {
+			logComposerDebug("slash commands state", {
+				provider: slashProvider,
+				workingDirectory,
+				workspaceId: displayedWorkspaceId,
+				status: slashCommandsQuery.status,
+				fetchStatus: slashCommandsQuery.fetchStatus,
+				isPending: slashCommandsQuery.isPending,
+				isError: slashCommandsQuery.isError,
+				agentCommandCount: agentSlashCommands.length,
+				totalCommandCount: slashCommands.length,
+			});
+		}, [
+			agentSlashCommands.length,
+			displayedWorkspaceId,
+			slashCommands.length,
+			slashCommandsQuery.fetchStatus,
+			slashCommandsQuery.isError,
+			slashCommandsQuery.isPending,
+			slashCommandsQuery.status,
+			slashProvider,
+			workingDirectory,
+		]);
+
+		useEffect(() => {
+			logComposerDebug("session context state", {
+				workspaceId: displayedWorkspaceId,
+				sessionId: displayedSessionId,
+				composerContextKey,
+				currentSessionId: currentSession?.id ?? null,
+				currentSessionAgentType: currentSession?.agentType ?? null,
+				currentSessionModel: currentSession?.model ?? null,
+				currentSessionStatus: currentSession?.status ?? null,
+				workspaceState: workspaceDetailQuery.data?.state ?? null,
+				workspaceStatus: workspaceDetailQuery.data?.status ?? null,
+				workingDirectory,
+				provider,
+				slashProvider,
+				effortLevel,
+				effectivePermissionMode,
+				fastMode,
+				supportsFastMode,
+				sessionsStatus: sessionsQuery.status,
+				sessionsCount: sessionsQuery.data?.length ?? 0,
+			});
+		}, [
+			composerContextKey,
+			currentSession?.agentType,
+			currentSession?.id,
+			currentSession?.model,
+			currentSession?.status,
+			displayedSessionId,
+			displayedWorkspaceId,
+			effectivePermissionMode,
+			effortLevel,
+			fastMode,
+			provider,
+			sessionsQuery.data?.length,
+			sessionsQuery.status,
+			slashProvider,
+			supportsFastMode,
+			workingDirectory,
+			workspaceDetailQuery.data?.state,
+			workspaceDetailQuery.data?.status,
+		]);
 
 		const handleComposerSubmit = useCallback(
 			(
@@ -661,6 +942,12 @@ export const WorkspaceComposerContainer = memo(
 				},
 			) => {
 				if (!effectiveModel) {
+					logComposerDebug("submit blocked without effective model", {
+						selectedModelId,
+						effectiveSelectedModelId,
+						workspaceId: displayedWorkspaceId,
+						sessionId: displayedSessionId,
+					});
 					return;
 				}
 				// Translate the per-submit "opposite" toggle into a concrete
@@ -684,6 +971,23 @@ export const WorkspaceComposerContainer = memo(
 					}
 				}
 
+				logComposerDebug("submit prepared", {
+					workspaceId: displayedWorkspaceId,
+					sessionId: displayedSessionId,
+					modelId: effectiveModel.id,
+					modelProvider: effectiveModel.provider,
+					modelCliModel: effectiveModel.cliModel,
+					workingDirectory,
+					effortLevel,
+					permissionMode:
+						options?.permissionModeOverride ?? effectivePermissionMode,
+					fastMode: supportsFastMode ? fastMode : false,
+					promptLength: prompt.length,
+					imageCount: imagePaths.length,
+					fileCount: filePaths.length,
+					customTagCount: customTags.length,
+					hasContextTransferPrefix: Boolean(contextTransferPrefix),
+				});
 				onSubmit({
 					prompt,
 					imagePaths,
@@ -709,6 +1013,9 @@ export const WorkspaceComposerContainer = memo(
 				supportsFastMode,
 				settings.followUpBehavior,
 				displayedSessionId,
+				displayedWorkspaceId,
+				selectedModelId,
+				effectiveSelectedModelId,
 			],
 		);
 
@@ -742,10 +1049,21 @@ export const WorkspaceComposerContainer = memo(
 				pendingPromptForSession.forceQueue ? "q" : "",
 			].join("|");
 			if (dispatchedPromptKeyRef.current === dispatchKey) {
+				logComposerDebug("pending prompt already dispatched", {
+					dispatchKey,
+					sessionId: displayedSessionId,
+				});
 				return;
 			}
 			dispatchedPromptKeyRef.current = dispatchKey;
 
+			logComposerDebug("dispatching pending prompt", {
+				sessionId: pendingPromptForSession.sessionId,
+				modelId: effectiveModel.id,
+				modelProvider: effectiveModel.provider,
+				promptLength: pendingPromptForSession.prompt.length,
+				forceQueue: pendingPromptForSession.forceQueue ?? false,
+			});
 			onSubmit({
 				prompt: pendingPromptForSession.prompt,
 				imagePaths: [],
@@ -773,11 +1091,53 @@ export const WorkspaceComposerContainer = memo(
 			workingDirectory,
 		]);
 
+		useEffect(() => {
+			const debug = renderDebugRef.current;
+			const elapsedMs = Math.round(debugNowMs() - debug.startedAt);
+			const snapshot = {
+				renderCount: debug.count,
+				elapsedMs,
+				workspaceId: displayedWorkspaceId,
+				sessionId: displayedSessionId,
+				contextKey: composerContextKey,
+				selectedModelId,
+				effectiveSelectedModelId,
+				provider,
+				slashProvider,
+				swapDialogOpen: Boolean(swapDialogState),
+				providerSwitchStatus,
+				modelSectionsStatus: modelSectionsQuery.status,
+				sessionsStatus: sessionsQuery.status,
+				workspaceStatus: workspaceDetailQuery.status,
+				slashCommandsStatus: slashCommandsQuery.status,
+				slashCommandsFetching: slashCommandsQuery.isFetching,
+				loadingConversationContext,
+				composerUnavailable,
+				composerAwaitingFinalize,
+			};
+			if (debug.count <= 20 || debug.count % 10 === 0) {
+				logComposerDebug("render snapshot", snapshot);
+			}
+			if (
+				debug.count >= 50 &&
+				elapsedMs < 2_000 &&
+				debugNowMs() - debug.lastBurstWarningAt > 250
+			) {
+				debug.lastBurstWarningAt = debugNowMs();
+				console.warn("[composer-debug] rapid render burst", snapshot);
+			}
+		});
+
 		const handleSelectModelInner = useCallback(
 			(modelId: string) => {
+				logComposerDebug("model picker callback", {
+					modelId,
+					workspaceId: displayedWorkspaceId,
+					sessionId: displayedSessionId,
+				});
 				void handleModelSelect(modelId);
 			},
-			[handleModelSelect],
+			[displayedSessionId, displayedWorkspaceId, handleModelSelect],
 		);
 
 		const handleToggleFavouriteInner = useCallback(
@@ -786,6 +1146,11 @@ export const WorkspaceComposerContainer = memo(
 				const next = current.includes(modelId)
 					? current.filter((id) => id !== modelId)
 					: [...current, modelId];
+				logComposerDebug("favorite models update", {
+					modelId,
+					wasFavorite: current.includes(modelId),
+					nextCount: next.length,
+				});
 				void updateSettings({ favoriteModelIds: next });
 			},
 			[settings.favoriteModelIds, updateSettings],
@@ -889,6 +1254,13 @@ export const WorkspaceComposerContainer = memo(
 					) : null}
 
 					<div className="relative z-10">
+						{providerSwitchStatus ? (
+							<div className="mb-2 flex items-center justify-center rounded-xl border border-border bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground">
+								<ShimmerText durationMs={1700}>
+									{providerSwitchStatus}
+								</ShimmerText>
+							</div>
+						) : null}
 						<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex justify-center">
 							<SubmitQueueList
 								items={queueItems}
@@ -901,9 +1273,7 @@ export const WorkspaceComposerContainer = memo(
 							contextKey={composerContextKey}
 							sessionId={displayedSessionId}
 							providerSessionId={currentSession?.providerSessionId ?? null}
-							agentType={
-								effectiveModel?.provider === "codex" ? "codex" : "claude"
-							}
+							agentType={slashProvider}
 							focusShortcut={focusShortcut}
 							togglePlanShortcut={togglePlanShortcut}
 							toggleFollowUpShortcut={toggleFollowUpShortcut}
@@ -913,7 +1283,8 @@ export const WorkspaceComposerContainer = memo(
 							submitDisabled={
 								disabled ||
 								loadingConversationContext ||
-								composerAwaitingFinalize
+								composerAwaitingFinalize ||
+								Boolean(providerSwitchStatus)
 							}
 							onStop={onStop}
 							sending={sending}
@@ -969,10 +1340,21 @@ export const WorkspaceComposerContainer = memo(
 						fromProvider={swapDialogState.fromProvider}
 						toProvider={swapDialogState.toProvider}
 						onChoose={(choice) => {
+							logComposerDebug("provider swap choice selected", {
+								choice,
+								fromProvider: swapDialogState.fromProvider,
+								toProvider: swapDialogState.toProvider,
+								modelId: swapDialogState.modelId,
+							});
 							swapDialogState.resolve(choice);
 							setSwapDialogState(null);
 						}}
 						onCancel={() => {
+							logComposerDebug("provider swap cancelled", {
+								fromProvider: swapDialogState.fromProvider,
+								toProvider: swapDialogState.toProvider,
+								modelId: swapDialogState.modelId,
+							});
 							swapDialogState.resolve(null);
 							setSwapDialogState(null);
 						}}
