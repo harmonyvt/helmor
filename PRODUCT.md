@@ -6,15 +6,15 @@ product
 
 ## Users
 
-Developers running local AI agent workflows — software engineers who use Claude Code or OpenAI Codex to automate engineering tasks on multiple parallel branches. They live in their terminal and editor all day, dispatch agents to parallel workspaces, and use Helmor to manage, prioritize, monitor progress, review diffs, send follow-up prompts, and inspect what changed. They are keyboard-first power users who value a dense, keyboard-navigable desktop UI when context-switching between workspaces is expensive.
+Developers running local AI agent workflows — software engineers who use Claude Code or OpenAI Codex to automate engineering tasks across multiple workspaces, branches, and PRs. They live in their terminal and editor all day, dispatch agents to parallel workspaces, and use Helmor to manage, prioritize, monitor progress, review streamed output and diffs, inspect PR status and comments, send follow-up prompts, and track AI-driven work across a project. They are keyboard-first power users who value a dense, keyboard-navigable desktop UI when context-switching between workspaces is expensive.
 
 ## Product Purpose
 
-Helmor is a local-first workspace management shell for AI coding agents. It runs as a macOS desktop app, connecting to Claude Code CLI and OpenAI Codex CLI processes and surfacing their sessions, thread history, and file changes in a three-panel IDE-like UI. It lets developers create isolated workspaces per task, stream agent output in real time, review file changes in an inline diff editor, manage git operations, and send follow-up prompts — all without leaving the app. The Goals workspace extends this with a Kanban board where each card is a child workspace, and Pi — Helmor's built-in planning AI — manages the board on the user's behalf.
+Helmor is a local-first workspace management shell for AI coding agents. It runs as a Tauri macOS desktop app, connecting to Claude Code CLI and OpenAI Codex CLI processes while storing sessions and messages in a local SQLite database. It lets developers create isolated workspaces per task, stream agent output in real time, review file changes in an inline diff editor, manage git and PR lifecycle, inspect CI checks and comments, open terminal or browser context, and send follow-up prompts — all without leaving the app. The Goals workspace extends this with a Kanban board where each card is a child workspace, and Pi — Helmor's built-in planning AI — manages the board on the user's behalf.
 
 ## Brand Personality
 
-Calm, precise, composed, capable. The app does not compete for attention with the agents working on its behalf. No celebration, no loading spinners with personality, no color-drenched hero moments. It surfaces information at the moment it's needed and disappears otherwise, making AI agents feel native to the developer's existing workflow. Closest analogues: Linear (terse, opinionated, fast) and Ghostty (native-feeling, no chrome).
+Calm, precise, composed, capable. The app does not compete for attention with the agents working on its behalf. No celebration, no loading spinners with personality, no color-drenched hero moments. It surfaces just enough context at the moment it's needed and disappears otherwise, making AI agents feel native to the developer's existing workflow. Closest analogues: Linear (terse, opinionated, fast) and Ghostty (native-feeling, no chrome).
 
 ## Anti-references
 

@@ -124,6 +124,10 @@ type InspectorTabsSectionProps = {
 	 * enlarging (and not on the empty "Run setup" / "Open settings" placeholders).
 	 */
 	canHoverExpand: boolean;
+	/** Show the Comments tab. True when the workspace has PR comment data. */
+	showCommentsTab: boolean;
+	/** Amber dot badge on the Comments tab when true. */
+	hasUnresolvedComments: boolean;
 	children?: React.ReactNode;
 };
 
@@ -142,6 +146,8 @@ export function InspectorTabsSection({
 	onCloseTerminal,
 	canSpawnTerminal,
 	canHoverExpand,
+	showCommentsTab,
+	hasUnresolvedComments,
 	children,
 }: InspectorTabsSectionProps) {
 	const { settings } = useSettings();
@@ -648,6 +654,38 @@ export function InspectorTabsSection({
 										)}
 									/>
 								</button>
+								{showCommentsTab && (
+									<button
+										type="button"
+										role="tab"
+										id="inspector-tab-comments"
+										aria-controls="inspector-panel-comments"
+										aria-selected={activeTab === "comments"}
+										tabIndex={activeTab === "comments" ? 0 : -1}
+										className={cn(
+											INSPECTOR_TAB_BUTTON_CLASS,
+											"shrink-0",
+											activeTab === "comments" && "text-foreground",
+										)}
+										onClick={() => handleTabClick("comments")}
+									>
+										Comments
+										{hasUnresolvedComments && (
+											<span
+												aria-hidden="true"
+												className="size-1.5 shrink-0 rounded-full bg-[var(--workspace-pr-conflicts-accent)]"
+											/>
+										)}
+										<span
+											aria-hidden="true"
+											className={cn(
+												"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+												activeTab === "comments" && "opacity-100",
+											)}
+										/>
+									</button>
+								)}
+
 								{terminalInstances.length === 0 ? (
 									// Placeholder tab so the Terminal entry point is always
 									// discoverable, even on a fresh workspace with no live

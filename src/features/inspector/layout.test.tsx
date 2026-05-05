@@ -33,6 +33,8 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand
+				showCommentsTab={false}
+				hasUnresolvedComments={false}
 			>
 				<div>Terminal body</div>
 			</InspectorTabsSection>,
@@ -79,6 +81,8 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand
+				showCommentsTab={false}
+				hasUnresolvedComments={false}
 			>
 				<div>Terminal body</div>
 			</InspectorTabsSection>,
@@ -113,6 +117,8 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand={false}
+				showCommentsTab={false}
+				hasUnresolvedComments={false}
 			>
 				<div>Placeholder body</div>
 			</InspectorTabsSection>,
