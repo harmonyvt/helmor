@@ -262,21 +262,20 @@ export function useWorkspacesSidebarController({
 	const rollbackArchivedWorkspace = useCallback(
 		(workspaceId: string, error: unknown, fallbackMessage: string) => {
 			updateArchivingWorkspaceId(workspaceId, false);
-			let rollback: PendingArchiveEntry | null = null;
 			setPendingArchives((current) => {
 				const existing = current.get(workspaceId) ?? null;
 				if (!existing) {
 					return current;
 				}
-				rollback = existing;
 				const next = new Map(current);
 				next.delete(workspaceId);
 				return next;
 			});
 
-			if (!rollback) {
-				flushSidebarLists();
-			}
+			// Balance the beginSidebarMutation from handleArchiveWorkspace. Only the
+			// final in-flight sidebar mutation may refetch the lists; otherwise this
+			// rollback could overwrite another optimistic sidebar transition.
+			endSidebarMutation();
 
 			pushWorkspaceErrorToast(
 				workspaceId,
@@ -285,7 +284,7 @@ export function useWorkspacesSidebarController({
 				fallbackMessage,
 			);
 		},
-		[flushSidebarLists, pushWorkspaceErrorToast, updateArchivingWorkspaceId],
+		[endSidebarMutation, pushWorkspaceErrorToast, updateArchivingWorkspaceId],
 	);
 
 	useEffect(() => {
@@ -314,6 +313,9 @@ export function useWorkspacesSidebarController({
 			if (disposed) {
 				return;
 			}
+			// Clear the archiving spinner now that the background task has
+			// actually finished (not when startArchiveWorkspace returned).
+			updateArchivingWorkspaceId(payload.workspaceId, false);
 			setPendingArchives((current) => {
 				const existing = current.get(payload.workspaceId);
 				if (!existing || existing.stage === "confirmed") {
@@ -326,12 +328,10 @@ export function useWorkspacesSidebarController({
 				});
 				return next;
 			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.archivedWorkspaces,
-			});
+			// Balance the beginSidebarMutation from handleArchiveWorkspace. The
+			// shared helper only flushes once all overlapping sidebar mutations have
+			// completed, preserving any remaining optimistic rows.
+			endSidebarMutation();
 		}).then((cleanup) => {
 			if (disposed) {
 				cleanup();
@@ -345,7 +345,11 @@ export function useWorkspacesSidebarController({
 			unlistenFailure?.();
 			unlistenSuccess?.();
 		};
-	}, [queryClient, rollbackArchivedWorkspace]);
+	}, [
+		endSidebarMutation,
+		rollbackArchivedWorkspace,
+		updateArchivingWorkspaceId,
+	]);
 
 	useEffect(() => {
 		if (pendingArchives.size === 0) {
@@ -1381,6 +1385,12 @@ export function useWorkspacesSidebarController({
 					stage: "running",
 					sortTimestamp,
 				};
+
+				// Gate background refetches (e.g. WorkspaceGitStateChanged) so they
+				// don't overwrite the optimistic cache while the archive is in flight.
+				// Balanced in the success/failure event listeners.
+				beginSidebarMutation();
+
 				setPendingArchives((current) => {
 					const next = new Map(current);
 					next.set(workspaceId, pendingArchive);
@@ -1424,22 +1434,26 @@ export function useWorkspacesSidebarController({
 					onSelectWorkspace(nextWorkspaceId);
 				}
 
-				void startArchiveWorkspace(workspaceId)
-					.catch((error) => {
-						rollbackArchivedWorkspace(
-							workspaceId,
-							error,
-							"Unable to archive workspace.",
-						);
-					})
-					.finally(() => {
-						updateArchivingWorkspaceId(workspaceId, false);
-					});
+				// startArchiveWorkspace returns immediately after spawning the
+				// background Rust task — do NOT clear the spinner here.  The
+				// archiving animation (and the gate) are cleared by the
+				// archive-execution-succeeded / archive-execution-failed event
+				// listeners once the task actually finishes.
+				void startArchiveWorkspace(workspaceId).catch((error) => {
+					// The IPC call itself failed (e.g. prepare plan missing).
+					// rollbackArchivedWorkspace handles spinner, gate, and flush.
+					rollbackArchivedWorkspace(
+						workspaceId,
+						error,
+						"Unable to archive workspace.",
+					);
+				});
 			})();
 		},
 		[
 			archivingWorkspaceIds,
 			baseArchivedSummaries,
+			beginSidebarMutation,
 			groups,
 			onSelectWorkspace,
 			pendingArchives,

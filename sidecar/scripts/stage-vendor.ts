@@ -1,4 +1,4 @@
-// Stage claude-code + codex + bun + gh + glab into `sidecar/dist/vendor/`
+// Stage claude-code + codex + bun + gh + glab + pi into `sidecar/dist/vendor/`
 // for Tauri to ship as bundle resources. macOS host only.
 //
 // Cross-arch staging: in CI the host is always Apple Silicon (macos-26
@@ -32,6 +32,8 @@ const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 //   bun:   github.com/oven-sh/bun/releases/download/bun-v$VER/SHASUMS256.txt
 //   codex: shasum -a 256 of the npm tarball at
 //          registry.npmjs.org/@openai/codex/-/codex-$VER-darwin-{arm64,x64}.tgz
+//   fd:    shasum -a 256 of the GitHub release asset at
+//          github.com/sharkdp/fd/releases/download/v$VER/fd-v$VER-{aarch64,x86_64}-apple-darwin.tar.gz
 
 const GH_VERSION = "2.91.0";
 const GH_SHA256 = {
@@ -49,6 +51,12 @@ const BUN_VERSION = "1.3.2";
 const BUN_SHA256 = {
 	arm64: "d85847982db574518130a45582bcf14d8e2be9610b66cb5046c20348578b0fe2",
 	x64: "78d4f0c8637427ac0be55639a697ff6a025e8eb940a6920ca508603c41a5a7b0",
+} as const;
+
+const FD_VERSION = "10.3.0";
+const FD_SHA256 = {
+	arm64: "0570263812089120bc2a5d84f9e65cd0c25e4a4d724c80075c357239c74ae904",
+	x64: "50d30f13fe3d5914b14c4fff5abcbd4d0cdab4b855970a6956f4f006c17117a3",
 } as const;
 
 // Codex version is whatever sidecar/package.json pulled in. The SHAs below
@@ -85,6 +93,8 @@ interface TargetInfo {
 	glabArch: "arm64" | "amd64";
 	/** `bun` release naming: `aarch64` / `x64`. */
 	bunArch: "aarch64" | "x64";
+	/** `fd` release target naming. */
+	fdArch: "aarch64" | "x86_64";
 }
 
 function infoForArch(arch: DarwinArch): TargetInfo {
@@ -98,6 +108,7 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 			ghArch: "arm64",
 			glabArch: "arm64",
 			bunArch: "aarch64",
+			fdArch: "aarch64",
 		};
 	}
 	return {
@@ -109,6 +120,7 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 		ghArch: "amd64",
 		glabArch: "amd64",
 		bunArch: "x64",
+		fdArch: "x86_64",
 	};
 }
 
@@ -159,6 +171,12 @@ function copyFile(src: string, dest: string): void {
 function copyDir(src: string, dest: string): void {
 	mkdirSync(dirname(dest), { recursive: true });
 	cpSync(src, dest, { recursive: true });
+}
+
+function copyDirIfExists(src: string, dest: string): void {
+	if (existsSync(src)) {
+		copyDir(src, dest);
+	}
 }
 
 function humanSize(path: string): string {
@@ -281,6 +299,22 @@ function locateExtractedBin(extractDir: string, name: string): string {
 	);
 }
 
+function locateExtractedFile(extractDir: string, name: string): string {
+	const stack = [extractDir];
+	while (stack.length > 0) {
+		const current = stack.pop();
+		if (!current) continue;
+		for (const entry of readdirSync(current, { withFileTypes: true })) {
+			const path = join(current, entry.name);
+			if (entry.isFile() && entry.name === name) return path;
+			if (entry.isDirectory()) stack.push(path);
+		}
+	}
+	throw new Error(
+		`[stage-vendor] could not locate ${name} under ${extractDir}`,
+	);
+}
+
 function stageGhBinary(arch: "arm64" | "amd64"): string {
 	ensureCacheDir();
 	const slug = `gh_${GH_VERSION}_macOS_${arch}`;
@@ -359,6 +393,108 @@ function stageBunBinary(target: TargetInfo): string {
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, true);
 	return binDest;
+}
+
+// ---------------------------------------------------------------------------
+// Pi — package assets + helper binaries used by the SDK at runtime.
+// ---------------------------------------------------------------------------
+
+function stageFdBinary(target: TargetInfo): string {
+	ensureCacheDir();
+	const slug = `fd-v${FD_VERSION}-${target.fdArch}-apple-darwin`;
+	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
+	const url = `https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/${slug}.tar.gz`;
+	downloadAndVerify(url, archive, FD_SHA256[target.arch]);
+
+	const extractDir = join(BUNDLE_CACHE, slug);
+	freshExtractDir(extractDir);
+	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+		stdio: "inherit",
+	});
+
+	const binSrc = locateExtractedFile(extractDir, "fd");
+	const binDest = join(DIST_VENDOR, "pi", "bin", "fd");
+	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, false);
+	return binDest;
+}
+
+function stagePiRgBinary(target: TargetInfo): string | null {
+	const src = join(
+		NODE_MODULES,
+		"@anthropic-ai",
+		"claude-code",
+		"vendor",
+		"ripgrep",
+		target.ccVendorArch,
+		"rg",
+	);
+	if (!existsSync(src)) return null;
+	const dest = join(DIST_VENDOR, "pi", "bin", "rg");
+	copyFile(src, dest);
+	chmodSync(dest, 0o755);
+	maybeSignMacBinary(dest, false);
+	return dest;
+}
+
+function stagePiPackageAssets(): string {
+	const piSrc = join(NODE_MODULES, "@mariozechner", "pi-coding-agent");
+	const piDest = join(DIST_VENDOR, "pi", "package");
+	ensureExists(
+		join(piSrc, "package.json"),
+		"@mariozechner/pi-coding-agent/package.json",
+	);
+
+	for (const file of ["package.json", "README.md", "CHANGELOG.md"]) {
+		const src = join(piSrc, file);
+		if (existsSync(src)) copyFile(src, join(piDest, file));
+	}
+
+	copyDirIfExists(
+		join(piSrc, "dist", "modes", "interactive", "theme"),
+		join(piDest, "dist", "modes", "interactive", "theme"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "modes", "interactive", "theme"),
+		join(piDest, "theme"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "modes", "interactive", "assets"),
+		join(piDest, "dist", "modes", "interactive", "assets"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "modes", "interactive", "assets"),
+		join(piDest, "assets"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "core", "export-html"),
+		join(piDest, "dist", "core", "export-html"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "core", "export-html"),
+		join(piDest, "export-html"),
+	);
+
+	const photonWasm = join(
+		NODE_MODULES,
+		"@silvia-odwyer",
+		"photon-node",
+		"photon_rs_bg.wasm",
+	);
+	if (existsSync(photonWasm)) {
+		copyFile(photonWasm, join(piDest, "photon_rs_bg.wasm"));
+	}
+	copyDirIfExists(join(piSrc, "docs"), join(piDest, "docs"));
+	copyDirIfExists(join(piSrc, "examples"), join(piDest, "examples"));
+
+	return piDest;
+}
+
+function stagePiRuntime(target: TargetInfo): void {
+	stagePiPackageAssets();
+	stageFdBinary(target);
+	stagePiRgBinary(target);
 }
 
 // ---------------------------------------------------------------------------
@@ -493,6 +629,9 @@ for (const rel of [
 stageGhBinary(target.ghArch);
 stageGlabBinary(target.glabArch);
 
+// ----- Pi -----
+stagePiRuntime(target);
+
 // ----- Summary -----
 console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);
 console.log(`  claude-code ${humanSize(ccDest)}`);
@@ -500,3 +639,4 @@ console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
 console.log(`  bun         ${humanSize(join(DIST_VENDOR, "bun"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);
+console.log(`  pi          ${humanSize(join(DIST_VENDOR, "pi"))}`);

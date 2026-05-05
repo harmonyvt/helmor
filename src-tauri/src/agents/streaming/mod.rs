@@ -64,6 +64,24 @@ pub(super) fn stream_via_sidecar(
 ) -> CmdResult<()> {
     let request_id = stream_id.to_string();
 
+    tracing::info!(
+        stream_id = %stream_id,
+        provider = %model.provider,
+        model_id = %model.id,
+        resolved_cli_model = %model.cli_model,
+        cwd = %working_directory.display(),
+        prompt_len = prompt.len(),
+        has_prompt_prefix = request.prompt_prefix.as_deref().is_some_and(|prefix| !prefix.trim().is_empty()),
+        resume_only = request.resume_only,
+        session_id = ?request.session_id,
+        helmor_session_id = ?request.helmor_session_id,
+        permission_mode = ?request.permission_mode,
+        effort_level = ?request.effort_level,
+        fast_mode = ?request.fast_mode,
+        file_count = request.files.as_ref().map_or(0, Vec::len),
+        image_count = request.images.as_ref().map_or(0, Vec::len),
+        "stream_via_sidecar starting"
+    );
     tracing::debug!(
         provider = %model.provider,
         model = %model.cli_model,
@@ -97,6 +115,13 @@ pub(super) fn stream_via_sidecar(
         provider = %model.provider,
         "Session resume context"
     );
+    tracing::info!(
+        stream_id = %stream_id,
+        resume_session_id = ?resume_session_id,
+        helmor_session_id = ?request.helmor_session_id,
+        provider = %model.provider,
+        "stream_via_sidecar resume context"
+    );
 
     let helmor_session_id = request.helmor_session_id.clone();
     let sidecar_session_id = helmor_session_id
@@ -121,6 +146,15 @@ pub(super) fn stream_via_sidecar(
     let remote_sidecar = crate::workspace::remote::sidecar_execution_for_session(
         request.helmor_session_id.as_deref(),
     )?;
+    tracing::info!(
+        stream_id = %stream_id,
+        provider = %model.provider,
+        model = %model.cli_model,
+        combined_prompt_len = combined_prompt.len(),
+        prompt_prefix_len = prefix_trimmed.map_or(0, str::len),
+        image_count = images_for_wire.len(),
+        "stream_via_sidecar wire payload prepared"
+    );
     let params = build_send_message_params(BuildSendMessageParamsInput {
         sidecar_session_id: &sidecar_session_id,
         prompt: &combined_prompt,
@@ -455,6 +489,7 @@ pub(super) fn stream_via_sidecar(
                         resolved_session_id.as_deref(),
                         sid,
                         hsid_copy.as_deref(),
+                        model_copy.provider.as_str() == "codex",
                     ) {
                         resolved_session_id = Some(sid.to_string());
                         if resume_only {

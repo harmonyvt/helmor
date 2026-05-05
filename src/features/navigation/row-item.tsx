@@ -187,6 +187,9 @@ export const WorkspaceRowItem = memo(
 		const showStatusDot = statusDotLabel !== null;
 		const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
 		const prNumber = showPrNumber ? extractPrNumber(row.prUrl) : null;
+		const statusTone =
+			STATUS_OPTIONS.find((o) => o.value === effectiveStatus)?.tone ??
+			"backlog";
 
 		const rowBody = (
 			<div
@@ -267,11 +270,14 @@ export const WorkspaceRowItem = memo(
 							</ShinyFlash>
 						</span>
 					</div>
-					{prNumber !== null && (
-						<span className="shrink-0 rounded px-1 py-0 text-[10px] tabular-nums font-medium text-foreground/40 group-hover/row:opacity-0 transition-opacity">
-							#{prNumber}
-						</span>
-					)}
+					<div className="shrink-0 flex items-center gap-1 group-hover/row:opacity-0 transition-opacity">
+						<GroupIcon tone={statusTone} />
+						{prNumber !== null && (
+							<span className="rounded px-1 py-0 text-[10px] tabular-nums font-medium text-foreground/40">
+								#{prNumber}
+							</span>
+						)}
+					</div>
 				</div>
 
 				{hasActionHandler ? (

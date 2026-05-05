@@ -466,6 +466,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		expect(onSelectWorkspace).toHaveBeenCalledWith(generatedWorkspaceId);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			generatedWorkspaceId,
+			undefined,
 		);
 
 		await act(async () => {
@@ -1170,6 +1171,82 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		});
 	});
 
+	it("does not refetch sidebar lists until all overlapping archives finish", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		let groupsFromServer = workspaceGroups;
+		let archivedFromServer: WorkspaceSummary[] = [];
+		apiMocks.loadWorkspaceGroups.mockImplementation(
+			async () => groupsFromServer,
+		);
+		apiMocks.loadArchivedWorkspaces.mockImplementation(
+			async () => archivedFromServer,
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+				"ws-1",
+				"ws-2",
+			]);
+		});
+		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(1);
+		expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(1);
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+		await waitFor(() => {
+			expect(result.current.archivedRows.map((row) => row.id)).toContain(
+				"ws-1",
+			);
+		});
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-2");
+		});
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([]);
+			expect(result.current.archivedRows.map((row) => row.id).sort()).toEqual([
+				"ws-1",
+				"ws-2",
+			]);
+		});
+
+		act(() => {
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
+		});
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(1);
+		expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(1);
+
+		groupsFromServer = [{ ...workspaceGroups[0], rows: [] }];
+		archivedFromServer = [
+			makeArchivedSummary("ws-1"),
+			makeArchivedSummary("ws-2"),
+		];
+		act(() => {
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-2" });
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(2);
+			expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(2);
+		});
+	});
+
 	it("does not render the same workspace in both live and archived when the success event arrives before the server snapshot switches", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -1241,13 +1318,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			defaultOptions: { queries: { retry: false } },
 		});
 		const onSelectWorkspace = vi.fn();
-		let resolveStart: (() => void) | null = null;
-		apiMocks.startArchiveWorkspace.mockImplementation(
-			() =>
-				new Promise<void>((resolve) => {
-					resolveStart = resolve;
-				}),
-		);
+		apiMocks.startArchiveWorkspace.mockResolvedValue(undefined);
 
 		const { result } = renderHook(
 			() =>
@@ -1273,8 +1344,13 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			);
 		});
 
+		// The spinner should stay until the background task fires its event.
+		expect(result.current.archivingWorkspaceIds.has("ws-1")).toBe(true);
+
+		// Simulate the backend success event (the spinner clears here, not on
+		// startArchiveWorkspace resolving).
 		act(() => {
-			resolveStart?.();
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
 		});
 
 		await waitFor(() => {

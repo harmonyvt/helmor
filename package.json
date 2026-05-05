@@ -12,9 +12,13 @@
 	],
 	"scripts": {
 		"changeset": "changeset",
+		"setup:envs": "bun scripts/setup-envs.ts",
 		"dev": "bun run dev:prepare && tauri dev",
 		"dev:preview": "bun scripts/dev-preview.ts",
 		"worktree:cleanup": "bun scripts/worktree-cleanup.ts",
+		"archive:clean": "bun run clean:cache --include-global-caches",
+		"clean": "bun run clean:cache",
+		"clean:cache": "bun scripts/clean-cache.ts",
 		"dev:prepare": "cd sidecar && bun run dev:prepare",
 		"dev:analyze": "bun run dev:prepare && VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",

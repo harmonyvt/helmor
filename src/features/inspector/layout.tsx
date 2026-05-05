@@ -105,6 +105,7 @@ type InspectorTabsSectionProps = {
 	tabActions?: React.ReactNode;
 	setupScriptState: ScriptIconState;
 	runScriptState: ScriptIconState;
+	archiveScriptState: ScriptIconState;
 	/**
 	 * Live list of terminal sub-tabs for the current workspace. Each instance
 	 * becomes a tab in the unified row, identified by `instance.id` as the
@@ -135,6 +136,7 @@ export function InspectorTabsSection({
 	tabActions,
 	setupScriptState,
 	runScriptState,
+	archiveScriptState,
 	terminalInstances,
 	onAddTerminal,
 	onCloseTerminal,
@@ -547,11 +549,20 @@ export function InspectorTabsSection({
 							// header + body (but NOT the section with its bg/border)
 							// means the container's edges stay crisp while the
 							// content inside looks like it's "focusing in / out."
+							//
+							// IMPORTANT: use `none` (not `blur(0)`) at rest. Even
+							// `blur(0)` promotes the element to its own GPU compositing
+							// layer, forcing GPU rasterisation of all child text and
+							// making it look blurry. `filter: none` keeps text on the
+							// CPU paint path where font rendering is crisp.
+							// `will-change: filter` is likewise only set while the
+							// animation is live so the GPU layer is torn down as soon
+							// as the blur clears.
 							filter: isContentBlurred
 								? `blur(${TABS_BLUR_PEAK_PX}px)`
-								: "blur(0)",
+								: "none",
 							transition: `filter ${TABS_BLUR_FADE_MS}ms ease-out`,
-							willChange: "filter",
+							...(isContentBlurred ? { willChange: "filter" } : {}),
 						}}
 					>
 						<div
@@ -610,6 +621,30 @@ export function InspectorTabsSection({
 										className={cn(
 											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
 											activeTab === "run" && "opacity-100",
+										)}
+									/>
+								</button>
+								<button
+									type="button"
+									role="tab"
+									id="inspector-tab-archive"
+									aria-controls="inspector-panel-archive"
+									aria-selected={activeTab === "archive"}
+									tabIndex={activeTab === "archive" ? 0 : -1}
+									className={cn(
+										INSPECTOR_TAB_BUTTON_CLASS,
+										"shrink-0",
+										activeTab === "archive" && "text-foreground",
+									)}
+									onClick={() => handleTabClick("archive")}
+								>
+									<ScriptStatusIcon state={archiveScriptState} />
+									Archive
+									<span
+										aria-hidden="true"
+										className={cn(
+											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+											activeTab === "archive" && "opacity-100",
 										)}
 									/>
 								</button>
