@@ -24,6 +24,7 @@ pub struct BuildSendMessageParamsInput<'a> {
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
+    pub remote_sidecar: Option<&'a crate::workspace::remote::RemoteSidecarExecution>,
 }
 
 /// Build the `sendMessage` request params that the sidecar receives.
@@ -56,6 +57,20 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
     if !input.images.is_empty() {
         if let Some(obj) = params.as_object_mut() {
             obj.insert("images".to_string(), Value::from(input.images.to_vec()));
+        }
+    }
+    if let Some(remote) = input.remote_sidecar {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert(
+                "remote".to_string(),
+                serde_json::json!({
+                    "backend": remote.backend,
+                    "cwd": remote.cwd,
+                    "containerName": remote.container_name,
+                    "host": remote.host,
+                }),
+            );
+            obj.insert("cwd".to_string(), Value::String(remote.cwd.clone()));
         }
     }
     if let (Some(base_url), Some(auth_token)) = (input.claude_base_url, input.claude_auth_token) {

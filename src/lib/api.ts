@@ -98,6 +98,7 @@ export type WorkspaceRow = {
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
+	remoteRuntime?: RemoteRuntimeInfo | null;
 };
 
 export type WorkspaceGroup = {
@@ -209,6 +210,35 @@ export type WorkspaceSummary = {
 	createdAt: string;
 	updatedAt?: string;
 	lastUserMessageAt?: string | null;
+	remoteRuntime?: RemoteRuntimeInfo | null;
+};
+
+export type RemoteWorkspaceBackend = "docker" | "ssh";
+
+export type RemoteWorkspaceProfile = {
+	id: string;
+	name: string;
+	backend: RemoteWorkspaceBackend;
+	sshHost?: string | null;
+	dockerImage?: string | null;
+	remoteRoot?: string | null;
+	bootstrapCommand?: string | null;
+};
+
+export type RemoteWorkspaceCreateOptions = {
+	profile: RemoteWorkspaceProfile;
+	copyPiConfig: boolean;
+};
+
+export type RemoteRuntimeInfo = {
+	backend: RemoteWorkspaceBackend;
+	profileId?: string | null;
+	profileName?: string | null;
+	remoteRootPath?: string | null;
+	containerName?: string | null;
+	host?: string | null;
+	status?: string | null;
+	error?: string | null;
 };
 
 export type RepositoryCreateOption = {
@@ -381,6 +411,7 @@ export type WorkspaceDetail = {
 	archiveCommit?: string | null;
 	sessionCount: number;
 	messageCount: number;
+	remoteRuntime?: RemoteRuntimeInfo | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -462,6 +493,7 @@ export type PrepareWorkspaceResponse = {
 	prSyncState: PrSyncState;
 	prUrl?: string | null;
 	state: WorkspaceState;
+	remoteRuntime?: RemoteRuntimeInfo | null;
 	repoScripts: RepoScripts;
 };
 
@@ -1958,6 +1990,21 @@ export async function prepareWorkspaceFromSource(
 	});
 }
 
+export async function prepareRemoteWorkspaceFromSource(
+	repoId: string,
+	source: WorkspaceCreationSource,
+	remote: RemoteWorkspaceCreateOptions,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>(
+		"prepare_remote_workspace_from_source",
+		{
+			repoId,
+			source,
+			remote,
+		},
+	);
+}
+
 /**
  * Phase 2 of workspace creation. Slow (~200ms-2s): creates the git
  * worktree, probes `helmor.json`, and flips the
@@ -1971,6 +2018,7 @@ export async function finalizeWorkspaceFromRepo(
 		fetchStartBranch?: boolean | null;
 		/** Move this existing worktree path into the Helmor workspace location instead of creating a new one. */
 		migrateFromPath?: string | null;
+		remote?: RemoteWorkspaceCreateOptions | null;
 	},
 ): Promise<FinalizeWorkspaceResponse> {
 	return invoke<FinalizeWorkspaceResponse>("finalize_workspace_from_repo", {

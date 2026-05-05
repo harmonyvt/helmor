@@ -1,0 +1,18 @@
+---
+source: tests/streaming_send_params.rs
+expression: "&params"
+---
+cwd: ~/helmor-workspaces/repo/feature
+effortLevel: high
+fastMode: false
+model: anthropic/claude-sonnet-4-5
+permissionMode: bypassPermissions
+prompt: hello
+provider: pi
+remote:
+  backend: docker
+  containerName: helmor-repo-default
+  cwd: ~/helmor-workspaces/repo/feature
+  host: ~
+resume: ~
+sessionId: sidecar-sess-1

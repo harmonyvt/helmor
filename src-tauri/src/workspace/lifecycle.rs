@@ -14,6 +14,7 @@ use crate::{
     git_ops, github_graphql, helpers,
     models::workspaces as workspace_models,
     repos,
+    workspace::remote::{self, RemoteRuntimeInfo, RemoteWorkspaceCreateOptions},
     workspace_pr_sync::PrSyncState,
     workspace_state::WorkspaceState,
     workspace_status::WorkspaceStatus,
@@ -81,6 +82,7 @@ pub struct PrepareWorkspaceResponse {
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
     pub state: WorkspaceState,
+    pub remote_runtime: Option<RemoteRuntimeInfo>,
     /// DB-level repo scripts. After Phase 2 (worktree creation) the frontend
     /// may refetch to pick up any `helmor.json` overrides copied into the
     /// worktree, but for a freshly cloned workspace these match exactly.
@@ -114,6 +116,7 @@ pub struct FinalizeWorkspaceOptions {
     /// location instead of creating a new one. The original branch is preserved
     /// as-is — no `-copy` suffix. Requires git 2.32+.
     pub migrate_from_path: Option<String>,
+    pub remote: Option<RemoteWorkspaceCreateOptions>,
 }
 
 struct WorkspaceSourcePlan {
@@ -163,6 +166,14 @@ pub fn prepare_workspace_from_source_impl(
     repo_id: &str,
     source: WorkspaceCreationSource,
 ) -> Result<PrepareWorkspaceResponse> {
+    prepare_workspace_from_source_with_remote_impl(repo_id, source, None)
+}
+
+pub fn prepare_workspace_from_source_with_remote_impl(
+    repo_id: &str,
+    source: WorkspaceCreationSource,
+    remote_options: Option<RemoteWorkspaceCreateOptions>,
+) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
     let repo_root = PathBuf::from(repository.root_path.trim());
@@ -198,6 +209,10 @@ pub fn prepare_workspace_from_source_impl(
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let timestamp = db::current_timestamp()?;
+    let remote_runtime = remote_options
+        .as_ref()
+        .map(|options| remote::prepare_metadata(&repository, &directory_name, options))
+        .transpose()?;
 
     workspace_models::insert_initializing_workspace_and_session_with_metadata(
         &repository,
@@ -212,6 +227,28 @@ pub fn prepare_workspace_from_source_impl(
             pr_title: source_plan.pr_title.as_deref(),
             pr_sync_state: source_plan.pr_sync_state,
             pr_url: source_plan.pr_url.as_deref(),
+            location_kind: remote_runtime.as_ref().map(|_| "remote"),
+            remote_profile_id: remote_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.profile_id.as_deref()),
+            remote_backend: remote_runtime
+                .as_ref()
+                .map(|runtime| runtime.backend.as_str()),
+            remote_root_path: remote_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.remote_root_path.as_deref()),
+            remote_container_name: remote_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.container_name.as_deref()),
+            remote_host: remote_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.host.as_deref()),
+            remote_status: remote_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.status.as_deref()),
+            remote_error: remote_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.error.as_deref()),
             timestamp: &timestamp,
         },
     )?;
@@ -253,6 +290,7 @@ pub fn prepare_workspace_from_source_impl(
         pr_sync_state: source_plan.pr_sync_state,
         pr_url: source_plan.pr_url,
         state: WorkspaceState::Initializing,
+        remote_runtime,
         repo_scripts,
     })
 }
@@ -379,6 +417,30 @@ pub fn finalize_workspace_from_repo_with_options_impl(
     let mut created_worktree = false;
 
     let finalize_result = (|| -> Result<FinalizeWorkspaceResponse> {
+        if remote::is_remote_record(&record) {
+            if request_is_not_pi_remote_safe(&options) {
+                tracing::debug!(
+                    workspace_id,
+                    "remote finalize options include local-only fields"
+                );
+            }
+            let final_state = remote::finalize_remote_workspace(
+                workspace_id,
+                &record,
+                &repository,
+                options
+                    .remote
+                    .as_ref()
+                    .map(|remote| remote.copy_pi_config)
+                    .unwrap_or(false),
+            )?;
+            workspace_models::update_workspace_state(workspace_id, final_state, &timestamp)?;
+            return Ok(FinalizeWorkspaceResponse {
+                workspace_id: workspace_id.to_string(),
+                final_state,
+            });
+        }
+
         if workspace_dir.exists() {
             bail!(
                 "Workspace target already exists at {}",
@@ -475,6 +537,12 @@ pub fn finalize_workspace_from_repo_with_options_impl(
             Err(error)
         }
     }
+}
+
+fn request_is_not_pi_remote_safe(options: &FinalizeWorkspaceOptions) -> bool {
+    options.start_branch.is_some()
+        || options.fetch_start_branch.is_some()
+        || options.migrate_from_path.is_some()
 }
 
 /// Legacy combined flow. Runs Phase 1 + Phase 2 back-to-back and returns

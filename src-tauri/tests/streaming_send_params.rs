@@ -12,6 +12,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 use helmor_lib::agents::{build_send_message_params, BuildSendMessageParamsInput};
 use helmor_lib::data_dir;
+use helmor_lib::workspace::remote::{RemoteSidecarExecution, RemoteWorkspaceBackend};
 use insta::assert_yaml_snapshot;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -20,11 +21,11 @@ use tempfile::TempDir;
 /// env var. Cargo runs each test binary in its own OS process, so we
 /// don't need to coordinate with the unit-test crate's own lock.
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static TEST_DIR: OnceLock<TempDir> = OnceLock::new();
 
 /// RAII test env: takes the env-var lock, overrides `HELMOR_DATA_DIR`,
 /// runs migrations, and cleans up on drop.
 struct TestEnv {
-    _dir: TempDir,
     _lock: MutexGuard<'static, ()>,
 }
 
@@ -34,20 +35,22 @@ impl TestEnv {
             .get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = TEST_DIR.get_or_init(|| tempfile::tempdir().unwrap());
         std::env::set_var("HELMOR_DATA_DIR", dir.path());
         data_dir::ensure_directory_structure().unwrap();
         let conn = rusqlite::Connection::open(data_dir::db_path().unwrap()).unwrap();
         helmor_lib::schema::ensure_schema(&conn).unwrap();
+        conn.execute_batch(
+            "DELETE FROM session_messages; DELETE FROM sessions; DELETE FROM workspaces; DELETE FROM repos;",
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO repos (id, name, default_branch) VALUES ('r-1', 'Repo One', 'main')",
             [],
         )
         .unwrap();
-        Self {
-            _dir: dir,
-            _lock: lock,
-        }
+        helmor_lib::models::db::init_pools().unwrap();
+        Self { _lock: lock }
     }
 
     fn connection(&self) -> rusqlite::Connection {
@@ -101,6 +104,7 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         claude_base_url: None,
         claude_auth_token: None,
         images: &[],
+        remote_sidecar: None,
     }
 }
 
@@ -145,7 +149,7 @@ fn omits_additional_directories_when_helmor_session_id_is_absent() {
     // New session that hasn't been written to the DB yet — common for the
     // first turn. Must not emit additionalDirectories.
     let env = TestEnv::new();
-    seed_workspace_session(&env.connection(), "w-3", "s-3", Some(r#"["/abs/a"]"#));
+    seed_workspace_session(&env.connection(), "w-5", "s-5", Some(r#"["/abs/a"]"#));
 
     let params = build(&env, base_input(None));
     assert_yaml_snapshot!("params_for_new_session", &params);
@@ -154,8 +158,28 @@ fn omits_additional_directories_when_helmor_session_id_is_absent() {
 #[test]
 fn malformed_linked_column_falls_back_to_no_directories() {
     let env = TestEnv::new();
-    seed_workspace_session(&env.connection(), "w-4", "s-4", Some("not-valid-json"));
+    seed_workspace_session(&env.connection(), "w-6", "s-6", Some("not-valid-json"));
 
-    let params = build(&env, base_input(Some("s-4")));
+    let params = build(&env, base_input(Some("s-6")));
     assert_yaml_snapshot!("params_malformed_linked_column", &params);
+}
+
+#[test]
+fn includes_remote_execution_metadata_for_pi() {
+    let env = TestEnv::new();
+    seed_workspace_session(&env.connection(), "w-7", "s-7", None);
+
+    let remote = RemoteSidecarExecution {
+        backend: RemoteWorkspaceBackend::Docker,
+        cwd: "~/helmor-workspaces/repo/feature".to_string(),
+        container_name: Some("helmor-repo-default".to_string()),
+        host: None,
+    };
+    let mut input = base_input(Some("s-7"));
+    input.provider = "pi";
+    input.cli_model = "anthropic/claude-sonnet-4-5";
+    input.remote_sidecar = Some(&remote);
+
+    let params = build(&env, input);
+    assert_yaml_snapshot!("params_with_remote_pi_execution", &params);
 }

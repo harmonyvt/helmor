@@ -143,6 +143,9 @@ pub(super) fn stream_via_sidecar(
     };
 
     let images_for_wire = request.images.clone().unwrap_or_default();
+    let remote_sidecar = crate::workspace::remote::sidecar_execution_for_session(
+        request.helmor_session_id.as_deref(),
+    )?;
     tracing::info!(
         stream_id = %stream_id,
         provider = %model.provider,
@@ -166,6 +169,7 @@ pub(super) fn stream_via_sidecar(
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
         images: &images_for_wire,
+        remote_sidecar: remote_sidecar.as_ref(),
     });
 
     // Surface the `/add-dir` decision in logs — we often debug linked-

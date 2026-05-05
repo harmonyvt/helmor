@@ -112,6 +112,7 @@ fn fingerprint_message(msg: &ThreadMessageLike) -> MessageFingerprint {
             ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { .. }) => {
                 "prompt-suggestion".into()
             }
+            ExtendedMessagePart::Basic(MessagePart::GenericCard { .. }) => "generic-card".into(),
             ExtendedMessagePart::CollapsedGroup(g) => {
                 format!("collapsed-group({:?},tools={})", g.category, g.tools.len())
             }

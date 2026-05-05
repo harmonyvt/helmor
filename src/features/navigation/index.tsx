@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type {
+	RemoteWorkspaceCreateOptions,
 	RepositoryCreateOption,
 	WorkspaceCreationSource,
 	WorkspaceGroup,
@@ -156,6 +157,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onCreateWorkspace?: (
 		repoId: string,
 		source?: WorkspaceCreationSource,
+		migrateFromPath?: string,
+		remote?: RemoteWorkspaceCreateOptions,
 	) => Promise<void> | void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
@@ -732,9 +735,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				onOpenChange={setIsCreateDialogOpen}
 				repositories={repositories}
 				creating={createBusy}
-				onCreateWorkspace={(repoId, source) => {
-					if (source) {
-						return onCreateWorkspace?.(repoId, source);
+				onCreateWorkspace={(repoId, source, remote) => {
+					if (source || remote) {
+						return onCreateWorkspace?.(
+							repoId,
+							source ?? { type: "defaultBranch" },
+							undefined,
+							remote,
+						);
 					}
 					return onCreateWorkspace?.(repoId);
 				}}

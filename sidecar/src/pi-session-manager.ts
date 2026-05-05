@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { basename, extname } from "node:path";
 import {
 	type AgentSession,
@@ -57,6 +58,16 @@ export class PiSessionManager implements SessionManager {
 		params: SendMessageParams,
 		emitter: SidecarEmitter,
 	): Promise<void> {
+		if (params.remote) {
+			try {
+				await sendRemotePiMessage(requestId, params, emitter);
+			} catch (err) {
+				const reason = err instanceof Error ? err.message : String(err);
+				emitter.error(requestId, reason, true);
+				logger.error("Remote Pi sendMessage failed", errorDetails(err));
+			}
+			return;
+		}
 		let live: LivePiSession | undefined;
 		try {
 			const promptWithContext = prependLinkedDirectoriesContext(
@@ -299,6 +310,109 @@ export class PiSessionManager implements SessionManager {
 		}
 		this.sessions.clear();
 	}
+}
+
+async function sendRemotePiMessage(
+	requestId: string,
+	params: SendMessageParams,
+	emitter: SidecarEmitter,
+): Promise<void> {
+	const remote = params.remote;
+	if (!remote) throw new Error("Remote Pi execution metadata is missing");
+	const prompt = params.prompt;
+	const modelArgs = params.model ? ["--model", params.model] : [];
+	const thinkingArgs = params.effortLevel
+		? ["--thinking", params.effortLevel]
+		: [];
+	const piCommand = [
+		"npx -y @mariozechner/pi-coding-agent@0.72.0",
+		"--print",
+		"--mode",
+		"text",
+		...modelArgs.map(shellQuote),
+		...thinkingArgs.map(shellQuote),
+		shellQuote(prompt),
+	].join(" ");
+	const command = `cd ${shellPath(remote.cwd)} && ${piCommand}`;
+	const output = await runRemoteCommand(remote, command);
+	const text = output.trim();
+	if (text) {
+		emitter.passthrough(requestId, {
+			type: "assistant",
+			session_id: params.sessionId,
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text }],
+			},
+		});
+	} else {
+		emitter.passthrough(requestId, {
+			type: "error",
+			message: "Remote Pi completed without visible output.",
+		});
+	}
+	emitter.end(requestId);
+}
+
+function runRemoteCommand(
+	remote: NonNullable<SendMessageParams["remote"]>,
+	command: string,
+): Promise<string> {
+	const args =
+		remote.backend === "docker"
+			? [
+					"exec",
+					"-i",
+					required(remote.containerName, "containerName"),
+					"sh",
+					"-lc",
+					command,
+				]
+			: [
+					"-o",
+					"BatchMode=yes",
+					required(remote.host, "host"),
+					"sh",
+					"-lc",
+					command,
+				];
+	const child = spawn(remote.backend === "docker" ? "docker" : "ssh", args, {
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let stdout = "";
+	let stderr = "";
+	child.stdout.setEncoding("utf8");
+	child.stderr.setEncoding("utf8");
+	child.stdout.on("data", (chunk: string) => {
+		stdout += chunk;
+	});
+	child.stderr.on("data", (chunk: string) => {
+		stderr += chunk;
+	});
+	return new Promise((resolve, reject) => {
+		child.on("error", reject);
+		child.on("close", (code) => {
+			if (code === 0) resolve(stdout);
+			else
+				reject(
+					new Error(stderr.trim() || `Remote Pi exited with code ${code}`),
+				);
+		});
+	});
+}
+
+function required(value: string | undefined, name: string): string {
+	if (!value) throw new Error(`Remote Pi execution missing ${name}`);
+	return value;
+}
+
+function shellPath(value: string): string {
+	if (value.startsWith("~/")) return `$HOME/${shellQuote(value.slice(2))}`;
+	return shellQuote(value);
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function createPiTrace(

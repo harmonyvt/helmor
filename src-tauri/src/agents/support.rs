@@ -51,6 +51,10 @@ pub(super) fn parse_codex_output(
 
 pub(super) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
     if let Some(path) = non_empty(provided) {
+        if crate::workspace::remote::parse_remote_uri(path).is_some() {
+            return std::env::current_dir()
+                .context("Failed to resolve fallback directory for remote workspace");
+        }
         let directory = PathBuf::from(path);
         // Provided path MUST exist — silently falling back to the helmor
         // process's cwd would spawn the agent CLI in `/` (or the app bundle)
@@ -74,22 +78,27 @@ pub(super) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBu
 pub(super) fn resolve_resume_working_directory(session_id: &str) -> Result<Option<PathBuf>> {
     let connection = crate::models::db::read_conn()
         .context("Failed to open DB while resolving resume workspace")?;
-    let workspace_info: Option<(String, String)> = connection
+    let workspace_info: Option<(String, String, Option<String>)> = connection
         .query_row(
-            r#"SELECT r.name, w.directory_name
+            r#"SELECT r.name, w.directory_name, w.location_kind
                FROM sessions s
                JOIN workspaces w ON w.id = s.workspace_id
                JOIN repos r ON r.id = w.repository_id
                WHERE s.id = ?1"#,
             [session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
         .context("Failed to load resume workspace info")?;
 
     workspace_info
-        .map(|(repo_name, directory_name)| {
-            crate::data_dir::workspace_dir(&repo_name, &directory_name)
+        .map(|(repo_name, directory_name, location_kind)| {
+            if location_kind.as_deref() == Some("remote") {
+                std::env::current_dir()
+                    .context("Failed to resolve fallback directory for remote resume")
+            } else {
+                crate::data_dir::workspace_dir(&repo_name, &directory_name)
+            }
         })
         .transpose()
 }

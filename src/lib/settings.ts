@@ -18,6 +18,16 @@ export type ClaudeCustomProviderSettings = {
 	customModels: string;
 };
 
+export type RemoteWorkspaceProfileSetting = {
+	id: string;
+	name: string;
+	backend: "docker" | "ssh";
+	sshHost?: string | null;
+	dockerImage?: string | null;
+	remoteRoot?: string | null;
+	bootstrapCommand?: string | null;
+};
+
 export type AppSettings = {
 	fontSize: number;
 	branchPrefixType: "github" | "custom" | "none";
@@ -42,6 +52,11 @@ export type AppSettings = {
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	/** Model IDs the user has starred for quick access. */
 	favoriteModelIds: string[];
+	remoteWorkspacesEnabled: boolean;
+	defaultWorkspaceLocation: "local" | "remote";
+	defaultRemoteWorkspaceProfileId: string | null;
+	defaultRemoteWorkspaceCopyPiConfig: boolean;
+	remoteWorkspaceProfiles: RemoteWorkspaceProfileSetting[];
 };
 
 /**
@@ -75,6 +90,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customModels: "",
 	},
 	favoriteModelIds: [],
+	remoteWorkspacesEnabled: true,
+	defaultWorkspaceLocation: "local",
+	defaultRemoteWorkspaceProfileId: null,
+	defaultRemoteWorkspaceCopyPiConfig: true,
+	remoteWorkspaceProfiles: [],
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -98,6 +118,12 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	favoriteModelIds: "app.favorite_model_ids",
+	remoteWorkspacesEnabled: "app.remote_workspaces_enabled",
+	defaultWorkspaceLocation: "app.default_workspace_location",
+	defaultRemoteWorkspaceProfileId: "app.default_remote_workspace_profile_id",
+	defaultRemoteWorkspaceCopyPiConfig:
+		"app.default_remote_workspace_copy_pi_config",
+	remoteWorkspaceProfiles: "app.remote_workspace_profiles",
 };
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
@@ -125,6 +151,44 @@ function parseFavoriteModelIds(raw: string | undefined): string[] {
 		return parsed.filter((item): item is string => typeof item === "string");
 	} catch {
 		return DEFAULT_SETTINGS.favoriteModelIds;
+	}
+}
+
+function parseRemoteWorkspaceProfiles(
+	raw: string | undefined,
+): RemoteWorkspaceProfileSetting[] {
+	if (!raw) return DEFAULT_SETTINGS.remoteWorkspaceProfiles;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed)) return DEFAULT_SETTINGS.remoteWorkspaceProfiles;
+		return parsed.flatMap((item): RemoteWorkspaceProfileSetting[] => {
+			if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+			const profile = item as Record<string, unknown>;
+			if (typeof profile.id !== "string" || typeof profile.name !== "string") {
+				return [];
+			}
+			if (profile.backend !== "docker" && profile.backend !== "ssh") return [];
+			return [
+				{
+					id: profile.id,
+					name: profile.name,
+					backend: profile.backend,
+					sshHost: typeof profile.sshHost === "string" ? profile.sshHost : null,
+					dockerImage:
+						typeof profile.dockerImage === "string"
+							? profile.dockerImage
+							: null,
+					remoteRoot:
+						typeof profile.remoteRoot === "string" ? profile.remoteRoot : null,
+					bootstrapCommand:
+						typeof profile.bootstrapCommand === "string"
+							? profile.bootstrapCommand
+							: null,
+				},
+			];
+		});
+	} catch {
+		return DEFAULT_SETTINGS.remoteWorkspaceProfiles;
 	}
 }
 
@@ -221,6 +285,25 @@ export async function loadSettings(): Promise<AppSettings> {
 			favoriteModelIds: parseFavoriteModelIds(
 				raw[SETTINGS_KEY_MAP.favoriteModelIds],
 			),
+			remoteWorkspacesEnabled:
+				raw[SETTINGS_KEY_MAP.remoteWorkspacesEnabled] !== undefined
+					? raw[SETTINGS_KEY_MAP.remoteWorkspacesEnabled] === "true"
+					: DEFAULT_SETTINGS.remoteWorkspacesEnabled,
+			defaultWorkspaceLocation: (() => {
+				const value = raw[SETTINGS_KEY_MAP.defaultWorkspaceLocation];
+				return value === "remote" || value === "local"
+					? value
+					: DEFAULT_SETTINGS.defaultWorkspaceLocation;
+			})(),
+			defaultRemoteWorkspaceProfileId:
+				raw[SETTINGS_KEY_MAP.defaultRemoteWorkspaceProfileId] || null,
+			defaultRemoteWorkspaceCopyPiConfig:
+				raw[SETTINGS_KEY_MAP.defaultRemoteWorkspaceCopyPiConfig] !== undefined
+					? raw[SETTINGS_KEY_MAP.defaultRemoteWorkspaceCopyPiConfig] === "true"
+					: DEFAULT_SETTINGS.defaultRemoteWorkspaceCopyPiConfig,
+			remoteWorkspaceProfiles: parseRemoteWorkspaceProfiles(
+				raw[SETTINGS_KEY_MAP.remoteWorkspaceProfiles],
+			),
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };
@@ -246,7 +329,8 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 			settings[dbKey] =
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
-				key === "favoriteModelIds"
+				key === "favoriteModelIds" ||
+				key === "remoteWorkspaceProfiles"
 					? JSON.stringify(value)
 					: value === null
 						? ""

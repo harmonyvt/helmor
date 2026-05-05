@@ -66,6 +66,7 @@ import {
 	ClaudeCustomProvidersPanel,
 	PiModelsCheckPanel,
 } from "./panels/model-providers";
+import { RemoteWorkspacesPanel } from "./panels/remote-workspaces";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
 const MIN_FONT_SIZE = 12;
@@ -77,6 +78,7 @@ export type SettingsSection =
 	| "shortcuts"
 	| "appearance"
 	| "model"
+	| "remote"
 	| "git"
 	| "experimental"
 	| "import"
@@ -186,6 +188,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"general",
 		"appearance",
 		"model",
+		"remote",
 		"shortcuts",
 		"git",
 		"experimental",
@@ -610,6 +613,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</div>
 								</SettingsGroup>
 							)}
+
+							{activeSection === "remote" && <RemoteWorkspacesPanel />}
 
 							{activeSection === "experimental" && (
 								<div className="flex flex-col gap-3">
