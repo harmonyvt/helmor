@@ -1331,6 +1331,7 @@ export type UiMutationEvent =
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
 	| { type: "workspaceChangeRequestChanged"; workspaceId: string }
+	| { type: "workspaceBrowserTabsChanged"; workspaceId: string }
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
@@ -3050,6 +3051,173 @@ export async function resizeTerminal(
 		instanceId,
 		cols,
 		rows,
+	});
+}
+
+export type BrowserTabRecord = {
+	id: string;
+	workspaceId: string;
+	url: string;
+	title: string | null;
+	displayOrder: number;
+	active: boolean;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type BrowserRuntimeActionResponse = {
+	tabId: string;
+	action: string;
+	implemented: boolean;
+	message: string;
+};
+
+export type BrowserProfileOptions = {
+	workspaceId: string;
+	tabId?: string;
+	dataDirectory: string;
+	dataStoreIdentifier: number[];
+};
+
+export type BrowserWebviewBounds = {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+};
+
+export async function listWorkspaceBrowserTabs(
+	workspaceId: string,
+): Promise<BrowserTabRecord[]> {
+	return invoke<BrowserTabRecord[]>("list_workspace_browser_tabs", {
+		workspaceId,
+	});
+}
+
+export async function createBrowserTab(
+	workspaceId: string,
+	initialUrl?: string | null,
+): Promise<BrowserTabRecord> {
+	return invoke<BrowserTabRecord>("create_browser_tab", {
+		workspaceId,
+		initialUrl: initialUrl ?? null,
+	});
+}
+
+export async function selectBrowserTab(
+	tabId: string,
+): Promise<BrowserTabRecord> {
+	return invoke<BrowserTabRecord>("select_browser_tab", { tabId });
+}
+
+export async function navigateBrowserTab(
+	tabId: string,
+	url: string,
+): Promise<BrowserTabRecord> {
+	return invoke<BrowserTabRecord>("navigate_browser_tab", { tabId, url });
+}
+
+export async function updateBrowserTabTitle(
+	tabId: string,
+	title: string | null,
+): Promise<BrowserTabRecord | null> {
+	return invoke<BrowserTabRecord | null>("update_browser_tab_title", {
+		tabId,
+		title,
+	});
+}
+
+export async function closeBrowserTab(
+	tabId: string,
+): Promise<BrowserTabRecord | null> {
+	return invoke<BrowserTabRecord | null>("close_browser_tab", { tabId });
+}
+
+export async function getWorkspaceBrowserProfile(
+	workspaceId: string,
+): Promise<BrowserProfileOptions> {
+	return invoke<BrowserProfileOptions>("get_workspace_browser_profile", {
+		workspaceId,
+	});
+}
+
+export async function getBrowserTabProfile(
+	tabId: string,
+): Promise<BrowserProfileOptions> {
+	return invoke<BrowserProfileOptions>("get_browser_tab_profile", { tabId });
+}
+
+export async function createBrowserWebviewHost(
+	label: string,
+	url: string,
+	bounds: BrowserWebviewBounds,
+	profile: BrowserProfileOptions,
+	userAgent: string,
+): Promise<void> {
+	return invoke<void>("create_browser_webview", {
+		label,
+		url,
+		bounds,
+		profile,
+		userAgent,
+	});
+}
+
+export async function browserGoBack(tabId: string): Promise<void> {
+	return invoke<void>("browser_go_back", { tabId });
+}
+
+export async function browserGoForward(tabId: string): Promise<void> {
+	return invoke<void>("browser_go_forward", { tabId });
+}
+
+export async function openBrowserDevtools(tabId: string): Promise<void> {
+	return invoke<void>("open_browser_devtools", { tabId });
+}
+
+export async function browserSnapshot(
+	tabId: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_snapshot", { tabId });
+}
+
+export async function browserScreenshot(
+	tabId: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_screenshot", { tabId });
+}
+
+export async function browserClick(
+	tabId: string,
+	x: number,
+	y: number,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_click", { tabId, x, y });
+}
+
+export async function browserType(
+	tabId: string,
+	text: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_type", { tabId, text });
+}
+
+export async function browserKey(
+	tabId: string,
+	key: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_key", { tabId, key });
+}
+
+export async function browserScroll(
+	tabId: string,
+	deltaX: number,
+	deltaY: number,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_scroll", {
+		tabId,
+		deltaX,
+		deltaY,
 	});
 }
 

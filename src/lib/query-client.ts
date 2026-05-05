@@ -3,6 +3,7 @@ import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
 import {
 	type ActionKind,
 	type AgentProvider,
+	type BrowserTabRecord,
 	type ChangeRequestInfo,
 	DEFAULT_WORKSPACE_GROUPS,
 	type DetectedEditor,
@@ -22,6 +23,7 @@ import {
 	listGoalChildWorkspaces,
 	listRepositories,
 	listSlashCommands,
+	listWorkspaceBrowserTabs,
 	listWorkspaceCandidateDirectories,
 	listWorkspaceChangesWithContent,
 	listWorkspaceFiles,
@@ -119,6 +121,8 @@ export const helmorQueryKeys = {
 		["workspaceLinkedDirectories", workspaceId] as const,
 	workspaceCandidateDirectories: (excludeWorkspaceId: string | null) =>
 		["workspaceCandidateDirectories", excludeWorkspaceId ?? ""] as const,
+	workspaceBrowserTabs: (workspaceId: string) =>
+		["workspaceBrowserTabs", workspaceId] as const,
 };
 
 export function createHelmorQueryClient() {
@@ -214,6 +218,16 @@ export function repositoriesQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.repositories,
 		queryFn: listRepositories,
+		initialData: [],
+		initialDataUpdatedAt: 0,
+		staleTime: 0,
+	});
+}
+
+export function workspaceBrowserTabsQueryOptions(workspaceId: string) {
+	return queryOptions<BrowserTabRecord[]>({
+		queryKey: helmorQueryKeys.workspaceBrowserTabs(workspaceId),
+		queryFn: () => listWorkspaceBrowserTabs(workspaceId),
 		initialData: [],
 		initialDataUpdatedAt: 0,
 		staleTime: 0,

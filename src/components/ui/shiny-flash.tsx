@@ -30,7 +30,7 @@ export function ShinyFlash({
 	}, [active]);
 
 	if (!shimmer) {
-		return <span className="truncate">{children}</span>;
+		return <span className="inline">{children}</span>;
 	}
 
 	return (

@@ -31,6 +31,8 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { BrowserSurface } from "@/features/browser";
+import type { BrowserSessionState } from "@/features/browser/browser-session";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
@@ -368,7 +370,7 @@ function AppShell({
 	const [workspaceReselectTick, setWorkspaceReselectTick] = useState(0);
 	const lastMarkedReadReselectTickRef = useRef(0);
 
-	const workspaceViewModeRef = useRef<"conversation" | "editor">(
+	const workspaceViewModeRef = useRef<"conversation" | "editor" | "browser">(
 		"conversation",
 	);
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
@@ -459,11 +461,13 @@ function AppShell({
 		null,
 	);
 	const [workspaceViewMode, setWorkspaceViewMode] = useState<
-		"conversation" | "editor"
+		"conversation" | "editor" | "browser"
 	>("conversation");
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
+	const [browserSession, setBrowserSession] =
+		useState<BrowserSessionState | null>(null);
 	const [sendingWorkspaceIds, setSendingWorkspaceIds] = useState<Set<string>>(
 		() => new Set(),
 	);
@@ -1095,6 +1099,22 @@ function AppShell({
 		setWorkspaceViewMode("conversation");
 		setEditorSession(null);
 	}, [confirmDiscardEditorChanges]);
+
+	const handleOpenBrowserMode = useCallback(() => {
+		setWorkspaceViewMode("browser");
+		setBrowserSession((prev) => prev ?? { activeTabId: null });
+	}, []);
+
+	const handleExitBrowserMode = useCallback(() => {
+		setWorkspaceViewMode("conversation");
+	}, []);
+
+	const handleBrowserSessionChange = useCallback(
+		(next: BrowserSessionState) => {
+			setBrowserSession(next);
+		},
+		[],
+	);
 
 	const primeWorkspaceDisplay = useCallback(
 		async (workspaceId: string) => {
@@ -2306,7 +2326,17 @@ function AppShell({
 													onError={handleEditorSurfaceError}
 												/>
 											)}
-											{workspaceViewMode !== "editor" &&
+											{workspaceViewMode === "browser" &&
+												browserSession &&
+												selectedWorkspaceId && (
+													<BrowserSurface
+														workspaceId={selectedWorkspaceId}
+														session={browserSession}
+														onChangeSession={handleBrowserSessionChange}
+														onExit={handleExitBrowserMode}
+													/>
+												)}
+											{workspaceViewMode === "conversation" &&
 											selectedWorkspaceDetailQuery.data?.workspaceKind ===
 												"goal" &&
 											selectedWorkspaceId ? (
@@ -2359,7 +2389,7 @@ function AppShell({
 											<div
 												data-focus-scope="chat"
 												className={
-													workspaceViewMode === "editor" ||
+													workspaceViewMode !== "conversation" ||
 													selectedWorkspaceDetailQuery.data?.workspaceKind ===
 														"goal"
 														? "hidden"
@@ -2688,6 +2718,7 @@ function AppShell({
 														changeRequest={workspaceChangeRequest}
 														forgeIsRefreshing={workspaceForgeIsRefreshing}
 														onOpenSettings={handleOpenSettings}
+														onOpenBrowserMode={handleOpenBrowserMode}
 													/>
 												</aside>
 											</>

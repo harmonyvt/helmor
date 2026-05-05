@@ -532,6 +532,11 @@ fn delete_imported_workspace_records(workspace_id: &str) -> Result<()> {
             [workspace_id],
         )
         .context("Failed to delete imported sessions")?;
+        conn.execute(
+            "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete imported browser tabs")?;
         conn.execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
             .context("Failed to delete imported workspace")?;
         Ok(())

@@ -1178,6 +1178,9 @@ pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResu
         let messages_deleted: usize = tx.execute("DELETE FROM session_messages", []).unwrap_or(0);
         let sessions_deleted: usize = tx.execute("DELETE FROM sessions", []).unwrap_or(0);
         let _pending: usize = tx.execute("DELETE FROM pending_cli_sends", []).unwrap_or(0);
+        let _browser_tabs: usize = tx
+            .execute("DELETE FROM workspace_browser_tabs", [])
+            .unwrap_or(0);
         let workspaces_deleted: usize = tx.execute("DELETE FROM workspaces", []).unwrap_or(0);
         let repos_deleted: usize = tx.execute("DELETE FROM repos", []).unwrap_or(0);
 

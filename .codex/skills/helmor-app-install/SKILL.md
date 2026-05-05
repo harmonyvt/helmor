@@ -61,11 +61,12 @@ du -sh src-tauri/target/release/bundle/macos/Helmor.app
 ditto src-tauri/target/release/bundle/macos/Helmor.app /Applications/Helmor.app
 ```
 
-5. Ad-hoc sign the local installed copy and verify it:
+5. Ad-hoc sign the local installed copy with the app entitlements and verify it:
 
 ```bash
-codesign --force --deep --sign - /Applications/Helmor.app
+codesign --force --deep --options runtime --entitlements src-tauri/Entitlements.plist --sign - /Applications/Helmor.app
 codesign --verify --deep --strict --verbose=2 /Applications/Helmor.app
+codesign -d --entitlements :- /Applications/Helmor.app >/dev/null
 defaults read /Applications/Helmor.app/Contents/Info CFBundleShortVersionString
 defaults read /Applications/Helmor.app/Contents/Info CFBundleIdentifier
 du -sh /Applications/Helmor.app
@@ -90,7 +91,7 @@ The app's data source preference lives outside both databases at:
 Report:
 
 - installed path, version, bundle id, and size
-- whether codesign verification passed
+- whether codesign verification passed and entitlements were readable
 - whether the Tauri build had the expected updater-signing caveat
 - any verification commands that failed
 

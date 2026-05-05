@@ -1238,6 +1238,8 @@ fn install_mock_gh_for_pr(harness: &CreateTestHarness, head_branch: &str, base_b
                     "merged": false,
                     "headRefName": head_branch,
                     "baseRefName": base_branch,
+                    "additions": 0,
+                    "deletions": 0,
                     "headRepository": { "nameWithOwner": "octocat/hello-world" },
                     "baseRepository": { "nameWithOwner": "octocat/hello-world" }
                 }

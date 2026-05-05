@@ -40,6 +40,10 @@ export type AppSettings = {
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
+	/** Use the libghostty terminal rendering library instead of xterm.js.
+	 *  Enables GPU-accelerated rendering and improved font shaping.
+	 *  Requires a restart to take effect. */
+	libghosttyEnabled: boolean;
 	/** Model IDs the user has starred for quick access. */
 	favoriteModelIds: string[];
 };
@@ -74,6 +78,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customApiKey: "",
 		customModels: "",
 	},
+	libghosttyEnabled: false,
 	favoriteModelIds: [],
 };
 
@@ -97,6 +102,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
+	libghosttyEnabled: "app.libghostty_enabled",
 	favoriteModelIds: "app.favorite_model_ids",
 };
 
@@ -218,6 +224,10 @@ export async function loadSettings(): Promise<AppSettings> {
 			claudeCustomProviders: parseClaudeCustomProviderSettings(
 				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
 			),
+			libghosttyEnabled:
+				raw[SETTINGS_KEY_MAP.libghosttyEnabled] !== undefined
+					? raw[SETTINGS_KEY_MAP.libghosttyEnabled] === "true"
+					: DEFAULT_SETTINGS.libghosttyEnabled,
 			favoriteModelIds: parseFavoriteModelIds(
 				raw[SETTINGS_KEY_MAP.favoriteModelIds],
 			),

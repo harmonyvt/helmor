@@ -544,6 +544,17 @@ CREATE TABLE IF NOT EXISTS pending_cli_sends (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS workspace_browser_tabs (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS workspaces (
     id TEXT PRIMARY KEY,
     repository_id TEXT,
@@ -617,6 +628,8 @@ CREATE TABLE IF NOT EXISTS session_messages (
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_browser_tabs_workspace_order ON workspace_browser_tabs(workspace_id, display_order);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_browser_tabs_one_active ON workspace_browser_tabs(workspace_id) WHERE active = 1;
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
 CREATE TRIGGER IF NOT EXISTS update_repos_updated_at
@@ -637,6 +650,13 @@ CREATE TRIGGER IF NOT EXISTS update_sessions_updated_at
     AFTER UPDATE ON sessions
     BEGIN
         UPDATE sessions SET updated_at = datetime('now')
+        WHERE id = NEW.id;
+    END;
+
+CREATE TRIGGER IF NOT EXISTS update_workspace_browser_tabs_updated_at
+    AFTER UPDATE ON workspace_browser_tabs
+    BEGIN
+        UPDATE workspace_browser_tabs SET updated_at = datetime('now')
         WHERE id = NEW.id;
     END;
 
@@ -672,6 +692,35 @@ mod tests {
         assert!(tables.contains(&"sessions".to_string()));
         assert!(tables.contains(&"session_messages".to_string()));
         assert!(tables.contains(&"settings".to_string()));
+        assert!(tables.contains(&"workspace_browser_tabs".to_string()));
+    }
+
+    #[test]
+    fn ensure_schema_creates_browser_tabs_shape() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+
+        let columns: Vec<String> = connection
+            .prepare("SELECT name FROM pragma_table_info('workspace_browser_tabs') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+
+        assert_eq!(
+            columns,
+            vec![
+                "id",
+                "workspace_id",
+                "url",
+                "title",
+                "display_order",
+                "active",
+                "created_at",
+                "updated_at",
+            ]
+        );
     }
 
     #[test]

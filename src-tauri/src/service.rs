@@ -22,6 +22,10 @@ pub use crate::workspaces::{
 
 // ---- Domain functions ----
 
+pub use crate::models::browser_tabs::{
+    close_browser_tab, create_browser_tab, list_workspace_browser_tabs, navigate_browser_tab,
+    normalize_browser_url, select_browser_tab, BrowserTabRecord,
+};
 pub use crate::models::workspaces::load_workspace_records;
 pub use crate::repos::{add_repository_from_local_path, list_repositories};
 pub use crate::sessions::{create_session, list_workspace_sessions};

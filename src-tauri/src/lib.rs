@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod browser_profile;
 pub mod cli;
 pub(crate) mod commands;
 pub mod data_dir;
@@ -167,6 +168,7 @@ pub fn run() {
             if let Err(error) = ui_sync::start_listener(app.handle().clone()) {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
+            mcp::set_app_handle(app.handle().clone());
 
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
@@ -270,6 +272,24 @@ pub fn run() {
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
+            commands::browser_commands::list_workspace_browser_tabs,
+            commands::browser_commands::create_browser_tab,
+            commands::browser_commands::select_browser_tab,
+            commands::browser_commands::navigate_browser_tab,
+            commands::browser_commands::update_browser_tab_title,
+            commands::browser_commands::close_browser_tab,
+            commands::browser_commands::get_workspace_browser_profile,
+            commands::browser_commands::get_browser_tab_profile,
+            commands::browser_commands::create_browser_webview,
+            commands::browser_commands::browser_go_back,
+            commands::browser_commands::browser_go_forward,
+            commands::browser_commands::open_browser_devtools,
+            commands::browser_commands::browser_snapshot,
+            commands::browser_commands::browser_screenshot,
+            commands::browser_commands::browser_click,
+            commands::browser_commands::browser_type,
+            commands::browser_commands::browser_key,
+            commands::browser_commands::browser_scroll,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,

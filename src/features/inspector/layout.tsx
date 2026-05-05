@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, X } from "lucide-react";
+import { ChevronDown, Plus, Terminal, X } from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -666,6 +666,7 @@ export function InspectorTabsSection({
 											"shrink-0 disabled:cursor-not-allowed disabled:opacity-50",
 										)}
 									>
+										<Terminal className="size-3" strokeWidth={1.8} />
 										Terminal
 									</button>
 								) : (

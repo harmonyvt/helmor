@@ -88,6 +88,15 @@ pub fn run_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Returns the browser profiles directory inside the data dir.
+pub fn browser_profiles_dir() -> Result<PathBuf> {
+    let dir = data_dir()?.join("browser-profiles");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).context("Failed to create browser profiles directory")?;
+    }
+    Ok(dir)
+}
+
 /// Returns the generated images directory inside the data dir.
 pub fn generated_images_dir() -> Result<PathBuf> {
     let dir = data_dir()?.join("generated-images");
@@ -229,6 +238,7 @@ pub fn ensure_directory_structure() -> Result<()> {
     workspaces_dir()?;
     logs_dir()?;
     run_dir()?;
+    browser_profiles_dir()?;
     generated_images_dir()?;
     Ok(())
 }
