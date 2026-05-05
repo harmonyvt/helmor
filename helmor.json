@@ -1,6 +1,6 @@
 {
 	"scripts": {
-		"setup": "cp \"$HELMOR_ROOT_PATH/.env.local\" \"$HELMOR_WORKSPACE_PATH/.env.local\"\ncp -r \"$HELMOR_ROOT_PATH/sidecar/dist\" \"$HELMOR_WORKSPACE_PATH/sidecar/dist\"\nbun install",
+		"setup": "bun run setup:envs",
 		"run": "bun run dev:analyze"
 	}
 }
