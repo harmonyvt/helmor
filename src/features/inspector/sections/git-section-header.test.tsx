@@ -423,6 +423,30 @@ describe("GitSectionHeader forge onboarding", () => {
 		});
 	});
 
+	it("keeps refresh PR status visible while forge setup needs attention", async () => {
+		const onRefreshPrStatus = vi.fn().mockResolvedValue(undefined);
+
+		renderWithProviders(
+			<GitSectionHeader
+				commitButtonMode="create-pr"
+				commitButtonState="idle"
+				changeRequest={null}
+				forgeDetection={githubDetection()}
+				workspaceId="workspace-1"
+				onRefreshPrStatus={onRefreshPrStatus}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Connect GitHub" }),
+		).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Refresh PR status" }));
+
+		await waitFor(() => {
+			expect(onRefreshPrStatus).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	it("does not shimmer in idle / busy / done states", () => {
 		const { rerender } = renderWithProviders(
 			<GitSectionHeader

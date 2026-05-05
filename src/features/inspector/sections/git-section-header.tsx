@@ -199,9 +199,7 @@ export function GitSectionHeader({
 		showForgeOnboarding;
 	const isMergeRequest = forgeDetection?.provider === "gitlab";
 	const showChangeRequest = changeRequest !== null && !showForgeOnboarding;
-	const showRefreshPrStatus = Boolean(
-		onRefreshPrStatus && !showForgeOnboarding,
-	);
+	const showRefreshPrStatus = Boolean(onRefreshPrStatus);
 	const showContinue = commitButtonMode === "merged" && showChangeRequest;
 	const headerRef = useRef<HTMLDivElement | null>(null);
 	const changeRequestRef = useRef<HTMLDivElement | null>(null);
