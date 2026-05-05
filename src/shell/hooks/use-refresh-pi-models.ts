@@ -17,16 +17,35 @@ export function useRefreshPiModels() {
 		if (modelSectionsQuery.status !== "success") return;
 		refreshStartedRef.current = true;
 
+		console.info("[models-debug] automatic Pi model refresh started", {
+			staticSectionCount: modelSectionsQuery.data?.length ?? 0,
+			staticPiCount:
+				modelSectionsQuery.data?.find((section) => section.id === "pi")?.options
+					.length ?? 0,
+		});
 		void checkPiModels()
 			.then((result) => {
+				console.info("[models-debug] automatic Pi model refresh result", {
+					status: result.status,
+					modelCount: result.models.length,
+					providerCount: result.providers.length,
+					providers: result.providers.map((provider) => ({
+						key: provider.key,
+						modelCount: provider.modelCount,
+					})),
+					error: result.error ?? null,
+				});
 				if (result.status === "error" || result.models.length === 0) return;
 				queryClient.setQueryData<AgentModelSection[]>(
 					helmorQueryKeys.agentModelSections,
 					(current) => replacePiModels(current, result.models),
 				);
+				console.info("[models-debug] automatic Pi model cache replaced", {
+					modelCount: result.models.length,
+				});
 			})
 			.catch((error) => {
-				console.debug("[models] automatic Pi model refresh failed", error);
+				console.warn("[models-debug] automatic Pi model refresh failed", error);
 			});
-	}, [modelSectionsQuery.status, queryClient]);
+	}, [modelSectionsQuery.data, modelSectionsQuery.status, queryClient]);
 }

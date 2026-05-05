@@ -385,6 +385,79 @@ describe("useConversationStreaming", () => {
 		expect(result.current.hasPlanReview).toBe(true);
 	});
 
+	it("shows assistant progress immediately before the first stream event", async () => {
+		const streamCallbacks: Array<(event: unknown) => void> = [];
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				streamCallbacks.push(onEvent);
+			},
+		);
+
+		const { Wrapper, queryClient } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "continue on codex",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		const initial = queryClient.getQueryData<ThreadMessageLike[]>(
+			sessionThreadCacheKey("session-1"),
+		);
+		expect(initial).toHaveLength(2);
+		expect(initial?.[0]?.role).toBe("user");
+		expect(initial?.[1]?.role).toBe("assistant");
+		expect(initial?.[1]?.streaming).toBe(true);
+		expect(initial?.[1]?.content).toEqual([
+			expect.objectContaining({ type: "text", text: "Working…" }),
+		]);
+
+		act(() => {
+			streamCallbacks[0]?.({
+				kind: "streamingPartial",
+				message: {
+					role: "assistant",
+					id: "assistant-1",
+					content: [{ type: "text", text: "Real output" }],
+					streaming: true,
+				},
+			});
+		});
+		await act(async () => {
+			await new Promise((resolve) => window.requestAnimationFrame(resolve));
+		});
+
+		const updated = queryClient.getQueryData<ThreadMessageLike[]>(
+			sessionThreadCacheKey("session-1"),
+		);
+		expect(updated).toHaveLength(2);
+		expect(updated?.[1]?.id).toBe("assistant-1");
+		expect(updated?.[1]?.content).toEqual([
+			expect.objectContaining({ type: "text", text: "Real output" }),
+		]);
+	});
+
 	it("clears hasPlanReview when a new message is submitted", async () => {
 		apiMocks.startAgentMessageStream.mockImplementation(
 			async (_payload: unknown, onEvent: (event: unknown) => void) => {

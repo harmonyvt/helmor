@@ -1,8 +1,11 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
+import { ArchiveTab } from "@/features/inspector/sections/archive";
+import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import {
 	type ShortcutHandler,
 	useAppShortcuts,
@@ -11,14 +14,18 @@ import {
 	type ChangeRequestInfo,
 	createSession,
 	type PrComment,
+	type WorkspaceDetail,
+	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import type { DiffOpenOptions } from "@/lib/editor-session";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
 import { useScriptStatus } from "./hooks/use-script-status";
 import { useSetupAutoRun } from "./hooks/use-setup-auto-run";
 import { HorizontalResizeHandle, InspectorTabsSection } from "./layout";
+import { buildReviewAllPrompt } from "./pr-comments";
 import type { ScriptStatus } from "./script-store";
 import { ActionsSection } from "./sections/actions";
 import { ChangesSection } from "./sections/changes";
@@ -28,58 +35,11 @@ import { TerminalInstancePanel } from "./sections/terminal";
 import {
 	closeTerminal,
 	createTerminal,
+	getTerminals,
 	subscribeToWorkspaceList,
 	TERMINAL_INSTANCE_LIMIT,
 	type TerminalInstance,
 } from "./terminal-store";
-
-// ── Review-all prompt builder ─────────────────────────────────────────────────
-
-function buildReviewAllPrompt(comments: PrComment[]): string {
-	const inlineUnresolved = comments.filter(
-		(c) => c.filePath != null && !c.isThreadResolved,
-	);
-	const generalComments = comments.filter((c) => c.filePath == null);
-
-	const sections: string[] = [
-		"Please review and address all outstanding PR review comments.",
-	];
-
-	if (inlineUnresolved.length > 0) {
-		sections.push("\n## Inline Code Review Comments");
-		// Group by file path.
-		const byFile = new Map<string, PrComment[]>();
-		for (const comment of inlineUnresolved) {
-			const key = comment.filePath!;
-			const group = byFile.get(key);
-			if (group) {
-				group.push(comment);
-			} else {
-				byFile.set(key, [comment]);
-			}
-		}
-		for (const [filePath, fileComments] of byFile) {
-			sections.push(`\n### ${filePath}`);
-			for (const comment of fileComments) {
-				sections.push(`**@${comment.author}**: ${comment.body}`);
-			}
-		}
-	}
-
-	if (generalComments.length > 0) {
-		sections.push("\n## General PR Comments");
-		for (const comment of generalComments) {
-			sections.push(`\n### @${comment.author}`);
-			sections.push(comment.body);
-		}
-	}
-
-	sections.push(
-		"\n---\nFor each comment, understand the requested change and implement it. Run the relevant tests to confirm nothing is broken.",
-	);
-
-	return sections.join("\n");
-}
 
 type WorkspaceInspectorSidebarProps = {
 	workspaceId?: string | null;
@@ -159,6 +119,7 @@ export function WorkspaceInspectorSidebar({
 		workspaceId: workspaceId ?? null,
 		repoId: repoId ?? null,
 	});
+	const queryClient = useQueryClient();
 
 	// Fire setup auto-run / auto-complete at the sidebar level so it runs even
 	// when the Setup tab isn't mounted (tabsOpen=false).
@@ -194,11 +155,29 @@ export function WorkspaceInspectorSidebar({
 		"run",
 		!!repoScripts?.runScript?.trim(),
 	);
+	const archiveScriptState = useScriptStatus(
+		workspaceId ?? null,
+		"archive",
+		!!repoScripts?.archiveScript?.trim(),
+	);
 
 	const handleReviewAllComments = useCallback(
 		async (comments: PrComment[]) => {
 			if (!workspaceId || !onQueuePendingPromptForSession) return;
 			const { sessionId } = await createSession(workspaceId);
+			seedNewSessionInCache({
+				queryClient,
+				workspaceId,
+				sessionId,
+				workspace:
+					queryClient.getQueryData<WorkspaceDetail | null>(
+						helmorQueryKeys.workspaceDetail(workspaceId),
+					) ?? null,
+				existingSessions:
+					queryClient.getQueryData<WorkspaceSessionSummary[]>(
+						helmorQueryKeys.workspaceSessions(workspaceId),
+					) ?? [],
+			});
 			onQueuePendingPromptForSession({
 				sessionId,
 				prompt: buildReviewAllPrompt(comments),
@@ -208,7 +187,7 @@ export function WorkspaceInspectorSidebar({
 			// Navigate to the new session so the pending prompt is consumed.
 			onSelectSession?.(sessionId);
 		},
-		[workspaceId, onQueuePendingPromptForSession, onSelectSession],
+		[queryClient, workspaceId, onQueuePendingPromptForSession, onSelectSession],
 	);
 
 	// Live list of Terminal sub-tabs for the current workspace, observed at
@@ -403,20 +382,32 @@ export function WorkspaceInspectorSidebar({
 	});
 
 	// Reset to "setup" when the active tab is a terminal id that no longer
-	// matches any current instance — happens when switching workspaces while
-	// a terminal tab was active in the previous one.
+	// matches any current instance. Read the terminal store synchronously too:
+	// on workspace switches the persisted tab id may restore before this
+	// component's subscribed terminal list has received its first snapshot.
 	useEffect(() => {
-		if (activeTab === "setup" || activeTab === "run") return;
+		if (activeTab === "setup" || activeTab === "run" || activeTab === "archive")
+			return;
 		if (terminalInstances.some((t) => t.id === activeTab)) return;
+		if (
+			workspaceId &&
+			getTerminals(workspaceId).some((t) => t.id === activeTab)
+		) {
+			return;
+		}
 		setActiveTab("setup");
-	}, [activeTab, terminalInstances, setActiveTab]);
+	}, [activeTab, terminalInstances, workspaceId, setActiveTab]);
 
 	// Only allow hover-to-zoom when the active tab has real terminal output.
 	// "idle" = script configured but never run; "no-script" = nothing to run.
 	// In both cases the body is a placeholder (Run / Open-settings button)
 	// that doesn't benefit from — and shouldn't trigger — the enlargement.
 	const scriptTabState =
-		activeTab === "setup" ? setupScriptState : runScriptState;
+		activeTab === "setup"
+			? setupScriptState
+			: activeTab === "archive"
+				? archiveScriptState
+				: runScriptState;
 	const canHoverExpand = isTerminalTabActive
 		? true
 		: scriptTabState === "running" ||
@@ -488,6 +479,7 @@ export function WorkspaceInspectorSidebar({
 				tabActions={runTabActions}
 				setupScriptState={setupScriptState}
 				runScriptState={runScriptState}
+				archiveScriptState={archiveScriptState}
 				terminalInstances={terminalInstances}
 				onAddTerminal={handleAddTerminal}
 				onCloseTerminal={handleCloseTerminal}
@@ -509,6 +501,13 @@ export function WorkspaceInspectorSidebar({
 					onOpenSettings={handleOpenSettings}
 					onStatusChange={setRunStatus}
 					onUrlsChange={setRunUrls}
+				/>
+				<ArchiveTab
+					repoId={repoId ?? null}
+					workspaceId={workspaceId ?? null}
+					archiveScript={repoScripts?.archiveScript ?? null}
+					isActive={activeTab === "archive"}
+					onOpenSettings={handleOpenSettings}
 				/>
 				{terminalInstances.map((instance) => (
 					<TerminalInstancePanel

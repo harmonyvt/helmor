@@ -6,7 +6,7 @@
  */
 
 import { ArrowRight, Box } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -67,7 +67,21 @@ export function ProviderSwapDialog({
 	const fromLabel = PROVIDER_LABELS[fromProvider];
 	const toLabel = PROVIDER_LABELS[toProvider];
 
+	useEffect(() => {
+		console.info("[provider-swap-debug] render", {
+			open,
+			fromProvider,
+			toProvider,
+			choice,
+		});
+	});
+
 	const handleConfirm = () => {
+		console.info("[provider-swap-debug] confirm", {
+			fromProvider,
+			toProvider,
+			choice,
+		});
 		onChoose(choice);
 	};
 
@@ -75,6 +89,12 @@ export function ProviderSwapDialog({
 		<Dialog
 			open={open}
 			onOpenChange={(isOpen) => {
+				console.info("[provider-swap-debug] open change", {
+					isOpen,
+					fromProvider,
+					toProvider,
+					choice,
+				});
 				if (!isOpen) onCancel();
 			}}
 		>
@@ -108,7 +128,14 @@ export function ProviderSwapDialog({
 				{/* Choice selection */}
 				<RadioGroup
 					value={choice}
-					onValueChange={(v) => setChoice(v as ProviderSwapChoice)}
+					onValueChange={(v) => {
+						console.info("[provider-swap-debug] choice change", {
+							fromProvider,
+							toProvider,
+							choice: v,
+						});
+						setChoice(v as ProviderSwapChoice);
+					}}
 					className="gap-2"
 				>
 					<label
@@ -166,7 +193,14 @@ export function ProviderSwapDialog({
 					<Button
 						variant="ghost"
 						size="sm"
-						onClick={onCancel}
+						onClick={() => {
+							console.info("[provider-swap-debug] cancel button", {
+								fromProvider,
+								toProvider,
+								choice,
+							});
+							onCancel();
+						}}
 						className="cursor-pointer"
 					>
 						Cancel

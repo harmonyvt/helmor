@@ -223,14 +223,39 @@ struct ExchangeContext {
 
 #[tauri::command]
 pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
-    Ok(queries::fetch_agent_model_sections())
+    let sections = queries::fetch_agent_model_sections();
+    let section_counts = sections
+        .iter()
+        .map(|section| format!("{}:{}", section.id, section.options.len()))
+        .collect::<Vec<_>>();
+    tracing::info!(
+        section_count = sections.len(),
+        section_counts = ?section_counts,
+        "list_agent_model_sections resolved"
+    );
+    Ok(sections)
 }
 
 #[tauri::command]
 pub fn check_pi_models(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
 ) -> CmdResult<pi_models::PiModelCheckResponse> {
-    Ok(pi_models::check(&sidecar))
+    tracing::info!("check_pi_models requested");
+    let result = pi_models::check(&sidecar);
+    let provider_counts = result
+        .providers
+        .iter()
+        .map(|provider| format!("{}:{}", provider.key, provider.model_count))
+        .collect::<Vec<_>>();
+    tracing::info!(
+        status = ?result.status,
+        model_count = result.models.len(),
+        provider_count = result.providers.len(),
+        provider_counts = ?provider_counts,
+        error = ?result.error,
+        "check_pi_models completed"
+    );
+    Ok(result)
 }
 
 #[tauri::command]
@@ -246,8 +271,30 @@ pub async fn send_agent_message_stream(
     }
 
     let model = resolve_model(&request.model_id);
+    tracing::info!(
+        request_provider = %request.provider,
+        requested_model_id = %request.model_id,
+        resolved_provider = %model.provider,
+        resolved_cli_model = %model.cli_model,
+        supports_effort = model.supports_effort,
+        session_id = ?request.session_id,
+        helmor_session_id = ?request.helmor_session_id,
+        resume_only = request.resume_only,
+        has_prompt_prefix = request.prompt_prefix.as_deref().is_some_and(|prefix| !prefix.trim().is_empty()),
+        prompt_len = prompt.len(),
+        file_count = request.files.as_ref().map_or(0, Vec::len),
+        image_count = request.images.as_ref().map_or(0, Vec::len),
+        "send_agent_message_stream model resolved"
+    );
 
     if request.provider != model.provider {
+        tracing::warn!(
+            request_provider = %request.provider,
+            requested_model_id = %request.model_id,
+            resolved_provider = %model.provider,
+            resolved_cli_model = %model.cli_model,
+            "send_agent_message_stream provider/model mismatch"
+        );
         return Err(anyhow::anyhow!(
             "Model {} does not belong to provider {}.",
             request.model_id,
@@ -259,6 +306,16 @@ pub async fn send_agent_message_stream(
     let working_directory = resolve_stream_working_directory(&request)?;
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
+    tracing::info!(
+        stream_id = %stream_id,
+        provider = %model.provider,
+        model_id = %request.model_id,
+        resolved_cli_model = %model.cli_model,
+        working_directory = %working_directory.display(),
+        session_id = ?request.session_id,
+        helmor_session_id = ?request.helmor_session_id,
+        "send_agent_message_stream starting sidecar stream"
+    );
 
     stream_via_sidecar(
         app.clone(),

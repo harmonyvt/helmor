@@ -1072,16 +1072,39 @@ export async function loadAddRepositoryDefaults(): Promise<AddRepositoryDefaults
 
 export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	try {
-		return await invoke<AgentModelSection[]>("list_agent_model_sections");
+		console.info("[api-debug] invoking list_agent_model_sections");
+		const sections = await invoke<AgentModelSection[]>(
+			"list_agent_model_sections",
+		);
+		console.info("[api-debug] list_agent_model_sections resolved", {
+			sectionCount: sections.length,
+			sections: sections.map((section) => ({
+				id: section.id,
+				label: section.label,
+				status: section.status ?? "ready",
+				optionCount: section.options.length,
+			})),
+		});
+		return sections;
 	} catch (error) {
+		console.warn("[api-debug] list_agent_model_sections failed", error);
 		throw new Error(describeInvokeError(error, "Unable to load agent models."));
 	}
 }
 
 export async function checkPiModels(): Promise<PiModelCheckResponse> {
 	try {
-		return await invoke<PiModelCheckResponse>("check_pi_models");
+		console.info("[api-debug] invoking check_pi_models");
+		const result = await invoke<PiModelCheckResponse>("check_pi_models");
+		console.info("[api-debug] check_pi_models resolved", {
+			status: result.status,
+			modelCount: result.models.length,
+			providerCount: result.providers.length,
+			error: result.error ?? null,
+		});
+		return result;
 	} catch (error) {
+		console.warn("[api-debug] check_pi_models failed", error);
 		throw new Error(describeInvokeError(error, "Unable to check Pi models."));
 	}
 }
@@ -2881,7 +2904,7 @@ export async function updateRepoPreferences(
 
 export async function executeRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	onEvent: (event: ScriptEvent) => void,
 	workspaceId?: string | null,
 ): Promise<void> {
@@ -2897,7 +2920,7 @@ export async function executeRepoScript(
 
 export async function stopRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	workspaceId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("stop_repo_script", {
@@ -2918,7 +2941,7 @@ export async function stopRepoScript(
  */
 export async function writeRepoScriptStdin(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	workspaceId: string | null,
 	data: string,
 ): Promise<boolean> {
@@ -2936,7 +2959,7 @@ export async function writeRepoScriptStdin(
  */
 export async function resizeRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	workspaceId: string | null,
 	cols: number,
 	rows: number,

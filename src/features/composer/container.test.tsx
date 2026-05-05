@@ -1,11 +1,20 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
+import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 
 const apiMockState = vi.hoisted(() => ({
+	createSession: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	listSlashCommands: vi.fn(),
 	listWorkspaceLinkedDirectories: vi.fn(),
 	setWorkspaceLinkedDirectories: vi.fn(),
@@ -15,11 +24,35 @@ vi.mock("@/lib/api", async () => {
 	const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
 	return {
 		...actual,
+		createSession: apiMockState.createSession,
+		loadSessionThreadMessages: apiMockState.loadSessionThreadMessages,
 		listSlashCommands: apiMockState.listSlashCommands,
 		listWorkspaceLinkedDirectories: apiMockState.listWorkspaceLinkedDirectories,
 		setWorkspaceLinkedDirectories: apiMockState.setWorkspaceLinkedDirectories,
 	};
 });
+
+vi.mock("./provider-swap-dialog", () => ({
+	ProviderSwapDialog: ({
+		onChoose,
+		onCancel,
+	}: {
+		onChoose: (choice: "bring-history" | "start-fresh") => void;
+		onCancel: () => void;
+	}) => (
+		<div data-testid="provider-swap-dialog">
+			<button type="button" onClick={() => onChoose("bring-history")}>
+				Bring history
+			</button>
+			<button type="button" onClick={() => onChoose("start-fresh")}>
+				Start fresh
+			</button>
+			<button type="button" onClick={onCancel}>
+				Cancel
+			</button>
+		</div>
+	),
+}));
 
 type PickHandler = (entry: unknown) => void;
 type RemoveHandler = (path: string) => void;
@@ -38,6 +71,8 @@ const composerMockState = vi.hoisted(() => ({
 	lastOnRemoveLinkedDirectory: null as RemoveHandler | null,
 	lastAddDirCandidates: [] as readonly unknown[],
 	lastOnPickAddDir: null as PickHandler | null,
+	lastOnSelectModel: null as ((modelId: string) => void) | null,
+	lastAgentType: null as "claude" | "codex" | "pi" | null,
 }));
 
 vi.mock("./index", async () => {
@@ -47,6 +82,7 @@ vi.mock("./index", async () => {
 		WorkspaceComposer: (props: {
 			contextKey: string;
 			selectedModelId: string | null;
+			onSelectModel: (modelId: string) => void;
 			fastMode?: boolean;
 			disabled?: boolean;
 			submitDisabled?: boolean;
@@ -60,6 +96,7 @@ vi.mock("./index", async () => {
 			onRemoveLinkedDirectory?: RemoveHandler;
 			addDirCandidates?: readonly unknown[];
 			onPickAddDir?: PickHandler;
+			agentType?: "claude" | "codex" | "pi" | null;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -70,6 +107,8 @@ vi.mock("./index", async () => {
 				...(props.addDirCandidates ?? []),
 			];
 			composerMockState.lastOnPickAddDir = props.onPickAddDir ?? null;
+			composerMockState.lastOnSelectModel = props.onSelectModel;
+			composerMockState.lastAgentType = props.agentType ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -83,6 +122,7 @@ vi.mock("./index", async () => {
 					data-fast-mode={props.fastMode ? "on" : "off"}
 					data-disabled={props.disabled ? "true" : "false"}
 					data-submit-disabled={props.submitDisabled ? "true" : "false"}
+					data-agent-type={props.agentType ?? "none"}
 				>
 					{props.contextKey}:{props.selectedModelId ?? "none"}
 				</div>
@@ -118,6 +158,19 @@ const MODEL_SECTIONS = [
 				cliModel: "gpt-5.4",
 				effortLevels: ["low", "medium", "high"],
 				supportsFastMode: true,
+			},
+		],
+	},
+	{
+		id: "pi",
+		label: "Pi",
+		options: [
+			{
+				id: "pi-gpt-5.4",
+				provider: "pi",
+				label: "Pi · GPT-5.4",
+				cliModel: "azure-openai-responses/gpt-5.4",
+				effortLevels: ["low", "medium", "high"],
 			},
 		],
 	},
@@ -193,9 +246,15 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.renders = [];
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
+		composerMockState.lastOnSelectModel = null;
+		composerMockState.lastAgentType = null;
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
+		apiMockState.createSession.mockReset();
+		apiMockState.createSession.mockResolvedValue({ sessionId: "session-new" });
+		apiMockState.loadSessionThreadMessages.mockReset();
+		apiMockState.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMockState.setWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listSlashCommands.mockResolvedValue({
 			commands: [],
@@ -267,6 +326,59 @@ describe("WorkspaceComposerContainer", () => {
 		]);
 	});
 
+	it("passes the Pi provider through to the composer for Pi sessions", () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			...WORKSPACE_SESSIONS,
+			{
+				...WORKSPACE_SESSIONS[0],
+				id: "session-pi",
+				title: "Pi session",
+				agentType: "pi",
+				model: "pi-gpt-5.4",
+				active: false,
+			},
+		]);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-pi"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const composer = screen.getByTestId("workspace-composer-mock");
+		expect(composer).toHaveTextContent("session:session-pi:pi-gpt-5.4");
+		expect(composer).toHaveAttribute("data-agent-type", "pi");
+		expect(composerMockState.lastAgentType).toBe("pi");
+	});
+
 	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
@@ -329,6 +441,85 @@ describe("WorkspaceComposerContainer", () => {
 			}),
 		);
 		expect(onPendingPromptConsumed).toHaveBeenCalledTimes(1);
+	});
+
+	it("seeds the new session and empty thread cache before selecting a switched provider model", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+		apiMockState.loadSessionThreadMessages.mockResolvedValue([
+			{
+				id: "m1",
+				role: "user",
+				content: [{ type: "text", id: "m1:t", text: "hello" }],
+				createdAt: "2026-04-05T00:00:00Z",
+			},
+		]);
+
+		const onSelectModel = vi.fn();
+		const onSwitchSession = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={onSelectModel}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSwitchSession={onSwitchSession}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(composerMockState.lastOnSelectModel).not.toBeNull();
+		composerMockState.lastOnSelectModel?.("gpt-5.4");
+		fireEvent.click(await screen.findByText("Bring history"));
+
+		await waitFor(() => {
+			expect(onSelectModel).toHaveBeenCalledWith(
+				"session:session-new",
+				"gpt-5.4",
+			);
+		});
+		expect(onSwitchSession).toHaveBeenCalledWith("session-new");
+		expect(apiMockState.createSession).toHaveBeenCalledWith("workspace-1");
+		expect(apiMockState.loadSessionThreadMessages).toHaveBeenCalledWith(
+			"session-1",
+		);
+		expect(
+			queryClient
+				.getQueryData<typeof WORKSPACE_SESSIONS>(
+					helmorQueryKeys.workspaceSessions("workspace-1"),
+				)
+				?.some((session) => session.id === "session-new"),
+		).toBe(true);
+		expect(
+			queryClient.getQueryData(sessionThreadCacheKey("session-new")),
+		).toEqual([]);
 	});
 
 	it("loads slash commands when the composer mounts", async () => {
