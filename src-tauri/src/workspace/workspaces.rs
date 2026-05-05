@@ -159,6 +159,10 @@ pub struct WorkspaceDetail {
     pub archive_commit: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
+    /// User-editable title for goal workspaces. `None` if never set.
+    pub goal_title: Option<String>,
+    /// User-editable description for goal workspaces. `None` if never set.
+    pub goal_description: Option<String>,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -251,6 +255,14 @@ pub fn get_workspace(workspace_id: &str) -> Result<WorkspaceDetail> {
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
     Ok(record_to_detail(record))
+}
+
+/// Return all child workspaces that belong to a goal workspace, in
+/// creation order (oldest first — matches the natural card sort on the
+/// Kanban board).
+pub fn list_goal_child_workspaces(goal_workspace_id: &str) -> Result<Vec<WorkspaceDetail>> {
+    let records = workspace_models::load_goal_child_workspace_records(goal_workspace_id)?;
+    Ok(records.into_iter().map(record_to_detail).collect())
 }
 
 // ---- Read / unread ----
@@ -847,6 +859,8 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         archive_commit: record.archive_commit,
         session_count: record.session_count,
         message_count: record.message_count,
+        goal_title: record.goal_title,
+        goal_description: record.goal_description,
     }
 }
 

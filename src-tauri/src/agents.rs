@@ -144,6 +144,26 @@ pub enum AgentStreamEvent {
     /// in the thread messages as a PlanReview card; this event just tells
     /// the frontend to show the Implement / Request Changes buttons.
     PlanCaptured {},
+    /// A Pi Kanban custom tool was invoked by the AI. The frontend must
+    /// execute the corresponding IPC call and respond via
+    /// `send_kanban_tool_result`.
+    KanbanToolCall {
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        tool: String,
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+        args: Value,
+    },
+    /// A Pi extension called `ctx.ui.select/confirm/input`. The frontend
+    /// must show the interactive element and respond via `respond_to_pi_ui`.
+    PiUiRequest {
+        #[serde(rename = "interactionId")]
+        interaction_id: String,
+        #[serde(rename = "uiKind")]
+        ui_kind: String,
+        payload: Value,
+    },
     Error {
         message: String,
         persisted: bool,
@@ -558,6 +578,56 @@ pub async fn respond_to_elicitation_request(
             .send(&req)
             .map_err(|e| anyhow::anyhow!("Failed to send elicitation response: {e}"))?;
     }
+    Ok(())
+}
+
+/// Send the result of a Pi Kanban custom tool call back to the sidecar.
+/// Called by the frontend after it has executed the corresponding Tauri IPC
+/// action (e.g. `upsert_goal_card`) in response to a `kanban_tool_call` event.
+#[tauri::command]
+pub async fn send_kanban_tool_result(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    tool_call_id: String,
+    result: Value,
+    is_error: bool,
+) -> CmdResult<()> {
+    tracing::debug!(tool_call_id = %tool_call_id, is_error, "Kanban tool result");
+    let req = crate::sidecar::SidecarRequest {
+        id: Uuid::new_v4().to_string(),
+        method: "kanbanToolResult".to_string(),
+        params: serde_json::json!({
+            "toolCallId": tool_call_id,
+            "result": result,
+            "isError": is_error,
+        }),
+    };
+    sidecar
+        .send(&req)
+        .map_err(|e| anyhow::anyhow!("Failed to send kanban tool result: {e}"))?;
+    Ok(())
+}
+
+/// Send the result of a Pi extension interactive UI request (select/confirm/input)
+/// back to the sidecar. Called by the frontend after the user interacts with the
+/// corresponding element rendered in the Goals AI panel.
+#[tauri::command]
+pub async fn respond_to_pi_ui(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    interaction_id: String,
+    result: Value,
+) -> CmdResult<()> {
+    tracing::debug!(interaction_id = %interaction_id, "Pi UI response");
+    let req = crate::sidecar::SidecarRequest {
+        id: Uuid::new_v4().to_string(),
+        method: "piUiResponse".to_string(),
+        params: serde_json::json!({
+            "interactionId": interaction_id,
+            "result": result,
+        }),
+    };
+    sidecar
+        .send(&req)
+        .map_err(|e| anyhow::anyhow!("Failed to send Pi UI response: {e}"))?;
     Ok(())
 }
 

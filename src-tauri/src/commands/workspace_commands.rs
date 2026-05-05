@@ -1,7 +1,11 @@
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    db, git_watcher, workspace_state::WorkspaceState, workspace_status::WorkspaceStatus, workspaces,
+    db, git_watcher, models,
+    ui_sync::{self, UiMutationEvent},
+    workspace_state::WorkspaceState,
+    workspace_status::WorkspaceStatus,
+    workspaces,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -116,6 +120,35 @@ pub async fn list_archived_workspaces() -> CmdResult<Vec<workspaces::WorkspaceSu
 #[tauri::command]
 pub async fn get_workspace(workspace_id: String) -> CmdResult<workspaces::WorkspaceDetail> {
     run_blocking(move || workspaces::get_workspace(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn list_goal_child_workspaces(
+    goal_workspace_id: String,
+) -> CmdResult<Vec<workspaces::WorkspaceDetail>> {
+    run_blocking(move || workspaces::list_goal_child_workspaces(&goal_workspace_id)).await
+}
+
+/// Update the user-editable goal title and description for a goal workspace.
+/// Broadcasts `WorkspaceChanged` so the frontend invalidates its cache.
+#[tauri::command]
+pub async fn update_goal_workspace_meta(
+    app: AppHandle,
+    workspace_id: String,
+    goal_title: Option<String>,
+    goal_description: Option<String>,
+) -> CmdResult<()> {
+    let wid = workspace_id.clone();
+    run_blocking(move || {
+        models::workspaces::update_goal_workspace_meta(
+            &wid,
+            goal_title.as_deref(),
+            goal_description.as_deref(),
+        )
+    })
+    .await?;
+    ui_sync::publish(&app, UiMutationEvent::WorkspaceChanged { workspace_id });
+    Ok(())
 }
 
 #[tauri::command]

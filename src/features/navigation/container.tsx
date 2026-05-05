@@ -45,6 +45,7 @@ export const WorkspacesSidebarContainer = memo(
 			layoutMode,
 			setLayoutMode,
 			projectGroups,
+			goalProjection,
 			handleAddRepository,
 			handleArchiveWorkspace,
 			handleCloneFromUrl,
@@ -74,10 +75,9 @@ export const WorkspacesSidebarContainer = memo(
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
 				layoutMode={layoutMode}
-				onToggleLayout={() =>
-					setLayoutMode(layoutMode === "status" ? "pr" : "status")
-				}
+				onSetLayoutMode={setLayoutMode}
 				projectGroups={projectGroups}
+				goalProjection={goalProjection}
 				selectedWorkspaceId={selectedWorkspaceId}
 				sendingWorkspaceIds={sendingWorkspaceIds}
 				interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}

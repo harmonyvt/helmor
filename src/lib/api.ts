@@ -182,6 +182,22 @@ export type AgentSendRequest = {
 	 *  matching `@<path>` substrings out as image attachments without
 	 *  re-parsing the text — paths may contain whitespace. */
 	images?: string[] | null;
+	/**
+	 * When set, the Pi agent registers Kanban custom tools so it can
+	 * create, move, and update cards. Must be the goal workspace id.
+	 */
+	kanbanWorkspaceId?: string | null;
+	/**
+	 * JSON-serialised current `GoalCard[]` snapshot. Written to
+	 * `.pi/context/kanban.json` before the agent starts so the
+	 * `helmor-kanban` Pi extension can inject board state into the
+	 * system prompt.
+	 */
+	kanbanSnapshot?: string | null;
+	/** Goal workspace title — injected into the Pi extension system prompt. */
+	goalTitle?: string | null;
+	/** Goal workspace description — injected into the Pi extension system prompt. */
+	goalDescription?: string | null;
 };
 
 export type WorkspaceSummary = {
@@ -389,6 +405,10 @@ export type WorkspaceDetail = {
 	archiveCommit?: string | null;
 	sessionCount: number;
 	messageCount: number;
+	/** User-editable title for goal workspaces. Null if never set. */
+	goalTitle?: string | null;
+	/** User-editable description for goal workspaces. Null if never set. */
+	goalDescription?: string | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -1135,6 +1155,29 @@ export async function loadWorkspaceDetail(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load workspace detail."),
+		);
+	}
+}
+
+/**
+ * Update the user-editable goal title and/or description for a goal workspace.
+ * The backend broadcasts a `WorkspaceChanged` event so the frontend cache
+ * is automatically invalidated.
+ */
+export async function updateGoalWorkspaceMeta(
+	workspaceId: string,
+	goalTitle: string | null,
+	goalDescription: string | null,
+): Promise<void> {
+	try {
+		await invoke("update_goal_workspace_meta", {
+			workspaceId,
+			goalTitle,
+			goalDescription,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to update goal workspace metadata."),
 		);
 	}
 }
@@ -2080,6 +2123,42 @@ export async function createGoalChildWorkspace(
 	});
 }
 
+// ---------------------------------------------------------------------------
+// Goals AI panel — Pi Kanban bridge
+// ---------------------------------------------------------------------------
+
+/**
+ * Send the result of a Pi Kanban custom tool call back to the sidecar.
+ * Called after the frontend has executed the corresponding Tauri IPC action
+ * in response to a `kanban_tool_call` pipeline event.
+ */
+export async function sendKanbanToolResult(
+	toolCallId: string,
+	result: unknown,
+	isError = false,
+): Promise<void> {
+	return invoke("send_kanban_tool_result", {
+		toolCallId,
+		result: result ?? null,
+		isError,
+	});
+}
+
+/**
+ * Respond to a Pi extension interactive UI request (select / confirm / input).
+ * Called after the user interacts with the element rendered in the Goals AI
+ * panel in response to a `pi_ui_request` pipeline event.
+ */
+export async function respondToPiUi(
+	interactionId: string,
+	result: unknown,
+): Promise<void> {
+	return invoke("respond_to_pi_ui", {
+		interactionId,
+		result: result ?? null,
+	});
+}
+
 export async function addRepositoryFromLocalPath(
 	folderPath: string,
 ): Promise<AddRepositoryResponse> {
@@ -2132,6 +2211,14 @@ export async function setWorkspaceStatus(
 	status: WorkspaceStatus,
 ): Promise<void> {
 	return invoke<void>("set_workspace_status", { workspaceId, status });
+}
+
+export async function listGoalChildWorkspaces(
+	goalWorkspaceId: string,
+): Promise<WorkspaceDetail[]> {
+	return invoke<WorkspaceDetail[]>("list_goal_child_workspaces", {
+		goalWorkspaceId,
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -2364,6 +2451,19 @@ export type AgentStreamEvent =
 			requestedSchema?: Record<string, unknown> | null;
 	  }
 	| { kind: "planCaptured" }
+	| {
+			kind: "kanbanToolCall";
+			toolCallId: string;
+			tool: string;
+			workspaceId: string;
+			args: Record<string, unknown>;
+	  }
+	| {
+			kind: "piUiRequest";
+			interactionId: string;
+			uiKind: "select" | "confirm" | "input";
+			payload: Record<string, unknown>;
+	  }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**

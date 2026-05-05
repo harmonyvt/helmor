@@ -120,6 +120,14 @@ pub fn prepare_goal_workspace(
         },
     )?;
 
+    // Write goal_title and goal_description so the Goals panel header and
+    // Pi agent context show the values the user entered at creation time.
+    crate::models::workspaces::update_goal_workspace_meta(
+        &workspace_id,
+        Some(&title),
+        Some(&description),
+    )?;
+
     let repo_scripts = repos::load_repo_scripts(&request.repo_id, Some(&workspace_id)).unwrap_or(
         repos::RepoScripts {
             setup_script: None,

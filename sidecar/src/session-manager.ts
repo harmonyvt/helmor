@@ -36,6 +36,29 @@ export interface SendMessageParams {
 	 * attachments".
 	 */
 	readonly images: readonly string[];
+	/**
+	 * When set, the Pi session registers Kanban custom tools and writes
+	 * context files so the Pi extension can inject current board state
+	 * into the system prompt.
+	 */
+	readonly kanbanWorkspaceId?: string;
+	/**
+	 * JSON-serialised `GoalCard[]` snapshot of the current board state.
+	 * Written to `<cwd>/.pi/context/kanban.json` before the Pi agent
+	 * starts so the helmor-kanban extension can inject it into the
+	 * system prompt.
+	 */
+	readonly kanbanSnapshot?: string;
+	/**
+	 * User-editable title for the goal workspace. Injected into the Pi
+	 * extension system prompt so the agent understands the goal context.
+	 */
+	readonly goalTitle?: string;
+	/**
+	 * User-editable description for the goal workspace. Injected into
+	 * the Pi extension system prompt alongside the goal title.
+	 */
+	readonly goalDescription?: string;
 }
 
 export interface ListSlashCommandsParams {

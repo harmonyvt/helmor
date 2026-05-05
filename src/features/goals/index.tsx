@@ -1,28 +1,40 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	Bot,
 	GitBranch,
 	GitPullRequestDraft,
 	LoaderCircle,
+	Pencil,
 	Plus,
 	Sparkles,
 	X,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+	Sheet,
+	SheetContent,
+	SheetDescription,
+	SheetFooter,
+	SheetHeader,
+	SheetTitle,
+} from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import {
 	createGoalChildWorkspace,
 	finalizeWorkspaceFromRepo,
-	type GoalCard,
-	upsertGoalCard,
+	setWorkspaceStatus,
+	updateGoalWorkspaceMeta,
+	type WorkspaceDetail,
 	type WorkspaceStatus,
 } from "@/lib/api";
 import {
-	goalCardsQueryOptions,
+	goalChildWorkspacesQueryOptions,
 	helmorQueryKeys,
 	workspaceDetailQueryOptions,
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
+import { GoalsAiPanel } from "./ai-panel";
 
 const LANES: { id: WorkspaceStatus; label: string; color: string }[] = [
 	{ id: "backlog", label: "Backlog", color: "#848f92" },
@@ -33,82 +45,115 @@ const LANES: { id: WorkspaceStatus; label: string; color: string }[] = [
 ];
 
 type DragState = {
-	cardId: string;
+	workspaceId: string;
 	sourceLane: WorkspaceStatus;
 } | null;
 
 type GoalWorkspaceContainerProps = {
 	workspaceId: string;
+	headerLeading?: React.ReactNode;
+	onSelectWorkspace?: (workspaceId: string) => void;
 };
 
 export function GoalWorkspaceContainer({
 	workspaceId,
+	headerLeading,
+	onSelectWorkspace,
 }: GoalWorkspaceContainerProps) {
 	const queryClient = useQueryClient();
-	const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-	const [showPlanner, setShowPlanner] = useState(false);
-	const [plannerPrompt, setPlannerPrompt] = useState(
-		"Break this goal into implementation cards. Start with the actual Kanban UI and assign it to Claude Code Opus.",
-	);
+	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [showAddPanel, setShowAddPanel] = useState(false);
+	const [showAiPanel, setShowAiPanel] = useState(false);
+	const [showGoalSheet, setShowGoalSheet] = useState(false);
+	const [newCardTitle, setNewCardTitle] = useState("");
 	const [dragState, setDragState] = useState<DragState>(null);
 	const [dragOverLane, setDragOverLane] = useState<WorkspaceStatus | null>(
 		null,
 	);
 
 	const detailQuery = useQuery(workspaceDetailQueryOptions(workspaceId));
-	const cardsQuery = useQuery(goalCardsQueryOptions(workspaceId));
+	const childQuery = useQuery(goalChildWorkspacesQueryOptions(workspaceId));
 	const workspace = detailQuery.data;
-	const cards = cardsQuery.data ?? [];
+	const children = childQuery.data ?? [];
 
-	const cardsByLane = useMemo(() => {
-		const grouped = new Map<WorkspaceStatus, GoalCard[]>();
-		for (const lane of LANES) grouped.set(lane.id, []);
-		for (const card of cards) {
-			const lane = grouped.get(card.lane) ? card.lane : "backlog";
-			grouped.get(lane)?.push(card);
-		}
-		return grouped;
-	}, [cards]);
-
-	const selectedCard = useMemo(
-		() => cards.find((c) => c.id === selectedCardId) ?? null,
-		[cards, selectedCardId],
-	);
-
-	const invalidate = async () => {
+	const invalidate = useCallback(async () => {
 		await Promise.all([
 			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.goalCards(workspaceId),
+				queryKey: helmorQueryKeys.goalChildWorkspaces(workspaceId),
 			}),
 			queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceGroups,
 			}),
 		]);
-	};
+	}, [queryClient, workspaceId]);
 
-	const upsertMutation = useMutation({
-		mutationFn: upsertGoalCard,
+	const saveGoalMeta = useCallback(
+		async (title: string, description: string) => {
+			await updateGoalWorkspaceMeta(
+				workspaceId,
+				title.trim() || null,
+				description.trim() || null,
+			);
+			await queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+			});
+			setShowGoalSheet(false);
+		},
+		[workspaceId, queryClient],
+	);
+
+	const byLane = useMemo(() => {
+		const grouped = new Map<WorkspaceStatus, WorkspaceDetail[]>();
+		for (const lane of LANES) grouped.set(lane.id, []);
+		for (const ws of children) {
+			const key = grouped.has(ws.status) ? ws.status : "backlog";
+			grouped.get(key)?.push(ws);
+		}
+		return grouped;
+	}, [children]);
+
+	const selectedWorkspace = useMemo(
+		() => children.find((c) => c.id === selectedId) ?? null,
+		[children, selectedId],
+	);
+
+	// ── Move card (drag or button) ────────────────────────────────────────────
+	const moveMutation = useMutation({
+		mutationFn: ({
+			workspaceId: wid,
+			status,
+		}: {
+			workspaceId: string;
+			status: WorkspaceStatus;
+		}) => setWorkspaceStatus(wid, status),
 		onSuccess: invalidate,
 	});
 
-	const createWorkspaceMutation = useMutation({
-		mutationFn: async (card: GoalCard) => {
+	const handleMoveCard = useCallback(
+		(ws: WorkspaceDetail, lane: WorkspaceStatus) => {
+			moveMutation.mutate({ workspaceId: ws.id, status: lane });
+		},
+		[moveMutation],
+	);
+
+	// ── Create child workspace ────────────────────────────────────────────────
+	const createMutation = useMutation({
+		mutationFn: async (title: string) => {
 			const prepared = await createGoalChildWorkspace({
 				goalWorkspaceId: workspaceId,
-				goalCardId: card.id,
-				title: card.title,
+				title: title || undefined,
 			});
 			await finalizeWorkspaceFromRepo(prepared.workspaceId, {
 				...(prepared.sourceStartBranch
-					? {
-							startBranch: prepared.sourceStartBranch,
-							fetchStartBranch: true,
-						}
+					? { startBranch: prepared.sourceStartBranch, fetchStartBranch: true }
 					: {}),
 			});
 			return prepared;
 		},
 		onSuccess: async (prepared) => {
+			setSelectedId(prepared.workspaceId);
+			setShowAddPanel(false);
+			setNewCardTitle("");
 			await Promise.all([
 				invalidate(),
 				queryClient.invalidateQueries({
@@ -118,48 +163,22 @@ export function GoalWorkspaceContainer({
 		},
 	});
 
-	const handleMoveCard = useCallback(
-		(card: GoalCard, lane: WorkspaceStatus) => {
-			upsertMutation.mutate({
-				...card,
-				lane,
-				goalWorkspaceId: workspaceId,
-			});
-		},
-		[upsertMutation, workspaceId],
-	);
-
-	const addPlannerCard = () => {
-		const title = plannerPrompt
-			.trim()
-			.split(/\r?\n/)[0]
-			?.replace(/^[-#\s]+/, "")
-			.trim();
-		if (!title) return;
-		upsertMutation.mutate({
-			goalWorkspaceId: workspaceId,
-			title: title.length > 80 ? `${title.slice(0, 77)}...` : title,
-			description: plannerPrompt,
-			lane: "backlog",
-			assignedProvider: "claude",
-			assignedModelId: "default",
-			assignedEffortLevel: "high",
-		});
-		setShowPlanner(false);
+	const addCard = () => {
+		if (!newCardTitle.trim()) return;
+		createMutation.mutate(newCardTitle.trim());
 	};
 
+	// ── Drag-and-drop ─────────────────────────────────────────────────────────
 	const handleDragStart = useCallback(
-		(cardId: string, sourceLane: WorkspaceStatus) => {
-			setDragState({ cardId, sourceLane });
+		(wsId: string, sourceLane: WorkspaceStatus) => {
+			setDragState({ workspaceId: wsId, sourceLane });
 		},
 		[],
 	);
-
 	const handleDragEnd = useCallback(() => {
 		setDragState(null);
 		setDragOverLane(null);
 	}, []);
-
 	const handleDragOver = useCallback(
 		(laneId: WorkspaceStatus, e: React.DragEvent) => {
 			e.preventDefault();
@@ -167,7 +186,6 @@ export function GoalWorkspaceContainer({
 		},
 		[],
 	);
-
 	const handleDrop = useCallback(
 		(laneId: WorkspaceStatus) => {
 			if (!dragState || dragState.sourceLane === laneId) {
@@ -175,35 +193,67 @@ export function GoalWorkspaceContainer({
 				setDragOverLane(null);
 				return;
 			}
-			const card = cards.find((c) => c.id === dragState.cardId);
-			if (card) handleMoveCard(card, laneId);
+			const ws = children.find((c) => c.id === dragState.workspaceId);
+			if (ws) handleMoveCard(ws, laneId);
 			setDragState(null);
 			setDragOverLane(null);
 		},
-		[dragState, cards, handleMoveCard],
+		[dragState, children, handleMoveCard],
 	);
-
 	const handleDragLeave = useCallback((e: React.DragEvent) => {
-		// Only clear if leaving the lane container entirely
 		if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
 			setDragOverLane(null);
 		}
 	}, []);
 
-	const isPanelOpen = selectedCard !== null || showPlanner;
+	const isPanelOpen = selectedWorkspace !== null || showAddPanel || showAiPanel;
+
+	const goalTitle = workspace?.goalTitle ?? workspace?.title ?? "Goal";
+	const goalDescription = workspace?.goalDescription ?? null;
+
+	// Snapshot for Pi — list of child workspaces in a compact format.
+	const piSnapshot = useMemo(
+		() =>
+			JSON.stringify(
+				children.map((c) => ({
+					id: c.id,
+					title: c.title,
+					lane: c.status,
+					branch: c.branch,
+					prUrl: c.prUrl,
+					sessionCount: c.sessionCount,
+				})),
+			),
+		[children],
+	);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
+			{/* Goal meta sheet */}
+			<GoalMetaSheet
+				open={showGoalSheet}
+				onOpenChange={setShowGoalSheet}
+				initialTitle={workspace?.goalTitle ?? ""}
+				initialDescription={workspace?.goalDescription ?? ""}
+				onSave={saveGoalMeta}
+			/>
+
 			{/* Header */}
-			<header className="flex shrink-0 items-center justify-between border-b border-border/70 px-5 py-3">
-				<div className="min-w-0">
-					<div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-						<GitPullRequestDraft className="size-3.5" strokeWidth={1.8} />
-						Goal Workspace
+			<header
+				className="flex shrink-0 items-center justify-between border-b border-border/70 px-5 py-3"
+				data-tauri-drag-region
+			>
+				<div className="flex min-w-0 items-center gap-2">
+					{headerLeading}
+					<div className="min-w-0">
+						<div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+							<GitPullRequestDraft className="size-3.5" strokeWidth={1.8} />
+							Goal Workspace
+						</div>
+						<h1 className="mt-0.5 truncate text-lg font-semibold tracking-[-0.02em]">
+							{goalTitle}
+						</h1>
 					</div>
-					<h1 className="mt-0.5 truncate text-lg font-semibold tracking-[-0.02em]">
-						{workspace?.title ?? "Goal"}
-					</h1>
 				</div>
 				<div className="flex shrink-0 items-center gap-2">
 					{workspace?.prUrl ? (
@@ -218,8 +268,23 @@ export function GoalWorkspaceContainer({
 						size="sm"
 						className="cursor-pointer"
 						onClick={() => {
-							setShowPlanner(true);
-							setSelectedCardId(null);
+							setShowAiPanel((p) => !p);
+							setSelectedId(null);
+							setShowAddPanel(false);
+						}}
+						title="Pi AI assistant"
+					>
+						<Bot className="size-3.5" />
+						AI
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						className="cursor-pointer"
+						onClick={() => {
+							setShowAddPanel(true);
+							setSelectedId(null);
+							setShowAiPanel(false);
 						}}
 					>
 						<Plus className="size-3.5" />
@@ -228,22 +293,45 @@ export function GoalWorkspaceContainer({
 				</div>
 			</header>
 
-			{/* Body: lanes + optional detail/planner panel */}
+			{/* Goal description banner */}
+			<button
+				type="button"
+				className="group flex shrink-0 cursor-pointer items-start gap-2 border-b border-border/50 bg-muted/20 px-5 py-2 text-left transition-colors hover:bg-muted/40"
+				onClick={() => setShowGoalSheet(true)}
+				title="Edit goal title and description"
+			>
+				<div className="min-w-0 flex-1">
+					{goalDescription ? (
+						<p className="line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">
+							{goalDescription}
+						</p>
+					) : (
+						<p className="text-[12px] text-muted-foreground/50 italic">
+							Add a description for this goal…
+						</p>
+					)}
+				</div>
+				<Pencil className="mt-0.5 size-3 shrink-0 text-muted-foreground/30 transition-opacity group-hover:text-muted-foreground/60" />
+			</button>
+
+			{/* Body */}
 			<div className="flex min-h-0 flex-1 overflow-hidden">
-				{/* Kanban lanes: horizontally scrollable */}
+				{/* Kanban lanes */}
 				<div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
 					<div className="flex h-full gap-3 p-4">
 						{LANES.map((lane) => (
 							<GoalLane
 								key={lane.id}
 								lane={lane}
-								cards={cardsByLane.get(lane.id) ?? []}
+								workspaces={byLane.get(lane.id) ?? []}
 								isDragOver={dragOverLane === lane.id}
-								draggedCardId={dragState?.cardId ?? null}
-								selectedCardId={selectedCardId}
-								onCardClick={(card) => {
-									setSelectedCardId(card.id);
-									setShowPlanner(false);
+								draggedId={dragState?.workspaceId ?? null}
+								selectedId={selectedId}
+								onCardClick={(ws) => {
+									setSelectedId(ws.id);
+									setShowAddPanel(false);
+									setShowAiPanel(false);
+									onSelectWorkspace?.(ws.id);
 								}}
 								onDragStart={handleDragStart}
 								onDragEnd={handleDragEnd}
@@ -255,30 +343,38 @@ export function GoalWorkspaceContainer({
 					</div>
 				</div>
 
-				{/* Detail / Planner panel — slides in from right */}
+				{/* Side panel */}
 				{isPanelOpen && (
 					<aside className="flex w-72 min-h-0 shrink-0 flex-col border-l border-border/70 bg-sidebar/70">
-						{selectedCard ? (
-							<CardDetailPanel
-								card={selectedCard}
+						{showAiPanel ? (
+							<GoalsAiPanel
+								workspaceId={workspaceId}
+								cards={children}
+								kanbanSnapshot={piSnapshot}
+								goalTitle={workspace?.goalTitle ?? null}
+								goalDescription={workspace?.goalDescription ?? null}
+								onClose={() => setShowAiPanel(false)}
+								onCardCreated={(ws) => setSelectedId(ws.id)}
+							/>
+						) : selectedWorkspace ? (
+							<WorkspaceDetailPanel
+								workspace={selectedWorkspace}
 								parentWorkspaceTitle={workspace?.title ?? "Goal"}
-								onClose={() => setSelectedCardId(null)}
-								onMove={(lane) => handleMoveCard(selectedCard, lane)}
-								onCreateWorkspace={() =>
-									createWorkspaceMutation.mutate(selectedCard)
-								}
-								busy={
-									createWorkspaceMutation.isPending &&
-									createWorkspaceMutation.variables?.id === selectedCard.id
+								onClose={() => setSelectedId(null)}
+								onMove={(lane) => handleMoveCard(selectedWorkspace, lane)}
+								onOpen={
+									onSelectWorkspace
+										? () => onSelectWorkspace(selectedWorkspace.id)
+										: undefined
 								}
 							/>
-						) : showPlanner ? (
-							<PlannerPanel
-								value={plannerPrompt}
-								onChange={setPlannerPrompt}
-								onClose={() => setShowPlanner(false)}
-								onSubmit={addPlannerCard}
-								busy={upsertMutation.isPending}
+						) : showAddPanel ? (
+							<AddCardPanel
+								value={newCardTitle}
+								onChange={setNewCardTitle}
+								onClose={() => setShowAddPanel(false)}
+								onSubmit={addCard}
+								busy={createMutation.isPending}
 							/>
 						) : null}
 					</aside>
@@ -288,12 +384,16 @@ export function GoalWorkspaceContainer({
 	);
 }
 
+// ---------------------------------------------------------------------------
+// Lane
+// ---------------------------------------------------------------------------
+
 function GoalLane({
 	lane,
-	cards,
+	workspaces,
 	isDragOver,
-	draggedCardId,
-	selectedCardId,
+	draggedId,
+	selectedId,
 	onCardClick,
 	onDragStart,
 	onDragEnd,
@@ -302,12 +402,12 @@ function GoalLane({
 	onDragLeave,
 }: {
 	lane: { id: WorkspaceStatus; label: string; color: string };
-	cards: GoalCard[];
+	workspaces: WorkspaceDetail[];
 	isDragOver: boolean;
-	draggedCardId: string | null;
-	selectedCardId: string | null;
-	onCardClick: (card: GoalCard) => void;
-	onDragStart: (cardId: string, sourceLane: WorkspaceStatus) => void;
+	draggedId: string | null;
+	selectedId: string | null;
+	onCardClick: (ws: WorkspaceDetail) => void;
+	onDragStart: (id: string, lane: WorkspaceStatus) => void;
 	onDragEnd: () => void;
 	onDragOver: (e: React.DragEvent) => void;
 	onDrop: () => void;
@@ -325,7 +425,6 @@ function GoalLane({
 			onDrop={onDrop}
 			onDragLeave={onDragLeave}
 		>
-			{/* Lane header */}
 			<div className="flex shrink-0 items-center justify-between border-b border-border/60 px-3 py-2">
 				<div className="flex items-center gap-2">
 					<span
@@ -336,24 +435,23 @@ function GoalLane({
 					<h2 className="text-sm font-medium">{lane.label}</h2>
 				</div>
 				<span className="rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">
-					{cards.length}
+					{workspaces.length}
 				</span>
 			</div>
 
-			{/* Cards */}
 			<div className="flex flex-col gap-2 overflow-y-auto p-2">
-				{cards.map((card) => (
-					<GoalCardItem
-						key={card.id}
-						card={card}
-						isSelected={selectedCardId === card.id}
-						isDragging={draggedCardId === card.id}
-						onClick={() => onCardClick(card)}
-						onDragStart={() => onDragStart(card.id, card.lane)}
+				{workspaces.map((ws) => (
+					<WorkspaceCard
+						key={ws.id}
+						workspace={ws}
+						isSelected={selectedId === ws.id}
+						isDragging={draggedId === ws.id}
+						onClick={() => onCardClick(ws)}
+						onDragStart={() => onDragStart(ws.id, ws.status)}
 						onDragEnd={onDragEnd}
 					/>
 				))}
-				{cards.length === 0 ? (
+				{workspaces.length === 0 ? (
 					<div
 						className={cn(
 							"rounded-lg border border-dashed px-3 py-8 text-center text-xs text-muted-foreground transition-colors duration-150",
@@ -363,28 +461,34 @@ function GoalLane({
 						{isDragOver ? "Drop here" : "No cards"}
 					</div>
 				) : isDragOver ? (
-					<div className="rounded-lg border-2 border-dashed border-ring/50 px-3 py-4 text-center text-xs text-muted-foreground" />
+					<div className="rounded-lg border-2 border-dashed border-ring/50 px-3 py-4" />
 				) : null}
 			</div>
 		</div>
 	);
 }
 
-function GoalCardItem({
-	card,
+// ---------------------------------------------------------------------------
+// Card
+// ---------------------------------------------------------------------------
+
+function WorkspaceCard({
+	workspace: ws,
 	isSelected,
 	isDragging,
 	onClick,
 	onDragStart,
 	onDragEnd,
 }: {
-	card: GoalCard;
+	workspace: WorkspaceDetail;
 	isSelected: boolean;
 	isDragging: boolean;
 	onClick: () => void;
 	onDragStart: () => void;
 	onDragEnd: () => void;
 }) {
+	const agentType = ws.activeSessionAgentType;
+
 	return (
 		<article
 			draggable
@@ -399,29 +503,27 @@ function GoalCardItem({
 				isDragging && "opacity-40 scale-[0.97]",
 			)}
 		>
-			<h3 className="line-clamp-2 text-sm font-medium leading-5">
-				{card.title}
-			</h3>
-			{card.description ? (
-				<p className="mt-1.5 line-clamp-2 text-xs leading-[1.5] text-muted-foreground">
-					{card.description}
-				</p>
+			<h3 className="line-clamp-2 text-sm font-medium leading-5">{ws.title}</h3>
+			{ws.branch ? (
+				<div className="mt-1.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+					<GitBranch className="size-2.5 shrink-0" />
+					<span className="truncate font-mono">{ws.branch}</span>
+				</div>
 			) : null}
-			<div className="mt-2.5 flex flex-wrap gap-1.5">
-				{card.assignedProvider ? (
+			<div className="mt-2 flex flex-wrap gap-1.5">
+				{agentType ? (
 					<span className="rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-medium capitalize text-accent-foreground">
-						{card.assignedProvider}
+						{agentType}
 					</span>
 				) : null}
-				{card.assignedEffortLevel ? (
+				{ws.prUrl ? (
 					<span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-						{card.assignedEffortLevel}
+						PR
 					</span>
 				) : null}
-				{card.childWorkspaceId ? (
-					<span className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-						<GitBranch className="size-2.5" />
-						Workspace
+				{ws.sessionCount > 0 ? (
+					<span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+						{ws.sessionCount} {ws.sessionCount === 1 ? "thread" : "threads"}
 					</span>
 				) : null}
 			</div>
@@ -429,58 +531,63 @@ function GoalCardItem({
 	);
 }
 
-function CardDetailPanel({
-	card,
+// ---------------------------------------------------------------------------
+// Workspace detail panel (right-side)
+// ---------------------------------------------------------------------------
+
+function WorkspaceDetailPanel({
+	workspace: ws,
 	parentWorkspaceTitle,
 	onClose,
 	onMove,
-	onCreateWorkspace,
-	busy,
+	onOpen,
 }: {
-	card: GoalCard;
+	workspace: WorkspaceDetail;
 	parentWorkspaceTitle: string;
 	onClose: () => void;
 	onMove: (lane: WorkspaceStatus) => void;
-	onCreateWorkspace: () => void;
-	busy: boolean;
+	onOpen?: () => void;
 }) {
-	const childWorkspaceQuery = useQuery({
-		...workspaceDetailQueryOptions(card.childWorkspaceId ?? ""),
-		enabled: !!card.childWorkspaceId,
-	});
-	const childWorkspace = childWorkspaceQuery.data;
-	const currentLane = LANES.find((l) => l.id === card.lane);
+	const currentLane = LANES.find((l) => l.id === ws.status);
 
 	return (
 		<div className="flex min-h-0 flex-col">
-			{/* Panel header */}
 			<div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-3">
-				<div className="min-w-0">
-					<p className="truncate text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-						{parentWorkspaceTitle}
-					</p>
+				<p className="truncate text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+					{parentWorkspaceTitle}
+				</p>
+				<div className="ml-2 flex shrink-0 items-center gap-1">
+					{onOpen ? (
+						<button
+							type="button"
+							onClick={onOpen}
+							className="cursor-pointer rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+							title="Open workspace"
+						>
+							Open ↗
+						</button>
+					) : null}
+					<button
+						type="button"
+						onClick={onClose}
+						className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+						aria-label="Close"
+					>
+						<X className="size-3.5" />
+					</button>
 				</div>
-				<button
-					type="button"
-					onClick={onClose}
-					className="ml-2 shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-					aria-label="Close card detail"
-				>
-					<X className="size-3.5" />
-				</button>
 			</div>
 
-			{/* Scrollable content */}
 			<div className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-4">
-				{/* Card title + description */}
 				<div>
 					<h2 className="text-sm font-semibold leading-5 tracking-[-0.01em]">
-						{card.title}
+						{ws.title}
 					</h2>
-					{card.description ? (
-						<p className="mt-2 whitespace-pre-wrap text-xs leading-[1.6] text-muted-foreground">
-							{card.description}
-						</p>
+					{ws.branch ? (
+						<div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+							<GitBranch className="size-3 shrink-0" />
+							<span className="truncate font-mono">{ws.branch}</span>
+						</div>
 					) : null}
 				</div>
 
@@ -497,10 +604,10 @@ function CardDetailPanel({
 								aria-hidden="true"
 							/>
 						) : null}
-						<span className="text-sm">{currentLane?.label ?? card.lane}</span>
+						<span className="text-sm">{currentLane?.label ?? ws.status}</span>
 					</div>
 					<div className="flex flex-wrap gap-1.5 pt-0.5">
-						{LANES.filter((l) => l.id !== card.lane).map((lane) => (
+						{LANES.filter((l) => l.id !== ws.status).map((lane) => (
 							<button
 								key={lane.id}
 								type="button"
@@ -513,108 +620,44 @@ function CardDetailPanel({
 					</div>
 				</div>
 
-				{/* Agent assignment */}
-				{card.assignedProvider ||
-				card.assignedModelId ||
-				card.assignedEffortLevel ? (
-					<div className="space-y-2">
+				{/* PR */}
+				{ws.prUrl ? (
+					<div className="space-y-1.5">
 						<p className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-							Agent
+							Pull Request
 						</p>
-						<div className="flex flex-wrap gap-1.5">
-							{card.assignedProvider ? (
-								<span className="rounded-md bg-accent px-2 py-0.5 text-xs font-medium capitalize text-accent-foreground">
-									{card.assignedProvider}
-								</span>
-							) : null}
-							{card.assignedModelId ? (
-								<span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-									{card.assignedModelId}
-								</span>
-							) : null}
-							{card.assignedEffortLevel ? (
-								<span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-									{card.assignedEffortLevel}
-								</span>
-							) : null}
-						</div>
+						<a
+							href={ws.prUrl}
+							target="_blank"
+							rel="noreferrer"
+							className="block truncate rounded-md border border-border/60 px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						>
+							{ws.prTitle ?? "Open PR ↗"}
+						</a>
 					</div>
 				) : null}
 
-				{/* Sub-workspace */}
-				<div className="space-y-2">
-					<p className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-						Sub-workspace
-					</p>
-					{card.childWorkspaceId ? (
-						childWorkspace ? (
-							<div className="space-y-2 rounded-lg border border-border/70 bg-background/60 p-3">
-								<p className="truncate text-xs font-medium leading-4">
-									{childWorkspace.title}
-								</p>
-								{childWorkspace.branch ? (
-									<div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-										<GitBranch className="size-3 shrink-0" />
-										<span className="truncate font-mono">
-											{childWorkspace.branch}
-										</span>
-									</div>
-								) : null}
-								<div className="flex items-center justify-between gap-2">
-									<div className="flex items-center gap-1.5">
-										<span
-											className="size-2 shrink-0 rounded-full"
-											style={{
-												backgroundColor:
-													LANES.find((l) => l.id === childWorkspace.status)
-														?.color ?? "#848f92",
-											}}
-											aria-hidden="true"
-										/>
-										<span className="text-[11px] capitalize text-muted-foreground">
-											{childWorkspace.status.replace("-", " ")}
-										</span>
-									</div>
-									{childWorkspace.prUrl ? (
-										<a
-											href={childWorkspace.prUrl}
-											target="_blank"
-											rel="noreferrer"
-											className="shrink-0 rounded-md border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-										>
-											PR ↗
-										</a>
-									) : null}
-								</div>
-							</div>
-						) : (
-							<div className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-								Loading workspace...
-							</div>
-						)
-					) : (
-						<Button
-							variant="outline"
-							size="xs"
-							className="w-full cursor-pointer justify-start"
-							onClick={onCreateWorkspace}
-							disabled={busy}
-						>
-							{busy ? (
-								<LoaderCircle className="size-3 animate-spin" />
-							) : (
-								<Plus className="size-3" />
-							)}
-							Create sub-workspace
-						</Button>
-					)}
-				</div>
+				{/* Sessions */}
+				{ws.sessionCount > 0 ? (
+					<div className="space-y-1">
+						<p className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+							Threads
+						</p>
+						<p className="text-sm text-muted-foreground">
+							{ws.sessionCount} {ws.sessionCount === 1 ? "thread" : "threads"}
+						</p>
+					</div>
+				) : null}
 			</div>
 		</div>
 	);
 }
 
-function PlannerPanel({
+// ---------------------------------------------------------------------------
+// Add card panel
+// ---------------------------------------------------------------------------
+
+function AddCardPanel({
 	value,
 	onChange,
 	onClose,
@@ -632,33 +675,149 @@ function PlannerPanel({
 			<div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-3">
 				<div className="flex items-center gap-2 text-sm font-semibold">
 					<Sparkles className="size-4" strokeWidth={1.8} />
-					Add card
+					New workspace
 				</div>
 				<button
 					type="button"
 					onClick={onClose}
 					className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-					aria-label="Close planner"
+					aria-label="Close"
 				>
 					<X className="size-3.5" />
 				</button>
 			</div>
 			<div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
 				<p className="text-xs leading-5 text-muted-foreground">
-					Draft a card. The first line becomes the title.
+					Each card is a workspace. Give it a name and it'll land in Backlog.
 				</p>
 				<Textarea
 					value={value}
 					onChange={(e) => onChange(e.target.value)}
-					className="min-h-32 resize-none text-sm"
-					placeholder="Describe a card..."
+					className="min-h-20 resize-none text-sm"
+					placeholder="e.g. Implement auth flow"
 					autoFocus
+					onKeyDown={(e) => {
+						if (e.key === "Enter" && !e.shiftKey) {
+							e.preventDefault();
+							onSubmit();
+						}
+					}}
 				/>
-				<Button className="cursor-pointer" onClick={onSubmit} disabled={busy}>
-					<Plus className="size-4" />
-					Create card
+				<Button
+					className="cursor-pointer"
+					onClick={onSubmit}
+					disabled={busy || !value.trim()}
+				>
+					{busy ? (
+						<LoaderCircle className="size-4 animate-spin" />
+					) : (
+						<Plus className="size-4" />
+					)}
+					Create
 				</Button>
 			</div>
 		</div>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Goal Meta Sheet
+// ---------------------------------------------------------------------------
+
+function GoalMetaSheet({
+	open,
+	onOpenChange,
+	initialTitle,
+	initialDescription,
+	onSave,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	initialTitle: string;
+	initialDescription: string;
+	onSave: (title: string, description: string) => Promise<void>;
+}) {
+	const [title, setTitle] = useState(initialTitle);
+	const [description, setDescription] = useState(initialDescription);
+	const [saving, setSaving] = useState(false);
+
+	const handleSave = async () => {
+		setSaving(true);
+		try {
+			await onSave(title, description);
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	return (
+		<Sheet open={open} onOpenChange={onOpenChange}>
+			<SheetContent
+				side="right"
+				className="flex w-full max-w-md flex-col gap-0 p-0"
+			>
+				<SheetHeader className="border-b border-border/70 px-5 py-4">
+					<SheetTitle>Goal details</SheetTitle>
+					<SheetDescription>
+						Set a title and description for this goal workspace. The Pi AI agent
+						uses these to stay focused on what you're building.
+					</SheetDescription>
+				</SheetHeader>
+
+				<div className="flex flex-1 flex-col gap-5 overflow-y-auto px-5 py-5">
+					<div className="space-y-1.5">
+						<label
+							htmlFor="goal-title"
+							className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground"
+						>
+							Title
+						</label>
+						<input
+							id="goal-title"
+							type="text"
+							value={title}
+							onChange={(e) => setTitle(e.target.value)}
+							placeholder="e.g. Build the authentication system"
+							className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
+						/>
+					</div>
+
+					<div className="space-y-1.5">
+						<label
+							htmlFor="goal-description"
+							className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground"
+						>
+							Description
+						</label>
+						<Textarea
+							id="goal-description"
+							value={description}
+							onChange={(e) => setDescription(e.target.value)}
+							placeholder="Describe what this goal is about, what success looks like, and any constraints or context the AI should know..."
+							className="min-h-[120px] resize-y text-sm"
+						/>
+					</div>
+				</div>
+
+				<SheetFooter className="border-t border-border/70 px-5 py-4">
+					<Button
+						variant="outline"
+						className="cursor-pointer"
+						onClick={() => onOpenChange(false)}
+						disabled={saving}
+					>
+						Cancel
+					</Button>
+					<Button
+						className="cursor-pointer"
+						onClick={handleSave}
+						disabled={saving}
+					>
+						{saving ? <LoaderCircle className="size-4 animate-spin" /> : null}
+						Save
+					</Button>
+				</SheetFooter>
+			</SheetContent>
+		</Sheet>
 	);
 }

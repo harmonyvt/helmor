@@ -2312,6 +2312,48 @@ function AppShell({
 											selectedWorkspaceId ? (
 												<GoalWorkspaceContainer
 													workspaceId={selectedWorkspaceId}
+													headerLeading={
+														sidebarCollapsed ? (
+															<>
+																{/* Spacer to avoid macOS traffic lights */}
+																<div className="w-[52px] shrink-0" />
+																<div className="flex items-center gap-[2px]">
+																	<AppUpdateButton status={appUpdateStatus} />
+																	<Tooltip>
+																		<TooltipTrigger asChild>
+																			<Button
+																				aria-label="Expand left sidebar"
+																				onClick={() =>
+																					setSidebarCollapsed(false)
+																				}
+																				variant="ghost"
+																				size="icon-xs"
+																				className="text-muted-foreground hover:text-foreground"
+																			>
+																				<PanelLeftOpen
+																					className="size-4"
+																					strokeWidth={1.8}
+																				/>
+																			</Button>
+																		</TooltipTrigger>
+																		<TooltipContent
+																			side="bottom"
+																			className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+																		>
+																			<span>Expand left sidebar</span>
+																			{leftSidebarToggleShortcut ? (
+																				<InlineShortcutDisplay
+																					hotkey={leftSidebarToggleShortcut}
+																					className="text-background/60"
+																				/>
+																			) : null}
+																		</TooltipContent>
+																	</Tooltip>
+																</div>
+															</>
+														) : undefined
+													}
+													onSelectWorkspace={handleSelectWorkspace}
 												/>
 											) : null}
 											<div

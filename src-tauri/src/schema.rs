@@ -415,6 +415,21 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add goal_workspace_id column")?;
     }
 
+    // Migration: goal_title / goal_description — user-editable metadata for
+    // goal workspaces shown in the Kanban header and injected into Pi context.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "goal_title") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_title TEXT")
+            .context("Failed to add goal_title column")?;
+    }
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "goal_description")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_description TEXT")
+            .context("Failed to add goal_description column")?;
+    }
+
     connection
         .execute_batch(GOAL_CARDS_SCHEMA)
         .context("Failed to ensure goal_cards schema")?;
@@ -546,6 +561,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     pr_url TEXT,
     workspace_kind TEXT DEFAULT 'code',
     goal_workspace_id TEXT,
+    goal_title TEXT,
+    goal_description TEXT,
     archive_commit TEXT,
     linked_directory_paths TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),

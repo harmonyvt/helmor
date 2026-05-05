@@ -14,7 +14,13 @@ import { prependLinkedDirectoriesContext } from "./linked-directories-context.js
 import { errorDetails, logger } from "./logger.js";
 import { createPiEventState, normalizePiEvent } from "./pi-event-normalizer.js";
 import { bindPiExtensionsForHelmor } from "./pi-extension-host.js";
+import { writeKanbanContext } from "./pi-kanban-context-writer.js";
+import {
+	createKanbanTools,
+	resolvePendingKanbanCall,
+} from "./pi-kanban-tools.js";
 import { createPiRuntimeResources } from "./pi-runtime.js";
+import { createThreadTools } from "./pi-thread-tools.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
@@ -74,6 +80,37 @@ export class PiSessionManager implements SessionManager {
 				await createPiRuntimeResources(params.cwd);
 			const model = resolvePiModel(modelRegistry, params.model);
 			const tools = toolsForPermissionMode(params.permissionMode);
+
+			// Write Pi extension file + board snapshot before the agent starts
+			// so the helmor-kanban extension can inject current state into the
+			// system prompt via `before_agent_start`.
+			if (params.kanbanWorkspaceId && params.cwd) {
+				let cards: unknown[] = [];
+				if (params.kanbanSnapshot) {
+					try {
+						cards = JSON.parse(params.kanbanSnapshot) as unknown[];
+					} catch {
+						// malformed snapshot — proceed with empty list
+					}
+				}
+				const goalMeta =
+					(params.goalTitle ?? params.goalDescription)
+						? {
+								title: params.goalTitle ?? undefined,
+								description: params.goalDescription ?? undefined,
+							}
+						: undefined;
+				await writeKanbanContext(params.cwd, cards, goalMeta);
+			}
+
+			const kanbanCustomTools = params.kanbanWorkspaceId
+				? createKanbanTools(params.kanbanWorkspaceId, emitter, requestId)
+				: [];
+
+			const threadCustomTools = params.kanbanWorkspaceId
+				? createThreadTools(params.kanbanWorkspaceId, emitter, requestId)
+				: [];
+
 			const { session } = await createAgentSession({
 				cwd: params.cwd,
 				authStorage,
@@ -88,6 +125,7 @@ export class PiSessionManager implements SessionManager {
 					: params.permissionMode === "plan"
 						? "builtin"
 						: undefined,
+				customTools: [...kanbanCustomTools, ...threadCustomTools],
 			});
 
 			live = {
@@ -278,6 +316,18 @@ export class PiSessionManager implements SessionManager {
 			}
 		}
 		this.sessions.clear();
+	}
+
+	/**
+	 * Resolve a pending Kanban tool call. Called by the sidecar stdin handler
+	 * when `{ method: "kanbanToolResult" }` arrives from the frontend.
+	 */
+	resolveKanbanToolCall(
+		toolCallId: string,
+		result: unknown,
+		isError: boolean,
+	): void {
+		resolvePendingKanbanCall(toolCallId, result, isError);
 	}
 }
 

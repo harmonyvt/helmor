@@ -52,6 +52,11 @@ pub struct WorkspaceRecord {
     /// Most recent `last_user_message_at` across all sessions in the
     /// workspace. `None` for workspaces with no user messages yet.
     pub last_user_message_at: Option<String>,
+    /// User-editable goal title (goal workspaces only). `None` means use the
+    /// derived display title (PR title → session title → directory name).
+    pub goal_title: Option<String>,
+    /// User-editable goal description (goal workspaces only).
+    pub goal_description: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -155,7 +160,9 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       r.forge_provider,
       w.created_at,
       w.updated_at,
-      wss.last_user_message_at
+      wss.last_user_message_at,
+      w.goal_title,
+      w.goal_description
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -186,6 +193,25 @@ pub fn load_workspace_record_by_id(workspace_id: &str) -> Result<Option<Workspac
         Some(result) => Ok(result.map(Some)?),
         None => Ok(None),
     }
+}
+
+/// Return all child workspaces linked to a goal workspace, sorted oldest-first
+/// so the Kanban board cards appear in a stable creation order.
+pub fn load_goal_child_workspace_records(goal_workspace_id: &str) -> Result<Vec<WorkspaceRecord>> {
+    let connection = db::read_conn()?;
+    let sql = format!(
+        "{WORKSPACE_RECORD_SQL} \
+         WHERE w.goal_workspace_id = ?1 \
+         AND COALESCE(w.workspace_kind, 'code') = 'code' \
+         AND w.state != ?2 \
+         ORDER BY datetime(w.created_at) ASC, w.id ASC"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(
+        rusqlite::params![goal_workspace_id, WorkspaceState::Archived],
+        workspace_record_from_row,
+    )?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 pub fn load_archived_workspace_records() -> Result<Vec<WorkspaceRecord>> {
@@ -523,5 +549,27 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         created_at: row.get(33)?,
         updated_at: row.get(34)?,
         last_user_message_at: row.get(35)?,
+        goal_title: row.get(36)?,
+        goal_description: row.get(37)?,
     })
+}
+
+/// Update the user-editable goal title and description for a workspace.
+pub(crate) fn update_goal_workspace_meta(
+    workspace_id: &str,
+    goal_title: Option<&str>,
+    goal_description: Option<&str>,
+) -> Result<()> {
+    let ts = chrono::Utc::now().to_rfc3339();
+    let connection = db::write_conn()?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET goal_title = ?2, goal_description = ?3, updated_at = ?4 WHERE id = ?1",
+            (workspace_id, goal_title, goal_description, &ts),
+        )
+        .context("Failed to update goal workspace meta")?;
+    if updated_rows == 0 {
+        anyhow::bail!("Goal workspace meta update affected 0 rows for {workspace_id}");
+    }
+    Ok(())
 }

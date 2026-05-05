@@ -8,6 +8,7 @@ import {
 	Globe,
 	LoaderCircle,
 	Plus,
+	Target,
 } from "lucide-react";
 import {
 	memo,
@@ -42,6 +43,15 @@ import type {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
+import {
+	buildGoalViewVirtualItems,
+	GOAL_UNGROUPED_KEY,
+	type GoalVirtualItem,
+	GoalVirtualItemRenderer,
+	getGoalItemHeight,
+	getGoalItemKey,
+	goalSectionKey,
+} from "./goal-layout";
 import type { SidebarLayoutMode } from "./hooks/use-controller";
 import { useWorkspacePrFlash } from "./hooks/use-workspace-pr-flash";
 import {
@@ -62,7 +72,7 @@ import {
 	findSelectedSectionId,
 	GroupIcon,
 } from "./shared";
-import type { ProjectGroup } from "./sidebar-projection";
+import type { GoalProjection, ProjectGroup } from "./sidebar-projection";
 import { WorkspaceCreateDialog } from "./workspace-create-dialog";
 
 // ---------------------------------------------------------------------------
@@ -130,8 +140,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
 	layoutMode,
-	onToggleLayout,
+	onSetLayoutMode,
 	projectGroups,
+	goalProjection,
 }: {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
@@ -174,8 +185,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 	layoutMode?: SidebarLayoutMode;
-	onToggleLayout?: () => void;
+	onSetLayoutMode?: (mode: SidebarLayoutMode) => void;
 	projectGroups?: ProjectGroup[];
+	goalProjection?: GoalProjection | null;
 }) {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
@@ -217,13 +229,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		writeStoredSectionOpenState(sectionOpenState);
 	}, [sectionOpenState]);
 
+	const isPrMode = layoutMode === "pr";
+	const isGoalMode = layoutMode === "goal";
+
 	// Auto-expand the group containing the selected workspace, but ONLY when
 	// the selection actually changes — not on every groups refetch (window
 	// focus, invalidation, status change). Without this guard, collapsed
 	// groups reopen whenever their data refreshes.
 	const lastAutoExpandedIdRef = useRef<string | null>(null);
+
+	// Status layout auto-expand
 	useEffect(() => {
 		if (
+			isGoalMode ||
+			isPrMode ||
 			!selectedWorkspaceId ||
 			selectedWorkspaceId === lastAutoExpandedIdRef.current
 		) {
@@ -246,15 +265,56 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				? current
 				: { ...current, [selectedSectionId]: true },
 		);
-	}, [archivedRows, groups, selectedWorkspaceId]);
+	}, [archivedRows, groups, isGoalMode, isPrMode, selectedWorkspaceId]);
+
+	// Goal layout auto-expand
+	useEffect(() => {
+		if (
+			!isGoalMode ||
+			!goalProjection ||
+			!selectedWorkspaceId ||
+			selectedWorkspaceId === lastAutoExpandedIdRef.current
+		) {
+			return;
+		}
+
+		let sectionKey: string | null = null;
+		for (const group of goalProjection.goalGroups) {
+			if (group.goalWorkspaceId === selectedWorkspaceId) {
+				// The goal workspace itself is selected — no section to expand
+				break;
+			}
+			if (group.childRows.some((r) => r.id === selectedWorkspaceId)) {
+				sectionKey = goalSectionKey(group.goalWorkspaceId);
+				break;
+			}
+		}
+		if (
+			!sectionKey &&
+			goalProjection.ungroupedRows.some((r) => r.id === selectedWorkspaceId)
+		) {
+			sectionKey = GOAL_UNGROUPED_KEY;
+		}
+
+		if (!sectionKey) return;
+
+		lastAutoExpandedIdRef.current = selectedWorkspaceId;
+		setSectionOpenState((current) =>
+			current[sectionKey] ? current : { ...current, [sectionKey]: true },
+		);
+	}, [goalProjection, isGoalMode, selectedWorkspaceId]);
 
 	// ── PR-first layout virtual items ─────────────────────────────────
-	const isPrMode = layoutMode === "pr";
-
 	const prFlatItems = useMemo<PrVirtualItem[]>(() => {
 		if (!isPrMode || !projectGroups?.length) return [];
 		return buildPrViewVirtualItems(projectGroups, sectionOpenState);
 	}, [isPrMode, projectGroups, sectionOpenState]);
+
+	// ── Goal layout virtual items ──────────────────────────────────────
+	const goalFlatItems = useMemo<GoalVirtualItem[]>(() => {
+		if (!isGoalMode || !goalProjection) return [];
+		return buildGoalViewVirtualItems(goalProjection, sectionOpenState);
+	}, [isGoalMode, goalProjection, sectionOpenState]);
 
 	// ── Status layout virtual items ────────────────────────────────────
 	const flatItems = useMemo(() => {
@@ -333,7 +393,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}, [groups, archivedRows, sectionOpenState]);
 
 	// ── Virtualizer ───────────────────────────────────────────────────
-	const activeItems = isPrMode ? prFlatItems : flatItems;
+	const activeItems = isPrMode
+		? prFlatItems
+		: isGoalMode
+			? goalFlatItems
+			: flatItems;
 
 	const virtualizer = useVirtualizer({
 		count: activeItems.length,
@@ -341,6 +405,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		estimateSize: (index) => {
 			if (isPrMode) {
 				return getPrItemHeight(prFlatItems[index]);
+			}
+			if (isGoalMode) {
+				return getGoalItemHeight(goalFlatItems[index]);
 			}
 			const item = flatItems[index];
 			switch (item.kind) {
@@ -357,6 +424,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		getItemKey: (index) => {
 			if (isPrMode) {
 				return getPrItemKey(prFlatItems[index], index);
+			}
+			if (isGoalMode) {
+				return getGoalItemKey(goalFlatItems[index], index);
 			}
 			const item = flatItems[index];
 			switch (item.kind) {
@@ -383,9 +453,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						item.kind === "pr-row" &&
 						item.stacked.row.id === selectedWorkspaceId,
 				)
-			: flatItems.findIndex(
-					(item) => item.kind === "row" && item.row.id === selectedWorkspaceId,
-				);
+			: isGoalMode
+				? goalFlatItems.findIndex(
+						(item) =>
+							(item.kind === "goal-header" &&
+								item.goalGroup.goalWorkspaceId === selectedWorkspaceId) ||
+							(item.kind === "goal-child" &&
+								item.row.id === selectedWorkspaceId) ||
+							(item.kind === "ungrouped-row" &&
+								item.row.id === selectedWorkspaceId),
+					)
+				: flatItems.findIndex(
+						(item) =>
+							item.kind === "row" && item.row.id === selectedWorkspaceId,
+					);
 		if (targetIndex === -1) return;
 
 		virtualizer.scrollToIndex(targetIndex, { align: "auto" });
@@ -394,7 +475,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		sectionOpenState,
 		flatItems,
 		prFlatItems,
+		goalFlatItems,
 		isPrMode,
+		isGoalMode,
 		virtualizer,
 	]);
 
@@ -595,11 +678,40 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							<Button
 								type="button"
 								aria-label={
+									isGoalMode ? "Switch to status view" : "Switch to goal view"
+								}
+								variant="ghost"
+								size="icon-xs"
+								onClick={() =>
+									onSetLayoutMode?.(isGoalMode ? "status" : "goal")
+								}
+								className={cn(
+									"text-muted-foreground",
+									isGoalMode && "bg-accent text-foreground",
+								)}
+							>
+								<Target className="size-4" strokeWidth={1.9} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="top"
+							sideOffset={4}
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+						>
+							<span>{isGoalMode ? "Status view" : "Goal view"}</span>
+						</TooltipContent>
+					</Tooltip>
+
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								type="button"
+								aria-label={
 									isPrMode ? "Switch to status view" : "Switch to PR view"
 								}
 								variant="ghost"
 								size="icon-xs"
-								onClick={onToggleLayout}
+								onClick={() => onSetLayoutMode?.(isPrMode ? "status" : "pr")}
 								className={cn(
 									"text-muted-foreground",
 									isPrMode && "bg-accent text-foreground",
@@ -777,6 +889,29 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							{isPrMode ? (
 								<PrVirtualItemRenderer
 									item={prFlatItems[vItem.index]}
+									selectedWorkspaceId={selectedWorkspaceId}
+									sendingWorkspaceIds={sendingWorkspaceIds}
+									interactionRequiredWorkspaceIds={
+										interactionRequiredWorkspaceIds
+									}
+									flashingIds={flashingIds}
+									actions={{
+										onSelect: onSelectWorkspace,
+										onPrefetch: onPrefetchWorkspace,
+										onArchiveWorkspace,
+										onMarkWorkspaceUnread,
+										onOpenInFinder,
+										onTogglePin,
+										onSetWorkspaceStatus,
+										archivingWorkspaceIds,
+										markingUnreadWorkspaceId,
+										restoringWorkspaceId,
+									}}
+									onToggleSection={toggleSection}
+								/>
+							) : isGoalMode ? (
+								<GoalVirtualItemRenderer
+									item={goalFlatItems[vItem.index]}
 									selectedWorkspaceId={selectedWorkspaceId}
 									sendingWorkspaceIds={sendingWorkspaceIds}
 									interactionRequiredWorkspaceIds={

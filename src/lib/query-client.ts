@@ -19,6 +19,7 @@ import {
 	getWorkspaceForge,
 	getWorkspacePrComments,
 	listGoalCards,
+	listGoalChildWorkspaces,
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
@@ -57,6 +58,8 @@ export const helmorQueryKeys = {
 	workspaceDetail: (workspaceId: string) =>
 		["workspaceDetail", workspaceId] as const,
 	goalCards: (workspaceId: string) => ["goalCards", workspaceId] as const,
+	goalChildWorkspaces: (goalWorkspaceId: string) =>
+		["goalChildWorkspaces", goalWorkspaceId] as const,
 	workspaceSessions: (workspaceId: string) =>
 		["workspaceSessions", workspaceId] as const,
 	sessionContextUsage: (sessionId: string) =>
@@ -240,6 +243,15 @@ export function goalCardsQueryOptions(workspaceId: string) {
 		queryKey: helmorQueryKeys.goalCards(workspaceId),
 		queryFn: () => listGoalCards(workspaceId),
 		initialData: [],
+		staleTime: 0,
+	});
+}
+
+export function goalChildWorkspacesQueryOptions(goalWorkspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.goalChildWorkspaces(goalWorkspaceId),
+		queryFn: () => listGoalChildWorkspaces(goalWorkspaceId),
+		initialData: [] as import("./api").WorkspaceDetail[],
 		staleTime: 0,
 	});
 }

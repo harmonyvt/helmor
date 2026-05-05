@@ -76,9 +76,14 @@ pub(super) fn persist_turn_message(
         &turn.content_json,
     )?;
 
+    // Use INSERT OR IGNORE so that if the same turn UUID is attempted twice
+    // (e.g. an event arm persists it during streaming, then the terminal
+    // `end` arm loops from a stale persisted_turn_count), the second attempt
+    // is silently skipped. The first insert is always correct — idempotent
+    // persistence is the right behaviour here.
     conn.execute(
         r#"
-            INSERT INTO session_messages (
+            INSERT OR IGNORE INTO session_messages (
               id, session_id, role, content, created_at, sent_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
             "#,

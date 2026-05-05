@@ -61,16 +61,18 @@ import {
 	workspaceGroupIdFromStatus,
 } from "@/lib/workspace-helpers";
 import {
+	type GoalProjection,
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
 	type ProjectGroup,
 	projectSidebarLists,
+	projectSidebarListsByGoal,
 	projectSidebarListsByPr,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
 } from "../sidebar-projection";
 
-export type SidebarLayoutMode = "status" | "pr";
+export type SidebarLayoutMode = "status" | "pr" | "goal";
 const LAYOUT_MODE_KEY = "helmor:workspaces-sidebar:layout-mode";
 
 type WorkspaceToastVariant = "default" | "destructive";
@@ -208,6 +210,14 @@ export function useWorkspacesSidebarController({
 		[layoutMode, baseGroups, pendingCreationsForPr],
 	);
 
+	const goalProjection = useMemo<GoalProjection | null>(
+		() =>
+			layoutMode === "goal"
+				? projectSidebarListsByGoal(baseGroups, pendingCreationsForPr)
+				: null,
+		[layoutMode, baseGroups, pendingCreationsForPr],
+	);
+
 	const updateArchivingWorkspaceId = useCallback(
 		(workspaceId: string, active: boolean) => {
 			setArchivingWorkspaceIds((current) => {
@@ -328,6 +338,9 @@ export function useWorkspacesSidebarController({
 			});
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceGroups,
+			});
+			void queryClient.invalidateQueries({
+				predicate: (query) => query.queryKey[0] === "goalChildWorkspaces",
 			});
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.archivedWorkspaces,
@@ -1672,6 +1685,7 @@ export function useWorkspacesSidebarController({
 		layoutMode,
 		setLayoutMode,
 		projectGroups,
+		goalProjection,
 		handleAddRepository,
 		handleArchiveWorkspace,
 		handleCloneFromUrl,

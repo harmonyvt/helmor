@@ -126,6 +126,44 @@ fn create_workspace_from_repo_stays_ready_when_auto_run_setup_disabled() {
 }
 
 #[test]
+fn list_goal_child_workspaces_excludes_archived_children() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+
+    connection
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, active_session_id, branch,
+              state, initialization_parent_branch, intended_target_branch,
+              status, workspace_kind, goal_workspace_id, unread
+            ) VALUES
+              ('goal-1', ?1, 'goal-board', NULL, NULL, 'ready', 'main', 'main',
+                'in-progress', 'goal', NULL, 0),
+              ('child-ready', ?1, 'child-ready', NULL, 'testuser/child-ready', 'ready',
+                'main', 'main', 'in-progress', 'code', 'goal-1', 0),
+              ('child-archived', ?1, 'child-archived', NULL, 'testuser/child-archived',
+                'archived', 'main', 'main', 'in-progress', 'code', 'goal-1', 0)
+            "#,
+            [&harness.repo_id],
+        )
+        .unwrap();
+
+    let children = workspaces::list_goal_child_workspaces("goal-1").unwrap();
+
+    assert_eq!(
+        children
+            .into_iter()
+            .map(|workspace| workspace.id)
+            .collect::<Vec<_>>(),
+        vec!["child-ready".to_string()]
+    );
+}
+
+#[test]
 fn create_workspace_from_remote_branch_uses_same_branch_and_default_target() {
     let _guard = TEST_LOCK
         .lock()

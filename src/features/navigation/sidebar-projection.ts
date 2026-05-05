@@ -138,6 +138,104 @@ function insertPendingCreationRow(
 	);
 }
 
+// ---- Goal layout projection ----
+
+export type GoalGroup = {
+	goalWorkspaceId: string;
+	goalTitle: string;
+	goalRow: WorkspaceRow;
+	childRows: WorkspaceRow[];
+};
+
+export type GoalProjection = {
+	goalGroups: GoalGroup[];
+	ungroupedRows: WorkspaceRow[];
+};
+
+export function projectSidebarListsByGoal(
+	baseGroups: WorkspaceGroup[],
+	pendingCreations: ReadonlyMap<string, PendingCreationEntry>,
+): GoalProjection {
+	const hiddenIds = new Set<string>();
+	for (const [optimisticId, pending] of pendingCreations) {
+		hiddenIds.add(optimisticId);
+		if (pending.resolvedWorkspaceId) {
+			hiddenIds.add(pending.resolvedWorkspaceId);
+		}
+	}
+
+	const filteredGroups =
+		hiddenIds.size === 0
+			? baseGroups
+			: baseGroups.map((group) => ({
+					...group,
+					rows: group.rows.filter((row) => !hiddenIds.has(row.id)),
+				}));
+
+	const withPending = Array.from(pendingCreations.values()).reduce(
+		(current, pending) => insertPendingCreationRow(current, pending.row),
+		filteredGroups,
+	);
+
+	// Flatten all rows from all status groups
+	const allRows: WorkspaceRow[] = [];
+	for (const group of withPending) {
+		for (const row of group.rows) {
+			allRows.push(row);
+		}
+	}
+
+	// Index goal workspaces by id
+	const goalRowsById = new Map<string, WorkspaceRow>();
+	for (const row of allRows) {
+		if (row.workspaceKind === "goal") {
+			goalRowsById.set(row.id, row);
+		}
+	}
+
+	// Group children under their parent goal; collect ungrouped rows
+	const childrenByGoalId = new Map<string, WorkspaceRow[]>();
+	const ungroupedRows: WorkspaceRow[] = [];
+
+	for (const row of allRows) {
+		if (row.workspaceKind === "goal") continue;
+
+		if (row.goalWorkspaceId) {
+			const bucket = childrenByGoalId.get(row.goalWorkspaceId) ?? [];
+			bucket.push(row);
+			childrenByGoalId.set(row.goalWorkspaceId, bucket);
+		} else {
+			ungroupedRows.push(row);
+		}
+	}
+
+	// Build goal groups in newest-first order
+	const goalGroups: GoalGroup[] = [];
+	for (const [goalId, goalRow] of goalRowsById) {
+		const childRows = childrenByGoalId.get(goalId) ?? [];
+		goalGroups.push({
+			goalWorkspaceId: goalId,
+			goalTitle: goalRow.title,
+			goalRow,
+			childRows,
+		});
+		childrenByGoalId.delete(goalId);
+	}
+
+	// Orphaned children (goal was archived / not in active groups) → ungrouped
+	for (const orphaned of childrenByGoalId.values()) {
+		ungroupedRows.push(...orphaned);
+	}
+
+	goalGroups.sort((a, b) => {
+		const aDate = a.goalRow.createdAt ?? "";
+		const bDate = b.goalRow.createdAt ?? "";
+		return bDate.localeCompare(aDate);
+	});
+
+	return { goalGroups, ungroupedRows };
+}
+
 // ---- PR-first layout projection ----
 
 export type PrGroupTone = "pr-open" | "pr-merged" | "pr-closed" | "pr-none";

@@ -15,6 +15,7 @@ import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
+import { resolvePiUiInteraction } from "./pi-extension-host.js";
 import { PiSessionManager } from "./pi-session-manager.js";
 import {
 	errorMessage,
@@ -512,6 +513,21 @@ for await (const line of rl) {
 					reason,
 					updatedInput,
 				);
+				break;
+			}
+			case "kanbanToolResult": {
+				const toolCallId = requireString(params, "toolCallId");
+				const result = params.result ?? null;
+				const isError = params.isError === true;
+				logger.debug(`[${id}] kanbanToolResult`, { toolCallId, isError });
+				piManager.resolveKanbanToolCall(toolCallId, result, isError);
+				break;
+			}
+			case "piUiResponse": {
+				const interactionId = requireString(params, "interactionId");
+				const result = params.result ?? null;
+				logger.debug(`[${id}] piUiResponse`, { interactionId });
+				resolvePiUiInteraction(interactionId, result);
 				break;
 			}
 			case "ping":
