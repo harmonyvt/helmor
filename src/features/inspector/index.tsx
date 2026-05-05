@@ -4,6 +4,7 @@ import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
+import { ArchiveTab } from "@/features/inspector/sections/archive";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import {
 	type ShortcutHandler,
@@ -153,6 +154,11 @@ export function WorkspaceInspectorSidebar({
 		workspaceId ?? null,
 		"run",
 		!!repoScripts?.runScript?.trim(),
+	);
+	const archiveScriptState = useScriptStatus(
+		workspaceId ?? null,
+		"archive",
+		!!repoScripts?.archiveScript?.trim(),
 	);
 
 	const handleReviewAllComments = useCallback(
@@ -380,7 +386,8 @@ export function WorkspaceInspectorSidebar({
 	// on workspace switches the persisted tab id may restore before this
 	// component's subscribed terminal list has received its first snapshot.
 	useEffect(() => {
-		if (activeTab === "setup" || activeTab === "run") return;
+		if (activeTab === "setup" || activeTab === "run" || activeTab === "archive")
+			return;
 		if (terminalInstances.some((t) => t.id === activeTab)) return;
 		if (
 			workspaceId &&
@@ -396,8 +403,11 @@ export function WorkspaceInspectorSidebar({
 	// In both cases the body is a placeholder (Run / Open-settings button)
 	// that doesn't benefit from — and shouldn't trigger — the enlargement.
 	const scriptTabState =
-		activeTab === "setup" ? setupScriptState : runScriptState;
-
+		activeTab === "setup"
+			? setupScriptState
+			: activeTab === "archive"
+				? archiveScriptState
+				: runScriptState;
 	const canHoverExpand = isTerminalTabActive
 		? true
 		: scriptTabState === "running" ||
@@ -469,6 +479,7 @@ export function WorkspaceInspectorSidebar({
 				tabActions={runTabActions}
 				setupScriptState={setupScriptState}
 				runScriptState={runScriptState}
+				archiveScriptState={archiveScriptState}
 				terminalInstances={terminalInstances}
 				onAddTerminal={handleAddTerminal}
 				onCloseTerminal={handleCloseTerminal}
@@ -490,6 +501,13 @@ export function WorkspaceInspectorSidebar({
 					onOpenSettings={handleOpenSettings}
 					onStatusChange={setRunStatus}
 					onUrlsChange={setRunUrls}
+				/>
+				<ArchiveTab
+					repoId={repoId ?? null}
+					workspaceId={workspaceId ?? null}
+					archiveScript={repoScripts?.archiveScript ?? null}
+					isActive={activeTab === "archive"}
+					onOpenSettings={handleOpenSettings}
 				/>
 				{terminalInstances.map((instance) => (
 					<TerminalInstancePanel

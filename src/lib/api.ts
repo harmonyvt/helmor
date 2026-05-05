@@ -2687,7 +2687,7 @@ export async function updateRepoPreferences(
 
 export async function executeRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	onEvent: (event: ScriptEvent) => void,
 	workspaceId?: string | null,
 ): Promise<void> {
@@ -2703,7 +2703,7 @@ export async function executeRepoScript(
 
 export async function stopRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	workspaceId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("stop_repo_script", {
@@ -2724,7 +2724,7 @@ export async function stopRepoScript(
  */
 export async function writeRepoScriptStdin(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	workspaceId: string | null,
 	data: string,
 ): Promise<boolean> {
@@ -2742,7 +2742,7 @@ export async function writeRepoScriptStdin(
  */
 export async function resizeRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	workspaceId: string | null,
 	cols: number,
 	rows: number,
