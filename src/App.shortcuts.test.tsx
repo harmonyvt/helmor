@@ -27,6 +27,7 @@ const apiMocks = vi.hoisted(() => ({
 	refreshWorkspaceChangeRequest: vi.fn(),
 	loadWorkspaceForgeActionStatus: vi.fn(),
 	stopAgentStream: vi.fn(),
+	getWorkspacePrComments: vi.fn(),
 	requestQuit: vi.fn(),
 }));
 
@@ -91,6 +92,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
 		requestQuit: apiMocks.requestQuit,
 		stopAgentStream: apiMocks.stopAgentStream,
+		getWorkspacePrComments: apiMocks.getWorkspacePrComments,
 	};
 });
 
@@ -437,6 +439,7 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.refreshWorkspaceChangeRequest.mockReset();
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
 		apiMocks.stopAgentStream.mockReset();
+		apiMocks.getWorkspacePrComments.mockReset();
 		eventApiMocks.listen.mockClear();
 		eventApiMocks.handlers.clear();
 		apiMocks.createSession.mockImplementation(async (workspaceId: string) => {
@@ -566,6 +569,11 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
 			UNAVAILABLE_FORGE_ACTION_STATUS,
 		);
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			comments: [],
+			prNumber: null,
+			prUrl: null,
+		});
 		apiMocks.stopAgentStream.mockResolvedValue(undefined);
 	});
 

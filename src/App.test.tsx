@@ -512,10 +512,12 @@ describe("App", () => {
 		// live now that branch/title text goes through the scramble animation.
 		const selectedReadLabel = screen
 			.getByText("Selected read")
-			.closest("span.truncate");
+			.closest("span.truncate")
+			?.parentElement?.closest("span.truncate");
 		const unreadLabel = screen
 			.getByText("Unselected unread")
-			.closest("span.truncate");
+			.closest("span.truncate")
+			?.parentElement?.closest("span.truncate");
 
 		expect(selectedReadLabel?.className).toContain("font-medium");
 		expect(selectedReadLabel?.className).not.toContain("font-semibold");
