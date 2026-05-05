@@ -84,7 +84,7 @@ function setupCocoIndexCode(repoRoot: string): void {
 		);
 	}
 
-	if (isCocoIndexProject(repoRoot)) {
+	if (hasWorkspaceCocoIndexSettings(repoRoot)) {
 		console.log("  /cc already initialized.");
 	} else {
 		console.log("  Initializing /cc index settings...");
@@ -101,16 +101,8 @@ function setupCocoIndexCode(repoRoot: string): void {
 	});
 }
 
-function isCocoIndexProject(repoRoot: string): boolean {
-	try {
-		execFileSync("ccc", ["status"], {
-			cwd: repoRoot,
-			stdio: "ignore",
-		});
-		return true;
-	} catch {
-		return false;
-	}
+function hasWorkspaceCocoIndexSettings(repoRoot: string): boolean {
+	return existsSync(path.join(repoRoot, ".cocoindex_code", "settings.yml"));
 }
 
 function resolveRepoRoot(): string {

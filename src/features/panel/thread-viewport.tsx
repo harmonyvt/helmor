@@ -69,7 +69,6 @@ export function ActiveThreadViewport({
 	workspaceState,
 	missingScriptTypes = [],
 	onInitializeScript,
-	compact = false,
 }: {
 	hasSession: boolean;
 	pane: PresentedSessionPane;
@@ -132,7 +131,6 @@ export function ActiveThreadViewport({
 					workspaceBranch={workspaceBranch}
 					workspacePrTitle={workspacePrTitle}
 					workspaceState={workspaceState}
-					compact={compact}
 				/>
 			</div>
 		</div>
