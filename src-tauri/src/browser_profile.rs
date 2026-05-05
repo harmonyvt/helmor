@@ -5,6 +5,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::models::browser_tabs;
 use crate::models::workspaces;
 
 const DATA_DIRECTORY_ROOT: &str = "workspace-browser";
@@ -13,6 +14,8 @@ const DATA_DIRECTORY_ROOT: &str = "workspace-browser";
 #[serde(rename_all = "camelCase")]
 pub struct BrowserProfileOptions {
     pub workspace_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
     pub data_directory: String,
     pub data_store_identifier: Vec<u8>,
 }
@@ -26,8 +29,29 @@ pub fn profile_options_for_workspace_id(workspace_id: &str) -> Result<BrowserPro
     let uuid = parse_workspace_uuid(workspace_id)?;
     Ok(BrowserProfileOptions {
         workspace_id: workspace_id.to_string(),
+        tab_id: None,
         data_directory: format!("{DATA_DIRECTORY_ROOT}/{workspace_id}"),
         data_store_identifier: uuid.as_bytes().to_vec(),
+    })
+}
+
+pub fn get_browser_tab_profile(tab_id: &str) -> Result<BrowserProfileOptions> {
+    let tab = browser_tabs::get_browser_tab(tab_id)?
+        .with_context(|| format!("Browser tab not found: {tab_id}"))?;
+    profile_options_for_tab_id(&tab.workspace_id, &tab.id)
+}
+
+pub fn profile_options_for_tab_id(
+    workspace_id: &str,
+    tab_id: &str,
+) -> Result<BrowserProfileOptions> {
+    parse_workspace_uuid(workspace_id)?;
+    let tab_uuid = parse_tab_uuid(tab_id)?;
+    Ok(BrowserProfileOptions {
+        workspace_id: workspace_id.to_string(),
+        tab_id: Some(tab_id.to_string()),
+        data_directory: format!("{DATA_DIRECTORY_ROOT}/{workspace_id}/{tab_id}"),
+        data_store_identifier: tab_uuid.as_bytes().to_vec(),
     })
 }
 
@@ -49,8 +73,33 @@ pub fn remove_workspace_browser_profile_files(workspace_id: &str) -> Result<()> 
     Ok(())
 }
 
+pub fn remove_browser_tab_profile_files(workspace_id: &str, tab_id: &str) -> Result<()> {
+    let profile_dir = browser_tab_profile_dir(workspace_id, tab_id)?;
+    if profile_dir.exists() {
+        fs::remove_dir_all(&profile_dir).with_context(|| {
+            format!(
+                "Failed to remove browser tab profile directory {}",
+                profile_dir.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 pub fn workspace_data_store_identifier(workspace_id: &str) -> Result<[u8; 16]> {
     Ok(*parse_workspace_uuid(workspace_id)?.as_bytes())
+}
+
+pub fn browser_tab_data_store_identifier(tab_id: &str) -> Result<[u8; 16]> {
+    Ok(*parse_tab_uuid(tab_id)?.as_bytes())
+}
+
+fn browser_tab_profile_dir(workspace_id: &str, tab_id: &str) -> Result<PathBuf> {
+    parse_workspace_uuid(workspace_id)?;
+    parse_tab_uuid(tab_id)?;
+    Ok(crate::data_dir::browser_profiles_dir()?
+        .join(workspace_id)
+        .join(tab_id))
 }
 
 fn ensure_workspace_exists(workspace_id: &str) -> Result<()> {
@@ -63,6 +112,10 @@ fn ensure_workspace_exists(workspace_id: &str) -> Result<()> {
 fn parse_workspace_uuid(workspace_id: &str) -> Result<Uuid> {
     Uuid::parse_str(workspace_id)
         .with_context(|| format!("Workspace id is not a UUID: {workspace_id}"))
+}
+
+fn parse_tab_uuid(tab_id: &str) -> Result<Uuid> {
+    Uuid::parse_str(tab_id).with_context(|| format!("Browser tab id is not a UUID: {tab_id}"))
 }
 
 #[cfg(test)]
@@ -78,6 +131,7 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.workspace_id, workspace_id);
+        assert_eq!(first.tab_id, None);
         assert_eq!(
             first.data_directory,
             format!("workspace-browser/{workspace_id}")
@@ -98,6 +152,29 @@ mod tests {
 
         assert_ne!(first.data_directory, second.data_directory);
         assert_ne!(first.data_store_identifier, second.data_store_identifier);
+    }
+
+    #[test]
+    fn tab_profile_options_are_isolated_per_tab_uuid() {
+        let workspace_id = "11111111-1111-4111-8111-111111111111";
+        let first_tab_id = "22222222-2222-4222-8222-222222222222";
+        let second_tab_id = "33333333-3333-4333-8333-333333333333";
+
+        let first = profile_options_for_tab_id(workspace_id, first_tab_id).unwrap();
+        let second = profile_options_for_tab_id(workspace_id, second_tab_id).unwrap();
+
+        assert_eq!(first.workspace_id, workspace_id);
+        assert_eq!(first.tab_id.as_deref(), Some(first_tab_id));
+        assert_eq!(
+            first.data_directory,
+            format!("workspace-browser/{workspace_id}/{first_tab_id}")
+        );
+        assert_ne!(first.data_directory, second.data_directory);
+        assert_ne!(first.data_store_identifier, second.data_store_identifier);
+        assert_eq!(
+            first.data_store_identifier,
+            Uuid::parse_str(first_tab_id).unwrap().as_bytes().to_vec()
+        );
     }
 
     #[test]
@@ -137,6 +214,39 @@ mod tests {
         let profile = get_workspace_browser_profile(workspace_id).unwrap();
 
         assert_eq!(profile.workspace_id, workspace_id);
+        assert_eq!(profile.tab_id, None);
+        assert_eq!(profile.data_store_identifier.len(), 16);
+    }
+
+    #[test]
+    fn tab_profile_lookup_returns_existing_tab_profile() {
+        let env = TestEnv::new("browser-profile-existing-tab");
+        let connection = env.db_connection();
+        let workspace_id = "11111111-1111-4111-8111-111111111111";
+        let tab_id = "22222222-2222-4222-8222-222222222222";
+        insert_repo(&connection, "repo-1", "repo", None);
+        insert_workspace(
+            &connection,
+            &WorkspaceFixture {
+                id: workspace_id,
+                repo_id: "repo-1",
+                directory_name: "work",
+                state: "ready",
+                branch: Some("main"),
+                intended_target_branch: None,
+            },
+        );
+        connection
+            .execute(
+                "INSERT INTO workspace_browser_tabs (id, workspace_id, url, active) VALUES (?1, ?2, 'https://example.com/', 1)",
+                [tab_id, workspace_id],
+            )
+            .unwrap();
+
+        let profile = get_browser_tab_profile(tab_id).unwrap();
+
+        assert_eq!(profile.workspace_id, workspace_id);
+        assert_eq!(profile.tab_id.as_deref(), Some(tab_id));
         assert_eq!(profile.data_store_identifier.len(), 16);
     }
 }

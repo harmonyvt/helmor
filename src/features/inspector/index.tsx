@@ -74,6 +74,8 @@ type WorkspaceInspectorSidebarProps = {
 	/** Called after a new session is created (e.g. "Review all") so the app
 	 * can navigate to it and the queued prompt actually fires. */
 	onSelectSession?: (sessionId: string) => void;
+	/** Opens the full-viewport browser surface. */
+	onOpenBrowserMode?: () => void;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -95,6 +97,7 @@ export function WorkspaceInspectorSidebar({
 	changeRequest,
 	forgeIsRefreshing = false,
 	onOpenSettings,
+	onOpenBrowserMode,
 }: WorkspaceInspectorSidebarProps) {
 	const {
 		actionsHeight,
@@ -461,6 +464,7 @@ export function WorkspaceInspectorSidebar({
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
 				onReviewAllComments={handleReviewAllComments}
+				onOpenBrowserMode={onOpenBrowserMode}
 			/>
 
 			{tabsOpen && (

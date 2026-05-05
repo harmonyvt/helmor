@@ -31,18 +31,20 @@ describe("browserWebviewOptions", () => {
 		});
 	});
 
-	it("uses workspace-specific browser profile metadata when provided", () => {
+	it("uses tab-specific browser profile metadata when provided", () => {
 		expect(
 			browserWebviewOptions("https://example.com", bounds, {
 				workspaceId: "11111111-1111-4111-8111-111111111111",
-				dataDirectory: "workspace-browser/11111111-1111-4111-8111-111111111111",
+				tabId: "22222222-2222-4222-8222-222222222222",
+				dataDirectory:
+					"workspace-browser/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222",
 				dataStoreIdentifier: [
-					1, 1, 1, 1, 17, 17, 65, 17, 129, 17, 17, 17, 17, 17, 17, 17,
+					34, 34, 34, 34, 34, 34, 66, 34, 130, 34, 34, 34, 34, 34, 34, 34,
 				],
 			}),
 		).toMatchObject({
 			dataStoreIdentifier: [
-				1, 1, 1, 1, 17, 17, 65, 17, 129, 17, 17, 17, 17, 17, 17, 17,
+				34, 34, 34, 34, 34, 34, 66, 34, 130, 34, 34, 34, 34, 34, 34, 34,
 			],
 		});
 	});

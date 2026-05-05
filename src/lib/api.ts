@@ -2846,6 +2846,7 @@ export type BrowserRuntimeActionResponse = {
 
 export type BrowserProfileOptions = {
 	workspaceId: string;
+	tabId?: string;
 	dataDirectory: string;
 	dataStoreIdentifier: number[];
 };
@@ -2903,6 +2904,12 @@ export async function getWorkspaceBrowserProfile(
 	return invoke<BrowserProfileOptions>("get_workspace_browser_profile", {
 		workspaceId,
 	});
+}
+
+export async function getBrowserTabProfile(
+	tabId: string,
+): Promise<BrowserProfileOptions> {
+	return invoke<BrowserProfileOptions>("get_browser_tab_profile", { tabId });
 }
 
 export async function browserSnapshot(

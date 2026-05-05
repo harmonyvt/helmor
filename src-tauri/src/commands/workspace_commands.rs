@@ -327,22 +327,51 @@ pub async fn permanently_delete_workspace(app: AppHandle, workspace_id: String) 
     let manager = app.state::<git_watcher::GitWatcherManager>();
     manager.unwatch(&workspace_id);
     let deleted_workspace_id = workspace_id.clone();
+    let tab_ids = run_blocking({
+        let workspace_id = workspace_id.clone();
+        move || {
+            crate::service::list_workspace_browser_tabs(&workspace_id)
+                .map(|tabs| tabs.into_iter().map(|tab| tab.id).collect::<Vec<_>>())
+        }
+    })
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(workspace_id = %deleted_workspace_id, error = ?error, "Failed to list browser tabs before workspace deletion");
+        Vec::new()
+    });
     run_blocking(move || workspaces::permanently_delete_workspace(&workspace_id)).await?;
-    remove_workspace_browser_data_store(&app, &deleted_workspace_id).await;
+    remove_workspace_browser_data_stores(&app, &deleted_workspace_id, &tab_ids).await;
     git_watcher::notify_workspace_changed(&app);
     Ok(())
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-async fn remove_workspace_browser_data_store(app: &AppHandle, workspace_id: &str) {
-    let Ok(identifier) = crate::browser_profile::workspace_data_store_identifier(workspace_id)
-    else {
-        return;
-    };
-    if let Err(error) = app.remove_data_store(identifier).await {
-        tracing::warn!(workspace_id, error = %format!("{error:#}"), "Failed to remove browser data store");
+async fn remove_workspace_browser_data_stores(
+    app: &AppHandle,
+    workspace_id: &str,
+    tab_ids: &[String],
+) {
+    for tab_id in tab_ids {
+        let Ok(identifier) = crate::browser_profile::browser_tab_data_store_identifier(tab_id)
+        else {
+            continue;
+        };
+        if let Err(error) = app.remove_data_store(identifier).await {
+            tracing::warn!(workspace_id, tab_id, error = %format!("{error:#}"), "Failed to remove browser tab data store");
+        }
+    }
+
+    if let Ok(identifier) = crate::browser_profile::workspace_data_store_identifier(workspace_id) {
+        if let Err(error) = app.remove_data_store(identifier).await {
+            tracing::warn!(workspace_id, error = %format!("{error:#}"), "Failed to remove legacy workspace browser data store");
+        }
     }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-async fn remove_workspace_browser_data_store(_app: &AppHandle, _workspace_id: &str) {}
+async fn remove_workspace_browser_data_stores(
+    _app: &AppHandle,
+    _workspace_id: &str,
+    _tab_ids: &[String],
+) {
+}

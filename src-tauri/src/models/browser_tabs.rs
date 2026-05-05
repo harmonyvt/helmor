@@ -68,6 +68,11 @@ pub fn list_workspace_browser_tabs(workspace_id: &str) -> Result<Vec<BrowserTabR
     list_workspace_browser_tabs_on(&connection, workspace_id)
 }
 
+pub fn get_browser_tab(tab_id: &str) -> Result<Option<BrowserTabRecord>> {
+    let connection = db::read_conn()?;
+    load_browser_tab_on(&connection, tab_id)
+}
+
 pub fn list_workspace_browser_tabs_on(
     connection: &Connection,
     workspace_id: &str,

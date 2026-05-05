@@ -42,12 +42,18 @@ pub fn close_browser_tab_and_publish(
 ) -> anyhow::Result<Option<BrowserTabRecord>> {
     let result = browser_tabs::close_browser_tab_with_workspace(tab_id)?;
     if let Some(result) = result {
+        let workspace_id = result.workspace_id.clone();
         ui_sync::publish(
             app,
             UiMutationEvent::WorkspaceBrowserTabsChanged {
-                workspace_id: result.workspace_id,
+                workspace_id: workspace_id.clone(),
             },
         );
+        if let Err(error) =
+            crate::browser_profile::remove_browser_tab_profile_files(&workspace_id, tab_id)
+        {
+            tracing::warn!(workspace_id, tab_id, error = %format!("{error:#}"), "Failed to remove browser tab profile files");
+        }
         return Ok(result.fallback);
     }
     Ok(None)
@@ -123,8 +129,10 @@ pub async fn close_browser_tab(
     tab_id: String,
 ) -> CmdResult<Option<BrowserTabRecord>> {
     let app_for_blocking = app.clone();
+    let closed_tab_id = tab_id.clone();
     let fallback =
         run_blocking(move || close_browser_tab_and_publish(&app_for_blocking, &tab_id)).await?;
+    remove_browser_tab_data_store(&app, &closed_tab_id).await;
     Ok(fallback)
 }
 
@@ -134,6 +142,24 @@ pub async fn get_workspace_browser_profile(
 ) -> CmdResult<BrowserProfileOptions> {
     run_blocking(move || crate::browser_profile::get_workspace_browser_profile(&workspace_id)).await
 }
+
+#[tauri::command]
+pub async fn get_browser_tab_profile(tab_id: String) -> CmdResult<BrowserProfileOptions> {
+    run_blocking(move || crate::browser_profile::get_browser_tab_profile(&tab_id)).await
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+async fn remove_browser_tab_data_store(app: &AppHandle, tab_id: &str) {
+    let Ok(identifier) = crate::browser_profile::browser_tab_data_store_identifier(tab_id) else {
+        return;
+    };
+    if let Err(error) = app.remove_data_store(identifier).await {
+        tracing::warn!(tab_id, error = %format!("{error:#}"), "Failed to remove browser tab data store");
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+async fn remove_browser_tab_data_store(_app: &AppHandle, _tab_id: &str) {}
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

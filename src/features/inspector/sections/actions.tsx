@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	ArrowUpRightIcon,
 	CheckIcon,
+	GlobeIcon,
 	LoaderCircleIcon,
 	TriangleIcon,
 } from "lucide-react";
@@ -129,6 +130,7 @@ type ActionsSectionProps = {
 	/** Called when the user clicks "Review all" in the Comments section.
 	 *  Receives all current PR comments so the parent can build the prompt. */
 	onReviewAllComments?: (comments: PrComment[]) => void | Promise<void>;
+	onOpenBrowserMode?: () => void;
 };
 
 function buildSyncResolutionPrompt(
@@ -171,6 +173,7 @@ export function ActionsSection({
 	commitButtonState,
 	changeRequest,
 	onReviewAllComments,
+	onOpenBrowserMode,
 }: ActionsSectionProps) {
 	const queryClient = useQueryClient();
 	const [syncPending, setSyncPending] = useState(false);
@@ -385,6 +388,22 @@ export function ActionsSection({
 		>
 			<div className={INSPECTOR_SECTION_HEADER_CLASS}>
 				<span className={INSPECTOR_SECTION_TITLE_CLASS}>Actions</span>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<button
+							type="button"
+							aria-label="Open browser"
+							onClick={onOpenBrowserMode}
+							disabled={!workspaceId || !onOpenBrowserMode}
+							className="ml-auto flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none"
+						>
+							<GlobeIcon className="size-3.5" strokeWidth={1.8} />
+						</button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom" className="text-[12px]">
+						Open browser
+					</TooltipContent>
+				</Tooltip>
 			</div>
 
 			<ScrollArea

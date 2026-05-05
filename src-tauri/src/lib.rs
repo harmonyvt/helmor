@@ -267,6 +267,7 @@ pub fn run() {
             commands::browser_commands::update_browser_tab_title,
             commands::browser_commands::close_browser_tab,
             commands::browser_commands::get_workspace_browser_profile,
+            commands::browser_commands::get_browser_tab_profile,
             commands::browser_commands::browser_snapshot,
             commands::browser_commands::browser_screenshot,
             commands::browser_commands::browser_click,
