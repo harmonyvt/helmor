@@ -50,10 +50,11 @@ pub(crate) fn mcp_result_text(server: &str, _tool: &str, item: &Value, failed: b
             .get("error")
             .and_then(|e| e.get("message"))
             .and_then(Value::as_str)
+            .map(str::to_string)
             .or_else(|| item.get("result").and_then(extract_result_text))
-            .unwrap_or("MCP tool failed");
+            .unwrap_or_else(|| "MCP tool failed".to_string());
         return if message.starts_with("Error:") {
-            message.to_string()
+            message
         } else {
             format!("Error: {message}")
         };
@@ -65,7 +66,7 @@ pub(crate) fn mcp_result_text(server: &str, _tool: &str, item: &Value, failed: b
 
     if server == "pi" {
         if let Some(text) = extract_result_text(result).filter(|text| !text.trim().is_empty()) {
-            return text.to_string();
+            return text;
         }
     }
 
@@ -83,29 +84,30 @@ fn parse_argument_value(raw: Value) -> Value {
     }
 }
 
-fn extract_result_text(value: &Value) -> Option<&str> {
+fn extract_result_text(value: &Value) -> Option<String> {
     match value {
-        Value::String(text) => Some(text.as_str()),
+        Value::String(text) => Some(text.clone()),
         Value::Object(obj) => {
             if let Some(content) = obj.get("content").and_then(Value::as_array) {
-                // Return a borrowed string only when there is exactly one text
-                // block. Multi-block content is handled by `join_text_content`.
-                let mut text_blocks = content.iter().filter_map(|item| {
-                    item.as_object().and_then(|block| {
-                        (block.get("type").and_then(Value::as_str) == Some("text"))
-                            .then(|| block.get("text").and_then(Value::as_str))
-                            .flatten()
+                let text = content
+                    .iter()
+                    .filter_map(|item| {
+                        item.as_object().and_then(|block| {
+                            (block.get("type").and_then(Value::as_str) == Some("text"))
+                                .then(|| block.get("text").and_then(Value::as_str))
+                                .flatten()
+                        })
                     })
-                });
-                let first = text_blocks.next();
-                if first.is_some() && text_blocks.next().is_none() {
-                    return first;
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    return Some(text);
                 }
             }
 
             ["text", "output", "stdout", "stderr"]
                 .iter()
-                .find_map(|key| obj.get(*key).and_then(Value::as_str))
+                .find_map(|key| obj.get(*key).and_then(Value::as_str).map(str::to_string))
         }
         _ => None,
     }
