@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/context-menu";
 import type { WorkspaceRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { WorkspaceAvatar } from "./avatar";
 import { WorkspaceRowItem, type WorkspaceRowItemProps } from "./row-item";
 import {
 	GroupIcon,
@@ -29,33 +30,50 @@ import {
 	STATUS_OPTIONS,
 	workspaceStatusToTone,
 } from "./shared";
-import type { GoalGroup, GoalProjection } from "./sidebar-projection";
+import type {
+	GoalGroup,
+	GoalProjectGroup,
+	GoalProjection,
+} from "./sidebar-projection";
 
 // ---------------------------------------------------------------------------
 // Virtual item types
 // ---------------------------------------------------------------------------
 
 export type GoalVirtualItem =
-	| { kind: "goal-header"; goalGroup: GoalGroup; isOpen: boolean }
+	| { kind: "project-header"; projectGroup: GoalProjectGroup; isOpen: boolean }
+	| {
+			kind: "goal-header";
+			goalGroup: GoalGroup;
+			isOpen: boolean;
+			indent: number;
+	  }
 	| {
 			kind: "goal-child";
 			row: WorkspaceRow;
 			goalWorkspaceId: string;
 			isLast: boolean;
+			indent: number;
 	  }
 	| { kind: "ungrouped-header"; count: number; isOpen: boolean }
 	| { kind: "ungrouped-row"; row: WorkspaceRow }
 	| { kind: "group-gap"; size: number }
 	| { kind: "bottom-padding" };
 
+export const GOAL_PROJECT_HEADER_HEIGHT = 34;
 export const GOAL_HEADER_HEIGHT = 32;
 export const GOAL_CHILD_HEIGHT = 30;
 export const GOAL_UNGROUPED_HEADER_HEIGHT = 34;
 export const GOAL_ROW_HEIGHT = 32;
 export const GOAL_GROUP_GAP = 10;
+export const GOAL_PROJECT_GAP = 6;
 export const GOAL_BOTTOM_PADDING = 8;
 
 export const GOAL_UNGROUPED_KEY = "goal:__ungrouped__";
+
+export function goalProjectSectionKey(repoName: string): string {
+	return `goal-project:${repoName}`;
+}
 
 export function goalSectionKey(goalWorkspaceId: string): string {
 	return `goal:${goalWorkspaceId}`;
@@ -63,6 +81,8 @@ export function goalSectionKey(goalWorkspaceId: string): string {
 
 export function getGoalItemHeight(item: GoalVirtualItem): number {
 	switch (item.kind) {
+		case "project-header":
+			return GOAL_PROJECT_HEADER_HEIGHT;
 		case "goal-header":
 			return GOAL_HEADER_HEIGHT;
 		case "goal-child":
@@ -80,6 +100,8 @@ export function getGoalItemHeight(item: GoalVirtualItem): number {
 
 export function getGoalItemKey(item: GoalVirtualItem, index: number): string {
 	switch (item.kind) {
+		case "project-header":
+			return `project-header:${item.projectGroup.repoName}`;
 		case "goal-header":
 			return `goal-header:${item.goalGroup.goalWorkspaceId}`;
 		case "goal-child":
@@ -105,33 +127,56 @@ export function buildGoalViewVirtualItems(
 ): GoalVirtualItem[] {
 	const items: GoalVirtualItem[] = [];
 
-	for (let gi = 0; gi < projection.goalGroups.length; gi++) {
-		const goal = projection.goalGroups[gi];
-		if (gi > 0) {
+	const hasProjects = projection.projectGroups.length > 0;
+
+	for (let pi = 0; pi < projection.projectGroups.length; pi++) {
+		const project = projection.projectGroups[pi];
+		const projectKey = goalProjectSectionKey(project.repoName);
+		const projectOpen = sectionOpenState[projectKey] ?? true;
+
+		if (pi > 0) {
 			items.push({ kind: "group-gap", size: GOAL_GROUP_GAP });
 		}
 
-		const sectionKey = goalSectionKey(goal.goalWorkspaceId);
-		const hasChildren = goal.childRows.length > 0;
-		const isOpen = hasChildren ? (sectionOpenState[sectionKey] ?? true) : false;
+		items.push({
+			kind: "project-header",
+			projectGroup: project,
+			isOpen: projectOpen,
+		});
 
-		items.push({ kind: "goal-header", goalGroup: goal, isOpen });
+		if (projectOpen) {
+			for (let gi = 0; gi < project.goalGroups.length; gi++) {
+				const goal = project.goalGroups[gi];
+				if (gi > 0) {
+					items.push({ kind: "group-gap", size: GOAL_PROJECT_GAP });
+				}
 
-		if (isOpen) {
-			for (let ci = 0; ci < goal.childRows.length; ci++) {
-				items.push({
-					kind: "goal-child",
-					row: goal.childRows[ci],
-					goalWorkspaceId: goal.goalWorkspaceId,
-					isLast: ci === goal.childRows.length - 1,
-				});
+				const sectionKey = goalSectionKey(goal.goalWorkspaceId);
+				const hasChildren = goal.childRows.length > 0;
+				const isOpen = hasChildren
+					? (sectionOpenState[sectionKey] ?? true)
+					: false;
+
+				items.push({ kind: "goal-header", goalGroup: goal, isOpen, indent: 8 });
+
+				if (isOpen) {
+					for (let ci = 0; ci < goal.childRows.length; ci++) {
+						items.push({
+							kind: "goal-child",
+							row: goal.childRows[ci],
+							goalWorkspaceId: goal.goalWorkspaceId,
+							isLast: ci === goal.childRows.length - 1,
+							indent: 8,
+						});
+					}
+				}
 			}
 		}
 	}
 
 	// Ungrouped section (workspaces with no goal relationship)
 	if (projection.ungroupedRows.length > 0) {
-		if (projection.goalGroups.length > 0) {
+		if (hasProjects) {
 			items.push({ kind: "group-gap", size: GOAL_GROUP_GAP });
 		}
 		const ungroupedOpen = sectionOpenState[GOAL_UNGROUPED_KEY] ?? true;
@@ -180,6 +225,53 @@ function extractPrNumber(prUrl: string | null | undefined): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// GoalProjectHeader
+// ---------------------------------------------------------------------------
+
+function GoalProjectHeader({
+	projectGroup,
+	isOpen,
+	onToggle,
+}: {
+	projectGroup: GoalProjectGroup;
+	isOpen: boolean;
+	onToggle: () => void;
+}) {
+	const goalCount = projectGroup.goalGroups.length;
+	return (
+		<button
+			type="button"
+			onClick={onToggle}
+			className="group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60"
+		>
+			<span className="flex min-w-0 items-center gap-2">
+				<WorkspaceAvatar
+					title={projectGroup.repoName}
+					repoInitials={projectGroup.repoInitials ?? null}
+					repoIconSrc={projectGroup.repoIconSrc ?? null}
+				/>
+				<span className="truncate">{projectGroup.repoName}</span>
+			</span>
+			<span className="relative flex h-5 min-w-5 shrink-0 items-center justify-center">
+				<Badge
+					variant="secondary"
+					className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
+				>
+					{goalCount}
+				</Badge>
+				<ChevronRight
+					className={cn(
+						"absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-all group-hover/trigger:opacity-100",
+						isOpen && "rotate-90",
+					)}
+					strokeWidth={2}
+				/>
+			</span>
+		</button>
+	);
+}
+
+// ---------------------------------------------------------------------------
 // GoalFolderHeader
 //
 // Click semantics:
@@ -191,12 +283,14 @@ function GoalFolderHeader({
 	goalGroup,
 	isOpen,
 	selected,
+	indent,
 	onSelect,
 	onToggle,
 }: {
 	goalGroup: GoalGroup;
 	isOpen: boolean;
 	selected: boolean;
+	indent?: number;
 	onSelect?: (id: string) => void;
 	onToggle: () => void;
 }) {
@@ -205,6 +299,7 @@ function GoalFolderHeader({
 
 	return (
 		<div
+			style={indent ? { paddingLeft: `${indent}px` } : undefined}
 			className={cn(
 				// Subtle background lift when expanded so the header reads as
 				// a section container rather than a plain row.
@@ -284,6 +379,7 @@ function GoalChildRow({
 	row,
 	isLast,
 	selected,
+	indent,
 	isSending: _isSending,
 	isInteractionRequired: _isInteractionRequired,
 	actions,
@@ -292,6 +388,7 @@ function GoalChildRow({
 	row: WorkspaceRow;
 	isLast: boolean;
 	selected: boolean;
+	indent?: number;
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
 	actions: GoalRowActions;
@@ -381,53 +478,55 @@ function GoalChildRow({
 	);
 
 	return (
-		<ContextMenu>
-			<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
-			<ContextMenuContent className="min-w-48">
-				<ContextMenuSub>
-					<ContextMenuSubTrigger>
-						<Circle className="size-4 shrink-0" strokeWidth={1.6} />
-						<span>Set status</span>
-					</ContextMenuSubTrigger>
-					<ContextMenuSubContent>
-						{STATUS_OPTIONS.map((opt) => (
-							<ContextMenuItem
-								key={opt.value}
-								onClick={() =>
-									actions.onSetWorkspaceStatus?.(row.id, opt.value)
-								}
-							>
-								<GroupIcon tone={opt.tone} />
-								<span className="flex-1">{opt.label}</span>
-								{effectiveStatus === opt.value ? (
-									<span className="ml-auto text-foreground">✓</span>
-								) : null}
-							</ContextMenuItem>
-						))}
-					</ContextMenuSubContent>
-				</ContextMenuSub>
+		<div style={indent ? { paddingLeft: `${indent}px` } : undefined}>
+			<ContextMenu>
+				<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
+				<ContextMenuContent className="min-w-48">
+					<ContextMenuSub>
+						<ContextMenuSubTrigger>
+							<Circle className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Set status</span>
+						</ContextMenuSubTrigger>
+						<ContextMenuSubContent>
+							{STATUS_OPTIONS.map((opt) => (
+								<ContextMenuItem
+									key={opt.value}
+									onClick={() =>
+										actions.onSetWorkspaceStatus?.(row.id, opt.value)
+									}
+								>
+									<GroupIcon tone={opt.tone} />
+									<span className="flex-1">{opt.label}</span>
+									{effectiveStatus === opt.value ? (
+										<span className="ml-auto text-foreground">✓</span>
+									) : null}
+								</ContextMenuItem>
+							))}
+						</ContextMenuSubContent>
+					</ContextMenuSub>
 
-				{actions.onOpenInFinder ? (
+					{actions.onOpenInFinder ? (
+						<ContextMenuItem
+							disabled={isBusy || workspaceActionsDisabled}
+							onClick={() => actions.onOpenInFinder?.(row.id)}
+						>
+							<Folder className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Open in Finder</span>
+						</ContextMenuItem>
+					) : null}
+
+					<ContextMenuSeparator />
+
 					<ContextMenuItem
 						disabled={isBusy || workspaceActionsDisabled}
-						onClick={() => actions.onOpenInFinder?.(row.id)}
+						onClick={() => actions.onArchiveWorkspace?.(row.id)}
 					>
-						<Folder className="size-4 shrink-0" strokeWidth={1.6} />
-						<span>Open in Finder</span>
+						<Archive className="size-4 shrink-0" strokeWidth={1.6} />
+						<span>Archive</span>
 					</ContextMenuItem>
-				) : null}
-
-				<ContextMenuSeparator />
-
-				<ContextMenuItem
-					disabled={isBusy || workspaceActionsDisabled}
-					onClick={() => actions.onArchiveWorkspace?.(row.id)}
-				>
-					<Archive className="size-4 shrink-0" strokeWidth={1.6} />
-					<span>Archive</span>
-				</ContextMenuItem>
-			</ContextMenuContent>
-		</ContextMenu>
+				</ContextMenuContent>
+			</ContextMenu>
+		</div>
 	);
 }
 
@@ -452,6 +551,12 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 	actions: GoalRowActions;
 	onToggleSection: (key: string) => void;
 }) {
+	const handleProjectToggle = useCallback(() => {
+		if (item.kind === "project-header") {
+			onToggleSection(goalProjectSectionKey(item.projectGroup.repoName));
+		}
+	}, [item, onToggleSection]);
+
 	const handleGoalToggle = useCallback(() => {
 		if (item.kind === "goal-header") {
 			onToggleSection(goalSectionKey(item.goalGroup.goalWorkspaceId));
@@ -466,11 +571,22 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 		return null;
 	}
 
+	if (item.kind === "project-header") {
+		return (
+			<GoalProjectHeader
+				projectGroup={item.projectGroup}
+				isOpen={item.isOpen}
+				onToggle={handleProjectToggle}
+			/>
+		);
+	}
+
 	if (item.kind === "goal-header") {
 		return (
 			<GoalFolderHeader
 				goalGroup={item.goalGroup}
 				isOpen={item.isOpen}
+				indent={item.indent}
 				selected={selectedWorkspaceId === item.goalGroup.goalWorkspaceId}
 				onSelect={actions.onSelect}
 				onToggle={handleGoalToggle}
@@ -483,6 +599,7 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 			<GoalChildRow
 				row={item.row}
 				isLast={item.isLast}
+				indent={item.indent}
 				selected={selectedWorkspaceId === item.row.id}
 				isSending={sendingWorkspaceIds?.has(item.row.id)}
 				isInteractionRequired={interactionRequiredWorkspaceIds?.has(

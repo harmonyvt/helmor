@@ -98,6 +98,68 @@ describe("Pi event normalization", () => {
 				output: "/tmp",
 			},
 		]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "tool_execution_end",
+					toolCallId: "tool-1",
+					toolName: "bash",
+					result: { content: [{ type: "text", text: "/tmp" }] },
+					isError: false,
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/completed",
+				item: {
+					id: "tool-1",
+					type: "command_execution",
+					command: "pwd",
+					aggregated_output: "/tmp",
+					exit_code: 0,
+				},
+			},
+		]);
+	});
+
+	test("preserves Pi MCP tool arguments when completion events omit args", () => {
+		const state = createPiEventState();
+		normalizePiEvent(
+			{
+				type: "tool_execution_start",
+				toolCallId: "tool-read",
+				toolName: "read",
+				args: { path: "src/App.tsx", limit: 40 },
+			} as unknown as AgentSessionEvent,
+			state,
+		);
+
+		expect(
+			normalizePiEvent(
+				{
+					type: "tool_execution_end",
+					toolCallId: "tool-read",
+					toolName: "read",
+					result: { content: [{ type: "text", text: "content" }] },
+					isError: false,
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/completed",
+				item: {
+					id: "tool-read",
+					type: "mcp_tool_call",
+					server: "pi",
+					tool: "read",
+					arguments: { path: "src/App.tsx", limit: 40 },
+					status: "completed",
+					result: { content: [{ type: "text", text: "content" }] },
+				},
+			},
+		]);
 	});
 
 	test("scopes fallback assistant message IDs by request ID", () => {

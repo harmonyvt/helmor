@@ -57,6 +57,14 @@ pub struct GoalChildWorkspaceRequest {
     pub title: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalChildWorkspaceStatusRequest {
+    pub goal_workspace_id: String,
+    pub child_workspace_id: String,
+    pub status: WorkspaceStatus,
+}
+
 pub use goal_models::{GoalCard, UpsertGoalCardInput};
 
 pub fn prepare_goal_workspace(
@@ -223,11 +231,7 @@ pub fn link_goal_card_workspace(goal_card_id: &str, workspace_id: &str) -> Resul
 pub fn create_goal_child_workspace(
     request: GoalChildWorkspaceRequest,
 ) -> Result<super::lifecycle::PrepareWorkspaceResponse> {
-    let goal = workspace_models::load_workspace_record_by_id(&request.goal_workspace_id)?
-        .with_context(|| format!("Goal workspace not found: {}", request.goal_workspace_id))?;
-    if goal.workspace_kind != WorkspaceKind::Goal {
-        bail!("Workspace is not a Goal: {}", request.goal_workspace_id);
-    }
+    let goal = workspace_models::load_goal_workspace_record(&request.goal_workspace_id)?;
     let repository = repos::load_repository_by_id(&goal.repo_id)?
         .with_context(|| format!("Repository not found: {}", goal.repo_id))?;
     let repo_root = PathBuf::from(repository.root_path.trim());
@@ -319,6 +323,14 @@ pub fn create_goal_child_workspace(
         state: WorkspaceState::Initializing,
         repo_scripts,
     })
+}
+
+pub fn set_goal_child_workspace_status(request: GoalChildWorkspaceStatusRequest) -> Result<()> {
+    workspace_models::set_goal_child_workspace_status(
+        &request.goal_workspace_id,
+        &request.child_workspace_id,
+        request.status,
+    )
 }
 
 fn update_goal_pr_metadata(workspace_id: &str, title: &str, pr_url: Option<&str>) -> Result<()> {

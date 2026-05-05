@@ -7,6 +7,7 @@ import type {
 } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
+import { CompactThreadContext } from "./compact-thread-context";
 import { WorkspacePanelHeader } from "./header";
 import { EmptyState, preloadStreamdown } from "./message-components";
 import {
@@ -47,6 +48,8 @@ type WorkspacePanelProps = {
 	newSessionShortcut?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
+	/** Renders a compact single-row header with no branch or session tabs. */
+	compact?: boolean;
 };
 
 export const WorkspacePanel = memo(function WorkspacePanel({
@@ -74,6 +77,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	newSessionShortcut,
 	missingScriptTypes = [],
 	onInitializeScript,
+	compact = false,
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionId) ?? null;
@@ -130,33 +134,37 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					onWorkspaceChanged={onWorkspaceChanged}
 					onRequestCloseSession={onRequestCloseSession}
 					newSessionShortcut={newSessionShortcut}
+					compact={compact}
 				/>
 
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-					{activePane?.hasLoaded ? (
-						<ActiveThreadViewport
-							hasSession={!!selectedSession}
-							pane={activePane}
-							workspaceBranch={workspace?.branch ?? null}
-							workspacePrTitle={workspace?.prTitle ?? null}
-							workspaceState={workspace?.state ?? null}
-							missingScriptTypes={missingScriptTypes}
-							onInitializeScript={onInitializeScript}
-						/>
-					) : loadingWorkspace || loadingSession ? (
-						<ConversationColdPlaceholder />
-					) : (
-						<div className="flex min-h-full flex-1 items-center justify-center px-8">
-							<EmptyState
-								workspaceState={workspace?.state ?? null}
+					<CompactThreadContext.Provider value={compact}>
+						{activePane?.hasLoaded ? (
+							<ActiveThreadViewport
+								hasSession={!!selectedSession}
+								pane={activePane}
 								workspaceBranch={workspace?.branch ?? null}
 								workspacePrTitle={workspace?.prTitle ?? null}
-								hasSession={!!selectedSession}
-								missingScriptTypes={missingScriptTypes}
-								onInitializeScript={onInitializeScript}
+								workspaceState={workspace?.state ?? null}
+								missingScriptTypes={compact ? [] : missingScriptTypes}
+								onInitializeScript={compact ? undefined : onInitializeScript}
+								compact={compact}
 							/>
-						</div>
-					)}
+						) : loadingWorkspace || loadingSession ? (
+							<ConversationColdPlaceholder />
+						) : (
+							<div className="flex min-h-full flex-1 items-center justify-center px-8">
+								<EmptyState
+									workspaceState={workspace?.state ?? null}
+									workspaceBranch={workspace?.branch ?? null}
+									workspacePrTitle={workspace?.prTitle ?? null}
+									hasSession={!!selectedSession}
+									missingScriptTypes={compact ? [] : missingScriptTypes}
+									onInitializeScript={compact ? undefined : onInitializeScript}
+								/>
+							</div>
+						)}
+					</CompactThreadContext.Provider>
 				</div>
 			</div>
 		</HelmorProfiler>

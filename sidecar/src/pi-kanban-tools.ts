@@ -1,11 +1,15 @@
 /**
- * Custom Pi tool definitions for Kanban board control.
+ * Custom Pi tool definitions for Goals board control.
  *
  * These tools are registered with the Pi agent via `customTools` in
  * `createAgentSession`. When the AI calls one, `execute()` emits a
  * `kanban_tool_call` passthrough event to the frontend, then suspends until
  * the frontend responds with `{ method: "kanbanToolResult" }` over stdin.
  * The sidecar index resolves the waiting promise via `resolvePendingKanbanCall`.
+ *
+ * The board is child-workspace canonical: tool names keep the historical
+ * `*_kanban_card` shape, but every card id is a child workspace id. There is
+ * no standalone card database contract in the sidecar.
  */
 
 import { randomUUID } from "node:crypto";
@@ -92,18 +96,20 @@ export function createKanbanTools(
 	emitter: SidecarEmitter,
 	requestId: string,
 ) {
+	const goalWorkspaceId = workspaceId;
 	const listCards = defineTool({
 		name: "list_kanban_cards",
-		label: "List Kanban Cards",
+		label: "List Goal Board Workspaces",
 		description:
-			"Return all cards on the Kanban board for the current goal workspace, including their id, title, lane (backlog/in-progress/review/done/canceled), description, and assigned provider.",
-		promptSnippet: "list_kanban_cards() → returns current board state as JSON",
+			"Return all child workspaces on the current goal board. Each returned card is a real workspace: `id` is the child workspace id, `lane` is the workspace status (backlog/in-progress/review/done/canceled), and optional fields may include branch, PR URL, session count, and description.",
+		promptSnippet:
+			"list_kanban_cards() → returns child workspace board state as JSON",
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
 			const result = await callKanbanTool(
 				"list_kanban_cards",
-				workspaceId,
-				{ workspaceId },
+				goalWorkspaceId,
+				{ workspaceId: goalWorkspaceId, goalWorkspaceId },
 				emitter,
 				requestId,
 			);
@@ -113,14 +119,15 @@ export function createKanbanTools(
 
 	const createCard = defineTool({
 		name: "create_kanban_card",
-		label: "Create Kanban Card",
+		label: "Create Goal Board Workspace",
 		description:
-			"Create a new card on the Kanban board. The `lane` must be one of: backlog, in-progress, review, done, canceled. `assigned_provider` is optional and must be one of: claude, codex, pi.",
+			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. `assigned_provider` is optional and must be one of: claude, codex, pi.",
 		promptSnippet:
-			"create_kanban_card({ title, lane, description?, assigned_provider? }) → new card",
+			"create_kanban_card({ title, lane, description?, assigned_provider? }) → new child workspace card",
 		promptGuidelines: [
-			"Use create_kanban_card when the user asks to add, create, or track a new task.",
+			"Use create_kanban_card when the user asks to add, create, or track a new goal task workspace.",
 			"Default lane is 'backlog' when unspecified.",
+			"Treat the returned id/workspaceId as the child workspace id for future move, update, and thread tools.",
 		],
 		parameters: Type.Object({
 			title: Type.String({ description: "Card title (required)" }),
@@ -140,9 +147,10 @@ export function createKanbanTools(
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const result = await callKanbanTool(
 				"create_kanban_card",
-				workspaceId,
+				goalWorkspaceId,
 				{
-					workspaceId,
+					workspaceId: goalWorkspaceId,
+					goalWorkspaceId,
 					title: params.title,
 					lane: params.lane || "backlog",
 					description: params.description,
@@ -157,12 +165,12 @@ export function createKanbanTools(
 
 	const moveCard = defineTool({
 		name: "move_kanban_card",
-		label: "Move Kanban Card",
+		label: "Move Goal Board Workspace",
 		description:
-			"Move an existing Kanban card to a different lane. `card_id` is the card's unique id (from list_kanban_cards). `lane` must be one of: backlog, in-progress, review, done, canceled.",
+			"Move an existing goal board child workspace to a different lane/status. `card_id` is the child workspace id from list_kanban_cards. `lane` must be one of: backlog, in-progress, review, done, canceled.",
 		promptSnippet: "move_kanban_card({ card_id, lane }) → updated card",
 		parameters: Type.Object({
-			card_id: Type.String({ description: "The card's unique id" }),
+			card_id: Type.String({ description: "The child workspace id" }),
 			lane: Type.String({
 				description:
 					"Target lane: backlog | in-progress | review | done | canceled",
@@ -171,8 +179,14 @@ export function createKanbanTools(
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const result = await callKanbanTool(
 				"move_kanban_card",
-				workspaceId,
-				{ workspaceId, cardId: params.card_id, lane: params.lane },
+				goalWorkspaceId,
+				{
+					goalWorkspaceId,
+					workspaceId: params.card_id,
+					cardId: params.card_id,
+					childWorkspaceId: params.card_id,
+					lane: params.lane,
+				},
 				emitter,
 				requestId,
 			);
@@ -182,13 +196,13 @@ export function createKanbanTools(
 
 	const updateCard = defineTool({
 		name: "update_kanban_card",
-		label: "Update Kanban Card",
+		label: "Update Goal Board Workspace",
 		description:
-			"Update the title or description of an existing Kanban card. At least one of `title` or `description` must be provided.",
+			"Update the title or description metadata for an existing goal board child workspace. `card_id` is the child workspace id from list_kanban_cards. At least one of `title` or `description` must be provided.",
 		promptSnippet:
 			"update_kanban_card({ card_id, title?, description? }) → updated card",
 		parameters: Type.Object({
-			card_id: Type.String({ description: "The card's unique id" }),
+			card_id: Type.String({ description: "The child workspace id" }),
 			title: Type.Optional(Type.String({ description: "New title" })),
 			description: Type.Optional(
 				Type.String({ description: "New description" }),
@@ -197,10 +211,12 @@ export function createKanbanTools(
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const result = await callKanbanTool(
 				"update_kanban_card",
-				workspaceId,
+				goalWorkspaceId,
 				{
-					workspaceId,
+					goalWorkspaceId,
+					workspaceId: params.card_id,
 					cardId: params.card_id,
+					childWorkspaceId: params.card_id,
 					title: params.title,
 					description: params.description,
 				},

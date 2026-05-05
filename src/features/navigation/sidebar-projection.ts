@@ -147,8 +147,15 @@ export type GoalGroup = {
 	childRows: WorkspaceRow[];
 };
 
-export type GoalProjection = {
+export type GoalProjectGroup = {
+	repoName: string;
+	repoIconSrc?: string | null;
+	repoInitials?: string | null;
 	goalGroups: GoalGroup[];
+};
+
+export type GoalProjection = {
+	projectGroups: GoalProjectGroup[];
 	ungroupedRows: WorkspaceRow[];
 };
 
@@ -233,7 +240,45 @@ export function projectSidebarListsByGoal(
 		return bDate.localeCompare(aDate);
 	});
 
-	return { goalGroups, ungroupedRows };
+	// Group goals by repo (project)
+	const byRepo = new Map<
+		string,
+		{
+			goalGroups: GoalGroup[];
+			repoIconSrc?: string | null;
+			repoInitials?: string | null;
+		}
+	>();
+	for (const goalGroup of goalGroups) {
+		const repoName = goalGroup.goalRow.repoName ?? "(unknown)";
+		const existing = byRepo.get(repoName);
+		if (existing) {
+			existing.goalGroups.push(goalGroup);
+		} else {
+			byRepo.set(repoName, {
+				goalGroups: [goalGroup],
+				repoIconSrc: goalGroup.goalRow.repoIconSrc,
+				repoInitials: goalGroup.goalRow.repoInitials,
+			});
+		}
+	}
+
+	const projectGroups: GoalProjectGroup[] = Array.from(byRepo.entries()).map(
+		([
+			repoName,
+			{ goalGroups: repoGoalGroups, repoIconSrc, repoInitials },
+		]) => ({
+			repoName,
+			repoIconSrc,
+			repoInitials,
+			goalGroups: repoGoalGroups,
+		}),
+	);
+
+	// Sort repos alphabetically for stable ordering
+	projectGroups.sort((a, b) => a.repoName.localeCompare(b.repoName));
+
+	return { projectGroups, ungroupedRows };
 }
 
 // ---- PR-first layout projection ----

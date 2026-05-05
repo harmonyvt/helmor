@@ -2236,6 +2236,16 @@ export async function setWorkspaceStatus(
 	return invoke<void>("set_workspace_status", { workspaceId, status });
 }
 
+export async function setGoalChildWorkspaceStatus(
+	goalWorkspaceId: string,
+	childWorkspaceId: string,
+	status: WorkspaceStatus,
+): Promise<void> {
+	return invoke<void>("set_goal_child_workspace_status", {
+		request: { goalWorkspaceId, childWorkspaceId, status },
+	});
+}
+
 export async function listGoalChildWorkspaces(
 	goalWorkspaceId: string,
 ): Promise<WorkspaceDetail[]> {

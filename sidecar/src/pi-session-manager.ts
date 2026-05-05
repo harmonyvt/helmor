@@ -83,12 +83,14 @@ export class PiSessionManager implements SessionManager {
 
 			// Write Pi extension file + board snapshot before the agent starts
 			// so the helmor-kanban extension can inject current state into the
-			// system prompt via `before_agent_start`.
+			// system prompt via `before_agent_start`. Cards are child workspaces;
+			// writeKanbanContext normalizes the snapshot defensively.
 			if (params.kanbanWorkspaceId && params.cwd) {
 				let cards: unknown[] = [];
 				if (params.kanbanSnapshot) {
 					try {
-						cards = JSON.parse(params.kanbanSnapshot) as unknown[];
+						const parsed = JSON.parse(params.kanbanSnapshot);
+						cards = Array.isArray(parsed) ? parsed : [];
 					} catch {
 						// malformed snapshot — proceed with empty list
 					}

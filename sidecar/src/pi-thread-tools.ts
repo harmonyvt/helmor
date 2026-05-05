@@ -43,12 +43,12 @@ export function createThreadTools(
 		name: "list_threads",
 		label: "List Threads",
 		description:
-			"List all conversation threads (sessions) in a child workspace that is linked to a Kanban card. Returns id, title, status, model, and unread count for each thread. Use the `workspace_id` from a card's childWorkspaceId field (visible in list_kanban_cards output).",
+			"List all conversation threads (sessions) in a goal board child workspace. Returns id, title, status, model, and unread count for each thread. Use a card `id` from list_kanban_cards as `workspace_id`.",
 		promptSnippet:
 			"list_threads({ workspace_id }) → array of session summaries",
 		parameters: Type.Object({
 			workspace_id: Type.String({
-				description: "The child workspace UUID (card.childWorkspaceId)",
+				description: "The child workspace UUID (card.id)",
 			}),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
@@ -72,7 +72,7 @@ export function createThreadTools(
 			"create_thread({ workspace_id, title? }) → { sessionId, workspaceId }",
 		parameters: Type.Object({
 			workspace_id: Type.String({
-				description: "The child workspace UUID (card.childWorkspaceId)",
+				description: "The child workspace UUID (card.id)",
 			}),
 			title: Type.Optional(
 				Type.String({ description: "Optional initial title for the thread" }),
@@ -133,7 +133,7 @@ export function createThreadTools(
 			"update_thread({ workspace_id, thread_id, title }) → { threadId, title }",
 		parameters: Type.Object({
 			workspace_id: Type.String({
-				description: "The child workspace UUID (card.childWorkspaceId)",
+				description: "The child workspace UUID (card.id)",
 			}),
 			thread_id: Type.String({
 				description: "The session UUID to rename",

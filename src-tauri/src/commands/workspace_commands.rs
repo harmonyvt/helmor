@@ -167,8 +167,15 @@ pub async fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn set_workspace_status(workspace_id: String, status: WorkspaceStatus) -> CmdResult<()> {
-    run_blocking(move || workspaces::set_workspace_status(&workspace_id, status)).await
+pub async fn set_workspace_status(
+    app: AppHandle,
+    workspace_id: String,
+    status: WorkspaceStatus,
+) -> CmdResult<()> {
+    let id = workspace_id.clone();
+    run_blocking(move || workspaces::set_workspace_status(&id, status)).await?;
+    ui_sync::publish(&app, UiMutationEvent::WorkspaceChanged { workspace_id });
+    Ok(())
 }
 
 /// `/add-dir` feature: list the extra directories the user has linked to

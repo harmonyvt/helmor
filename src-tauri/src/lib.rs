@@ -238,6 +238,7 @@ pub fn run() {
             commands::goal_commands::upsert_goal_card,
             commands::goal_commands::link_goal_card_workspace,
             commands::goal_commands::create_goal_child_workspace,
+            commands::goal_commands::set_goal_child_workspace_status,
             commands::forge_commands::get_workspace_pr_comment_insert_text,
             commands::forge_commands::merge_workspace_change_request,
             commands::forge_commands::close_workspace_change_request,

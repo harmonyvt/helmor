@@ -7,7 +7,10 @@
  *
  * The extension is auto-discovered by Pi's DefaultResourceLoader and uses
  * `pi.on("before_agent_start")` to inject the current board state into the
- * system prompt. It also registers the `/new-card` slash command.
+ * system prompt. Board cards are child workspaces; this writer accepts both
+ * the current child-workspace snapshot and the older GoalCard-like shape, then
+ * writes the normalized child-workspace shape for Pi.
+ * It also registers the `/new-card` slash command.
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -35,11 +38,12 @@ export default function (pi: ExtensionAPI) {
         join(ctx.cwd, ".pi", "context", "kanban.json"),
         "utf8",
       );
-      // Each entry is a WorkspaceDetail subset — cards are workspaces now.
+      // Each entry is a child-workspace board card. There is no separate card DB.
       const cards = JSON.parse(raw) as Array<{
         id: string;
         title: string;
         lane: string;
+        description?: string | null;
         branch?: string | null;
         prUrl?: string | null;
         sessionCount?: number;
@@ -96,12 +100,14 @@ export default function (pi: ExtensionAPI) {
           const prTag = c.prUrl ? " [PR open]" : "";
           const threadsTag = c.sessionCount ? \` [\${c.sessionCount} thread\${c.sessionCount === 1 ? "" : "s"}]\` : "";
           contextLines.push(\`- [workspace:\${c.id}] \${c.title}\${branchTag}\${prTag}\${threadsTag}\`);
+          if (c.description) contextLines.push(\`  Description: \${c.description}\`);
         }
         contextLines.push("");
       }
       contextLines.push(
-        "Each card is a workspace. Use list_kanban_cards, create_kanban_card, move_kanban_card to manage cards.",
-        "Use list_threads(workspace_id), create_thread(workspace_id), get_thread(workspace_id, thread_id), update_thread(workspace_id, thread_id, title) to inspect threads inside any workspace.",
+        "Each card is a child workspace. The workspace id shown in [workspace:<id>] is the id to pass as card_id to move_kanban_card/update_kanban_card and as workspace_id to thread tools.",
+        "Use list_kanban_cards, create_kanban_card, move_kanban_card, update_kanban_card to manage child workspace cards.",
+        "Use list_threads(workspace_id), create_thread(workspace_id), get_thread(workspace_id, thread_id), update_thread(workspace_id, thread_id, title) to inspect threads inside a child workspace.",
       );
 
       return { systemPrompt: event.systemPrompt + "\\n\\n" + contextLines.join("\\n") };
@@ -165,11 +171,70 @@ export type GoalMeta = {
 	description?: string;
 };
 
+export type KanbanContextCard = {
+	id: string;
+	title: string;
+	lane: string;
+	description?: string | null;
+	branch?: string | null;
+	prUrl?: string | null;
+	sessionCount?: number;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function optionalString(value: unknown): string | null | undefined {
+	if (typeof value === "string") return value;
+	return value === null ? null : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value)
+		? value
+		: undefined;
+}
+
+export function normalizeKanbanContextCards(
+	cards: readonly unknown[],
+): KanbanContextCard[] {
+	const normalized: KanbanContextCard[] = [];
+	for (const rawCard of cards) {
+		const card = asRecord(rawCard);
+		if (!card) continue;
+
+		const id =
+			optionalString(card.childWorkspaceId) ??
+			optionalString(card.workspaceId) ??
+			optionalString(card.id);
+		if (!id) continue;
+
+		const title = optionalString(card.title) ?? "Untitled workspace";
+		const lane =
+			optionalString(card.lane) ?? optionalString(card.status) ?? "backlog";
+
+		normalized.push({
+			id,
+			title,
+			lane,
+			description: optionalString(card.description),
+			branch: optionalString(card.branch) ?? optionalString(card.branchName),
+			prUrl: optionalString(card.prUrl),
+			sessionCount: optionalNumber(card.sessionCount),
+		});
+	}
+	return normalized;
+}
+
 export async function writeKanbanContext(
 	cwd: string,
 	cards: unknown[],
 	goalMeta?: GoalMeta,
 ): Promise<void> {
+	const normalizedCards = normalizeKanbanContextCards(cards);
 	const piDir = join(cwd, ".pi");
 	const extensionsDir = join(piDir, "extensions");
 	const contextDir = join(piDir, "context");
@@ -188,7 +253,7 @@ export async function writeKanbanContext(
 			),
 			writeFile(
 				join(contextDir, "kanban.json"),
-				JSON.stringify(cards, null, 2),
+				JSON.stringify(normalizedCards, null, 2),
 				"utf8",
 			),
 		];
@@ -207,7 +272,7 @@ export async function writeKanbanContext(
 
 		logger.debug("Wrote Pi Kanban context files", {
 			cwd,
-			cardCount: cards.length,
+			cardCount: normalizedCards.length,
 			hasGoalMeta: !!(goalMeta?.title ?? goalMeta?.description),
 		});
 	} catch (err) {

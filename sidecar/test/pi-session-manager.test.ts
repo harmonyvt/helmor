@@ -90,6 +90,7 @@ class MockAgentSession {
 mock.module("@mariozechner/pi-coding-agent", () => ({
 	AuthStorage: MockAuthStorage,
 	DefaultResourceLoader: MockDefaultResourceLoader,
+	defineTool: (tool: unknown) => tool,
 	getAgentDir: () => "/tmp/pi-agent",
 	ModelRegistry: MockModelRegistry,
 	SessionManager: MockSessionManager,

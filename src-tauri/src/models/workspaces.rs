@@ -195,9 +195,19 @@ pub fn load_workspace_record_by_id(workspace_id: &str) -> Result<Option<Workspac
     }
 }
 
+pub(crate) fn load_goal_workspace_record(goal_workspace_id: &str) -> Result<WorkspaceRecord> {
+    let record = load_workspace_record_by_id(goal_workspace_id)?
+        .with_context(|| format!("Goal workspace not found: {goal_workspace_id}"))?;
+    if record.workspace_kind != WorkspaceKind::Goal {
+        bail!("Workspace is not a Goal: {goal_workspace_id}");
+    }
+    Ok(record)
+}
+
 /// Return all child workspaces linked to a goal workspace, sorted oldest-first
 /// so the Kanban board cards appear in a stable creation order.
 pub fn load_goal_child_workspace_records(goal_workspace_id: &str) -> Result<Vec<WorkspaceRecord>> {
+    let _goal = load_goal_workspace_record(goal_workspace_id)?;
     let connection = db::read_conn()?;
     let sql = format!(
         "{WORKSPACE_RECORD_SQL} \
@@ -560,6 +570,7 @@ pub(crate) fn update_goal_workspace_meta(
     goal_title: Option<&str>,
     goal_description: Option<&str>,
 ) -> Result<()> {
+    let _goal = load_goal_workspace_record(workspace_id)?;
     let ts = chrono::Utc::now().to_rfc3339();
     let connection = db::write_conn()?;
     let updated_rows = connection
@@ -570,6 +581,37 @@ pub(crate) fn update_goal_workspace_meta(
         .context("Failed to update goal workspace meta")?;
     if updated_rows == 0 {
         anyhow::bail!("Goal workspace meta update affected 0 rows for {workspace_id}");
+    }
+    Ok(())
+}
+
+pub(crate) fn set_goal_child_workspace_status(
+    goal_workspace_id: &str,
+    child_workspace_id: &str,
+    status: WorkspaceStatus,
+) -> Result<()> {
+    let _goal = load_goal_workspace_record(goal_workspace_id)?;
+    let child = load_workspace_record_by_id(child_workspace_id)?
+        .with_context(|| format!("Goal child workspace not found: {child_workspace_id}"))?;
+    if child.workspace_kind != WorkspaceKind::Code
+        || child.goal_workspace_id.as_deref() != Some(goal_workspace_id)
+    {
+        bail!(
+            "Workspace {child_workspace_id} is not a child of Goal workspace {goal_workspace_id}"
+        );
+    }
+
+    let connection = db::write_conn()?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET status = ?3, updated_at = datetime('now') WHERE id = ?1 AND goal_workspace_id = ?2",
+            rusqlite::params![child_workspace_id, goal_workspace_id, status],
+        )
+        .context("Failed to set goal child workspace status")?;
+    if updated_rows != 1 {
+        bail!(
+            "Goal child status update affected {updated_rows} rows for workspace {child_workspace_id}"
+        );
     }
     Ok(())
 }

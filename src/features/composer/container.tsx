@@ -121,6 +121,22 @@ function logComposerDebug(
 	console.info(`[composer-debug] ${event}`, payload ?? {});
 }
 
+function filterModelSections(
+	sections: readonly AgentModelSection[],
+	predicate?: (model: AgentModelOption) => boolean,
+): AgentModelSection[] {
+	if (!predicate) {
+		return [...sections];
+	}
+
+	return sections
+		.map((section) => ({
+			...section,
+			options: section.options.filter(predicate),
+		}))
+		.filter((section) => section.options.length > 0);
+}
+
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
 	displayedSessionId: string | null;
@@ -193,6 +209,9 @@ type WorkspaceComposerContainerProps = {
 	queueItems?: readonly QueuedSubmit[];
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
+	modelFilter?: (model: AgentModelOption) => boolean;
+	/** When true hides the full toolbar and shows only send/stop. */
+	hideToolbar?: boolean;
 };
 
 const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
@@ -235,6 +254,8 @@ export const WorkspaceComposerContainer = memo(
 		queueItems = EMPTY_QUEUE_ITEMS,
 		onSteerQueued,
 		onRemoveQueued,
+		modelFilter,
+		hideToolbar = false,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const { settings, updateSettings } = useSettings();
@@ -384,7 +405,11 @@ export const WorkspaceComposerContainer = memo(
 			[displayedWorkspaceId, linkedDirectories, linkedDirectoriesMutation],
 		);
 
-		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
+		const rawModelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
+		const modelSections = useMemo(
+			() => filterModelSections(rawModelSections, modelFilter),
+			[rawModelSections, modelFilter],
+		);
 		const modelsLoading =
 			modelSectionsQuery.isLoading &&
 			modelSections.every((s) => s.options.length === 0);
@@ -1278,6 +1303,7 @@ export const WorkspaceComposerContainer = memo(
 							togglePlanShortcut={togglePlanShortcut}
 							toggleFollowUpShortcut={toggleFollowUpShortcut}
 							alwaysShowContextUsage={settings.alwaysShowContextUsage}
+							hideToolbar={hideToolbar}
 							onSubmit={handleComposerSubmit}
 							disabled={composerUnavailable}
 							submitDisabled={

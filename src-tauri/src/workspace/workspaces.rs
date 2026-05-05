@@ -28,8 +28,9 @@ pub use super::branching::{
 };
 pub use super::goals::{
     create_goal_child_workspace, finalize_goal_workspace, link_goal_card_workspace,
-    list_goal_cards, prepare_goal_workspace, upsert_goal_card, FinalizeGoalWorkspaceResponse,
-    GoalCard, GoalChildWorkspaceRequest, PrepareGoalWorkspaceRequest, PrepareGoalWorkspaceResponse,
+    list_goal_cards, prepare_goal_workspace, set_goal_child_workspace_status, upsert_goal_card,
+    FinalizeGoalWorkspaceResponse, GoalCard, GoalChildWorkspaceRequest,
+    GoalChildWorkspaceStatusRequest, PrepareGoalWorkspaceRequest, PrepareGoalWorkspaceResponse,
     UpsertGoalCardInput,
 };
 pub use super::lifecycle::{

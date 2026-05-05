@@ -50,6 +50,7 @@ import {
 	GoalVirtualItemRenderer,
 	getGoalItemHeight,
 	getGoalItemKey,
+	goalProjectSectionKey,
 	goalSectionKey,
 } from "./goal-layout";
 import type { SidebarLayoutMode } from "./hooks/use-controller";
@@ -278,30 +279,49 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			return;
 		}
 
-		let sectionKey: string | null = null;
-		for (const group of goalProjection.goalGroups) {
-			if (group.goalWorkspaceId === selectedWorkspaceId) {
-				// The goal workspace itself is selected — no section to expand
-				break;
-			}
-			if (group.childRows.some((r) => r.id === selectedWorkspaceId)) {
-				sectionKey = goalSectionKey(group.goalWorkspaceId);
-				break;
+		let goalSectionKeyToOpen: string | null = null;
+		let projectSectionKeyToOpen: string | null = null;
+
+		outer: for (const projectGroup of goalProjection.projectGroups) {
+			for (const group of projectGroup.goalGroups) {
+				if (group.goalWorkspaceId === selectedWorkspaceId) {
+					// The goal workspace itself is selected — just expand the project
+					projectSectionKeyToOpen = goalProjectSectionKey(
+						projectGroup.repoName,
+					);
+					break outer;
+				}
+				if (group.childRows.some((r) => r.id === selectedWorkspaceId)) {
+					goalSectionKeyToOpen = goalSectionKey(group.goalWorkspaceId);
+					projectSectionKeyToOpen = goalProjectSectionKey(
+						projectGroup.repoName,
+					);
+					break outer;
+				}
 			}
 		}
+
 		if (
-			!sectionKey &&
+			!goalSectionKeyToOpen &&
+			!projectSectionKeyToOpen &&
 			goalProjection.ungroupedRows.some((r) => r.id === selectedWorkspaceId)
 		) {
-			sectionKey = GOAL_UNGROUPED_KEY;
+			goalSectionKeyToOpen = GOAL_UNGROUPED_KEY;
 		}
 
-		if (!sectionKey) return;
+		if (!goalSectionKeyToOpen && !projectSectionKeyToOpen) return;
 
 		lastAutoExpandedIdRef.current = selectedWorkspaceId;
-		setSectionOpenState((current) =>
-			current[sectionKey] ? current : { ...current, [sectionKey]: true },
-		);
+		setSectionOpenState((current) => {
+			let next = current;
+			if (projectSectionKeyToOpen && !current[projectSectionKeyToOpen]) {
+				next = { ...next, [projectSectionKeyToOpen]: true };
+			}
+			if (goalSectionKeyToOpen && !current[goalSectionKeyToOpen]) {
+				next = { ...next, [goalSectionKeyToOpen]: true };
+			}
+			return next;
+		});
 	}, [goalProjection, isGoalMode, selectedWorkspaceId]);
 
 	// ── PR-first layout virtual items ─────────────────────────────────

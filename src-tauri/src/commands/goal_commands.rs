@@ -1,6 +1,10 @@
 use tauri::AppHandle;
 
-use crate::{git_watcher, workspaces};
+use crate::{
+    git_watcher,
+    ui_sync::{self, UiMutationEvent},
+    workspaces,
+};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -11,6 +15,23 @@ fn notify_workspace_changed_in_background(app: AppHandle) {
         })
         .await;
     });
+}
+
+fn publish_goal_child_workspace_changes(
+    app: &AppHandle,
+    goal_workspace_id: String,
+    child_workspace_id: Option<String>,
+) {
+    ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
+    ui_sync::publish(
+        app,
+        UiMutationEvent::WorkspaceChanged {
+            workspace_id: goal_workspace_id,
+        },
+    );
+    if let Some(workspace_id) = child_workspace_id {
+        ui_sync::publish(app, UiMutationEvent::WorkspaceChanged { workspace_id });
+    }
 }
 
 #[tauri::command]
@@ -61,7 +82,25 @@ pub async fn create_goal_child_workspace(
     app: AppHandle,
     request: workspaces::GoalChildWorkspaceRequest,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
     let result = run_blocking(move || workspaces::create_goal_child_workspace(request)).await?;
+    publish_goal_child_workspace_changes(
+        &app,
+        goal_workspace_id,
+        Some(result.workspace_id.clone()),
+    );
     notify_workspace_changed_in_background(app);
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn set_goal_child_workspace_status(
+    app: AppHandle,
+    request: workspaces::GoalChildWorkspaceStatusRequest,
+) -> CmdResult<()> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
+    let child_workspace_id = request.child_workspace_id.clone();
+    run_blocking(move || workspaces::set_goal_child_workspace_status(request)).await?;
+    publish_goal_child_workspace_changes(&app, goal_workspace_id, Some(child_workspace_id));
+    Ok(())
 }

@@ -11,6 +11,7 @@ interface PiEventState {
 	reasoningItemId: string | null;
 	turnId: string | null;
 	turnIndex: number;
+	toolArgsById: Map<string, unknown>;
 }
 
 export function createPiEventState(
@@ -22,6 +23,7 @@ export function createPiEventState(
 		reasoningItemId: null,
 		turnId: null,
 		turnIndex: 0,
+		toolArgsById: new Map(),
 	};
 }
 
@@ -76,7 +78,8 @@ export function normalizePiEvent(
 				},
 			];
 		}
-		case "tool_execution_start":
+		case "tool_execution_start": {
+			state.toolArgsById.set(event.toolCallId, event.args);
 			return [
 				{
 					type: "item/started",
@@ -89,7 +92,12 @@ export function normalizePiEvent(
 					),
 				},
 			];
-		case "tool_execution_update":
+		}
+		case "tool_execution_update": {
+			const rawEvent = event as AgentSessionEvent & { args?: unknown };
+			if (rawEvent.args !== undefined) {
+				state.toolArgsById.set(event.toolCallId, rawEvent.args);
+			}
 			return [
 				{
 					type: "item/commandExecution/outputDelta",
@@ -97,19 +105,24 @@ export function normalizePiEvent(
 					output: toolResultText(event.partialResult),
 				},
 			];
-		case "tool_execution_end":
+		}
+		case "tool_execution_end": {
+			const rawEvent = event as AgentSessionEvent & { args?: unknown };
+			const args = rawEvent.args ?? state.toolArgsById.get(event.toolCallId);
+			state.toolArgsById.delete(event.toolCallId);
 			return [
 				{
 					type: "item/completed",
 					item: toolItem(
 						event.toolCallId,
 						event.toolName,
-						undefined,
+						args,
 						event.result,
 						event.isError,
 					),
 				},
 			];
+		}
 		case "turn_end": {
 			const turnId = state.turnId ?? piScopedId(state, "turn", state.turnIndex);
 			const usage = asRecord(asRecord(event.message)?.usage);
