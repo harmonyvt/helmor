@@ -34,9 +34,19 @@ pub fn check(sidecar: &crate::sidecar::ManagedSidecar) -> PiModelCheckResponse {
         params: serde_json::json!({ "provider": "pi" }),
     };
 
+    tracing::info!(
+        request_id = %request_id,
+        timeout_secs = PI_MODELS_TIMEOUT.as_secs(),
+        "Pi model check sending sidecar listModels request"
+    );
     let rx = sidecar.subscribe(&request_id);
     if let Err(error) = sidecar.send(&request) {
         sidecar.unsubscribe(&request_id);
+        tracing::warn!(
+            request_id = %request_id,
+            error = %format!("{error:#}"),
+            "Pi model check could not send request"
+        );
         return check_error(format!("Unable to ask Pi for models: {error:#}"));
     }
 
@@ -44,6 +54,10 @@ pub fn check(sidecar: &crate::sidecar::ManagedSidecar) -> PiModelCheckResponse {
         match rx.recv_timeout(PI_MODELS_TIMEOUT) {
             Ok(event) => match event.event_type() {
                 "modelsListed" => {
+                    tracing::info!(
+                        request_id = %request_id,
+                        "Pi model check received modelsListed"
+                    );
                     break parse_models_listed(&event.raw);
                 }
                 "error" => {
@@ -53,22 +67,50 @@ pub fn check(sidecar: &crate::sidecar::ManagedSidecar) -> PiModelCheckResponse {
                         .and_then(Value::as_str)
                         .unwrap_or("Unknown Pi model check error")
                         .to_string();
+                    tracing::warn!(
+                        request_id = %request_id,
+                        message = %message,
+                        "Pi model check received sidecar error"
+                    );
                     break check_error(message);
                 }
-                _ => {}
+                other => {
+                    tracing::debug!(
+                        request_id = %request_id,
+                        event_type = %other,
+                        "Pi model check ignoring sidecar event"
+                    );
+                }
             },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                tracing::warn!(
+                    request_id = %request_id,
+                    timeout_secs = PI_MODELS_TIMEOUT.as_secs(),
+                    "Pi model check timed out"
+                );
                 break check_error(format!(
                     "Pi model check timed out after {}s.",
                     PI_MODELS_TIMEOUT.as_secs()
                 ));
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::warn!(
+                    request_id = %request_id,
+                    "Pi model check sidecar subscription disconnected"
+                );
                 break check_error("Sidecar disconnected while checking Pi models.".to_string());
             }
         }
     };
     sidecar.unsubscribe(&request_id);
+    tracing::info!(
+        request_id = %request_id,
+        status = ?response.status,
+        model_count = response.models.len(),
+        provider_count = response.providers.len(),
+        error = ?response.error,
+        "Pi model check unsubscribed"
+    );
     response
 }
 
@@ -84,6 +126,18 @@ fn parse_models_listed(raw: &Value) -> PiModelCheckResponse {
         })
         .unwrap_or_default();
     let providers = summarize_providers(&models);
+    let provider_counts = providers
+        .iter()
+        .map(|provider| format!("{}:{}", provider.key, provider.model_count))
+        .collect::<Vec<_>>();
+    tracing::info!(
+        model_count = models.len(),
+        provider_count = providers.len(),
+        provider_counts = ?provider_counts,
+        first_model = ?models.first().map(|model| model.id.as_str()),
+        last_model = ?models.last().map(|model| model.id.as_str()),
+        "Pi model check parsed models"
+    );
     PiModelCheckResponse {
         status: AgentModelSectionStatus::Ready,
         providers,

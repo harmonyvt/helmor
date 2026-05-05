@@ -13,6 +13,13 @@ import {
 import type { AgentModelOption, AgentModelSection } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+function logModelPickerDebug(
+	event: string,
+	payload?: Record<string, unknown>,
+): void {
+	console.info(`[model-picker-debug] ${event}`, payload ?? {});
+}
+
 // ---------------------------------------------------------------------------
 // Grouping helper (Pi models split by provider key)
 // ---------------------------------------------------------------------------
@@ -93,6 +100,23 @@ export function ModelPicker({
 		() => modelSections.flatMap(groupModelSectionForPicker),
 		[modelSections],
 	);
+	const sectionCounts = useMemo(
+		() =>
+			Object.fromEntries(
+				modelSections.map((section) => [section.id, section.options.length]),
+			),
+		[modelSections],
+	);
+	const displayedSectionCounts = useMemo(
+		() =>
+			Object.fromEntries(
+				displayedSections.map((section) => [
+					section.id,
+					section.options.length,
+				]),
+			),
+		[displayedSections],
+	);
 
 	// Ordered favourite options (preserves cross-section order of appearance)
 	const favouriteOptions = useMemo<AgentModelOption[]>(() => {
@@ -135,22 +159,80 @@ export function ModelPicker({
 	const [focusIndex, setFocusIndex] = useState(-1);
 	const listRef = useRef<HTMLDivElement>(null);
 
-	useEffect(() => {
-		if (open) {
-			setFocusIndex(
-				currentId ? allOptions.findIndex((o) => o.id === currentId) : 0,
-			);
-		} else {
-			setFocusIndex(-1);
-		}
-	}, [open]); // intentionally narrow — only reset on open/close
+	const handleOpenChange = useCallback(
+		(next: boolean) => {
+			logModelPickerDebug("open change", {
+				next,
+				currentId,
+				selectedModelId,
+				sectionCounts,
+				displayedSectionCounts,
+				allOptionCount: allOptions.length,
+			});
+			onOpenChange(next);
+		},
+		[
+			allOptions.length,
+			currentId,
+			displayedSectionCounts,
+			onOpenChange,
+			sectionCounts,
+			selectedModelId,
+		],
+	);
 
 	useEffect(() => {
+		if (open) {
+			const nextIndex = currentId
+				? allOptions.findIndex((o) => o.id === currentId)
+				: 0;
+			logModelPickerDebug("focus reset for open", {
+				currentId,
+				nextIndex,
+				allOptionCount: allOptions.length,
+			});
+			setFocusIndex(nextIndex);
+			window.requestAnimationFrame(() => {
+				listRef.current?.focus({ preventScroll: true });
+			});
+		} else {
+			logModelPickerDebug("focus reset for close", {
+				previousFocusIndex: focusIndex,
+			});
+			setFocusIndex(-1);
+		}
+		// Intentionally narrow: reset only on open/close so background Pi model
+		// refreshes do not steal focus while the picker is already open.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [open]);
+
+	useEffect(() => {
+		if (!open) return;
 		if (focusIndex < 0) return;
 		const buttons =
 			listRef.current?.querySelectorAll<HTMLButtonElement>("[data-model-row]");
-		buttons?.[focusIndex]?.focus();
-	}, [focusIndex]);
+		const target = buttons?.[focusIndex];
+		if (!target) return;
+		logModelPickerDebug("active row changed", {
+			focusIndex,
+			rowCount: buttons?.length ?? 0,
+			modelId: target.dataset.modelId ?? null,
+		});
+		target.scrollIntoView({ block: "nearest" });
+	}, [focusIndex, open]);
+
+	const handleSelectModel = useCallback(
+		(modelId: string) => {
+			logModelPickerDebug("select model", {
+				modelId,
+				currentId,
+				allOptionCount: allOptions.length,
+			});
+			onSelectModel(modelId);
+			handleOpenChange(false);
+		},
+		[allOptions.length, currentId, handleOpenChange, onSelectModel],
+	);
 
 	const handleListKeyDown = useCallback(
 		(e: React.KeyboardEvent) => {
@@ -160,25 +242,24 @@ export function ModelPicker({
 			} else if (e.key === "ArrowUp") {
 				e.preventDefault();
 				setFocusIndex((i) => Math.max(i - 1, 0));
+			} else if (e.key === "Enter" || e.key === " ") {
+				e.preventDefault();
+				const modelId = allOptions[focusIndex]?.id;
+				if (modelId) handleSelectModel(modelId);
 			} else if (e.key === "Escape") {
-				onOpenChange(false);
+				handleOpenChange(false);
 			}
 		},
-		[allOptions.length, onOpenChange],
-	);
-
-	const handleSelectModel = useCallback(
-		(modelId: string) => {
-			onSelectModel(modelId);
-			onOpenChange(false);
-		},
-		[onSelectModel, onOpenChange],
+		[allOptions, focusIndex, handleOpenChange, handleSelectModel],
 	);
 
 	const handleOpenSettings = useCallback(() => {
+		logModelPickerDebug("open model settings", {
+			currentId,
+		});
 		onOpenModelSettings();
-		onOpenChange(false);
-	}, [onOpenModelSettings, onOpenChange]);
+		handleOpenChange(false);
+	}, [currentId, handleOpenChange, onOpenModelSettings]);
 
 	const getFlatIndex = useCallback(
 		(optionId: string) => allOptions.findIndex((o) => o.id === optionId),
@@ -186,7 +267,7 @@ export function ModelPicker({
 	);
 
 	return (
-		<Popover open={open} onOpenChange={onOpenChange}>
+		<Popover open={open} onOpenChange={handleOpenChange}>
 			<PopoverTrigger
 				disabled={disabled}
 				className={triggerClassName}
@@ -201,6 +282,19 @@ export function ModelPicker({
 				side="top"
 				align="start"
 				sideOffset={4}
+				onOpenAutoFocus={(event) => {
+					event.preventDefault();
+					logModelPickerDebug("open auto focus prevented", {
+						currentId,
+						focusIndex,
+						allOptionCount: allOptions.length,
+					});
+				}}
+				onCloseAutoFocus={() => {
+					logModelPickerDebug("close auto focus", {
+						currentId,
+					});
+				}}
 				// Override default w-72 / p-2.5 / gap-2.5 from PopoverContent
 				className="w-[18rem] gap-0 p-0"
 				onKeyDown={handleListKeyDown}
@@ -210,6 +304,7 @@ export function ModelPicker({
 					ref={listRef}
 					role="listbox"
 					aria-label="Select model"
+					tabIndex={0}
 					className="max-h-[min(420px,calc(100vh-140px))] overflow-y-auto p-1"
 				>
 					{/* Favourites section */}
@@ -227,7 +322,6 @@ export function ModelPicker({
 									focusIndex={focusIndex}
 									onSelect={handleSelectModel}
 									onToggleFavourite={onToggleFavorite}
-									onFocus={setFocusIndex}
 								/>
 							))}
 							<Divider />
@@ -250,7 +344,6 @@ export function ModelPicker({
 									focusIndex={focusIndex}
 									onSelect={handleSelectModel}
 									onToggleFavourite={onToggleFavorite}
-									onFocus={setFocusIndex}
 								/>
 							))}
 							{section.id === "claude" && !hasConfiguredClaudeProviderModels ? (
@@ -311,7 +404,6 @@ type ModelRowProps = {
 	focusIndex: number;
 	onSelect: (modelId: string) => void;
 	onToggleFavourite: (modelId: string) => void;
-	onFocus: (index: number) => void;
 };
 
 function ModelRow({
@@ -323,7 +415,6 @@ function ModelRow({
 	focusIndex,
 	onSelect,
 	onToggleFavourite,
-	onFocus,
 }: ModelRowProps) {
 	const isKeyFocused = focusIndex === flatIndex;
 
@@ -359,15 +450,16 @@ function ModelRow({
 			<button
 				type="button"
 				data-model-row
-				tabIndex={isKeyFocused ? 0 : -1}
+				data-model-id={option.id}
+				tabIndex={-1}
 				onClick={handleSelectClick}
 				onKeyDown={handleKeyDown}
-				onFocus={() => onFocus(flatIndex)}
 				className={cn(
 					"flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-[6px] px-2 py-[5px] text-left",
 					"text-[13px] text-foreground/80 transition-colors duration-100",
 					"hover:bg-accent/60 hover:text-foreground",
 					"focus-visible:bg-accent/60 focus-visible:text-foreground focus-visible:outline-none",
+					isKeyFocused && "bg-accent/50 text-foreground",
 					isSelected && "text-foreground",
 					// extra right padding reserves space for the star button
 					"pr-7",

@@ -18,6 +18,8 @@ import { _resetForTesting as resetTerminalStoreForTesting } from "./terminal-sto
 const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChangesWithContent: vi.fn(),
 	getWorkspaceForgeCheckInsertText: vi.fn(),
+	getWorkspacePrCommentInsertText: vi.fn(),
+	createSession: vi.fn(),
 	loadWorkspaceGitActionStatus: vi.fn(),
 	loadWorkspaceForgeActionStatus: vi.fn(),
 	getWorkspacePrComments: vi.fn(),
@@ -37,7 +39,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
+		createSession: apiMocks.createSession,
 		getWorkspaceForgeCheckInsertText: apiMocks.getWorkspaceForgeCheckInsertText,
+		getWorkspacePrCommentInsertText: apiMocks.getWorkspacePrCommentInsertText,
 		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
 		loadWorkspaceGitActionStatus: apiMocks.loadWorkspaceGitActionStatus,
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
@@ -136,6 +140,8 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		resetTerminalStoreForTesting();
 		apiMocks.listWorkspaceChangesWithContent.mockReset();
 		apiMocks.getWorkspaceForgeCheckInsertText.mockReset();
+		apiMocks.getWorkspacePrCommentInsertText.mockReset();
+		apiMocks.createSession.mockReset();
 		apiMocks.loadWorkspaceGitActionStatus.mockReset();
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
 		apiMocks.getWorkspacePrComments.mockReset();
@@ -149,6 +155,10 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.getWorkspaceForgeCheckInsertText.mockResolvedValue(
 			"Content Log:\ncheck output",
 		);
+		apiMocks.getWorkspacePrCommentInsertText.mockResolvedValue(
+			"PR Comment by @reviewer",
+		);
+		apiMocks.createSession.mockResolvedValue({ sessionId: "session-review" });
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue(cleanGitStatus());
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(emptyPrStatus());
 		apiMocks.getWorkspacePrComments.mockResolvedValue({
@@ -173,8 +183,12 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		await screen.findByText("No uncommitted changes");
 
 		const actions = screen.getByLabelText("Inspector section Actions");
-		expect(within(actions).queryByText("Deployments")).not.toBeInTheDocument();
-		expect(within(actions).queryByText("Checks")).not.toBeInTheDocument();
+		await waitFor(() => {
+			expect(
+				within(actions).queryByText("Deployments"),
+			).not.toBeInTheDocument();
+			expect(within(actions).queryByText("Checks")).not.toBeInTheDocument();
+		});
 		expect(within(actions).queryByText("marketing")).not.toBeInTheDocument();
 		expect(
 			within(actions).queryByText("staging-locked"),
@@ -848,7 +862,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(openButton).toHaveClass("hover:opacity-100");
 	});
 
-	it("inserts check details into the composer and keeps deployments without insert buttons", async () => {
+	it("inserts check details into the composer and exposes deployment insert buttons", async () => {
 		const user = userEvent.setup();
 		const insertIntoComposer = vi.fn();
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
@@ -897,8 +911,8 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 
 		await screen.findByText("Preview");
 		expect(
-			screen.queryByRole("button", { name: "Append Preview to composer" }),
-		).not.toBeInTheDocument();
+			screen.getByRole("button", { name: "Append Preview to composer" }),
+		).toBeInTheDocument();
 
 		await user.click(
 			screen.getByRole("button", { name: "Append changes to composer" }),
@@ -929,6 +943,98 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			],
 			behavior: "append",
 		});
+	});
+
+	it("inserts PR comment details from cached comment data without refetching", async () => {
+		const user = userEvent.setup();
+		const insertIntoComposer = vi.fn();
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			prNumber: 12,
+			prUrl: "https://github.com/acme/repo/pull/12",
+			comments: [
+				{
+					id: "comment-1",
+					author: "reviewer",
+					body: "Please fix this path.",
+					url: "https://github.com/acme/repo/pull/12#discussion_r1",
+					filePath: "src/problem.ts",
+					isThreadResolved: false,
+					createdAt: "2026-05-04T00:00:00Z",
+				},
+			],
+		});
+
+		renderWithProviders(
+			<ComposerInsertProvider value={insertIntoComposer}>
+				<WorkspaceInspectorSidebar
+					workspaceId="workspace-1"
+					workspaceRootPath="/tmp/workspace"
+					workspaceBranch="feature/actions"
+					workspaceTargetBranch="main"
+					workspaceRemote="origin"
+					editorMode={false}
+					onOpenEditorFile={vi.fn()}
+				/>
+			</ComposerInsertProvider>,
+		);
+
+		await screen.findByText("src/problem.ts – @reviewer");
+		await user.click(
+			screen.getByRole("button", {
+				name: "Append src/problem.ts – @reviewer to composer",
+			}),
+		);
+
+		expect(apiMocks.getWorkspacePrCommentInsertText).not.toHaveBeenCalled();
+		expect(insertIntoComposer).toHaveBeenCalledWith({
+			target: { workspaceId: "workspace-1" },
+			items: [
+				{
+					kind: "text",
+					text: "PR Comment by @reviewer\nFile: src/problem.ts\nStatus: Unresolved\n\n> Please fix this path.\n\nURL: https://github.com/acme/repo/pull/12#discussion_r1",
+				},
+			],
+			behavior: "append",
+		});
+	});
+
+	it("review all selects the new session immediately after creating it", async () => {
+		const user = userEvent.setup();
+		const onQueuePendingPromptForSession = vi.fn();
+		const onSelectSession = vi.fn();
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			prNumber: 12,
+			prUrl: "https://github.com/acme/repo/pull/12",
+			comments: [
+				{
+					id: "comment-1",
+					author: "reviewer",
+					body: "Please fix this path.",
+					url: "https://github.com/acme/repo/pull/12#discussion_r1",
+					filePath: "src/problem.ts",
+					isThreadResolved: false,
+					createdAt: "2026-05-04T00:00:00Z",
+				},
+			],
+		});
+
+		renderInspector({ onQueuePendingPromptForSession, onSelectSession });
+
+		await user.click(
+			await screen.findByRole("button", { name: "Review all PR comments" }),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1");
+		});
+		expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
+			sessionId: "session-review",
+			prompt: expect.stringContaining(
+				"Please review and address all outstanding PR review comments.",
+			),
+			forceQueue: true,
+		});
+		expect(onSelectSession).toHaveBeenCalledWith("session-review");
 	});
 
 	it("uses the workspace remote when formatting sync target labels", async () => {
