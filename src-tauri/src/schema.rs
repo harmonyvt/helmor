@@ -400,6 +400,40 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add pr_url column")?;
     }
 
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "workspace_kind")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN workspace_kind TEXT DEFAULT 'code'")
+            .context("Failed to add workspace_kind column")?;
+    }
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "goal_workspace_id")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_workspace_id TEXT")
+            .context("Failed to add goal_workspace_id column")?;
+    }
+
+    // Migration: goal_title / goal_description — user-editable metadata for
+    // goal workspaces shown in the Kanban header and injected into Pi context.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "goal_title") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_title TEXT")
+            .context("Failed to add goal_title column")?;
+    }
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "goal_description")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_description TEXT")
+            .context("Failed to add goal_description column")?;
+    }
+
+    connection
+        .execute_batch(GOAL_CARDS_SCHEMA)
+        .context("Failed to ensure goal_cards schema")?;
+
     let had_workspace_status =
         has_table(connection, "workspaces") && has_column(connection, "workspaces", "status");
     if has_table(connection, "workspaces") && !had_workspace_status {
@@ -450,6 +484,23 @@ fn run_migrations(connection: &Connection) -> Result<()> {
 
     Ok(())
 }
+
+const GOAL_CARDS_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS goal_cards (
+    id TEXT PRIMARY KEY,
+    goal_workspace_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    lane TEXT NOT NULL DEFAULT 'backlog',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    assigned_provider TEXT,
+    assigned_model_id TEXT,
+    assigned_effort_level TEXT,
+    child_workspace_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"#;
 
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS repos (
@@ -519,8 +570,27 @@ CREATE TABLE IF NOT EXISTS workspaces (
     pr_title TEXT,
     pr_sync_state TEXT DEFAULT 'none',
     pr_url TEXT,
+    workspace_kind TEXT DEFAULT 'code',
+    goal_workspace_id TEXT,
+    goal_title TEXT,
+    goal_description TEXT,
     archive_commit TEXT,
     linked_directory_paths TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS goal_cards (
+    id TEXT PRIMARY KEY,
+    goal_workspace_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    lane TEXT NOT NULL DEFAULT 'backlog',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    assigned_provider TEXT,
+    assigned_model_id TEXT,
+    assigned_effort_level TEXT,
+    child_workspace_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

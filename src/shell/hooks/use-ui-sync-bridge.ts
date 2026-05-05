@@ -19,6 +19,15 @@ function invalidateAllWorkspaceChanges(queryClient: QueryClient) {
 	});
 }
 
+function invalidateWorkspaceLists(queryClient: QueryClient) {
+	void queryClient.invalidateQueries({
+		queryKey: helmorQueryKeys.workspaceGroups,
+	});
+	void queryClient.invalidateQueries({
+		predicate: (query) => query.queryKey[0] === "goalChildWorkspaces",
+	});
+}
+
 function handleUiMutation(
 	event: UiMutationEvent,
 	queryClient: QueryClient,
@@ -26,9 +35,7 @@ function handleUiMutation(
 ) {
 	switch (event.type) {
 		case "workspaceListChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			invalidateWorkspaceLists(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.archivedWorkspaces,
 			});
@@ -38,9 +45,7 @@ function handleUiMutation(
 			});
 			return;
 		case "workspaceChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			invalidateWorkspaceLists(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -49,9 +54,7 @@ function handleUiMutation(
 			});
 			return;
 		case "sessionListChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			invalidateWorkspaceLists(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -76,9 +79,7 @@ function handleUiMutation(
 			invalidateAllWorkspaceChanges(queryClient);
 			return;
 		case "workspaceGitStateChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			invalidateWorkspaceLists(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -106,9 +107,7 @@ function handleUiMutation(
 			});
 			return;
 		case "workspaceChangeRequestChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			invalidateWorkspaceLists(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -147,9 +146,7 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				predicate: (query) => query.queryKey[0] === "workspaceDetail",
 			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			invalidateWorkspaceLists(queryClient);
 			return;
 		case "settingsChanged":
 			if (

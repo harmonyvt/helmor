@@ -37,6 +37,7 @@ import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
+import { GoalWorkspaceContainer } from "@/features/goals";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { AppOnboarding } from "@/features/onboarding";
@@ -2335,12 +2336,64 @@ function AppShell({
 														onExit={handleExitBrowserMode}
 													/>
 												)}
+											{workspaceViewMode === "conversation" &&
+											selectedWorkspaceDetailQuery.data?.workspaceKind ===
+												"goal" &&
+											selectedWorkspaceId ? (
+												<GoalWorkspaceContainer
+													workspaceId={selectedWorkspaceId}
+													headerLeading={
+														sidebarCollapsed ? (
+															<>
+																{/* Spacer to avoid macOS traffic lights */}
+																<div className="w-[52px] shrink-0" />
+																<div className="flex items-center gap-[2px]">
+																	<AppUpdateButton status={appUpdateStatus} />
+																	<Tooltip>
+																		<TooltipTrigger asChild>
+																			<Button
+																				aria-label="Expand left sidebar"
+																				onClick={() =>
+																					setSidebarCollapsed(false)
+																				}
+																				variant="ghost"
+																				size="icon-xs"
+																				className="text-muted-foreground hover:text-foreground"
+																			>
+																				<PanelLeftOpen
+																					className="size-4"
+																					strokeWidth={1.8}
+																				/>
+																			</Button>
+																		</TooltipTrigger>
+																		<TooltipContent
+																			side="bottom"
+																			className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+																		>
+																			<span>Expand left sidebar</span>
+																			{leftSidebarToggleShortcut ? (
+																				<InlineShortcutDisplay
+																					hotkey={leftSidebarToggleShortcut}
+																					className="text-background/60"
+																				/>
+																			) : null}
+																		</TooltipContent>
+																	</Tooltip>
+																</div>
+															</>
+														) : undefined
+													}
+													onSelectWorkspace={handleSelectWorkspace}
+												/>
+											) : null}
 											<div
 												data-focus-scope="chat"
 												className={
-													workspaceViewMode === "conversation"
-														? "flex min-h-0 flex-1 flex-col"
-														: "hidden"
+													workspaceViewMode !== "conversation" ||
+													selectedWorkspaceDetailQuery.data?.workspaceKind ===
+														"goal"
+														? "hidden"
+														: "flex min-h-0 flex-1 flex-col"
 												}
 											>
 												<WorkspaceConversationContainer
@@ -2593,81 +2646,83 @@ function AppShell({
 										</div>
 									</section>
 
-									{!inspectorCollapsed && (
-										<>
-											<div
-												role="separator"
-												tabIndex={0}
-												aria-label="Resize inspector sidebar"
-												aria-orientation="vertical"
-												aria-valuemin={MIN_SIDEBAR_WIDTH}
-												aria-valuemax={MAX_SIDEBAR_WIDTH}
-												aria-valuenow={inspectorWidth}
-												onMouseDown={handleResizeStart("inspector")}
-												onKeyDown={handleResizeKeyDown("inspector")}
-												className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-												style={{
-													right: `${Math.max(0, inspectorWidth - SIDEBAR_RESIZE_HIT_AREA)}px`,
-													width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-												}}
-											>
-												<span
-													aria-hidden="true"
-													className={`pointer-events-none absolute inset-y-0 left-0 transition-[width,background-color,box-shadow] ${
-														isInspectorResizing
-															? "w-[2px] bg-transparent shadow-none"
-															: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
-													}`}
-												/>
-											</div>
+									{!inspectorCollapsed &&
+										selectedWorkspaceDetailQuery.data?.workspaceKind !==
+											"goal" && (
+											<>
+												<div
+													role="separator"
+													tabIndex={0}
+													aria-label="Resize inspector sidebar"
+													aria-orientation="vertical"
+													aria-valuemin={MIN_SIDEBAR_WIDTH}
+													aria-valuemax={MAX_SIDEBAR_WIDTH}
+													aria-valuenow={inspectorWidth}
+													onMouseDown={handleResizeStart("inspector")}
+													onKeyDown={handleResizeKeyDown("inspector")}
+													className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+													style={{
+														right: `${Math.max(0, inspectorWidth - SIDEBAR_RESIZE_HIT_AREA)}px`,
+														width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+													}}
+												>
+													<span
+														aria-hidden="true"
+														className={`pointer-events-none absolute inset-y-0 left-0 transition-[width,background-color,box-shadow] ${
+															isInspectorResizing
+																? "w-[2px] bg-transparent shadow-none"
+																: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
+														}`}
+													/>
+												</div>
 
-											<aside
-												aria-label="Inspector sidebar"
-												className="relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible"
-												style={{ width: `${inspectorWidth}px` }}
-											>
-												<WorkspaceInspectorSidebar
-													workspaceId={selectedWorkspaceId}
-													workspaceRootPath={workspaceRootPath}
-													workspaceState={
-														selectedWorkspaceDetailQuery.data?.state ?? null
-													}
-													repoId={
-														selectedWorkspaceDetailQuery.data?.repoId ?? null
-													}
-													workspaceBranch={
-														selectedWorkspaceDetailQuery.data?.branch ?? null
-													}
-													workspaceRemote={
-														selectedWorkspaceDetailQuery.data?.remote ?? null
-													}
-													workspaceTargetBranch={(() => {
-														const d = selectedWorkspaceDetailQuery.data;
-														const target =
-															d?.intendedTargetBranch ?? d?.defaultBranch;
-														if (!target) return null;
-														const remote = d?.remote ?? "origin";
-														return `${remote}/${target}`;
-													})()}
-													editorMode={workspaceViewMode === "editor"}
-													activeEditorPath={editorSession?.path ?? null}
-													onOpenEditorFile={handleOpenEditorFile}
-													onCommitAction={handleInspectorCommitAction}
-													currentSessionId={displayedSessionId}
-													onQueuePendingPromptForSession={
-														queuePendingPromptForSession
-													}
-													onSelectSession={handleSelectSession}
-													commitButtonMode={commitButtonMode}
-													commitButtonState={commitButtonState}
-													changeRequest={workspaceChangeRequest}
-													forgeIsRefreshing={workspaceForgeIsRefreshing}
-													onOpenSettings={handleOpenSettings}
-													onOpenBrowserMode={handleOpenBrowserMode}
-												/>
-											</aside>
-										</>
-									)}
+												<aside
+													aria-label="Inspector sidebar"
+													className="relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible"
+													style={{ width: `${inspectorWidth}px` }}
+												>
+													<WorkspaceInspectorSidebar
+														workspaceId={selectedWorkspaceId}
+														workspaceRootPath={workspaceRootPath}
+														workspaceState={
+															selectedWorkspaceDetailQuery.data?.state ?? null
+														}
+														repoId={
+															selectedWorkspaceDetailQuery.data?.repoId ?? null
+														}
+														workspaceBranch={
+															selectedWorkspaceDetailQuery.data?.branch ?? null
+														}
+														workspaceRemote={
+															selectedWorkspaceDetailQuery.data?.remote ?? null
+														}
+														workspaceTargetBranch={(() => {
+															const d = selectedWorkspaceDetailQuery.data;
+															const target =
+																d?.intendedTargetBranch ?? d?.defaultBranch;
+															if (!target) return null;
+															const remote = d?.remote ?? "origin";
+															return `${remote}/${target}`;
+														})()}
+														editorMode={workspaceViewMode === "editor"}
+														activeEditorPath={editorSession?.path ?? null}
+														onOpenEditorFile={handleOpenEditorFile}
+														onCommitAction={handleInspectorCommitAction}
+														currentSessionId={displayedSessionId}
+														onQueuePendingPromptForSession={
+															queuePendingPromptForSession
+														}
+														onSelectSession={handleSelectSession}
+														commitButtonMode={commitButtonMode}
+														commitButtonState={commitButtonState}
+														changeRequest={workspaceChangeRequest}
+														forgeIsRefreshing={workspaceForgeIsRefreshing}
+														onOpenSettings={handleOpenSettings}
+														onOpenBrowserMode={handleOpenBrowserMode}
+													/>
+												</aside>
+											</>
+										)}
 								</div>
 							</main>
 						)}

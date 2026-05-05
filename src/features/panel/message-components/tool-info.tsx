@@ -22,6 +22,99 @@ const fallbackIcon = (
 );
 const neutralToolIconClassName = "size-3.5 text-muted-foreground";
 
+function getPiToolInfo(
+	tool: string,
+	input: Record<string, unknown> | null,
+): ToolInfo | null {
+	if (tool === "read") {
+		const filePath = str(input?.path) ?? str(input?.file_path);
+		const limit = typeof input?.limit === "number" ? input.limit : null;
+		return {
+			action: limit ? `Read ${limit} lines` : "Read",
+			file: filePath ? basename(filePath) : undefined,
+			icon: <FileText className={neutralToolIconClassName} strokeWidth={1.8} />,
+		};
+	}
+
+	if (tool === "bash") {
+		const command = str(input?.command) ?? str(input?.cmd);
+		return {
+			action: "Run",
+			icon: <Terminal className={neutralToolIconClassName} strokeWidth={1.8} />,
+			command: command ? truncate(command, 80) : undefined,
+			fullCommand: command ?? undefined,
+		};
+	}
+
+	if (tool === "grep") {
+		const pattern = str(input?.pattern) ?? str(input?.query);
+		return {
+			action: "Grep",
+			icon: <Search className={neutralToolIconClassName} strokeWidth={1.8} />,
+			detail: pattern ?? undefined,
+		};
+	}
+
+	if (tool === "find") {
+		const pattern = str(input?.pattern) ?? str(input?.name) ?? str(input?.path);
+		return {
+			action: "Find",
+			icon: (
+				<FolderSearch className={neutralToolIconClassName} strokeWidth={1.8} />
+			),
+			detail: pattern ?? undefined,
+		};
+	}
+
+	if (tool === "ls") {
+		const path = str(input?.path);
+		return {
+			action: "List",
+			file: path ? basename(path) : undefined,
+			icon: (
+				<FolderSearch className={neutralToolIconClassName} strokeWidth={1.8} />
+			),
+		};
+	}
+
+	const kanbanLabels: Record<string, string> = {
+		list_kanban_cards: "List cards",
+		create_kanban_card: "Create card",
+		move_kanban_card: "Move card",
+		update_kanban_card: "Update card",
+	};
+	if (kanbanLabels[tool]) {
+		return {
+			action: kanbanLabels[tool],
+			icon: (
+				<ClipboardList className={neutralToolIconClassName} strokeWidth={1.8} />
+			),
+			detail: str(input?.title) ?? str(input?.lane) ?? undefined,
+		};
+	}
+
+	const threadLabels: Record<string, string> = {
+		list_threads: "List threads",
+		create_thread: "Create thread",
+		get_thread: "Read thread",
+		update_thread: "Update thread",
+	};
+	if (threadLabels[tool]) {
+		return {
+			action: threadLabels[tool],
+			icon: (
+				<MessageSquareText
+					className={neutralToolIconClassName}
+					strokeWidth={1.8}
+				/>
+			),
+			detail: str(input?.title) ?? str(input?.threadId) ?? undefined,
+		};
+	}
+
+	return null;
+}
+
 export function getToolInfo(
 	name: string,
 	input: Record<string, unknown> | null,
@@ -30,6 +123,8 @@ export function getToolInfo(
 		const segments = name.split("__");
 		const server = segments[1] ?? "mcp";
 		const tool = segments.slice(2).join("__") || name;
+		const piInfo = server === "pi" ? getPiToolInfo(tool, input) : null;
+		if (piInfo) return piInfo;
 		return {
 			action: tool,
 			icon: <Plug className="size-3.5 text-chart-2" strokeWidth={1.8} />,

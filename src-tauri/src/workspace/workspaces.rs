@@ -8,6 +8,7 @@ use crate::{
     helpers,
     models::workspaces::{self as workspace_models, WorkspaceRecord},
     sessions,
+    workspace_kind::WorkspaceKind,
     workspace_pr_sync::PrSyncState,
     workspace_state::WorkspaceState,
     workspace_status::WorkspaceStatus,
@@ -24,6 +25,13 @@ pub use super::branching::{
     update_intended_target_branch_local, ContinueWorkspaceResponse, PrefetchRemoteRefsResponse,
     PushWorkspaceToRemoteResponse, SyncWorkspaceTargetOutcome, SyncWorkspaceTargetResponse,
     UpdateIntendedTargetBranchInternal, UpdateIntendedTargetBranchResponse,
+};
+pub use super::goals::{
+    create_goal_child_workspace, finalize_goal_workspace, link_goal_card_workspace,
+    list_goal_cards, prepare_goal_workspace, set_goal_child_workspace_status, upsert_goal_card,
+    FinalizeGoalWorkspaceResponse, GoalCard, GoalChildWorkspaceRequest,
+    GoalChildWorkspaceStatusRequest, PrepareGoalWorkspaceRequest, PrepareGoalWorkspaceResponse,
+    UpsertGoalCardInput,
 };
 pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,
@@ -43,6 +51,8 @@ pub struct WorkspaceSidebarRow {
     pub title: String,
     pub avatar: String,
     pub directory_name: String,
+    pub workspace_kind: WorkspaceKind,
+    pub goal_workspace_id: Option<String>,
     pub repo_name: String,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
@@ -86,6 +96,8 @@ pub struct WorkspaceSummary {
     pub id: String,
     pub title: String,
     pub directory_name: String,
+    pub workspace_kind: WorkspaceKind,
+    pub goal_workspace_id: Option<String>,
     pub repo_name: String,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
@@ -127,6 +139,8 @@ pub struct WorkspaceDetail {
     pub default_branch: Option<String>,
     pub root_path: Option<String>,
     pub directory_name: String,
+    pub workspace_kind: WorkspaceKind,
+    pub goal_workspace_id: Option<String>,
     pub state: WorkspaceState,
     pub has_unread: bool,
     pub workspace_unread: i64,
@@ -146,6 +160,10 @@ pub struct WorkspaceDetail {
     pub archive_commit: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
+    /// User-editable title for goal workspaces. `None` if never set.
+    pub goal_title: Option<String>,
+    /// User-editable description for goal workspaces. `None` if never set.
+    pub goal_description: Option<String>,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -238,6 +256,14 @@ pub fn get_workspace(workspace_id: &str) -> Result<WorkspaceDetail> {
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
     Ok(record_to_detail(record))
+}
+
+/// Return all child workspaces that belong to a goal workspace, in
+/// creation order (oldest first — matches the natural card sort on the
+/// Kanban board).
+pub fn list_goal_child_workspaces(goal_workspace_id: &str) -> Result<Vec<WorkspaceDetail>> {
+    let records = workspace_models::load_goal_child_workspace_records(goal_workspace_id)?;
+    Ok(records.into_iter().map(record_to_detail).collect())
 }
 
 // ---- Read / unread ----
@@ -716,6 +742,8 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         title,
         id: record.id,
         directory_name: record.directory_name,
+        workspace_kind: record.workspace_kind,
+        goal_workspace_id: record.goal_workspace_id,
         repo_name: record.repo_name,
         repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
@@ -752,6 +780,8 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
         title: helpers::display_title(&record),
         id: record.id,
         directory_name: record.directory_name,
+        workspace_kind: record.workspace_kind,
+        goal_workspace_id: record.goal_workspace_id,
         repo_name: record.repo_name,
         repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
@@ -809,6 +839,8 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         default_branch: record.default_branch,
         root_path: worktree_path,
         directory_name: record.directory_name,
+        workspace_kind: record.workspace_kind,
+        goal_workspace_id: record.goal_workspace_id,
         state: record.state,
         has_unread: record.has_unread,
         workspace_unread: record.workspace_unread,
@@ -828,6 +860,8 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         archive_commit: record.archive_commit,
         session_count: record.session_count,
         message_count: record.message_count,
+        goal_title: record.goal_title,
+        goal_description: record.goal_description,
     }
 }
 

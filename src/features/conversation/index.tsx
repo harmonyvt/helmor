@@ -4,8 +4,16 @@
 // intentional and StrictMode-safe in situ.
 "use no memo";
 
-import { useQuery } from "@tanstack/react-query";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	memo,
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { WorkspaceComposerContainer } from "@/features/composer/container";
 import type {
 	DeferredToolResponseHandler,
@@ -14,11 +22,21 @@ import type {
 import { WorkspacePanelContainer } from "@/features/panel/container";
 import { FileLinkProvider } from "@/features/panel/message-components/file-link-context";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
-import type { ChangeRequestInfo } from "@/lib/api";
+import {
+	type AgentModelOption,
+	type AgentSendRequest,
+	type AgentStreamEvent,
+	type ChangeRequestInfo,
+	createSession,
+	type PlanReviewPart,
+} from "@/lib/api";
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
 import { insertRequestMatchesComposer } from "@/lib/composer-insert";
-import { hasUnresolvedPlanReview } from "@/lib/plan-review";
-import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
+import { getUnresolvedPlanReview } from "@/lib/plan-review";
+import {
+	helmorQueryKeys,
+	sessionThreadMessagesQueryOptions,
+} from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { EMPTY_QUEUE, useSubmitQueue } from "@/lib/use-submit-queue";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
@@ -77,6 +95,23 @@ type WorkspaceConversationContainerProps = {
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
 	workspaceRootPath?: string | null;
 	onOpenFileReference?: (path: string, line?: number, column?: number) => void;
+	modelFilter?: (model: AgentModelOption) => boolean;
+	buildSendRequestExtras?: (context: {
+		workspaceId: string | null;
+		sessionId: string;
+		prompt: string;
+		model: AgentModelOption;
+	}) => Partial<AgentSendRequest> | null | undefined;
+	onKanbanToolCall?: (
+		event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
+	) => void;
+	onPiUiRequest?: (
+		event: Extract<AgentStreamEvent, { kind: "piUiRequest" }>,
+	) => void;
+	composerAccessory?: ReactNode;
+	/** Renders a compact header (no branch/tabs) and hides the composer toolbar.
+	 *  Used by narrow embedded panels such as the Pi goals surface. */
+	compact?: boolean;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -106,7 +141,14 @@ export const WorkspaceConversationContainer = memo(
 		onRequestCloseSession,
 		workspaceRootPath,
 		onOpenFileReference,
+		modelFilter,
+		buildSendRequestExtras,
+		onKanbanToolCall,
+		onPiUiRequest,
+		composerAccessory,
+		compact = false,
 	}: WorkspaceConversationContainerProps) {
+		const queryClient = useQueryClient();
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
 		>({});
@@ -171,6 +213,9 @@ export const WorkspaceConversationContainer = memo(
 			onInteractionSessionsChange,
 			onSessionCompleted,
 			onSessionAborted,
+			buildSendRequestExtras,
+			onKanbanToolCall,
+			onPiUiRequest,
 		});
 
 		const queueItems = displayedSessionId
@@ -182,10 +227,11 @@ export const WorkspaceConversationContainer = memo(
 			...sessionThreadMessagesQueryOptions(displayedSessionId ?? "__none__"),
 			enabled: Boolean(displayedSessionId),
 		});
-		const hasPlanReview = useMemo(
-			() => hasUnresolvedPlanReview(threadQuery.data ?? []),
+		const planReview = useMemo<PlanReviewPart | null>(
+			() => getUnresolvedPlanReview(threadQuery.data ?? []),
 			[threadQuery.data],
 		);
+		const hasPlanReview = planReview !== null;
 
 		// Auto-activate plan button when AI enters plan mode on its own.
 		const prevPlanReviewRef = useRef(false);
@@ -237,6 +283,40 @@ export const WorkspaceConversationContainer = memo(
 				}));
 			},
 			[],
+		);
+
+		const handleImplementPlanInCleanThread = useCallback(
+			async (plan: PlanReviewPart) => {
+				if (!displayedWorkspaceId || !onQueuePendingPromptForSession) return;
+				const { sessionId } = await createSession(displayedWorkspaceId, {
+					permissionMode: "bypassPermissions",
+				});
+				await queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
+				});
+				const planBody = plan.plan?.trim() || "No plan content.";
+				const planPath = plan.planFilePath?.trim();
+				const prompt = [
+					"Implement this plan in a clean thread:",
+					planPath ? `Plan file: ${planPath}` : null,
+					planBody,
+				]
+					.filter(Boolean)
+					.join("\n\n");
+
+				onQueuePendingPromptForSession({
+					sessionId,
+					prompt,
+					permissionMode: "bypassPermissions",
+				});
+				onSelectSession(sessionId);
+			},
+			[
+				displayedWorkspaceId,
+				onQueuePendingPromptForSession,
+				onSelectSession,
+				queryClient,
+			],
 		);
 
 		const handleComposerSubmitWrapper = useCallback(
@@ -312,10 +392,16 @@ export const WorkspaceConversationContainer = memo(
 					onRequestCloseSession={onRequestCloseSession}
 					headerActions={headerActions}
 					headerLeading={headerLeading}
+					compact={compact}
 				/>
 
-				<div className="mt-auto px-4 pb-4 pt-0">
+				<div
+					className={
+						compact ? "mt-auto px-2.5 pb-2.5 pt-0" : "mt-auto px-4 pb-4 pt-0"
+					}
+				>
 					<div>
+						{composerAccessory}
 						<WorkspaceComposerContainer
 							displayedWorkspaceId={displayedWorkspaceId}
 							displayedSessionId={displayedSessionId}
@@ -332,7 +418,12 @@ export const WorkspaceConversationContainer = memo(
 							elicitationResponsePending={elicitationResponsePending}
 							pendingDeferredTool={effectivePendingDeferredTool}
 							onDeferredToolResponse={effectiveDeferredToolResponse}
-							hasPlanReview={hasPlanReview}
+							planReview={planReview}
+							onImplementPlanInCleanThread={
+								displayedWorkspaceId && onQueuePendingPromptForSession
+									? handleImplementPlanInCleanThread
+									: undefined
+							}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}
@@ -352,6 +443,8 @@ export const WorkspaceConversationContainer = memo(
 							queueItems={queueItems}
 							onSteerQueued={handleSteerQueued}
 							onRemoveQueued={handleRemoveQueued}
+							modelFilter={modelFilter}
+							hideToolbar={compact}
 						/>
 					</div>
 				</div>

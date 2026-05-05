@@ -36,6 +36,7 @@ pub use models::sessions;
 pub use models::settings;
 pub use workspace::files as editor_files;
 pub use workspace::helpers;
+pub use workspace::kind as workspace_kind;
 pub use workspace::pr_sync as workspace_pr_sync;
 pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
@@ -187,6 +188,8 @@ pub fn run() {
             agents::respond_to_permission_request,
             agents::respond_to_deferred_tool,
             agents::respond_to_elicitation_request,
+            agents::send_kanban_tool_result,
+            agents::respond_to_pi_ui,
             agents::generate_session_title,
             agents::list_slash_commands,
             agents::prewarm_slash_commands_for_workspace,
@@ -231,10 +234,19 @@ pub fn run() {
             commands::forge_commands::get_workspace_forge_check_insert_text,
             commands::forge_commands::get_workspace_forge_deployment_insert_text,
             commands::forge_commands::get_workspace_pr_comments,
+            commands::goal_commands::prepare_goal_workspace,
+            commands::goal_commands::finalize_goal_workspace,
+            commands::goal_commands::list_goal_cards,
+            commands::goal_commands::upsert_goal_card,
+            commands::goal_commands::link_goal_card_workspace,
+            commands::goal_commands::create_goal_child_workspace,
+            commands::goal_commands::set_goal_child_workspace_status,
             commands::forge_commands::get_workspace_pr_comment_insert_text,
             commands::forge_commands::merge_workspace_change_request,
             commands::forge_commands::close_workspace_change_request,
             commands::workspace_commands::get_workspace,
+            commands::workspace_commands::list_goal_child_workspaces,
+            commands::workspace_commands::update_goal_workspace_meta,
             commands::repository_commands::add_repository_from_local_path,
             commands::repository_commands::clone_repository_from_url,
             commands::github_commands::list_github_accessible_repositories,

@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { useCompactThread } from "../compact-thread-context";
 import { ImageBlock, PlanReviewCard, TodoList } from "./content-parts";
 import { GenericCard } from "./generic-card";
 import type { RenderedMessage, StreamdownMode } from "./shared";
@@ -150,6 +151,7 @@ export function ChatAssistantMessage({
 }) {
 	const parts = message.content as ExtendedMessagePart[];
 	const { settings } = useSettings();
+	const compact = useCompactThread();
 
 	return (
 		<div
@@ -198,6 +200,7 @@ export function ChatAssistantMessage({
 									: (part as ToolCallPart).isError
 							}
 							streamingStatus={(part as ToolCallPart).streamingStatus}
+							compact={compact}
 							childParts={(part as ToolCallPart).children}
 						/>
 					);

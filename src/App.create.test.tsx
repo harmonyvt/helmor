@@ -290,6 +290,7 @@ describe("App create workspace flow", () => {
 		await waitFor(() => {
 			expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 				createRuntime.workspaceId,
+				undefined,
 			);
 		});
 		await waitFor(() => {

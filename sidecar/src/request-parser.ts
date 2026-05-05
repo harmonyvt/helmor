@@ -136,6 +136,10 @@ export function parseSendMessageParams(
 		// "field absent" vs "no images" — both mean `[]`. The structured
 		// list is the single source of truth (see `parseImageRefs`).
 		images: parseOptionalStringArray(params, "images") ?? [],
+		kanbanWorkspaceId: optionalString(params, "kanbanWorkspaceId"),
+		kanbanSnapshot: optionalString(params, "kanbanSnapshot"),
+		goalTitle: optionalString(params, "goalTitle"),
+		goalDescription: optionalString(params, "goalDescription"),
 	};
 }
 
