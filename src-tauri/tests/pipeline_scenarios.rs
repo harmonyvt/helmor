@@ -1317,6 +1317,28 @@ fn codex_mcp_tool_call_renders_as_tool_call() {
 }
 
 #[test]
+fn codex_pi_mcp_tool_call_text_result_renders_as_tool_output() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi_read_1",
+            "type": "mcp_tool_call",
+            "server": "pi",
+            "tool": "read",
+            "arguments": {"path": "src/App.tsx", "limit": 20},
+            "status": "completed",
+            "result": {"content": [{"type": "text", "text": "file contents"}]}
+        }
+    });
+    let msgs = vec![make_record(
+        "pi-mcp1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn codex_turn_completed_with_duration_shows_result_label() {
     let parsed = json!({
         "type": "turn/completed",

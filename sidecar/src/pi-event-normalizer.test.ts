@@ -123,6 +123,61 @@ describe("Pi event normalization", () => {
 		]);
 	});
 
+	test("persists accumulated reasoning when thinking_end omits content", () => {
+		const state = createPiEventState("request-a");
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_update",
+					message: { role: "assistant", content: [] },
+					assistantMessageEvent: { type: "thinking_start" },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/started",
+				item: { id: "pi-reasoning-request-a-0", type: "reasoning", text: "" },
+			},
+		]);
+		normalizePiEvent(
+			{
+				type: "message_update",
+				message: { role: "assistant", content: [] },
+				assistantMessageEvent: { type: "thinking_delta", delta: "step one" },
+			} as unknown as AgentSessionEvent,
+			state,
+		);
+		normalizePiEvent(
+			{
+				type: "message_update",
+				message: { role: "assistant", content: [] },
+				assistantMessageEvent: { type: "thinking_delta", delta: " and two" },
+			} as unknown as AgentSessionEvent,
+			state,
+		);
+
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_update",
+					message: { role: "assistant", content: [] },
+					assistantMessageEvent: { type: "thinking_end" },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/completed",
+				item: {
+					id: "pi-reasoning-request-a-0",
+					type: "reasoning",
+					text: "step one and two",
+				},
+			},
+		]);
+	});
+
 	test("preserves Pi MCP tool arguments when completion events omit args", () => {
 		const state = createPiEventState();
 		normalizePiEvent(

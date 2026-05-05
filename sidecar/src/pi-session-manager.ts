@@ -164,6 +164,7 @@ export class PiSessionManager implements SessionManager {
 				images,
 				source: "interactive",
 			});
+			if (!live.active) return;
 			trace.finish(session.agent.state.errorMessage);
 			if (trace.shouldEmitEmptyTurnNotice()) {
 				emitter.passthrough(requestId, {
@@ -175,6 +176,7 @@ export class PiSessionManager implements SessionManager {
 			}
 			emitter.end(requestId);
 		} catch (err) {
+			if (live && !live.active) return;
 			const reason = err instanceof Error ? err.message : String(err);
 			if (reason.toLowerCase().includes("abort")) {
 				emitter.aborted(requestId, reason);
@@ -298,8 +300,15 @@ export class PiSessionManager implements SessionManager {
 	async stopSession(sessionId: string): Promise<void> {
 		const live = this.sessions.get(sessionId);
 		if (!live) return;
-		await live.session.abort();
-		live.emitter.stopped(live.requestId, sessionId);
+		live.active = false;
+		this.sessions.delete(sessionId);
+		live.unsubscribe?.();
+		live.emitter.aborted(live.requestId, "user_requested");
+		try {
+			await live.session.abort();
+		} finally {
+			live.session.dispose();
+		}
 	}
 
 	async steer(
@@ -312,19 +321,17 @@ export class PiSessionManager implements SessionManager {
 		if (!live?.active) return false;
 		const { text, imagePaths } = parseImageRefs(prompt, images);
 		const piImages = await buildPiImages(imagePaths);
+		await live.session.steer(text || prompt, piImages);
 		const event: {
 			type: "user_prompt";
-			message: { role: "user"; content: string };
+			text: string;
+			steer: true;
 			files?: string[];
 			images?: string[];
-		} = {
-			type: "user_prompt",
-			message: { role: "user", content: prompt },
-		};
+		} = { type: "user_prompt", text: prompt, steer: true };
 		if (files.length > 0) event.files = [...files];
 		if (imagePaths.length > 0) event.images = [...imagePaths];
 		live.emitter.passthrough(live.requestId, event);
-		await live.session.steer(text || prompt, piImages);
 		return true;
 	}
 
