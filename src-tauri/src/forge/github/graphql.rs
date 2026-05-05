@@ -15,6 +15,7 @@ use crate::forge::{
 use crate::{
     git_ops, github_cli,
     models::{repos, workspaces as workspace_models},
+    workspace_pr_sync::PrSyncState,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -290,9 +291,17 @@ pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInf
     // the unauthenticated / unavailable case. Check status first and return
     // `Ok(None)` gracefully so callers (commit button, CLI, forge router) see
     // a clean "no PR" state rather than an error toast.
+    let cached_pr = cached_change_request_from_workspace_record(&record);
     let cli_status = github_cli::get_github_cli_status()?;
     if !matches!(cli_status, github_cli::GithubCliStatus::Ready { .. }) {
-        return Ok(None);
+        if cached_pr.is_some() {
+            tracing::warn!(
+                workspace_id,
+                status = ?cli_status,
+                "Serving cached GitHub PR because gh is not ready"
+            );
+        }
+        return Ok(cached_pr);
     }
 
     let query = r#"
@@ -311,14 +320,27 @@ query($owner: String!, $name: String!, $head: String!) {
 }
 "#;
 
-    let parsed: GraphqlEnvelope = github_cli::graphql(
+    let parsed: GraphqlEnvelope = match github_cli::graphql(
         query,
         &[
             ("owner", owner),
             ("name", name),
             ("head", branch.to_string()),
         ],
-    )?;
+    ) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            if cached_pr.is_some() {
+                tracing::warn!(
+                    workspace_id,
+                    error = %error,
+                    "Serving cached GitHub PR because gh lookup failed"
+                );
+                return Ok(cached_pr);
+            }
+            return Err(error);
+        }
+    };
 
     if let Some(errors) = &parsed.errors {
         if !errors.is_empty() {
@@ -331,7 +353,14 @@ query($owner: String!, $name: String!, $head: String!) {
                     || e.message.contains("NOT_FOUND")
             });
             if is_repo_not_found {
-                return Ok(None);
+                if cached_pr.is_some() {
+                    tracing::warn!(
+                        workspace_id,
+                        errors = ?errors,
+                        "Serving cached GitHub PR because repository lookup failed"
+                    );
+                }
+                return Ok(cached_pr);
             }
             // Other GraphQL errors are unexpected — propagate.
             return Err(anyhow!(
@@ -346,14 +375,20 @@ query($owner: String!, $name: String!, $head: String!) {
     }
 
     let Some(data) = parsed.data else {
-        return Ok(None);
+        return Ok(cached_pr);
     };
     let Some(repository) = data.repository else {
-        return Ok(None);
+        return Ok(cached_pr);
     };
 
     let Some(node) = repository.pull_requests.nodes.into_iter().next() else {
-        return Ok(None);
+        if cached_pr.is_some() {
+            tracing::warn!(
+                workspace_id,
+                "Serving cached GitHub PR because live lookup returned no PR nodes"
+            );
+        }
+        return Ok(cached_pr);
     };
 
     Ok(Some(ChangeRequestInfo {
@@ -363,6 +398,47 @@ query($owner: String!, $name: String!, $head: String!) {
         title: node.title,
         is_merged: node.merged,
     }))
+}
+
+fn cached_change_request_from_workspace_record(
+    record: &workspace_models::WorkspaceRecord,
+) -> Option<ChangeRequestInfo> {
+    cached_change_request_from_snapshot(
+        record.pr_sync_state,
+        record.pr_url.as_deref(),
+        record.pr_title.as_deref(),
+    )
+}
+
+fn cached_change_request_from_snapshot(
+    sync_state: PrSyncState,
+    url: Option<&str>,
+    title: Option<&str>,
+) -> Option<ChangeRequestInfo> {
+    if sync_state == PrSyncState::None {
+        return None;
+    }
+    let url = url?.trim();
+    if url.is_empty() {
+        return None;
+    }
+    let number = parse_cached_pull_request_number(url)?;
+    Some(ChangeRequestInfo {
+        url: url.to_string(),
+        number,
+        state: sync_state.as_str().to_ascii_uppercase(),
+        title: title.unwrap_or_default().to_string(),
+        is_merged: sync_state == PrSyncState::Merged,
+    })
+}
+
+fn parse_cached_pull_request_number(url: &str) -> Option<i64> {
+    let segment = url.split("/pull/").nth(1)?;
+    let number = segment
+        .split(|ch: char| !ch.is_ascii_digit())
+        .next()
+        .filter(|value| !value.is_empty())?;
+    number.parse().ok()
 }
 
 /// Full PR action status for the inspector Actions panel.
@@ -1760,6 +1836,41 @@ mod tests {
         assert_eq!(split_owner_repo(" / hello-world"), None);
         assert_eq!(split_owner_repo("octocat / "), None);
         assert_eq!(split_owner_repo("/"), None);
+    }
+
+    #[test]
+    fn cached_change_request_rehydrates_pr_snapshot() {
+        let cached = cached_change_request_from_snapshot(
+            PrSyncState::Open,
+            Some("https://github.com/octocat/hello-world/pull/42/files"),
+            Some("Review this"),
+        )
+        .unwrap();
+
+        assert_eq!(cached.number, 42);
+        assert_eq!(cached.state, "OPEN");
+        assert_eq!(cached.title, "Review this");
+        assert!(!cached.is_merged);
+    }
+
+    #[test]
+    fn cached_change_request_rejects_empty_or_missing_snapshots() {
+        assert!(cached_change_request_from_snapshot(
+            PrSyncState::None,
+            Some("https://github.com/octocat/hello-world/pull/42"),
+            Some("Review this"),
+        )
+        .is_none());
+        assert!(
+            cached_change_request_from_snapshot(PrSyncState::Open, None, Some("Review this"),)
+                .is_none()
+        );
+        assert!(cached_change_request_from_snapshot(
+            PrSyncState::Open,
+            Some("https://github.com/octocat/hello-world/issues/42"),
+            Some("Review this"),
+        )
+        .is_none());
     }
 
     #[test]
