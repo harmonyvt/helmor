@@ -1,4 +1,11 @@
-import { GlobeIcon, PlusIcon, XIcon } from "lucide-react";
+import {
+	ArrowLeftIcon,
+	ArrowRightIcon,
+	GlobeIcon,
+	PlusIcon,
+	SquareTerminalIcon,
+	XIcon,
+} from "lucide-react";
 import {
 	useCallback,
 	useEffect,
@@ -17,7 +24,10 @@ import {
 import { browserWebviewLabel } from "@/features/browser-tabs/ids";
 import {
 	createBrowserWebview,
+	goBackBrowserWebview,
+	goForwardBrowserWebview,
 	measureBrowserWebviewBounds,
+	openBrowserWebviewDevtools,
 	positionBrowserWebview,
 } from "@/features/browser-tabs/runtime";
 import { ShortcutDisplay } from "@/features/shortcuts/shortcut-display";
@@ -124,6 +134,21 @@ function BrowserChrome({
 		[activeTabId, address],
 	);
 
+	const handleGoBack = useCallback(() => {
+		if (!activeTabId) return;
+		void goBackBrowserWebview(activeTabId).catch(() => undefined);
+	}, [activeTabId]);
+
+	const handleGoForward = useCallback(() => {
+		if (!activeTabId) return;
+		void goForwardBrowserWebview(activeTabId).catch(() => undefined);
+	}, [activeTabId]);
+
+	const handleOpenDevtools = useCallback(() => {
+		if (!activeTabId) return;
+		void openBrowserWebviewDevtools(activeTabId).catch(() => undefined);
+	}, [activeTabId]);
+
 	return (
 		<div
 			className="flex h-9 shrink-0 items-stretch border-b border-border/60 bg-sidebar"
@@ -211,8 +236,22 @@ function BrowserChrome({
 			<form
 				onSubmit={handleNavigate}
 				className="flex shrink-0 items-center gap-1 pr-2"
-				style={{ width: "min(440px, 38%)" }}
+				style={{ width: "min(520px, 44%)" }}
 			>
+				<BrowserChromeIconButton
+					label="Back"
+					disabled={!activeTabId}
+					onClick={handleGoBack}
+				>
+					<ArrowLeftIcon className="size-3.5" strokeWidth={1.8} />
+				</BrowserChromeIconButton>
+				<BrowserChromeIconButton
+					label="Forward"
+					disabled={!activeTabId}
+					onClick={handleGoForward}
+				>
+					<ArrowRightIcon className="size-3.5" strokeWidth={1.8} />
+				</BrowserChromeIconButton>
 				<input
 					aria-label="Browser address"
 					value={address}
@@ -223,6 +262,13 @@ function BrowserChrome({
 					spellCheck={false}
 					className="h-6 min-w-0 flex-1 rounded-md border border-transparent bg-background/70 px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground/40 outline-none transition-colors focus:border-border hover:border-border/60 disabled:opacity-40"
 				/>
+				<BrowserChromeIconButton
+					label="Open dev console"
+					disabled={!activeTabId}
+					onClick={handleOpenDevtools}
+				>
+					<SquareTerminalIcon className="size-3.5" strokeWidth={1.8} />
+				</BrowserChromeIconButton>
 			</form>
 
 			{/* Exit */}
@@ -245,6 +291,39 @@ function BrowserChrome({
 	);
 }
 
+function BrowserChromeIconButton({
+	label,
+	disabled,
+	onClick,
+	children,
+}: {
+	label: string;
+	disabled: boolean;
+	onClick: () => void;
+	children: React.ReactNode;
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-xs"
+					disabled={disabled}
+					onClick={onClick}
+					aria-label={label}
+					className="text-muted-foreground hover:text-foreground"
+				>
+					{children}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom" className="text-[12px]">
+				{label}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Individual tab panel — mounts/hides native WebView
 // ---------------------------------------------------------------------------
@@ -260,11 +339,16 @@ type WebviewInstance = Awaited<ReturnType<typeof createBrowserWebview>>;
 function BrowserTabPanel({ tabId, url, isActive }: BrowserTabPanelProps) {
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	const webviewRef = useRef<WebviewInstance | null>(null);
+	const latestUrlRef = useRef(url);
 	const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">(
 		"idle",
 	);
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
 	const label = useMemo(() => browserWebviewLabel(tabId), [tabId]);
+
+	useEffect(() => {
+		latestUrlRef.current = url;
+	}, [url]);
 
 	useEffect(() => {
 		if (!isActive) return;
@@ -278,14 +362,23 @@ function BrowserTabPanel({ tabId, url, isActive }: BrowserTabPanelProps) {
 			setStatus("loading");
 			setErrorMsg(null);
 			try {
-				const profile = await getBrowserTabProfile(tabId);
-				if (disposed) return;
-				const webview = await createBrowserWebview(
-					label,
-					url,
-					measureBrowserWebviewBounds(host),
-					profile,
-				);
+				let webview = webviewRef.current;
+				if (webview) {
+					await webview.show().catch(() => undefined);
+					await positionBrowserWebview(
+						webview,
+						measureBrowserWebviewBounds(host),
+					);
+				} else {
+					const profile = await getBrowserTabProfile(tabId);
+					if (disposed) return;
+					webview = await createBrowserWebview(
+						label,
+						latestUrlRef.current,
+						measureBrowserWebviewBounds(host),
+						profile,
+					);
+				}
 				if (disposed) {
 					await webview.hide().catch(() => undefined);
 					return;
@@ -320,11 +413,10 @@ function BrowserTabPanel({ tabId, url, isActive }: BrowserTabPanelProps) {
 			resizeObserver?.disconnect();
 			if (pollId !== null) window.clearInterval(pollId);
 			const wv = webviewRef.current;
-			webviewRef.current = null;
 			setStatus("idle");
 			if (wv) void wv.hide().catch(() => undefined);
 		};
-	}, [isActive, label, tabId, url]);
+	}, [isActive, label, tabId]);
 
 	return (
 		<div

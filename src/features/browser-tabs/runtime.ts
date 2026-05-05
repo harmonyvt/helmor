@@ -1,15 +1,14 @@
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { Webview, type WebviewOptions } from "@tauri-apps/api/webview";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { BrowserProfileOptions } from "@/lib/api";
+import {
+	type BrowserProfileOptions,
+	type BrowserWebviewBounds,
+	browserGoBack,
+	browserGoForward,
+	createBrowserWebviewHost,
+	openBrowserDevtools,
+} from "@/lib/api";
 import { browserWebviewLabel } from "./ids";
-
-export type BrowserWebviewBounds = {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-};
 
 const MIN_VISIBLE_SIZE = 24;
 const FALLBACK_BROWSER_USER_AGENT =
@@ -36,15 +35,9 @@ export function browserUserAgent(source?: string): string {
 	return FALLBACK_BROWSER_USER_AGENT;
 }
 
-function supportsRelativeDataDirectory(): boolean {
-	const platform = currentNavigator()?.platform ?? "";
-	return !/^(Mac|iPhone|iPad|iPod)/i.test(platform);
-}
-
 export function browserWebviewOptions(
 	url: string,
 	bounds: BrowserWebviewBounds,
-	profile?: BrowserProfileOptions | null,
 ): WebviewOptions {
 	return {
 		url,
@@ -58,12 +51,6 @@ export function browserWebviewOptions(
 		javascriptDisabled: false,
 		incognito: false,
 		userAgent: browserUserAgent(),
-		...(profile?.dataStoreIdentifier.length === 16
-			? { dataStoreIdentifier: profile.dataStoreIdentifier }
-			: {}),
-		...(profile?.dataDirectory && supportsRelativeDataDirectory()
-			? { dataDirectory: profile.dataDirectory }
-			: {}),
 	};
 }
 
@@ -83,29 +70,42 @@ export async function createBrowserWebview(
 	label: string,
 	url: string,
 	bounds: BrowserWebviewBounds,
-	profile?: BrowserProfileOptions | null,
+	profile: BrowserProfileOptions,
 ): Promise<Webview> {
 	const existing = await Webview.getByLabel(label);
 	if (existing) {
 		await existing.close().catch(() => undefined);
 	}
 
-	const webview = new Webview(
-		getCurrentWindow(),
+	await createBrowserWebviewHost(
 		label,
-		browserWebviewOptions(url, bounds, profile),
+		url,
+		bounds,
+		profile,
+		browserUserAgent(),
 	);
-
-	await new Promise<void>((resolve, reject) => {
-		void webview.once("tauri://created", () => resolve());
-		void webview.once("tauri://error", (event) => reject(event.payload));
-	});
+	const webview = await Webview.getByLabel(label);
+	if (!webview) {
+		throw new Error(`Created browser webview ${label} was not found`);
+	}
 	return webview;
 }
 
 export async function closeBrowserWebviewForTab(tabId: string): Promise<void> {
 	const existing = await Webview.getByLabel(browserWebviewLabel(tabId));
 	await existing?.close().catch(() => undefined);
+}
+
+export async function goBackBrowserWebview(tabId: string): Promise<void> {
+	await browserGoBack(tabId);
+}
+
+export async function goForwardBrowserWebview(tabId: string): Promise<void> {
+	await browserGoForward(tabId);
+}
+
+export async function openBrowserWebviewDevtools(tabId: string): Promise<void> {
+	await openBrowserDevtools(tabId);
 }
 
 export async function positionBrowserWebview(

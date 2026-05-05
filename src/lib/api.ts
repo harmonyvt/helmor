@@ -2851,6 +2851,13 @@ export type BrowserProfileOptions = {
 	dataStoreIdentifier: number[];
 };
 
+export type BrowserWebviewBounds = {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+};
+
 export async function listWorkspaceBrowserTabs(
 	workspaceId: string,
 ): Promise<BrowserTabRecord[]> {
@@ -2910,6 +2917,34 @@ export async function getBrowserTabProfile(
 	tabId: string,
 ): Promise<BrowserProfileOptions> {
 	return invoke<BrowserProfileOptions>("get_browser_tab_profile", { tabId });
+}
+
+export async function createBrowserWebviewHost(
+	label: string,
+	url: string,
+	bounds: BrowserWebviewBounds,
+	profile: BrowserProfileOptions,
+	userAgent: string,
+): Promise<void> {
+	return invoke<void>("create_browser_webview", {
+		label,
+		url,
+		bounds,
+		profile,
+		userAgent,
+	});
+}
+
+export async function browserGoBack(tabId: string): Promise<void> {
+	return invoke<void>("browser_go_back", { tabId });
+}
+
+export async function browserGoForward(tabId: string): Promise<void> {
+	return invoke<void>("browser_go_forward", { tabId });
+}
+
+export async function openBrowserDevtools(tabId: string): Promise<void> {
+	return invoke<void>("open_browser_devtools", { tabId });
 }
 
 export async function browserSnapshot(

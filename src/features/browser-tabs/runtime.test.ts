@@ -31,21 +31,12 @@ describe("browserWebviewOptions", () => {
 		});
 	});
 
-	it("uses tab-specific browser profile metadata when provided", () => {
+	it("does not rely on JS-created webview profile options", () => {
 		expect(
-			browserWebviewOptions("https://example.com", bounds, {
-				workspaceId: "11111111-1111-4111-8111-111111111111",
-				tabId: "22222222-2222-4222-8222-222222222222",
-				dataDirectory:
-					"workspace-browser/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222",
-				dataStoreIdentifier: [
-					34, 34, 34, 34, 34, 34, 66, 34, 130, 34, 34, 34, 34, 34, 34, 34,
-				],
-			}),
-		).toMatchObject({
-			dataStoreIdentifier: [
-				34, 34, 34, 34, 34, 34, 66, 34, 130, 34, 34, 34, 34, 34, 34, 34,
-			],
-		});
+			browserWebviewOptions("https://example.com", bounds),
+		).not.toHaveProperty("dataStoreIdentifier");
+		expect(
+			browserWebviewOptions("https://example.com", bounds),
+		).not.toHaveProperty("dataDirectory");
 	});
 });
