@@ -220,19 +220,39 @@ export class PiSessionManager implements SessionManager {
 	}
 
 	async listModels(): Promise<readonly ProviderModelInfo[]> {
+		logger.info("PiSessionManager.listModels starting", {
+			cwd: process.cwd(),
+			piPackageDir: process.env.PI_PACKAGE_DIR ?? null,
+			piBinDir: process.env.HELMOR_PI_BIN_DIR ?? null,
+			pathHasPiBin: process.env.PATH?.includes(
+				process.env.HELMOR_PI_BIN_DIR ?? "\u0000",
+			),
+		});
 		const { modelRegistry } = await createPiRuntimeResources(process.cwd());
 		const loadError = modelRegistry.getError();
 		if (loadError) {
 			logger.info("Pi model registry reported errors", { error: loadError });
 		}
 
-		return modelRegistry
-			.getAvailable()
-			.sort((left, right) => {
-				const providerDelta = left.provider.localeCompare(right.provider);
-				return providerDelta || left.id.localeCompare(right.id);
-			})
-			.map(piModelInfo);
+		const available = modelRegistry.getAvailable().sort((left, right) => {
+			const providerDelta = left.provider.localeCompare(right.provider);
+			return providerDelta || left.id.localeCompare(right.id);
+		});
+		const providerCounts = countPiModelProviders(available);
+		logger.info("PiSessionManager.listModels completed", {
+			modelCount: available.length,
+			providerCount: Object.keys(providerCounts).length,
+			providerCounts,
+			firstModel: available[0]
+				? `${available[0].provider}/${available[0].id}`
+				: null,
+			lastModel: available.at(-1)
+				? `${available.at(-1)?.provider}/${available.at(-1)?.id}`
+				: null,
+			loadError: loadError ? String(loadError) : null,
+		});
+
+		return available.map(piModelInfo);
 	}
 
 	async stopSession(sessionId: string): Promise<void> {
@@ -346,6 +366,16 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: undefined;
+}
+
+function countPiModelProviders(
+	models: readonly PiModel[],
+): Record<string, number> {
+	const counts: Record<string, number> = {};
+	for (const model of models) {
+		counts[model.provider] = (counts[model.provider] ?? 0) + 1;
+	}
+	return counts;
 }
 
 function piModelInfo(model: PiModel): ProviderModelInfo {

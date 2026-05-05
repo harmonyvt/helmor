@@ -72,6 +72,7 @@ const composerMockState = vi.hoisted(() => ({
 	lastAddDirCandidates: [] as readonly unknown[],
 	lastOnPickAddDir: null as PickHandler | null,
 	lastOnSelectModel: null as ((modelId: string) => void) | null,
+	lastAgentType: null as "claude" | "codex" | "pi" | null,
 }));
 
 vi.mock("./index", async () => {
@@ -95,6 +96,7 @@ vi.mock("./index", async () => {
 			onRemoveLinkedDirectory?: RemoveHandler;
 			addDirCandidates?: readonly unknown[];
 			onPickAddDir?: PickHandler;
+			agentType?: "claude" | "codex" | "pi" | null;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -106,6 +108,7 @@ vi.mock("./index", async () => {
 			];
 			composerMockState.lastOnPickAddDir = props.onPickAddDir ?? null;
 			composerMockState.lastOnSelectModel = props.onSelectModel;
+			composerMockState.lastAgentType = props.agentType ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -119,6 +122,7 @@ vi.mock("./index", async () => {
 					data-fast-mode={props.fastMode ? "on" : "off"}
 					data-disabled={props.disabled ? "true" : "false"}
 					data-submit-disabled={props.submitDisabled ? "true" : "false"}
+					data-agent-type={props.agentType ?? "none"}
 				>
 					{props.contextKey}:{props.selectedModelId ?? "none"}
 				</div>
@@ -154,6 +158,19 @@ const MODEL_SECTIONS = [
 				cliModel: "gpt-5.4",
 				effortLevels: ["low", "medium", "high"],
 				supportsFastMode: true,
+			},
+		],
+	},
+	{
+		id: "pi",
+		label: "Pi",
+		options: [
+			{
+				id: "pi-gpt-5.4",
+				provider: "pi",
+				label: "Pi · GPT-5.4",
+				cliModel: "azure-openai-responses/gpt-5.4",
+				effortLevels: ["low", "medium", "high"],
 			},
 		],
 	},
@@ -230,6 +247,7 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
 		composerMockState.lastOnSelectModel = null;
+		composerMockState.lastAgentType = null;
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
@@ -306,6 +324,59 @@ describe("WorkspaceComposerContainer", () => {
 			"session:session-1",
 			"session:session-2",
 		]);
+	});
+
+	it("passes the Pi provider through to the composer for Pi sessions", () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			...WORKSPACE_SESSIONS,
+			{
+				...WORKSPACE_SESSIONS[0],
+				id: "session-pi",
+				title: "Pi session",
+				agentType: "pi",
+				model: "pi-gpt-5.4",
+				active: false,
+			},
+		]);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-pi"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const composer = screen.getByTestId("workspace-composer-mock");
+		expect(composer).toHaveTextContent("session:session-pi:pi-gpt-5.4");
+		expect(composer).toHaveAttribute("data-agent-type", "pi");
+		expect(composerMockState.lastAgentType).toBe("pi");
 	});
 
 	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {

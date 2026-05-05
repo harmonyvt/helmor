@@ -7,6 +7,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
@@ -795,6 +796,127 @@ describe("WorkspaceComposer", () => {
 		expect(screen.getByText("Pi · Azure OpenAI Responses")).toBeInTheDocument();
 		expect(screen.getByText("Pi · Claude Sonnet 4.6")).toBeInTheDocument();
 		expect(screen.getByText("Pi · GPT-5.4")).toBeInTheDocument();
+	});
+
+	it("can select a Pi model without entering an update loop", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+		const piModelId = "pi:azure-openai-responses/gpt-5.4";
+		const sections = [
+			...MODEL_SECTIONS,
+			{
+				id: "pi",
+				label: "Pi",
+				options: [
+					{
+						id: piModelId,
+						provider: "pi",
+						label: "Pi · GPT-5.4",
+						cliModel: "azure-openai-responses/gpt-5.4",
+						providerKey: "azure-openai-responses",
+						effortLevels: ["low", "medium", "high", "xhigh"],
+						supportsFastMode: true,
+						supportsContextUsage: false,
+					},
+				],
+			},
+		] satisfies import("@/lib/api").AgentModelSection[];
+
+		function Harness() {
+			const [selectedModelId, setSelectedModelId] = useState("opus-1m");
+			return (
+				<QueryClientProvider client={queryClient}>
+					<TooltipProvider>
+						<WorkspaceComposer
+							contextKey="session:session-1"
+							onSubmit={vi.fn()}
+							disabled={false}
+							submitDisabled={false}
+							sending={false}
+							selectedModelId={selectedModelId}
+							modelSections={sections}
+							onSelectModel={setSelectedModelId}
+							provider="claude"
+							effortLevel="high"
+							onSelectEffort={vi.fn()}
+							permissionMode="acceptEdits"
+							onChangePermissionMode={vi.fn()}
+							restoreImages={[]}
+							restoreFiles={[]}
+							restoreCustomTags={[]}
+						/>
+					</TooltipProvider>
+				</QueryClientProvider>
+			);
+		}
+
+		render(<Harness />);
+
+		await user.click(
+			screen.getByRole("button", { name: "Model: Opus 4.7 1M" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Pi · GPT-5.4" }));
+
+		expect(
+			screen.getByRole("button", { name: "Model: Pi · GPT-5.4" }),
+		).toBeInTheDocument();
+	});
+
+	it("can open a large Pi model list without entering an update loop", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+		const sections = [
+			...MODEL_SECTIONS,
+			{
+				id: "pi",
+				label: "Pi",
+				options: Array.from({ length: 506 }, (_, index) => ({
+					id: `pi:test-provider/model-${index}`,
+					provider: "pi",
+					label: `Pi · Test Provider: Model ${index}`,
+					cliModel: `test-provider/model-${index}`,
+					providerKey: "test-provider",
+					effortLevels: ["low", "medium", "high"],
+					supportsFastMode: false,
+					supportsContextUsage: false,
+				})),
+			},
+		] satisfies import("@/lib/api").AgentModelSection[];
+
+		render(
+			<TooltipProvider>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposer
+						contextKey="session:session-1"
+						onSubmit={vi.fn()}
+						disabled={false}
+						submitDisabled={false}
+						sending={false}
+						selectedModelId="opus-1m"
+						modelSections={sections}
+						onSelectModel={vi.fn()}
+						provider="claude"
+						effortLevel="high"
+						onSelectEffort={vi.fn()}
+						permissionMode="acceptEdits"
+						onChangePermissionMode={vi.fn()}
+						restoreImages={[]}
+						restoreFiles={[]}
+						restoreCustomTags={[]}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Model: Opus 4.7 1M" }),
+		);
+
+		await screen.findByRole("listbox", { name: "Select model" });
+		expect(await screen.findByText("Pi · test-provider")).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Pi · Test Provider: Model 505" }),
+		).toBeInTheDocument();
 	});
 
 	it("does not render the fast mode lottie overlay when fast mode is only toggled on", () => {
