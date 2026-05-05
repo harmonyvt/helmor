@@ -79,6 +79,9 @@ type WorkspacePanelHeaderProps = {
 	onWorkspaceChanged?: () => void;
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
 	newSessionShortcut?: string | null;
+	/** When true renders a minimal single-row header with no branch info or
+	 *  session tabs — suited for narrow embedded panels like the Pi surface. */
+	compact?: boolean;
 };
 
 export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
@@ -100,6 +103,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	onWorkspaceChanged,
 	onRequestCloseSession,
 	newSessionShortcut,
+	compact = false,
 }: WorkspacePanelHeaderProps) {
 	const branchTone = getWorkspaceBranchTone({
 		workspaceState: workspace?.state,
@@ -338,6 +342,135 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		event.preventDefault();
 		event.stopPropagation();
 	}, []);
+
+	if (compact) {
+		return (
+			<header className="relative z-20">
+				{/* Single compact row: scrollable tabs + new-session + close */}
+				<div className="flex items-center gap-0.5 border-b border-border/40 px-2 pb-1">
+					<div className="group/tabs-scroll relative min-w-0 flex-1">
+						{hasRightOverflow && (
+							<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-gradient-to-l from-background to-transparent" />
+						)}
+						<div
+							ref={tabsScrollRef}
+							onScroll={updateOverflow}
+							className="scrollbar-none min-w-0 flex-1 overflow-x-auto"
+						>
+							{loadingWorkspace ? (
+								<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+									<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
+									Loading
+								</div>
+							) : sessions.length > 0 ? (
+								<Tabs
+									value={selectedSessionId ?? sessions[0]?.id}
+									onValueChange={(value) => onSelectSession?.(value)}
+									className="min-w-max gap-0"
+								>
+									<TabsList
+										aria-label="Sessions"
+										className="inline-flex w-max min-w-full justify-start self-start"
+									>
+										{sessions.map((session) => {
+											const selected = session.id === selectedSessionId;
+											const isActivelySending = sendingSessionIds
+												? sendingSessionIds.has(session.id)
+												: selected && sending;
+											const isInteractionRequired =
+												interactionRequiredSessionIds?.has(session.id) ?? false;
+											const isActive =
+												isActivelySending && !isInteractionRequired;
+											const hasUnread = session.unreadCount > 0;
+											const hasStatusDot =
+												isInteractionRequired || (!selected && hasUnread);
+
+											return (
+												<TabsTrigger
+													key={session.id}
+													value={session.id}
+													onMouseEnter={() => onPrefetchSession?.(session.id)}
+													onFocus={() => onPrefetchSession?.(session.id)}
+													className="group/tab relative h-full w-auto min-w-[4rem] max-w-[9rem] shrink-0 flex-none justify-start gap-1 overflow-hidden pr-4 text-[12px] text-muted-foreground data-[state=active]:text-foreground"
+												>
+													<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1">
+														<SessionProviderIcon
+															agentType={
+																sessionDisplayProviders?.[session.id] ??
+																session.agentType
+															}
+															active={isActive}
+														/>
+														<span
+															className={cn(
+																"truncate font-medium",
+																hasStatusDot && !selected
+																	? "text-foreground"
+																	: undefined,
+															)}
+														>
+															{displaySessionTitle(session)}
+														</span>
+														{hasStatusDot ? (
+															<span
+																aria-label={
+																	isInteractionRequired
+																		? "Interaction required"
+																		: "Unread session"
+																}
+																className={cn(
+																	"size-1.5 shrink-0 rounded-full",
+																	isInteractionRequired
+																		? "bg-yellow-500"
+																		: "bg-chart-2",
+																)}
+															/>
+														) : null}
+													</span>
+													<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center pr-0.5 group-hover/tab:pointer-events-auto group-hover/tab:visible">
+														<span
+															role="button"
+															aria-label="Close session"
+															onPointerDown={stopTabActionPointerDown}
+															onClick={(event) =>
+																handleHideSession(session.id, event)
+															}
+															className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+														>
+															<X className="size-3" strokeWidth={2} />
+														</span>
+													</span>
+												</TabsTrigger>
+											);
+										})}
+									</TabsList>
+								</Tabs>
+							) : (
+								<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+									<AlertCircle className="size-3" strokeWidth={1.8} />
+									No sessions
+								</div>
+							)}
+						</div>
+					</div>
+
+					<Button
+						aria-label="New session"
+						onClick={handleCreateSession}
+						variant="ghost"
+						size="icon-sm"
+						className="ml-0.5 shrink-0 cursor-pointer text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+					>
+						<Plus className="size-3.5" strokeWidth={1.8} />
+					</Button>
+
+					{headerActions ? (
+						<div className="flex shrink-0 items-center">{headerActions}</div>
+					) : null}
+				</div>
+			</header>
+		);
+	}
 
 	return (
 		<header className="relative z-20">

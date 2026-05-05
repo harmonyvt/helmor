@@ -6,6 +6,7 @@ import {
 	type AddRepositoryResponse,
 	addRepositoryFromLocalPath,
 	cloneRepositoryFromUrl,
+	finalizeGoalWorkspace,
 	finalizeWorkspaceFromRepo,
 	listenArchiveExecutionFailed,
 	listenArchiveExecutionSucceeded,
@@ -14,6 +15,7 @@ import {
 	permanentlyDeleteWorkspace,
 	pinWorkspace,
 	prepareArchiveWorkspace,
+	prepareGoalWorkspace,
 	prepareWorkspaceFromRepo,
 	prepareWorkspaceFromSource,
 	type RepositoryCreateOption,
@@ -59,16 +61,18 @@ import {
 	workspaceGroupIdFromStatus,
 } from "@/lib/workspace-helpers";
 import {
+	type GoalProjection,
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
 	type ProjectGroup,
 	projectSidebarLists,
+	projectSidebarListsByGoal,
 	projectSidebarListsByPr,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
 } from "../sidebar-projection";
 
-export type SidebarLayoutMode = "status" | "pr";
+export type SidebarLayoutMode = "status" | "pr" | "goal";
 const LAYOUT_MODE_KEY = "helmor:workspaces-sidebar:layout-mode";
 
 type WorkspaceToastVariant = "default" | "destructive";
@@ -206,6 +210,14 @@ export function useWorkspacesSidebarController({
 		[layoutMode, baseGroups, pendingCreationsForPr],
 	);
 
+	const goalProjection = useMemo<GoalProjection | null>(
+		() =>
+			layoutMode === "goal"
+				? projectSidebarListsByGoal(baseGroups, pendingCreationsForPr)
+				: null,
+		[layoutMode, baseGroups, pendingCreationsForPr],
+	);
+
 	const updateArchivingWorkspaceId = useCallback(
 		(workspaceId: string, active: boolean) => {
 			setArchivingWorkspaceIds((current) => {
@@ -330,6 +342,9 @@ export function useWorkspacesSidebarController({
 			// shared helper only flushes once all overlapping sidebar mutations have
 			// completed, preserving any remaining optimistic rows.
 			endSidebarMutation();
+			void queryClient.invalidateQueries({
+				predicate: (query) => query.queryKey[0] === "goalChildWorkspaces",
+			});
 		}).then((cleanup) => {
 			if (disposed) {
 				cleanup();
@@ -345,6 +360,7 @@ export function useWorkspacesSidebarController({
 		};
 	}, [
 		endSidebarMutation,
+		queryClient,
 		rollbackArchivedWorkspace,
 		updateArchivingWorkspaceId,
 	]);
@@ -701,6 +717,64 @@ export function useWorkspacesSidebarController({
 
 	// Stable ref so the conflict-recovery toast can call back into the latest
 	// version of handleCreateWorkspaceFromRepo without creating a circular dep.
+	const handleCreateGoalWorkspace = useCallback(
+		async (repoId: string, title: string, description: string) => {
+			if (creatingWorkspaceRepoId) return;
+			setCreatingWorkspaceRepoId(repoId);
+			try {
+				const prepared = await prepareGoalWorkspace({
+					repoId,
+					title,
+					description,
+				});
+				onSelectWorkspace(prepared.workspaceId);
+				await Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(prepared.workspaceId),
+					}),
+				]);
+				void finalizeGoalWorkspace(prepared.workspaceId, description)
+					.then(() =>
+						Promise.all([
+							queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceGroups,
+							}),
+							queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceDetail(prepared.workspaceId),
+							}),
+						]),
+					)
+					.catch((error) => {
+						pushWorkspaceToast(
+							describeUnknownError(error, "Unable to create Goal PR."),
+							"Goal setup failed",
+							"destructive",
+						);
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceGroups,
+						});
+					});
+			} catch (error) {
+				pushWorkspaceToast(
+					describeUnknownError(error, "Unable to create Goal workspace."),
+					"Goal creation failed",
+					"destructive",
+				);
+			} finally {
+				setCreatingWorkspaceRepoId(null);
+			}
+		},
+		[
+			creatingWorkspaceRepoId,
+			onSelectWorkspace,
+			pushWorkspaceToast,
+			queryClient,
+		],
+	);
+
 	const handleCreateWorkspaceFromRepoRef = useRef<
 		| ((
 				repoId: string,
@@ -1626,10 +1700,12 @@ export function useWorkspacesSidebarController({
 		layoutMode,
 		setLayoutMode,
 		projectGroups,
+		goalProjection,
 		handleAddRepository,
 		handleArchiveWorkspace,
 		handleCloneFromUrl,
 		handleCreateWorkspaceFromRepo,
+		handleCreateGoalWorkspace,
 		handleDeleteWorkspace,
 		handleMarkWorkspaceUnread,
 		handleOpenCloneDialog,

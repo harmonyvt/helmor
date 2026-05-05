@@ -18,6 +18,7 @@ pub mod adapter;
 pub mod classify;
 pub mod collapse;
 pub mod event_filter;
+pub(crate) mod pi_tools;
 pub mod types;
 
 use serde_json::Value;

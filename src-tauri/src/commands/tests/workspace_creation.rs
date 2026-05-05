@@ -1,5 +1,6 @@
 use super::support::*;
 use crate::workspace_state::WorkspaceState;
+use crate::workspace_status::WorkspaceStatus;
 
 #[test]
 fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
@@ -123,6 +124,210 @@ fn create_workspace_from_repo_stays_ready_when_auto_run_setup_disabled() {
 
     // User opted out → workspace lands in Ready; setup runs manually.
     assert_eq!(response.created_state, WorkspaceState::Ready);
+}
+
+#[test]
+fn list_goal_child_workspaces_excludes_archived_children() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+
+    connection
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, active_session_id, branch,
+              state, initialization_parent_branch, intended_target_branch,
+              status, workspace_kind, goal_workspace_id, unread
+            ) VALUES
+              ('goal-1', ?1, 'goal-board', NULL, NULL, 'ready', 'main', 'main',
+                'in-progress', 'goal', NULL, 0),
+              ('child-ready', ?1, 'child-ready', NULL, 'testuser/child-ready', 'ready',
+                'main', 'main', 'in-progress', 'code', 'goal-1', 0),
+              ('child-archived', ?1, 'child-archived', NULL, 'testuser/child-archived',
+                'archived', 'main', 'main', 'in-progress', 'code', 'goal-1', 0)
+            "#,
+            [&harness.repo_id],
+        )
+        .unwrap();
+
+    let children = workspaces::list_goal_child_workspaces("goal-1").unwrap();
+
+    assert_eq!(
+        children
+            .into_iter()
+            .map(|workspace| workspace.id)
+            .collect::<Vec<_>>(),
+        vec!["child-ready".to_string()]
+    );
+}
+
+#[test]
+fn list_goal_child_workspaces_rejects_non_goal_parent() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    harness.insert_workspace_name("ordinary-parent");
+
+    let error = workspaces::list_goal_child_workspaces("workspace-ordinary-parent")
+        .expect_err("ordinary workspaces must not be valid goal boards");
+
+    assert!(
+        error.to_string().contains("Workspace is not a Goal"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn create_goal_child_workspace_inserts_code_child_linked_to_goal() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+
+    connection
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, active_session_id, branch,
+              state, initialization_parent_branch, intended_target_branch,
+              status, workspace_kind, goal_workspace_id, unread
+            ) VALUES (
+              'goal-create', ?1, 'goal-create', NULL, 'helmor/goal/create',
+              'ready', 'main', 'main', 'backlog', 'goal', NULL, 0
+            )
+            "#,
+            [&harness.repo_id],
+        )
+        .unwrap();
+
+    let response = workspaces::create_goal_child_workspace(workspaces::GoalChildWorkspaceRequest {
+        goal_workspace_id: "goal-create".to_string(),
+        goal_card_id: None,
+        title: Some("Build the API".to_string()),
+    })
+    .unwrap();
+
+    let (kind, goal_workspace_id, status, init_parent, target_branch, pr_title): (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT workspace_kind, goal_workspace_id, status,
+              initialization_parent_branch, intended_target_branch, pr_title
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&response.workspace_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+
+    assert_eq!(kind, "code");
+    assert_eq!(goal_workspace_id, "goal-create");
+    assert_eq!(status, "backlog");
+    assert_eq!(init_parent, "helmor/goal/create");
+    assert_eq!(target_branch, "helmor/goal/create");
+    assert_eq!(pr_title, "Build the API");
+}
+
+#[test]
+fn create_goal_child_workspace_rejects_non_goal_parent() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    harness.insert_workspace_name("ordinary-goal-parent");
+
+    let error = workspaces::create_goal_child_workspace(workspaces::GoalChildWorkspaceRequest {
+        goal_workspace_id: "workspace-ordinary-goal-parent".to_string(),
+        goal_card_id: None,
+        title: Some("Should fail".to_string()),
+    })
+    .expect_err("ordinary workspaces must not create goal children");
+
+    assert!(
+        error.to_string().contains("Workspace is not a Goal"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn set_goal_child_workspace_status_updates_only_linked_child() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+
+    connection
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, active_session_id, branch,
+              state, initialization_parent_branch, intended_target_branch,
+              status, workspace_kind, goal_workspace_id, unread
+            ) VALUES
+              ('goal-status', ?1, 'goal-status', NULL, 'helmor/goal/status',
+                'ready', 'main', 'main', 'backlog', 'goal', NULL, 0),
+              ('child-status', ?1, 'child-status', NULL, 'testuser/child-status',
+                'ready', 'helmor/goal/status', 'helmor/goal/status', 'backlog', 'code', 'goal-status', 0),
+              ('unrelated-child', ?1, 'unrelated-child', NULL, 'testuser/unrelated-child',
+                'ready', 'main', 'main', 'backlog', 'code', NULL, 0)
+            "#,
+            [&harness.repo_id],
+        )
+        .unwrap();
+
+    workspaces::set_goal_child_workspace_status(workspaces::GoalChildWorkspaceStatusRequest {
+        goal_workspace_id: "goal-status".to_string(),
+        child_workspace_id: "child-status".to_string(),
+        status: WorkspaceStatus::InProgress,
+    })
+    .unwrap();
+
+    let status: String = connection
+        .query_row(
+            "SELECT status FROM workspaces WHERE id = 'child-status'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "in-progress");
+
+    let error =
+        workspaces::set_goal_child_workspace_status(workspaces::GoalChildWorkspaceStatusRequest {
+            goal_workspace_id: "goal-status".to_string(),
+            child_workspace_id: "unrelated-child".to_string(),
+            status: WorkspaceStatus::Done,
+        })
+        .expect_err("unrelated workspaces must not move on this goal board");
+
+    assert!(
+        error
+            .to_string()
+            .contains("is not a child of Goal workspace"),
+        "unexpected error: {error:#}"
+    );
 }
 
 #[test]

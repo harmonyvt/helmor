@@ -264,6 +264,29 @@ export interface SidecarEmitter {
 	): void;
 	contextUsageResult(requestId: string, meta: string): void;
 	/**
+	 * Emitted when a Pi Kanban custom tool is called. The frontend must
+	 * execute the corresponding Tauri IPC call and respond via
+	 * `send_kanban_tool_result` → sidecar stdin `kanbanToolResult`.
+	 */
+	kanbanToolCall(
+		requestId: string,
+		toolCallId: string,
+		tool: string,
+		workspaceId: string,
+		args: unknown,
+	): void;
+	/**
+	 * Emitted when a Pi extension calls `ctx.ui.select/confirm/input`.
+	 * The frontend must show the appropriate interactive element and
+	 * respond via `respond_to_pi_ui` → sidecar stdin `piUiResponse`.
+	 */
+	piUiRequest(
+		requestId: string,
+		interactionId: string,
+		kind: "select" | "confirm" | "input",
+		payload: Record<string, unknown>,
+	): void;
+	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
 	 * field named `id` can never override our request id.
 	 */
@@ -376,6 +399,23 @@ export function createSidecarEmitter(
 			}),
 		contextUsageResult: (requestId, meta) =>
 			write({ id: requestId, type: "contextUsageResult", meta }),
+		kanbanToolCall: (requestId, toolCallId, tool, workspaceId, args) =>
+			write({
+				id: requestId,
+				type: "kanban_tool_call",
+				toolCallId,
+				tool,
+				workspaceId,
+				args,
+			}),
+		piUiRequest: (requestId, interactionId, kind, payload) =>
+			write({
+				id: requestId,
+				type: "pi_ui_request",
+				interactionId,
+				kind,
+				payload,
+			}),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),
 	};

@@ -112,6 +112,7 @@ fn fingerprint_message(msg: &ThreadMessageLike) -> MessageFingerprint {
             ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { .. }) => {
                 "prompt-suggestion".into()
             }
+            ExtendedMessagePart::Basic(MessagePart::GenericCard { .. }) => "generic-card".into(),
             ExtendedMessagePart::CollapsedGroup(g) => {
                 format!("collapsed-group({:?},tools={})", g.category, g.tools.len())
             }
@@ -175,6 +176,14 @@ fn convert_action(action: Action) -> Result<EmittedEvent, String> {
                 persisted,
                 internal,
             },
+            // Passthrough events for the Kanban assistant and Pi UI interactions.
+            // These are forwarded to the frontend as-is; no dedicated snapshot type needed.
+            AgentStreamEvent::KanbanToolCall { tool, .. } => {
+                return Err(format!("KanbanToolCall({tool})"));
+            }
+            AgentStreamEvent::PiUiRequest { ui_kind, .. } => {
+                return Err(format!("PiUiRequest({ui_kind})"));
+            }
         }),
         // Non-emit actions are surfaced as text labels so the snapshot
         // documents that they were generated, without binding the test

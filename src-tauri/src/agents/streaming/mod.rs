@@ -960,6 +960,76 @@ pub(super) fn stream_via_sidecar(
                         }
                     }
                 }
+                "kanban_tool_call" => {
+                    // Pi Kanban custom tool called — forward directly to
+                    // the frontend so the Goals AI panel can execute the
+                    // corresponding Tauri IPC and respond via
+                    // `send_kanban_tool_result`.
+                    let tool_call_id = event
+                        .raw
+                        .get("toolCallId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let tool = event
+                        .raw
+                        .get("tool")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let workspace_id = event
+                        .raw
+                        .get("workspaceId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let args = event.raw.get("args").cloned().unwrap_or(Value::Null);
+                    tracing::debug!(
+                        rid = %rid,
+                        tool = %tool,
+                        tool_call_id = %tool_call_id,
+                        "Kanban tool call",
+                    );
+                    let _ = on_event.send(AgentStreamEvent::KanbanToolCall {
+                        tool_call_id,
+                        tool,
+                        workspace_id,
+                        args,
+                    });
+                }
+                "pi_ui_request" => {
+                    // Pi extension interactive UI request — forward to the
+                    // frontend so the Goals AI panel can render a picker or
+                    // confirm dialog and respond via `respond_to_pi_ui`.
+                    let interaction_id = event
+                        .raw
+                        .get("interactionId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let kind = event
+                        .raw
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let payload = event
+                        .raw
+                        .get("payload")
+                        .cloned()
+                        .unwrap_or(Value::Object(serde_json::Map::new()));
+                    tracing::debug!(
+                        rid = %rid,
+                        kind = %kind,
+                        interaction_id = %interaction_id,
+                        "Pi UI request",
+                    );
+                    let _ = on_event.send(AgentStreamEvent::PiUiRequest {
+                        interaction_id,
+                        ui_kind: kind,
+                        payload,
+                    });
+                }
                 "error" => {
                     // Pre-compute (message, internal) for tracing and DB
                     // writes. Final emit goes through the state machine

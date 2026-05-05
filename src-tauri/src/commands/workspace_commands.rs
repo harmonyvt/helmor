@@ -1,7 +1,11 @@
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    db, git_watcher, workspace_state::WorkspaceState, workspace_status::WorkspaceStatus, workspaces,
+    db, git_watcher, models,
+    ui_sync::{self, UiMutationEvent},
+    workspace_state::WorkspaceState,
+    workspace_status::WorkspaceStatus,
+    workspaces,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -119,6 +123,35 @@ pub async fn get_workspace(workspace_id: String) -> CmdResult<workspaces::Worksp
 }
 
 #[tauri::command]
+pub async fn list_goal_child_workspaces(
+    goal_workspace_id: String,
+) -> CmdResult<Vec<workspaces::WorkspaceDetail>> {
+    run_blocking(move || workspaces::list_goal_child_workspaces(&goal_workspace_id)).await
+}
+
+/// Update the user-editable goal title and description for a goal workspace.
+/// Broadcasts `WorkspaceChanged` so the frontend invalidates its cache.
+#[tauri::command]
+pub async fn update_goal_workspace_meta(
+    app: AppHandle,
+    workspace_id: String,
+    goal_title: Option<String>,
+    goal_description: Option<String>,
+) -> CmdResult<()> {
+    let wid = workspace_id.clone();
+    run_blocking(move || {
+        models::workspaces::update_goal_workspace_meta(
+            &wid,
+            goal_title.as_deref(),
+            goal_description.as_deref(),
+        )
+    })
+    .await?;
+    ui_sync::publish(&app, UiMutationEvent::WorkspaceChanged { workspace_id });
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn mark_workspace_unread(workspace_id: String) -> CmdResult<()> {
     run_blocking(move || workspaces::mark_workspace_unread(&workspace_id)).await
 }
@@ -134,8 +167,15 @@ pub async fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn set_workspace_status(workspace_id: String, status: WorkspaceStatus) -> CmdResult<()> {
-    run_blocking(move || workspaces::set_workspace_status(&workspace_id, status)).await
+pub async fn set_workspace_status(
+    app: AppHandle,
+    workspace_id: String,
+    status: WorkspaceStatus,
+) -> CmdResult<()> {
+    let id = workspace_id.clone();
+    run_blocking(move || workspaces::set_workspace_status(&id, status)).await?;
+    ui_sync::publish(&app, UiMutationEvent::WorkspaceChanged { workspace_id });
+    Ok(())
 }
 
 /// `/add-dir` feature: list the extra directories the user has linked to

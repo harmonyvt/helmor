@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use super::StreamAccumulator;
+use crate::pipeline::pi_tools::{canonical_pi_tool_name, mcp_result_text, normalize_pi_tool_args};
 use crate::pipeline::types::{CollectedTurn, MessageRole};
 
 // ---------------------------------------------------------------------------
@@ -87,6 +88,7 @@ pub(super) fn handle_item_started(acc: &mut StreamAccumulator, _raw_line: &str, 
     let synthetic = serde_json::json!({"item": item});
     let synthetic_str = serde_json::to_string(&synthetic).unwrap_or_default();
     dispatch_item(acc, &synthetic_str, &synthetic, false);
+    reserve_item_turn_order(acc, item_type, item_id, &item);
 }
 
 pub(super) fn handle_item_completed(acc: &mut StreamAccumulator, _raw_line: &str, value: &Value) {
@@ -248,6 +250,80 @@ fn emit_snapshot_for(acc: &mut StreamAccumulator, item_id: &str) {
     let synthetic = serde_json::json!({"item": snapshot});
     let s = serde_json::to_string(&synthetic).unwrap_or_default();
     dispatch_item(acc, &s, &synthetic, false);
+}
+
+/// Reserve a database row at item start time for item types whose live
+/// renderer inserts a placeholder immediately and replaces it as deltas or
+/// completion arrive. Persistence later upserts the same id, preserving
+/// start-order in `session_messages.sent_at/rowid` while keeping the final
+/// content up to date. Without this, long-running Pi/Codex tools are stored
+/// in completion order even though the live thread displays them in start
+/// order.
+fn reserve_item_turn_order(
+    acc: &mut StreamAccumulator,
+    item_type: &str,
+    item_id: &str,
+    item: &Value,
+) {
+    let Some(turn_id) = item_turn_id(item_type, Some(item_id), acc.line_count) else {
+        return;
+    };
+
+    let role = item_turn_role(item_type);
+    let envelope = serde_json::json!({"type": "item.completed", "item": item});
+    let content_json = serde_json::to_string(&envelope).unwrap_or_default();
+    acc.turns.push(CollectedTurn {
+        id: turn_id,
+        role,
+        content_json,
+    });
+}
+
+fn item_turn_role(_item_type: &str) -> MessageRole {
+    MessageRole::Assistant
+}
+
+fn item_turn_id(item_type: &str, item_id: Option<&str>, line_count: u64) -> Option<String> {
+    let id = item_id.filter(|id| !id.is_empty());
+    match item_type {
+        "agent_message" => Some(
+            id.map(|id| format!("codex-item:{id}"))
+                .unwrap_or_else(|| format!("codex-item:{line_count}")),
+        ),
+        "command_execution" => Some(
+            id.map(|id| format!("codex-cmd-asst:{id}"))
+                .unwrap_or_else(|| format!("codex-cmd-asst:{line_count}")),
+        ),
+        "file_change" => Some(
+            id.map(|id| format!("codex-patch-asst:{id}"))
+                .unwrap_or_else(|| format!("codex-patch-asst:{line_count}")),
+        ),
+        "web_search" => Some(
+            id.map(|id| format!("codex-search-asst:{id}"))
+                .unwrap_or_else(|| format!("codex-search-asst:{line_count}")),
+        ),
+        "mcp_tool_call" => Some(
+            id.map(|id| format!("codex-mcp-asst:{id}"))
+                .unwrap_or_else(|| format!("codex-mcp-asst:{line_count}")),
+        ),
+        "todo_list" => Some(
+            id.map(|id| format!("codex-todo-msg:{id}"))
+                .unwrap_or_else(|| format!("codex-todo-msg:{line_count}")),
+        ),
+        "plan" => Some(
+            id.map(|id| format!("codex-plan:{id}"))
+                .unwrap_or_else(|| format!("codex-plan:{line_count}")),
+        ),
+        "image_generation" => Some(
+            id.map(|id| format!("codex-image:{id}"))
+                .unwrap_or_else(|| format!("codex-image:{line_count}")),
+        ),
+        "generic_card" => Some(
+            id.map(|id| format!("generic-card:{id}"))
+                .unwrap_or_else(|| format!("generic-card:{line_count}")),
+        ),
+        _ => None,
+    }
 }
 
 /// Route a normalized item value to the correct type handler.
@@ -642,12 +718,13 @@ fn handle_mcp_tool_call(
 ) {
     let server = item.get("server").and_then(Value::as_str).unwrap_or("");
     let tool = item.get("tool").and_then(Value::as_str).unwrap_or("");
-    let arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
+    let raw_arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
+    let arguments = normalize_pi_tool_args(server, tool, raw_arguments);
     let status = item.get("status").and_then(Value::as_str);
     let synthetic_id = item_id
         .map(|id| format!("codex-mcp-{id}"))
         .unwrap_or_else(|| format!("codex-mcp-{}", acc.line_count));
-    let tool_name = format!("mcp__{server}__{tool}");
+    let tool_name = canonical_pi_tool_name(server, tool);
 
     let mut tool_use = serde_json::json!({
         "type": "tool_use",
@@ -678,18 +755,7 @@ fn handle_mcp_tool_call(
     );
 
     if matches!(status, Some("completed") | Some("failed")) {
-        let result_text = if status == Some("failed") {
-            let msg = item
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("MCP tool failed");
-            format!("Error: {msg}")
-        } else {
-            item.get("result")
-                .and_then(|r| serde_json::to_string(r).ok())
-                .unwrap_or_else(|| "OK".to_string())
-        };
+        let result_text = mcp_result_text(server, tool, item, status == Some("failed"));
         let synthetic_result = serde_json::json!({
             "type": "user",
             "message": {

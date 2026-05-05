@@ -17,7 +17,12 @@ import {
 	type PendingElicitation,
 } from "@/features/conversation/pending-elicitation";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
-import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
+import type {
+	AgentModelOption,
+	AgentSendRequest,
+	AgentStreamEvent,
+	ThreadMessageLike,
+} from "@/lib/api";
 import {
 	generateSessionTitle,
 	loadRepoPreferences,
@@ -144,6 +149,13 @@ type SubmitPayload = {
 	contextTransferPrefix?: string | null;
 };
 
+type SendRequestExtensionContext = {
+	workspaceId: string | null;
+	sessionId: string;
+	prompt: string;
+	model: AgentModelOption;
+};
+
 type UseConversationStreamingArgs = {
 	composerContextKey: string;
 	displayedSessionId: string | null;
@@ -167,6 +179,15 @@ type UseConversationStreamingArgs = {
 	) => void;
 	onSessionCompleted?: (sessionId: string, workspaceId: string) => void;
 	onSessionAborted?: (sessionId: string, workspaceId: string) => void;
+	buildSendRequestExtras?: (
+		context: SendRequestExtensionContext,
+	) => Partial<AgentSendRequest> | null | undefined;
+	onKanbanToolCall?: (
+		event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
+	) => void;
+	onPiUiRequest?: (
+		event: Extract<AgentStreamEvent, { kind: "piUiRequest" }>,
+	) => void;
 };
 
 export function useConversationStreaming({
@@ -183,6 +204,9 @@ export function useConversationStreaming({
 	onInteractionSessionsChange,
 	onSessionCompleted,
 	onSessionAborted,
+	buildSendRequestExtras,
+	onKanbanToolCall,
+	onPiUiRequest,
 }: UseConversationStreamingArgs) {
 	const queryClient = useQueryClient();
 	const pushToast = useWorkspaceToast();
@@ -838,6 +862,16 @@ export function useConversationStreaming({
 							return;
 						}
 
+						if (event.kind === "kanbanToolCall") {
+							onKanbanToolCall?.(event);
+							return;
+						}
+
+						if (event.kind === "piUiRequest") {
+							onPiUiRequest?.(event);
+							return;
+						}
+
 						if (event.kind === "permissionRequest") {
 							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
 							appendPendingPermission(contextKey, {
@@ -1020,6 +1054,8 @@ export function useConversationStreaming({
 			queryClient,
 			rememberInteractionWorkspace,
 			selectedProvider,
+			onKanbanToolCall,
+			onPiUiRequest,
 		],
 	);
 
@@ -1381,8 +1417,17 @@ export function useConversationStreaming({
 					}
 				};
 
+				const sendRequestExtras =
+					buildSendRequestExtras?.({
+						workspaceId: targetWorkspaceId,
+						sessionId: targetSessionId,
+						prompt: trimmedPrompt,
+						model,
+					}) ?? {};
+
 				await startAgentMessageStream(
 					{
+						...sendRequestExtras,
 						provider: model.provider,
 						modelId: model.id,
 						prompt: trimmedPrompt,
@@ -1408,6 +1453,16 @@ export function useConversationStreaming({
 						if (event.kind === "streamingPartial") {
 							pendingPartial = event.message;
 							scheduleFlush();
+							return;
+						}
+
+						if (event.kind === "kanbanToolCall") {
+							onKanbanToolCall?.(event);
+							return;
+						}
+
+						if (event.kind === "piUiRequest") {
+							onPiUiRequest?.(event);
 							return;
 						}
 
@@ -1616,6 +1671,9 @@ export function useConversationStreaming({
 			planReviewByContext,
 			followUpBehavior,
 			submitQueue,
+			buildSendRequestExtras,
+			onKanbanToolCall,
+			onPiUiRequest,
 		],
 	);
 

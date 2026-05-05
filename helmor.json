@@ -1,6 +1,6 @@
 {
 	"scripts": {
 		"setup": "bun run setup:envs",
-		"run": "bun run dev:analyze"
+		"run": "bun run dev:preview"
 	}
 }

@@ -138,6 +138,149 @@ function insertPendingCreationRow(
 	);
 }
 
+// ---- Goal layout projection ----
+
+export type GoalGroup = {
+	goalWorkspaceId: string;
+	goalTitle: string;
+	goalRow: WorkspaceRow;
+	childRows: WorkspaceRow[];
+};
+
+export type GoalProjectGroup = {
+	repoName: string;
+	repoIconSrc?: string | null;
+	repoInitials?: string | null;
+	goalGroups: GoalGroup[];
+};
+
+export type GoalProjection = {
+	projectGroups: GoalProjectGroup[];
+	ungroupedRows: WorkspaceRow[];
+};
+
+export function projectSidebarListsByGoal(
+	baseGroups: WorkspaceGroup[],
+	pendingCreations: ReadonlyMap<string, PendingCreationEntry>,
+): GoalProjection {
+	const hiddenIds = new Set<string>();
+	for (const [optimisticId, pending] of pendingCreations) {
+		hiddenIds.add(optimisticId);
+		if (pending.resolvedWorkspaceId) {
+			hiddenIds.add(pending.resolvedWorkspaceId);
+		}
+	}
+
+	const filteredGroups =
+		hiddenIds.size === 0
+			? baseGroups
+			: baseGroups.map((group) => ({
+					...group,
+					rows: group.rows.filter((row) => !hiddenIds.has(row.id)),
+				}));
+
+	const withPending = Array.from(pendingCreations.values()).reduce(
+		(current, pending) => insertPendingCreationRow(current, pending.row),
+		filteredGroups,
+	);
+
+	// Flatten all rows from all status groups
+	const allRows: WorkspaceRow[] = [];
+	for (const group of withPending) {
+		for (const row of group.rows) {
+			allRows.push(row);
+		}
+	}
+
+	// Index goal workspaces by id
+	const goalRowsById = new Map<string, WorkspaceRow>();
+	for (const row of allRows) {
+		if (row.workspaceKind === "goal") {
+			goalRowsById.set(row.id, row);
+		}
+	}
+
+	// Group children under their parent goal; collect ungrouped rows
+	const childrenByGoalId = new Map<string, WorkspaceRow[]>();
+	const ungroupedRows: WorkspaceRow[] = [];
+
+	for (const row of allRows) {
+		if (row.workspaceKind === "goal") continue;
+
+		if (row.goalWorkspaceId) {
+			const bucket = childrenByGoalId.get(row.goalWorkspaceId) ?? [];
+			bucket.push(row);
+			childrenByGoalId.set(row.goalWorkspaceId, bucket);
+		} else {
+			ungroupedRows.push(row);
+		}
+	}
+
+	// Build goal groups in newest-first order
+	const goalGroups: GoalGroup[] = [];
+	for (const [goalId, goalRow] of goalRowsById) {
+		const childRows = childrenByGoalId.get(goalId) ?? [];
+		goalGroups.push({
+			goalWorkspaceId: goalId,
+			goalTitle: goalRow.title,
+			goalRow,
+			childRows,
+		});
+		childrenByGoalId.delete(goalId);
+	}
+
+	// Orphaned children (goal was archived / not in active groups) → ungrouped
+	for (const orphaned of childrenByGoalId.values()) {
+		ungroupedRows.push(...orphaned);
+	}
+
+	goalGroups.sort((a, b) => {
+		const aDate = a.goalRow.createdAt ?? "";
+		const bDate = b.goalRow.createdAt ?? "";
+		return bDate.localeCompare(aDate);
+	});
+
+	// Group goals by repo (project)
+	const byRepo = new Map<
+		string,
+		{
+			goalGroups: GoalGroup[];
+			repoIconSrc?: string | null;
+			repoInitials?: string | null;
+		}
+	>();
+	for (const goalGroup of goalGroups) {
+		const repoName = goalGroup.goalRow.repoName ?? "(unknown)";
+		const existing = byRepo.get(repoName);
+		if (existing) {
+			existing.goalGroups.push(goalGroup);
+		} else {
+			byRepo.set(repoName, {
+				goalGroups: [goalGroup],
+				repoIconSrc: goalGroup.goalRow.repoIconSrc,
+				repoInitials: goalGroup.goalRow.repoInitials,
+			});
+		}
+	}
+
+	const projectGroups: GoalProjectGroup[] = Array.from(byRepo.entries()).map(
+		([
+			repoName,
+			{ goalGroups: repoGoalGroups, repoIconSrc, repoInitials },
+		]) => ({
+			repoName,
+			repoIconSrc,
+			repoInitials,
+			goalGroups: repoGoalGroups,
+		}),
+	);
+
+	// Sort repos alphabetically for stable ordering
+	projectGroups.sort((a, b) => a.repoName.localeCompare(b.repoName));
+
+	return { projectGroups, ungroupedRows };
+}
+
 // ---- PR-first layout projection ----
 
 export type PrGroupTone = "pr-open" | "pr-merged" | "pr-closed" | "pr-none";

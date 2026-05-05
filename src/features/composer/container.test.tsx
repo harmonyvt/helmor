@@ -388,6 +388,52 @@ describe("WorkspaceComposerContainer", () => {
 		expect(composerMockState.lastAgentType).toBe("pi");
 	});
 
+	it("filters available models for specialized chat surfaces", () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={vi.fn()}
+					modelFilter={(model) => model.provider === "pi"}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const composer = screen.getByTestId("workspace-composer-mock");
+		expect(composer).toHaveTextContent("session:session-1:pi-gpt-5.4");
+		expect(composer).toHaveAttribute("data-agent-type", "pi");
+	});
+
 	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(

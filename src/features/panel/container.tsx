@@ -50,6 +50,8 @@ type WorkspacePanelContainerProps = {
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
+	/** Compact mode: minimal header, no session tabs, no script action cards. */
+	compact?: boolean;
 };
 
 export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
@@ -69,6 +71,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	onRequestCloseSession,
 	headerActions,
 	headerLeading,
+	compact = false,
 }: WorkspacePanelContainerProps) {
 	const queryClient = useQueryClient();
 	const { settings } = useSettings();
@@ -540,6 +543,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			missingScriptTypes={missingScriptTypes}
 			onInitializeScript={handleInitializeScript}
 			changeRequest={workspaceChangeRequest}
+			compact={compact}
 		/>
 	);
 });

@@ -1,4 +1,10 @@
-import { GitBranch, GitPullRequest, LoaderCircle, Plus } from "lucide-react";
+import {
+	Flag,
+	GitBranch,
+	GitPullRequest,
+	LoaderCircle,
+	Plus,
+} from "lucide-react";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -40,6 +46,11 @@ type WorkspaceCreateDialogProps = {
 		repoId: string,
 		source?: WorkspaceCreationSource,
 	) => Promise<void> | void;
+	onCreateGoalWorkspace?: (
+		repoId: string,
+		title: string,
+		description: string,
+	) => Promise<void> | void;
 };
 
 export function WorkspaceCreateDialog({
@@ -48,6 +59,7 @@ export function WorkspaceCreateDialog({
 	repositories,
 	creating,
 	onCreateWorkspace,
+	onCreateGoalWorkspace,
 }: WorkspaceCreateDialogProps) {
 	const [tab, setTab] = useState("new");
 	const [remoteRepoId, setRemoteRepoId] = useState("");
@@ -63,6 +75,9 @@ export function WorkspaceCreateDialog({
 	const [prInput, setPrInput] = useState("");
 	const [prLoading, setPrLoading] = useState(false);
 	const [prError, setPrError] = useState<string | null>(null);
+	const [goalRepoId, setGoalRepoId] = useState("");
+	const [goalTitle, setGoalTitle] = useState("");
+	const [goalDescription, setGoalDescription] = useState("");
 	const [submitting, setSubmitting] = useState(false);
 	const newRepoListRef = useRef<HTMLDivElement | null>(null);
 
@@ -73,6 +88,7 @@ export function WorkspaceCreateDialog({
 		const firstRepoId = repositories[0]?.id ?? "";
 		setRemoteRepoId((current) => current || firstRepoId);
 		setPrRepoId((current) => current || firstRepoId);
+		setGoalRepoId((current) => current || firstRepoId);
 		setRemoteError(null);
 		setPrError(null);
 	}, [open, repositories]);
@@ -190,6 +206,35 @@ export function WorkspaceCreateDialog({
 		[onCreateWorkspace, onOpenChange, submitting],
 	);
 
+	const handleCreateGoal = useCallback(async () => {
+		if (
+			!goalRepoId ||
+			!goalTitle.trim() ||
+			!goalDescription.trim() ||
+			submitting
+		) {
+			return;
+		}
+		setSubmitting(true);
+		try {
+			await onCreateGoalWorkspace?.(
+				goalRepoId,
+				goalTitle.trim(),
+				goalDescription.trim(),
+			);
+		} finally {
+			setSubmitting(false);
+			onOpenChange(false);
+		}
+	}, [
+		goalDescription,
+		goalRepoId,
+		goalTitle,
+		onCreateGoalWorkspace,
+		onOpenChange,
+		submitting,
+	]);
+
 	const handleResolvePr = useCallback(async () => {
 		if (!prRepoId || !prInput.trim()) {
 			return;
@@ -231,7 +276,7 @@ export function WorkspaceCreateDialog({
 					</DialogDescription>
 				</DialogHeader>
 				<Tabs value={tab} onValueChange={setTab} className="min-w-0 w-full">
-					<TabsList className="grid w-full min-w-0 grid-cols-3">
+					<TabsList className="grid w-full min-w-0 grid-cols-4">
 						<TabsTrigger value="new">
 							<Plus className="size-3.5" strokeWidth={2} />
 							New
@@ -243,6 +288,10 @@ export function WorkspaceCreateDialog({
 						<TabsTrigger value="pr">
 							<GitPullRequest className="size-3.5" strokeWidth={2} />
 							PR
+						</TabsTrigger>
+						<TabsTrigger value="goal">
+							<Flag className="size-3.5" strokeWidth={2} />
+							Goal
 						</TabsTrigger>
 					</TabsList>
 					<TabsContent value="new" className="min-h-[340px] min-w-0">
@@ -361,6 +410,64 @@ export function WorkspaceCreateDialog({
 								>
 									{busy ? <LoaderCircle className="animate-spin" /> : null}
 									Create workspace
+								</Button>
+							</div>
+						</div>
+					</TabsContent>
+					<TabsContent value="goal" className="min-h-[340px] min-w-0">
+						<div className="flex min-w-0 flex-col gap-3">
+							<RepositorySelect
+								label="Repository"
+								value={goalRepoId}
+								repositories={repositories}
+								onChange={setGoalRepoId}
+								disabled={busy}
+							/>
+							<div className="flex flex-col gap-1">
+								<Label
+									htmlFor="workspace-create-goal-title"
+									className="text-[12px] font-medium tracking-[-0.01em]"
+								>
+									Goal title
+								</Label>
+								<Input
+									id="workspace-create-goal-title"
+									value={goalTitle}
+									onChange={(event) => setGoalTitle(event.target.value)}
+									placeholder="Desktop companion app"
+									disabled={busy}
+									className="h-8 text-[13px] md:text-[13px]"
+								/>
+							</div>
+							<div className="flex flex-col gap-1">
+								<Label
+									htmlFor="workspace-create-goal-description"
+									className="text-[12px] font-medium tracking-[-0.01em]"
+								>
+									Goal description
+								</Label>
+								<textarea
+									id="workspace-create-goal-description"
+									value={goalDescription}
+									onChange={(event) => setGoalDescription(event.target.value)}
+									placeholder="Describe the goal, acceptance criteria, and how child PRs should stack."
+									disabled={busy}
+									className="min-h-28 resize-none rounded-md border border-input bg-background px-2 py-2 text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60"
+								/>
+							</div>
+							<div className="flex justify-end">
+								<Button
+									size="sm"
+									disabled={
+										!goalRepoId ||
+										!goalTitle.trim() ||
+										!goalDescription.trim() ||
+										busy
+									}
+									onClick={() => void handleCreateGoal()}
+								>
+									{busy ? <LoaderCircle className="animate-spin" /> : null}
+									Create Goal
 								</Button>
 							</div>
 						</div>

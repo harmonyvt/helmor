@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
 	AgentSession,
 	ExtensionError,
@@ -6,6 +7,32 @@ import type {
 import type { SidecarEmitter } from "./emitter.js";
 
 type CardSeverity = "info" | "warning" | "error";
+
+// ---------------------------------------------------------------------------
+// Pending interactive UI calls — interactionId → { resolve, reject }
+// ---------------------------------------------------------------------------
+
+interface PendingUiInteraction {
+	resolve: (result: unknown) => void;
+	reject: (err: Error) => void;
+}
+
+const pendingUiInteractions = new Map<string, PendingUiInteraction>();
+
+/**
+ * Called by the sidecar stdin handler when `piUiResponse` arrives from the
+ * frontend. Resolves the corresponding pending `uiContext.select/confirm/input`
+ * call inside the Pi extension.
+ */
+export function resolvePiUiInteraction(
+	interactionId: string,
+	result: unknown,
+): void {
+	const pending = pendingUiInteractions.get(interactionId);
+	if (!pending) return;
+	pendingUiInteractions.delete(interactionId);
+	pending.resolve(result);
+}
 
 export async function bindPiExtensionsForHelmor(
 	session: AgentSession,
@@ -50,18 +77,31 @@ class PiExtensionHost {
 	};
 
 	readonly uiContext: ExtensionUIContext = {
+		// -----------------------------------------------------------------------
+		// Interactive — emit a piUiRequest and await the frontend's response.
+		// -----------------------------------------------------------------------
 		select: async (title, options) => {
-			this.emitUnsupported(title, "select", { options });
-			return undefined;
+			return this.awaitUiInteraction("select", { title, options }) as Promise<
+				string | undefined
+			>;
 		},
 		confirm: async (title, message) => {
-			this.emitUnsupported(title, "confirm", { message });
-			return false;
+			const result = await this.awaitUiInteraction("confirm", {
+				title,
+				message,
+			});
+			return result === true || result === "true";
 		},
 		input: async (title, placeholder) => {
-			this.emitUnsupported(title, "input", { placeholder });
-			return undefined;
+			return this.awaitUiInteraction("input", {
+				title,
+				placeholder,
+			}) as Promise<string | undefined>;
 		},
+
+		// -----------------------------------------------------------------------
+		// Notifications — emit info cards; no round-trip needed.
+		// -----------------------------------------------------------------------
 		notify: (message, type = "info") => {
 			this.emitCard({
 				title: "Pi extension notification",
@@ -69,7 +109,6 @@ class PiExtensionHost {
 				body: message,
 			});
 		},
-		onTerminalInput: () => () => undefined,
 		setStatus: (key, text) => {
 			this.emitCard({
 				title: "Pi extension status",
@@ -82,14 +121,16 @@ class PiExtensionHost {
 				this.emitCard({ title: "Pi working message", body: message });
 			}
 		},
-		setWorkingVisible: () => undefined,
-		setWorkingIndicator: () => undefined,
-		setHiddenThinkingLabel: () => undefined,
-		setWidget: () => undefined,
-		setFooter: () => undefined,
-		setHeader: () => undefined,
 		setTitle: (title) => {
 			this.emitCard({ title: "Pi extension title", body: title });
+		},
+
+		// -----------------------------------------------------------------------
+		// Unsupported — emit a warning card and return a safe fallback.
+		// -----------------------------------------------------------------------
+		editor: async (title, prefill) => {
+			this.emitUnsupported(title, "editor", { prefill });
+			return undefined;
 		},
 		custom: async (_factory, options) => {
 			this.emitUnsupported("Custom Pi extension UI", "custom", {
@@ -104,10 +145,13 @@ class PiExtensionHost {
 			this.emitUnsupported("Set editor text", "setEditorText", { text });
 		},
 		getEditorText: () => "",
-		editor: async (title, prefill) => {
-			this.emitUnsupported(title, "editor", { prefill });
-			return undefined;
-		},
+		onTerminalInput: () => () => undefined,
+		setWorkingVisible: () => undefined,
+		setWorkingIndicator: () => undefined,
+		setHiddenThinkingLabel: () => undefined,
+		setWidget: () => undefined,
+		setFooter: () => undefined,
+		setHeader: () => undefined,
 		addAutocompleteProvider: () => undefined,
 		setEditorComponent: () => undefined,
 		getEditorComponent: () => undefined,
@@ -123,6 +167,22 @@ class PiExtensionHost {
 		getToolsExpanded: () => false,
 		setToolsExpanded: () => undefined,
 	};
+
+	// -------------------------------------------------------------------------
+	// Internal helpers
+	// -------------------------------------------------------------------------
+
+	private awaitUiInteraction(
+		kind: "select" | "confirm" | "input",
+		payload: Record<string, unknown>,
+	): Promise<unknown> {
+		const interactionId = randomUUID();
+		const promise = new Promise<unknown>((resolve, reject) => {
+			pendingUiInteractions.set(interactionId, { resolve, reject });
+		});
+		this.emitter.piUiRequest(this.requestId, interactionId, kind, payload);
+		return promise;
+	}
 
 	private emitUnsupported(
 		title: string,

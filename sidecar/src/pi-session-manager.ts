@@ -14,7 +14,13 @@ import { prependLinkedDirectoriesContext } from "./linked-directories-context.js
 import { errorDetails, logger } from "./logger.js";
 import { createPiEventState, normalizePiEvent } from "./pi-event-normalizer.js";
 import { bindPiExtensionsForHelmor } from "./pi-extension-host.js";
+import { writeKanbanContext } from "./pi-kanban-context-writer.js";
+import {
+	createKanbanTools,
+	resolvePendingKanbanCall,
+} from "./pi-kanban-tools.js";
 import { createPiRuntimeResources } from "./pi-runtime.js";
+import { createThreadTools } from "./pi-thread-tools.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
@@ -74,6 +80,39 @@ export class PiSessionManager implements SessionManager {
 				await createPiRuntimeResources(params.cwd);
 			const model = resolvePiModel(modelRegistry, params.model);
 			const tools = toolsForPermissionMode(params.permissionMode);
+
+			// Write Pi extension file + board snapshot before the agent starts
+			// so the helmor-kanban extension can inject current state into the
+			// system prompt via `before_agent_start`. Cards are child workspaces;
+			// writeKanbanContext normalizes the snapshot defensively.
+			if (params.kanbanWorkspaceId && params.cwd) {
+				let cards: unknown[] = [];
+				if (params.kanbanSnapshot) {
+					try {
+						const parsed = JSON.parse(params.kanbanSnapshot);
+						cards = Array.isArray(parsed) ? parsed : [];
+					} catch {
+						// malformed snapshot — proceed with empty list
+					}
+				}
+				const goalMeta =
+					(params.goalTitle ?? params.goalDescription)
+						? {
+								title: params.goalTitle ?? undefined,
+								description: params.goalDescription ?? undefined,
+							}
+						: undefined;
+				await writeKanbanContext(params.cwd, cards, goalMeta);
+			}
+
+			const kanbanCustomTools = params.kanbanWorkspaceId
+				? createKanbanTools(params.kanbanWorkspaceId, emitter, requestId)
+				: [];
+
+			const threadCustomTools = params.kanbanWorkspaceId
+				? createThreadTools(params.kanbanWorkspaceId, emitter, requestId)
+				: [];
+
 			const { session } = await createAgentSession({
 				cwd: params.cwd,
 				authStorage,
@@ -88,6 +127,7 @@ export class PiSessionManager implements SessionManager {
 					: params.permissionMode === "plan"
 						? "builtin"
 						: undefined,
+				customTools: [...kanbanCustomTools, ...threadCustomTools],
 			});
 
 			live = {
@@ -124,6 +164,7 @@ export class PiSessionManager implements SessionManager {
 				images,
 				source: "interactive",
 			});
+			if (!live.active) return;
 			trace.finish(session.agent.state.errorMessage);
 			if (trace.shouldEmitEmptyTurnNotice()) {
 				emitter.passthrough(requestId, {
@@ -135,6 +176,7 @@ export class PiSessionManager implements SessionManager {
 			}
 			emitter.end(requestId);
 		} catch (err) {
+			if (live && !live.active) return;
 			const reason = err instanceof Error ? err.message : String(err);
 			if (reason.toLowerCase().includes("abort")) {
 				emitter.aborted(requestId, reason);
@@ -258,8 +300,15 @@ export class PiSessionManager implements SessionManager {
 	async stopSession(sessionId: string): Promise<void> {
 		const live = this.sessions.get(sessionId);
 		if (!live) return;
-		await live.session.abort();
-		live.emitter.stopped(live.requestId, sessionId);
+		live.active = false;
+		this.sessions.delete(sessionId);
+		live.unsubscribe?.();
+		live.emitter.aborted(live.requestId, "user_requested");
+		try {
+			await live.session.abort();
+		} finally {
+			live.session.dispose();
+		}
 	}
 
 	async steer(
@@ -272,19 +321,17 @@ export class PiSessionManager implements SessionManager {
 		if (!live?.active) return false;
 		const { text, imagePaths } = parseImageRefs(prompt, images);
 		const piImages = await buildPiImages(imagePaths);
+		await live.session.steer(text || prompt, piImages);
 		const event: {
 			type: "user_prompt";
-			message: { role: "user"; content: string };
+			text: string;
+			steer: true;
 			files?: string[];
 			images?: string[];
-		} = {
-			type: "user_prompt",
-			message: { role: "user", content: prompt },
-		};
+		} = { type: "user_prompt", text: prompt, steer: true };
 		if (files.length > 0) event.files = [...files];
 		if (imagePaths.length > 0) event.images = [...imagePaths];
 		live.emitter.passthrough(live.requestId, event);
-		await live.session.steer(text || prompt, piImages);
 		return true;
 	}
 
@@ -298,6 +345,18 @@ export class PiSessionManager implements SessionManager {
 			}
 		}
 		this.sessions.clear();
+	}
+
+	/**
+	 * Resolve a pending Kanban tool call. Called by the sidecar stdin handler
+	 * when `{ method: "kanbanToolResult" }` arrives from the frontend.
+	 */
+	resolveKanbanToolCall(
+		toolCallId: string,
+		result: unknown,
+		isError: boolean,
+	): void {
+		resolvePendingKanbanCall(toolCallId, result, isError);
 	}
 }
 

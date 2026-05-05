@@ -14,6 +14,7 @@ use crate::{
     git_ops, github_graphql, helpers,
     models::workspaces as workspace_models,
     repos,
+    workspace_kind::WorkspaceKind,
     workspace_pr_sync::PrSyncState,
     workspace_state::WorkspaceState,
     workspace_status::WorkspaceStatus,
@@ -208,6 +209,8 @@ pub fn prepare_workspace_from_source_impl(
         workspace_models::InitializingWorkspaceMetadata {
             initialization_parent_branch: &source_plan.initialization_parent_branch,
             intended_target_branch: &source_plan.intended_target_branch,
+            workspace_kind: WorkspaceKind::Code,
+            goal_workspace_id: None,
             status: source_plan.status,
             pr_title: source_plan.pr_title.as_deref(),
             pr_sync_state: source_plan.pr_sync_state,

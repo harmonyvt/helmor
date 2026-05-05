@@ -16,6 +16,8 @@ export type GroupTone =
  * Kept as a string literal union so existing `ws.state === "archived"` checks
  * keep working without runtime changes.
  */
+export type WorkspaceKind = "code" | "goal";
+
 export type WorkspaceState =
 	| "initializing"
 	| "setup_pending"
@@ -63,6 +65,8 @@ export type WorkspaceRow = {
 	title: string;
 	avatar?: string;
 	directoryName?: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	repoName?: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
@@ -178,12 +182,30 @@ export type AgentSendRequest = {
 	 *  matching `@<path>` substrings out as image attachments without
 	 *  re-parsing the text — paths may contain whitespace. */
 	images?: string[] | null;
+	/**
+	 * When set, the Pi agent registers Kanban custom tools so it can
+	 * create, move, and update cards. Must be the goal workspace id.
+	 */
+	kanbanWorkspaceId?: string | null;
+	/**
+	 * JSON-serialised current `GoalCard[]` snapshot. Written to
+	 * `.pi/context/kanban.json` before the agent starts so the
+	 * `helmor-kanban` Pi extension can inject board state into the
+	 * system prompt.
+	 */
+	kanbanSnapshot?: string | null;
+	/** Goal workspace title — injected into the Pi extension system prompt. */
+	goalTitle?: string | null;
+	/** Goal workspace description — injected into the Pi extension system prompt. */
+	goalDescription?: string | null;
 };
 
 export type WorkspaceSummary = {
 	id: string;
 	title: string;
 	directoryName: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	repoName: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
@@ -362,6 +384,8 @@ export type WorkspaceDetail = {
 	defaultBranch?: string | null;
 	rootPath?: string | null;
 	directoryName: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	state: WorkspaceState;
 	hasUnread: boolean;
 	workspaceUnread: number;
@@ -381,6 +405,10 @@ export type WorkspaceDetail = {
 	archiveCommit?: string | null;
 	sessionCount: number;
 	messageCount: number;
+	/** User-editable title for goal workspaces. Null if never set. */
+	goalTitle?: string | null;
+	/** User-editable description for goal workspaces. Null if never set. */
+	goalDescription?: string | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -468,6 +496,70 @@ export type PrepareWorkspaceResponse = {
 export type FinalizeWorkspaceResponse = {
 	workspaceId: string;
 	finalState: WorkspaceState;
+};
+
+export type PrepareGoalWorkspaceRequest = {
+	repoId: string;
+	title: string;
+	description: string;
+	targetBranch?: string | null;
+};
+
+export type PrepareGoalWorkspaceResponse = {
+	workspaceId: string;
+	initialSessionId: string;
+	repoId: string;
+	repoName: string;
+	directoryName: string;
+	branch: string;
+	defaultBranch: string;
+	intendedTargetBranch: string;
+	title: string;
+	description: string;
+	state: WorkspaceState;
+	repoScripts: RepoScripts;
+};
+
+export type FinalizeGoalWorkspaceResponse = {
+	workspaceId: string;
+	finalState: WorkspaceState;
+	prTitle: string;
+	prUrl?: string | null;
+	prSyncState: PrSyncState;
+};
+
+export type GoalCard = {
+	id: string;
+	goalWorkspaceId: string;
+	title: string;
+	description?: string | null;
+	lane: WorkspaceStatus;
+	sortOrder: number;
+	assignedProvider?: AgentProvider | string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	childWorkspaceId?: string | null;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type UpsertGoalCardInput = {
+	id?: string | null;
+	goalWorkspaceId: string;
+	title: string;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	sortOrder?: number | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	childWorkspaceId?: string | null;
+};
+
+export type GoalChildWorkspaceRequest = {
+	goalWorkspaceId: string;
+	goalCardId?: string | null;
+	title?: string | null;
 };
 
 export type WorkspaceCreationSource =
@@ -1086,6 +1178,29 @@ export async function loadWorkspaceDetail(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load workspace detail."),
+		);
+	}
+}
+
+/**
+ * Update the user-editable goal title and/or description for a goal workspace.
+ * The backend broadcasts a `WorkspaceChanged` event so the frontend cache
+ * is automatically invalidated.
+ */
+export async function updateGoalWorkspaceMeta(
+	workspaceId: string,
+	goalTitle: string | null,
+	goalDescription: string | null,
+): Promise<void> {
+	try {
+		await invoke("update_goal_workspace_meta", {
+			workspaceId,
+			goalTitle,
+			goalDescription,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to update goal workspace metadata."),
 		);
 	}
 }
@@ -1985,6 +2100,88 @@ export async function completeWorkspaceSetup(
 	return invoke("complete_workspace_setup", { workspaceId });
 }
 
+export async function prepareGoalWorkspace(
+	request: PrepareGoalWorkspaceRequest,
+): Promise<PrepareGoalWorkspaceResponse> {
+	return invoke<PrepareGoalWorkspaceResponse>("prepare_goal_workspace", {
+		request,
+	});
+}
+
+export async function finalizeGoalWorkspace(
+	workspaceId: string,
+	description: string,
+): Promise<FinalizeGoalWorkspaceResponse> {
+	return invoke<FinalizeGoalWorkspaceResponse>("finalize_goal_workspace", {
+		workspaceId,
+		description,
+	});
+}
+
+export async function listGoalCards(workspaceId: string): Promise<GoalCard[]> {
+	return invoke<GoalCard[]>("list_goal_cards", { workspaceId });
+}
+
+export async function upsertGoalCard(
+	input: UpsertGoalCardInput,
+): Promise<GoalCard> {
+	return invoke<GoalCard>("upsert_goal_card", { input });
+}
+
+export async function linkGoalCardWorkspace(
+	goalCardId: string,
+	workspaceId: string,
+): Promise<GoalCard> {
+	return invoke<GoalCard>("link_goal_card_workspace", {
+		goalCardId,
+		workspaceId,
+	});
+}
+
+export async function createGoalChildWorkspace(
+	request: GoalChildWorkspaceRequest,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("create_goal_child_workspace", {
+		request,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Goals AI panel — Pi Kanban bridge
+// ---------------------------------------------------------------------------
+
+/**
+ * Send the result of a Pi Kanban custom tool call back to the sidecar.
+ * Called after the frontend has executed the corresponding Tauri IPC action
+ * in response to a `kanban_tool_call` pipeline event.
+ */
+export async function sendKanbanToolResult(
+	toolCallId: string,
+	result: unknown,
+	isError = false,
+): Promise<void> {
+	return invoke("send_kanban_tool_result", {
+		toolCallId,
+		result: result ?? null,
+		isError,
+	});
+}
+
+/**
+ * Respond to a Pi extension interactive UI request (select / confirm / input).
+ * Called after the user interacts with the element rendered in the Goals AI
+ * panel in response to a `pi_ui_request` pipeline event.
+ */
+export async function respondToPiUi(
+	interactionId: string,
+	result: unknown,
+): Promise<void> {
+	return invoke("respond_to_pi_ui", {
+		interactionId,
+		result: result ?? null,
+	});
+}
+
 export async function addRepositoryFromLocalPath(
 	folderPath: string,
 ): Promise<AddRepositoryResponse> {
@@ -2037,6 +2234,24 @@ export async function setWorkspaceStatus(
 	status: WorkspaceStatus,
 ): Promise<void> {
 	return invoke<void>("set_workspace_status", { workspaceId, status });
+}
+
+export async function setGoalChildWorkspaceStatus(
+	goalWorkspaceId: string,
+	childWorkspaceId: string,
+	status: WorkspaceStatus,
+): Promise<void> {
+	return invoke<void>("set_goal_child_workspace_status", {
+		request: { goalWorkspaceId, childWorkspaceId, status },
+	});
+}
+
+export async function listGoalChildWorkspaces(
+	goalWorkspaceId: string,
+): Promise<WorkspaceDetail[]> {
+	return invoke<WorkspaceDetail[]>("list_goal_child_workspaces", {
+		goalWorkspaceId,
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -2269,6 +2484,19 @@ export type AgentStreamEvent =
 			requestedSchema?: Record<string, unknown> | null;
 	  }
 	| { kind: "planCaptured" }
+	| {
+			kind: "kanbanToolCall";
+			toolCallId: string;
+			tool: string;
+			workspaceId: string;
+			args: Record<string, unknown>;
+	  }
+	| {
+			kind: "piUiRequest";
+			interactionId: string;
+			uiKind: "select" | "confirm" | "input";
+			payload: Record<string, unknown>;
+	  }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
