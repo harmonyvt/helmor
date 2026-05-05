@@ -40,7 +40,7 @@ function deriveState(
  */
 export function useScriptStatus(
 	workspaceId: string | null,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	hasScript: boolean,
 ): ScriptIconState {
 	const [status, setStatus] = useState<ScriptStatus>("idle");
