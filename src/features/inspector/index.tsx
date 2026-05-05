@@ -4,6 +4,7 @@ import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
+import { ArchiveTab } from "@/features/inspector/sections/archive";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import {
 	type ShortcutHandler,
@@ -27,7 +28,6 @@ import { HorizontalResizeHandle, InspectorTabsSection } from "./layout";
 import { buildReviewAllPrompt } from "./pr-comments";
 import type { ScriptStatus } from "./script-store";
 import { ActionsSection } from "./sections/actions";
-import { ArchiveTab } from "./sections/archive";
 import { ChangesSection } from "./sections/changes";
 import { OpenDevServerButton, RunTab } from "./sections/run";
 import { SetupTab } from "./sections/setup";

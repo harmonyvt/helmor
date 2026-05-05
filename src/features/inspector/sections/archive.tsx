@@ -5,8 +5,11 @@ import {
 	TerminalOutput,
 } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { TABS_EASING, TABS_HOVER_TRANSITION_MS, useTabsZoom } from "../layout";
+import {
+	TABS_EASING,
+	TABS_HOVER_TRANSITION_MS,
+	useTabsZoom,
+} from "@/features/inspector/layout";
 import {
 	attach,
 	detach,
@@ -16,7 +19,8 @@ import {
 	stopScript,
 	TRUNCATION_NOTICE,
 	writeStdin,
-} from "../script-store";
+} from "@/features/inspector/script-store";
+import { cn } from "@/lib/utils";
 
 type ArchiveTabProps = {
 	repoId: string | null;
@@ -44,8 +48,18 @@ export function ArchiveTab({
 		if (!workspaceId) return;
 
 		const existing = attach(workspaceId, "archive", {
-			onChunk: (data) => termRef.current?.write(data),
-			onStatusChange: (s) => setStatus(s),
+			onChunk: (data) => {
+				setHasRun(true);
+				termRef.current?.write(data);
+			},
+			onStatusChange: (s) => {
+				setStatus(s);
+				if (s !== "idle") setHasRun(true);
+			},
+			onReset: () => {
+				setHasRun(true);
+				termRef.current?.clear();
+			},
 		});
 
 		if (existing) {
