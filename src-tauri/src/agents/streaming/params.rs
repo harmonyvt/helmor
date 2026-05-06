@@ -24,6 +24,11 @@ pub struct BuildSendMessageParamsInput<'a> {
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
+    /// Goal-only Pi context/tool fields. Omitted for normal conversations.
+    pub kanban_workspace_id: Option<&'a str>,
+    pub kanban_snapshot: Option<&'a str>,
+    pub goal_title: Option<&'a str>,
+    pub goal_description: Option<&'a str>,
 }
 
 /// Build the `sendMessage` request params that the sidecar receives.
@@ -69,7 +74,20 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
             );
         }
     }
+    insert_optional_string(&mut params, "kanbanWorkspaceId", input.kanban_workspace_id);
+    insert_optional_string(&mut params, "kanbanSnapshot", input.kanban_snapshot);
+    insert_optional_string(&mut params, "goalTitle", input.goal_title);
+    insert_optional_string(&mut params, "goalDescription", input.goal_description);
     params
+}
+
+fn insert_optional_string(params: &mut Value, key: &str, value: Option<&str>) {
+    let Some(value) = value else {
+        return;
+    };
+    if let Some(obj) = params.as_object_mut() {
+        obj.insert(key.to_string(), Value::String(value.to_string()));
+    }
 }
 
 /// Load the workspace's `/add-dir` list via the helmor session id. Returns

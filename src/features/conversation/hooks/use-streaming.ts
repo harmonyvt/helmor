@@ -837,8 +837,26 @@ export function useConversationStreaming({
 					}
 				};
 
+				const resumeModel = findModelOption(
+					modelSectionsQuery.data ?? [],
+					resumeModelId,
+				) ?? {
+					id: resumeModelId,
+					provider: deferred.provider,
+					label: resumeModelId,
+					cliModel: resumeModelId,
+				};
+				const sendRequestExtras =
+					buildSendRequestExtras?.({
+						workspaceId: displayedWorkspaceId,
+						sessionId: displayedSessionId,
+						prompt: "",
+						model: resumeModel,
+					}) ?? {};
+
 				await startAgentMessageStream(
 					{
+						...sendRequestExtras,
 						provider: deferred.provider,
 						modelId: resumeModelId,
 						prompt: "",
@@ -1054,6 +1072,8 @@ export function useConversationStreaming({
 			queryClient,
 			rememberInteractionWorkspace,
 			selectedProvider,
+			modelSectionsQuery.data,
+			buildSendRequestExtras,
 			onKanbanToolCall,
 			onPiUiRequest,
 		],

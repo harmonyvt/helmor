@@ -2170,8 +2170,8 @@ export async function sendKanbanToolResult(
 
 /**
  * Respond to a Pi extension interactive UI request (select / confirm / input).
- * Called after the user interacts with the element rendered in the Goals AI
- * panel in response to a `pi_ui_request` pipeline event.
+ * Called after the user interacts with the shared conversation UI rendered in
+ * response to a `pi_ui_request` event from a Pi extension.
  */
 export async function respondToPiUi(
 	interactionId: string,
