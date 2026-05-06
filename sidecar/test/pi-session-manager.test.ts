@@ -14,6 +14,8 @@ const registryState = {
 const sessionState = {
 	createdSession: undefined as MockAgentSession | undefined,
 	promptBlocker: undefined as Promise<void> | undefined,
+	promptEvents: [] as unknown[],
+	extensionNotification: undefined as string | undefined,
 };
 
 const MockAuthStorage = {
@@ -71,6 +73,7 @@ class MockDefaultResourceLoader {
 class MockAgentSession {
 	listeners: Array<(event: unknown) => void> = [];
 	steerCalls: Array<{ text: string; images: unknown }> = [];
+	bindings: { uiContext?: { notify?: (message: string) => void } } | undefined;
 	abortCalls = 0;
 	disposed = false;
 	agent = { state: { errorMessage: undefined as string | undefined } };
@@ -83,6 +86,12 @@ class MockAgentSession {
 	}
 
 	async prompt() {
+		if (sessionState.extensionNotification) {
+			this.bindings?.uiContext?.notify?.(sessionState.extensionNotification);
+		}
+		for (const event of sessionState.promptEvents) {
+			for (const listener of this.listeners) listener(event);
+		}
 		await sessionState.promptBlocker;
 	}
 
@@ -93,7 +102,11 @@ class MockAgentSession {
 		this.steerCalls.push({ text, images });
 	}
 
-	async bindExtensions() {}
+	async bindExtensions(bindings: {
+		uiContext?: { notify?: (message: string) => void };
+	}) {
+		this.bindings = bindings;
+	}
 
 	async reload() {}
 
@@ -146,6 +159,8 @@ describe("PiSessionManager.listModels", () => {
 		registryState.bootstrapped = false;
 		sessionState.createdSession = undefined;
 		sessionState.promptBlocker = undefined;
+		sessionState.promptEvents = [];
+		sessionState.extensionNotification = undefined;
 	});
 
 	test("returns configured Pi models from the registry", async () => {
@@ -202,6 +217,8 @@ describe("PiSessionManager.sendMessage", () => {
 		registryState.bootstrapped = false;
 		sessionState.createdSession = undefined;
 		sessionState.promptBlocker = undefined;
+		sessionState.promptEvents = [];
+		sessionState.extensionNotification = undefined;
 	});
 
 	test("emits steer prompts in the persisted user_prompt shape after Pi accepts", async () => {
@@ -334,6 +351,99 @@ describe("PiSessionManager.sendMessage", () => {
 			message: "Pi completed without returning a visible assistant message.",
 		});
 		expect(events).toContainEqual({ id: "request-1", type: "end" });
+	});
+
+	test("does not label reasoning-only Pi turns as empty", async () => {
+		sessionState.promptEvents = [
+			{
+				type: "message_update",
+				message: { role: "assistant", content: [] },
+				assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+			},
+			{
+				type: "message_update",
+				message: { role: "assistant", content: [] },
+				assistantMessageEvent: {
+					type: "thinking_delta",
+					contentIndex: 0,
+					delta: "reasoning only",
+				},
+			},
+			{
+				type: "message_update",
+				message: { role: "assistant", content: [] },
+				assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
+			},
+		];
+		const events: object[] = [];
+		await new PiSessionManager().sendMessage(
+			"request-1",
+			{
+				sessionId: "session-1",
+				prompt: "Hi",
+				cwd: "/tmp",
+				model: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			{
+				passthrough: (_requestId: string, event: object) => events.push(event),
+				end: (requestId: string) => events.push({ id: requestId, type: "end" }),
+				error: (requestId: string, message: string, internal?: boolean) =>
+					events.push({ id: requestId, type: "error", message, internal }),
+				aborted: (requestId: string, reason: string) =>
+					events.push({ id: requestId, type: "aborted", reason }),
+			} as never,
+		);
+
+		expect(events).not.toContainEqual({
+			type: "error",
+			message: "Pi completed without returning a visible assistant message.",
+		});
+		expect(events).toContainEqual(
+			expect.objectContaining({ type: "item/completed" }),
+		);
+	});
+
+	test("does not label Pi extension card activity as empty", async () => {
+		sessionState.extensionNotification = "Extension did useful work";
+		const events: object[] = [];
+		await new PiSessionManager().sendMessage(
+			"request-1",
+			{
+				sessionId: "session-1",
+				prompt: "Hi",
+				cwd: "/tmp",
+				model: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			{
+				passthrough: (_requestId: string, event: object) => events.push(event),
+				end: (requestId: string) => events.push({ id: requestId, type: "end" }),
+				error: (requestId: string, message: string, internal?: boolean) =>
+					events.push({ id: requestId, type: "error", message, internal }),
+				aborted: (requestId: string, reason: string) =>
+					events.push({ id: requestId, type: "aborted", reason }),
+			} as never,
+		);
+
+		expect(events).not.toContainEqual({
+			type: "error",
+			message: "Pi completed without returning a visible assistant message.",
+		});
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "item/completed",
+				item: expect.objectContaining({ type: "generic_card" }),
+			}),
+		);
 	});
 });
 

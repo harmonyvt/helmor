@@ -38,8 +38,9 @@ export async function bindPiExtensionsForHelmor(
 	session: AgentSession,
 	emitter: SidecarEmitter,
 	requestId: string,
+	onCard?: () => void,
 ): Promise<void> {
-	const host = new PiExtensionHost(emitter, requestId);
+	const host = new PiExtensionHost(emitter, requestId, onCard);
 	await session.bindExtensions({
 		uiContext: host.uiContext,
 		onError: host.onError,
@@ -64,6 +65,7 @@ class PiExtensionHost {
 	constructor(
 		private readonly emitter: SidecarEmitter,
 		private readonly requestId: string,
+		private readonly onCard: (() => void) | undefined,
 	) {}
 
 	readonly onError = (error: ExtensionError): void => {
@@ -206,6 +208,7 @@ class PiExtensionHost {
 		readonly details?: unknown;
 	}): void {
 		this.sequence += 1;
+		this.onCard?.();
 		this.emitter.passthrough(this.requestId, {
 			type: "item/completed",
 			item: {

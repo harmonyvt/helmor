@@ -1339,6 +1339,44 @@ fn codex_pi_mcp_tool_call_text_result_renders_as_tool_output() {
 }
 
 #[test]
+fn codex_pi_reasoning_item_renders_historical_collapsed_with_duration() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi_reasoning_1",
+            "type": "reasoning",
+            "text": "Pi considered the goal state before calling tools.",
+            "duration_ms": 2400
+        }
+    });
+    let msgs = vec![make_record(
+        "pi-reasoning1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_pi_reasoning_lifecycle_end_to_end() {
+    let events = vec![
+        json!({"type": "turn/started", "turn": {"id": "pi-turn-request-a-0"}, "session_id": "session-1"}),
+        json!({"type": "item/started", "item": {"id": "pi-reasoning-request-a-0", "type": "reasoning", "text": ""}, "session_id": "session-1"}),
+        json!({"type": "item/reasoning/textDelta", "itemId": "pi-reasoning-request-a-0", "text": "Pi is thinking."}),
+        json!({"type": "item/started", "item": {"id": "pi-read-1", "type": "mcp_tool_call", "server": "pi", "tool": "read", "arguments": {"path": "README.md"}, "status": "in_progress"}, "session_id": "session-1"}),
+        json!({"type": "item/completed", "item": {"id": "pi-reasoning-request-a-0", "type": "reasoning", "text": "Pi is thinking."}, "session_id": "session-1"}),
+        json!({"type": "item/completed", "item": {"id": "pi-read-1", "type": "mcp_tool_call", "server": "pi", "tool": "read", "arguments": {"path": "README.md"}, "status": "completed", "result": {"content": [{"type": "text", "text": "Readme"}]}}, "session_id": "session-1"}),
+        json!({"type": "item/started", "item": {"id": "pi-message-request-a-0", "type": "agent_message", "text": ""}, "session_id": "session-1"}),
+        json!({"type": "item/agentMessage/delta", "itemId": "pi-message-request-a-0", "text": "Done."}),
+        json!({"type": "item/completed", "item": {"id": "pi-message-request-a-0", "type": "agent_message", "text": "Done."}, "session_id": "session-1"}),
+        json!({"type": "turn/completed", "turn": {"id": "pi-turn-request-a-0", "status": "completed"}, "session_id": "session-1"}),
+    ];
+
+    let fingerprint = replay_stream_events("codex", &events);
+    assert_yaml_snapshot!(normalize_stream_fingerprint(&fingerprint));
+}
+
+#[test]
 fn codex_turn_completed_with_duration_shows_result_label() {
     let parsed = json!({
         "type": "turn/completed",

@@ -26,6 +26,7 @@ pub(super) struct CodexItemState {
     output: String,
     reasoning_text: String,
     initial_item: Value,
+    started_at_ms: f64,
 }
 
 impl CodexItemState {
@@ -36,7 +37,13 @@ impl CodexItemState {
             output: String::new(),
             reasoning_text: String::new(),
             initial_item,
+            started_at_ms: super::now_ms(),
         }
+    }
+
+    fn duration_ms(&self) -> Option<u64> {
+        let duration = super::now_ms() - self.started_at_ms;
+        (duration >= 0.0).then_some(duration as u64)
     }
 
     /// Build a full item snapshot from accumulated delta state.
@@ -98,10 +105,16 @@ pub(super) fn handle_item_completed(acc: &mut StreamAccumulator, _raw_line: &str
     let item = normalize_item(raw_item);
     let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
 
-    // Clean up delta state
-    if !item_id.is_empty() {
-        acc.codex_items.remove(item_id);
-    }
+    // Clean up delta state. Keep the removed state long enough to fill
+    // completion payload gaps (Pi thinking_end can omit content) and to
+    // stamp reasoning duration for both the live just-finished render and
+    // the persisted historical row.
+    let completed_state = if !item_id.is_empty() {
+        acc.codex_items.remove(item_id)
+    } else {
+        None
+    };
+    let item = enrich_completed_item(item, completed_state.as_ref());
 
     // Include "type": "item.completed" so the adapter's historical
     // reload can dispatch via `msg_type == "item.completed"`.
@@ -265,6 +278,17 @@ fn reserve_item_turn_order(
     item_id: &str,
     item: &Value,
 ) {
+    if item_type == "reasoning" {
+        let has_text = item
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty());
+        let is_pi_reasoning = item_id.starts_with("pi-reasoning-");
+        if !has_text && !is_pi_reasoning {
+            return;
+        }
+    }
+
     let Some(turn_id) = item_turn_id(item_type, Some(item_id), acc.line_count) else {
         return;
     };
@@ -289,6 +313,10 @@ fn item_turn_id(item_type: &str, item_id: Option<&str>, line_count: u64) -> Opti
         "agent_message" => Some(
             id.map(|id| format!("codex-item:{id}"))
                 .unwrap_or_else(|| format!("codex-item:{line_count}")),
+        ),
+        "reasoning" => Some(
+            id.map(|id| format!("codex-reasoning:{id}"))
+                .unwrap_or_else(|| format!("codex-reasoning:{line_count}")),
         ),
         "command_execution" => Some(
             id.map(|id| format!("codex-cmd-asst:{id}"))
@@ -594,16 +622,23 @@ fn handle_reasoning(
     let intermediate_id = item_id
         .map(|id| format!("codex-reasoning:{id}"))
         .unwrap_or_else(|| format!("codex-reasoning:{}", acc.line_count));
+    let mut thinking_block = serde_json::json!({
+        "type": "thinking",
+        "thinking": text,
+        "__part_id": format!("{intermediate_id}:blk:0"),
+    });
+    if let Some(obj) = thinking_block.as_object_mut() {
+        obj.insert("__is_streaming".to_string(), Value::Bool(!persist));
+        if let Some(duration) = item.get("duration_ms").and_then(Value::as_u64) {
+            obj.insert("__duration_ms".to_string(), Value::from(duration));
+        }
+    }
     let synthetic_assistant = serde_json::json!({
         "type": "assistant",
         "message": {
             "type": "message",
             "role": "assistant",
-            "content": [{
-                "type": "thinking",
-                "thinking": text,
-                "__part_id": format!("{intermediate_id}:blk:0"),
-            }]
+            "content": [thinking_block]
         }
     });
     let sa_str = serde_json::to_string(&synthetic_assistant).unwrap_or_default();
@@ -1058,6 +1093,33 @@ pub(super) fn handle_turn_plan_updated(
         MessageRole::Assistant,
         Some(msg_id),
     );
+}
+
+fn enrich_completed_item(mut item: Value, state: Option<&CodexItemState>) -> Value {
+    if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+        return item;
+    }
+
+    if item
+        .get("text")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        if let Some(text) = state
+            .map(|state| state.reasoning_text.as_str())
+            .filter(|text| !text.is_empty())
+        {
+            item["text"] = Value::String(text.to_string());
+        }
+    }
+
+    if item.get("duration_ms").and_then(Value::as_u64).is_none() {
+        if let Some(duration) = state.and_then(CodexItemState::duration_ms) {
+            item["duration_ms"] = Value::from(duration);
+        }
+    }
+
+    item
 }
 
 fn handle_error_item(acc: &mut StreamAccumulator, raw_line: &str, item: &Value, persist: bool) {

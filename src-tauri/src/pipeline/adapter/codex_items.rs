@@ -169,7 +169,7 @@ fn render_reasoning(msg: &IntermediateMessage, item: &Value, result: &mut Vec<Th
                     id: format!("{}:blk:0", msg.id),
                     text: text.to_string(),
                     streaming: None,
-                    duration_ms: None,
+                    duration_ms: item.get("duration_ms").and_then(Value::as_u64),
                 })],
                 status: Some(MessageStatus {
                     status_type: "complete".to_string(),
