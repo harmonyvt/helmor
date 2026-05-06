@@ -68,6 +68,19 @@ describe("buildCommitButtonPrompt", () => {
 		);
 	});
 
+	it("passes the Goal branch into child workspace create-pr prompts", () => {
+		const prompt = buildCommitButtonPrompt(
+			"create-pr",
+			{},
+			"helmor/goal/build-api",
+			GITHUB_FORGE,
+		);
+
+		expect(prompt).toContain(
+			"Open a pull request against `helmor/goal/build-api` using `gh pr create --base helmor/goal/build-api`.",
+		);
+	});
+
 	it("passes the target branch into create-pr prompts (GitLab forge)", () => {
 		const prompt = buildCommitButtonPrompt(
 			"create-pr",
