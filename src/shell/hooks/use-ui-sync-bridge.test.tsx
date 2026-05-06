@@ -93,6 +93,7 @@ describe("useUiSyncBridge", () => {
 		act(() => {
 			capturedSubscription?.({
 				type: "pendingCliSendQueued",
+				pendingSendId: "pending-1",
 				workspaceId: "workspace-1",
 				sessionId: "session-1",
 				prompt: "hello",

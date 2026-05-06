@@ -3,6 +3,7 @@ import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
+import { open as openFilePickerDialog } from "@tauri-apps/plugin-dialog";
 import type { LexicalEditor } from "lexical";
 import { $getRoot } from "lexical";
 import {
@@ -11,6 +12,7 @@ import {
 	ChevronDown,
 	ClipboardList,
 	MessageSquareMore,
+	Paperclip,
 	Square,
 	Zap,
 } from "lucide-react";
@@ -79,7 +81,7 @@ import { PasteImagePlugin } from "./editor/plugins/paste-image-plugin";
 import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
 import { $extractComposerContent } from "./editor/utils";
-import { $appendComposerInsertItems } from "./editor-ops";
+import { $appendComposerInsertItems, $insertFilePaths } from "./editor-ops";
 import type { ElicitationResponseHandler } from "./elicitation";
 import { ElicitationPanel } from "./elicitation-panel";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
@@ -266,6 +268,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const consumedInsertRequestIdsRef = useRef<Set<string>>(new Set());
 	const [hasContent, setHasContent] = useState(false);
 	const [isInputFocused, setIsInputFocused] = useState(false);
+	const [isDragOver, setIsDragOver] = useState(false);
 	const [modelPickerOpen, setModelPickerOpen] = useState(false);
 	useEffect(() => {
 		const handleFocusComposer = () => {
@@ -510,6 +513,27 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		submitDraft({ oppositeFollowUp: true });
 	}, [submitDraft]);
 
+	const handleDragStateChange = useCallback(
+		(dragging: boolean) => {
+			if (inputDisabled || hasPendingInteraction) return;
+			setIsDragOver(dragging);
+		},
+		[inputDisabled, hasPendingInteraction],
+	);
+
+	const handleOpenFilePicker = useCallback(async () => {
+		if (inputDisabled) return;
+		const rawSelected = await openFilePickerDialog({ multiple: true });
+		const selected = rawSelected ?? [];
+		if (selected.length === 0) return;
+		const editor = editorRef.current;
+		if (!editor) return;
+		editor.update(() => {
+			$insertFilePaths(selected);
+		});
+		editor.focus();
+	}, [inputDisabled]);
+
 	const handleComposerKeyDownCapture = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
 			if (inputDisabled) return;
@@ -554,7 +578,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			data-focus-scope="composer"
 			onKeyDownCapture={handleComposerKeyDownCapture}
 			className={cn(
-				"relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
+				"relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)] transition-colors",
 				// Pending-interaction panels fill the shell edge-to-edge and own
 				// their own internal padding; the default composer gets the
 				// legacy px-4 pt-3 pb-3 breathing room.
@@ -562,6 +586,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				inputDisabled &&
 					!hasPendingInteraction &&
 					"cursor-not-allowed opacity-60",
+				isDragOver && !hasPendingInteraction && "border-primary/50",
 			)}
 		>
 			<label htmlFor="workspace-input" className="sr-only">
@@ -654,6 +679,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									<span>to focus</span>
 								</div>
 							) : null}
+							{isDragOver ? (
+								<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-primary/[0.04]">
+									<span className="text-[12px] font-medium text-primary/60">
+										Drop to attach
+									</span>
+								</div>
+							) : null}
 						</div>
 						<HistoryPlugin />
 						<SlashCommandPlugin
@@ -690,7 +722,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						/>
 						<CompositionGuardPlugin />
 						<PasteImagePlugin />
-						<DropFilePlugin />
+						<DropFilePlugin onDragStateChange={handleDragStateChange} />
 						<AutoResizePlugin minHeight={64} maxHeight={240} />
 						<EditorRefPlugin editorRef={editorRef} />
 						<DraftPersistencePlugin
@@ -743,6 +775,19 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								)}
 							</div>
 							<div className="flex shrink-0 items-center gap-1.5">
+								<Button
+									variant="ghost"
+									size="icon"
+									aria-label="Attach files"
+									title="Attach files"
+									onClick={() => {
+										void handleOpenFilePicker();
+									}}
+									disabled={inputDisabled}
+									className="rounded-[9px] text-muted-foreground hover:text-foreground"
+								>
+									<Paperclip className="size-[14px]" strokeWidth={1.8} />
+								</Button>
 								{sending ? (
 									<>
 										<Button
@@ -933,6 +978,17 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										</ComposerButton>
 									</>
 								)}
+								<ComposerButton
+									aria-label="Attach files"
+									title="Attach files"
+									disabled={inputDisabled}
+									onClick={() => {
+										void handleOpenFilePicker();
+									}}
+									className={cn(composerToolbarTriggerClassName)}
+								>
+									<Paperclip className="size-[13px]" strokeWidth={1.8} />
+								</ComposerButton>
 							</div>
 
 							<div className="flex items-center gap-1">

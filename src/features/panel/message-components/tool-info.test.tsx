@@ -129,6 +129,26 @@ describe("getToolInfo — apply_patch", () => {
 		expect(info.diffDel).toBeUndefined();
 	});
 
+	it("single create change is labeled as a write", () => {
+		const info = getToolInfo("apply_patch", {
+			changes: [{ path: "/src/new.ts", kind: "create", diff: "+hello" }],
+		});
+		expect(info.action).toBe("Write");
+		expect(info.file).toBe("new.ts");
+		expect(info.diffAdd).toBe(1);
+		expect(info.diffDel).toBeUndefined();
+	});
+
+	it("single delete change is labeled as a delete", () => {
+		const info = getToolInfo("apply_patch", {
+			changes: [{ path: "/src/old.ts", kind: "delete" }],
+		});
+		expect(info.action).toBe("Delete");
+		expect(info.file).toBe("old.ts");
+		expect(info.diffAdd).toBeUndefined();
+		expect(info.diffDel).toBeUndefined();
+	});
+
 	it("skips +++ and --- header lines in diff", () => {
 		const info = getToolInfo("apply_patch", {
 			changes: [

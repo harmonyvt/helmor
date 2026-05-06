@@ -45,6 +45,7 @@ import {
 	adaptPermissionToDeferredTool,
 	permissionIdFromAdaptedToolUseId,
 } from "./permission-as-deferred-tool";
+import { usePiUiInteraction } from "./pi-ui-interaction";
 
 type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
@@ -80,10 +81,11 @@ type WorkspaceConversationContainerProps = {
 		/** When true, submit must queue if a turn is already streaming,
 		 *  regardless of the user's `followUpBehavior` setting. */
 		forceQueue?: boolean;
+		pendingSendId?: string | null;
 	} | null;
 	/** Called after the pending prompt has been handed off to the composer's
 	 * submit flow, so the caller can clear the queue. */
-	onPendingPromptConsumed?: () => void;
+	onPendingPromptConsumed?: (pendingSendId?: string | null) => void;
 	pendingInsertRequests?: ResolvedComposerInsertRequest[];
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 	onQueuePendingPromptForSession?: (request: {
@@ -105,6 +107,8 @@ type WorkspaceConversationContainerProps = {
 	onKanbanToolCall?: (
 		event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
 	) => void;
+	/** Optional observer for Pi extension UI requests. The shared conversation
+	 * surface always renders and responds to select/confirm/input requests. */
 	onPiUiRequest?: (
 		event: Extract<AgentStreamEvent, { kind: "piUiRequest" }>,
 	) => void;
@@ -149,6 +153,10 @@ export const WorkspaceConversationContainer = memo(
 		compact = false,
 	}: WorkspaceConversationContainerProps) {
 		const queryClient = useQueryClient();
+		const {
+			accessory: piUiAccessory,
+			handlePiUiRequest: handleSharedPiUiRequest,
+		} = usePiUiInteraction();
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
 		>({});
@@ -177,6 +185,14 @@ export const WorkspaceConversationContainer = memo(
 		// tree (not keyed by session id).
 		const { settings } = useSettings();
 		const { queuesBySessionId, api: submitQueueApi } = useSubmitQueue();
+
+		const handlePiUiRequest = useCallback(
+			(event: Extract<AgentStreamEvent, { kind: "piUiRequest" }>) => {
+				handleSharedPiUiRequest(event);
+				onPiUiRequest?.(event);
+			},
+			[handleSharedPiUiRequest, onPiUiRequest],
+		);
 
 		const {
 			activeSendError,
@@ -215,7 +231,7 @@ export const WorkspaceConversationContainer = memo(
 			onSessionAborted,
 			buildSendRequestExtras,
 			onKanbanToolCall,
-			onPiUiRequest,
+			onPiUiRequest: handlePiUiRequest,
 		});
 
 		const queueItems = displayedSessionId
@@ -349,6 +365,14 @@ export const WorkspaceConversationContainer = memo(
 		const effectivePendingDeferredTool =
 			pendingDeferredTool ?? permissionAsDeferredTool;
 
+		const effectiveComposerAccessory =
+			composerAccessory || piUiAccessory ? (
+				<>
+					{composerAccessory}
+					{piUiAccessory}
+				</>
+			) : null;
+
 		const effectiveDeferredToolResponse =
 			useCallback<DeferredToolResponseHandler>(
 				(deferred, behavior, options?: DeferredToolResponseOptions) => {
@@ -401,7 +425,7 @@ export const WorkspaceConversationContainer = memo(
 					}
 				>
 					<div>
-						{composerAccessory}
+						{effectiveComposerAccessory}
 						<WorkspaceComposerContainer
 							displayedWorkspaceId={displayedWorkspaceId}
 							displayedSessionId={displayedSessionId}

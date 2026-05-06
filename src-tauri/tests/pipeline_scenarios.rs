@@ -32,6 +32,7 @@
 mod common;
 
 use common::*;
+use helmor_lib::pipeline::PipelineEmit;
 use insta::assert_yaml_snapshot;
 use serde::Serialize;
 use serde_json::json;
@@ -1339,6 +1340,44 @@ fn codex_pi_mcp_tool_call_text_result_renders_as_tool_output() {
 }
 
 #[test]
+fn codex_pi_reasoning_item_renders_historical_collapsed_with_duration() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi_reasoning_1",
+            "type": "reasoning",
+            "text": "Pi considered the goal state before calling tools.",
+            "duration_ms": 2400
+        }
+    });
+    let msgs = vec![make_record(
+        "pi-reasoning1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_pi_reasoning_lifecycle_end_to_end() {
+    let events = vec![
+        json!({"type": "turn/started", "turn": {"id": "pi-turn-request-a-0"}, "session_id": "session-1"}),
+        json!({"type": "item/started", "item": {"id": "pi-reasoning-request-a-0", "type": "reasoning", "text": ""}, "session_id": "session-1"}),
+        json!({"type": "item/reasoning/textDelta", "itemId": "pi-reasoning-request-a-0", "text": "Pi is thinking."}),
+        json!({"type": "item/started", "item": {"id": "pi-read-1", "type": "mcp_tool_call", "server": "pi", "tool": "read", "arguments": {"path": "README.md"}, "status": "in_progress"}, "session_id": "session-1"}),
+        json!({"type": "item/completed", "item": {"id": "pi-reasoning-request-a-0", "type": "reasoning", "text": "Pi is thinking."}, "session_id": "session-1"}),
+        json!({"type": "item/completed", "item": {"id": "pi-read-1", "type": "mcp_tool_call", "server": "pi", "tool": "read", "arguments": {"path": "README.md"}, "status": "completed", "result": {"content": [{"type": "text", "text": "Readme"}]}}, "session_id": "session-1"}),
+        json!({"type": "item/started", "item": {"id": "pi-message-request-a-0", "type": "agent_message", "text": ""}, "session_id": "session-1"}),
+        json!({"type": "item/agentMessage/delta", "itemId": "pi-message-request-a-0", "text": "Done."}),
+        json!({"type": "item/completed", "item": {"id": "pi-message-request-a-0", "type": "agent_message", "text": "Done."}, "session_id": "session-1"}),
+        json!({"type": "turn/completed", "turn": {"id": "pi-turn-request-a-0", "status": "completed"}, "session_id": "session-1"}),
+    ];
+
+    let fingerprint = replay_stream_events("codex", &events);
+    assert_yaml_snapshot!(normalize_stream_fingerprint(&fingerprint));
+}
+
+#[test]
 fn codex_turn_completed_with_duration_shows_result_label() {
     let parsed = json!({
         "type": "turn/completed",
@@ -1483,6 +1522,113 @@ fn codex_file_change_empty_changes() {
         &serde_json::to_string(&parsed).unwrap(),
     )];
     assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn pi_file_change_write_historical_preserves_file_and_result_details() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi_write_1",
+            "type": "file_change",
+            "changes": [
+                {
+                    "path": "src/new.ts",
+                    "kind": "create",
+                    "diff": "+one\n+two",
+                    "contentLength": 7
+                }
+            ],
+            "status": "completed",
+            "result": {
+                "content": [
+                    { "type": "text", "text": "Successfully wrote 7 bytes to src/new.ts" }
+                ]
+            }
+        }
+    });
+    let msgs = vec![make_record(
+        "piw1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn pi_file_change_failed_historical_preserves_error_details() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi_edit_failed",
+            "type": "file_change",
+            "changes": [
+                { "path": "src/app.ts", "kind": "modify", "diff": "-missing\n+new" }
+            ],
+            "status": "failed",
+            "result": {
+                "content": [
+                    { "type": "text", "text": "Could not find edits[0] in src/app.ts." }
+                ]
+            }
+        }
+    });
+    let msgs = vec![make_record(
+        "pif1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[derive(Serialize)]
+struct FileChangeRenderPair {
+    live: Vec<common::NormThreadMessage>,
+    historical: Vec<common::NormThreadMessage>,
+}
+
+#[test]
+fn pi_file_change_live_and_historical_reload_match() {
+    let event = json!({
+        "type": "item/completed",
+        "item": {
+            "id": "pi_edit_1",
+            "type": "file_change",
+            "changes": [
+                { "path": "src/app.ts", "kind": "modify", "diff": "-1 old\n+1 new" }
+            ],
+            "status": "completed",
+            "result": {
+                "content": [
+                    { "type": "text", "text": "Successfully replaced 1 block(s) in src/app.ts." }
+                ],
+                "details": { "diff": "-1 old\n+1 new", "firstChangedLine": 1 }
+            }
+        }
+    });
+    let line = serde_json::to_string(&event).unwrap();
+    let mut pipeline = MessagePipeline::new("pi", "test-model", "ctx", "sess");
+    let live = match pipeline.push_event(&event, &line) {
+        PipelineEmit::Full(messages) => normalize_all(&messages),
+        PipelineEmit::Partial(message) => normalize_all(&[message]),
+        PipelineEmit::None => Vec::new(),
+    };
+    pipeline.accumulator.flush_pending();
+    let historical_records: Vec<_> = (0..pipeline.accumulator.turns_len())
+        .map(|i| {
+            let turn = pipeline.accumulator.turn_at(i);
+            HistoricalRecord {
+                id: format!("hist-{i}"),
+                role: turn.role,
+                content: turn.content_json.clone(),
+                parsed_content: serde_json::from_str(&turn.content_json).ok(),
+                created_at: "2026-04-08T00:00:00.000Z".to_string(),
+            }
+        })
+        .collect();
+    let historical = normalize_all(&MessagePipeline::convert_historical(&historical_records));
+
+    assert_yaml_snapshot!(FileChangeRenderPair { live, historical });
 }
 
 #[test]

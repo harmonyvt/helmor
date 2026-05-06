@@ -76,6 +76,7 @@ import {
 } from "@/shell/layout";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
+	ackPendingCliSendStarted,
 	createSession,
 	drainPendingCliSends,
 	markSessionRead,
@@ -359,6 +360,7 @@ function AppShell({
 	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const selectedWorkspaceIdRef = useRef<string | null>(null);
 	const selectedSessionIdRef = useRef<string | null>(null);
+	const activePendingCliSendIdRef = useRef<string | null>(null);
 	// Tracks which session we last persisted as "read" so the auto-read effect
 	// stays idempotent when interaction-required state churns without the
 	// displayed session changing.
@@ -2018,11 +2020,15 @@ function AppShell({
 	);
 
 	const processPendingCliSends = useCallback(async () => {
+		if (activePendingCliSendIdRef.current) {
+			return;
+		}
 		try {
 			const sends = await drainPendingCliSends();
 			if (sends.length === 0) return;
 
 			const first = sends[0];
+			activePendingCliSendIdRef.current = first.id;
 
 			await queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceGroups,
@@ -2041,10 +2047,24 @@ function AppShell({
 					prompt: first.prompt,
 					modelId: first.modelId,
 					permissionMode: first.permissionMode,
+					pendingSendId: first.id,
+					forceQueue: true,
 				});
 				handleSelectSession(first.sessionId);
 			}, 100);
+			window.setTimeout(() => {
+				if (activePendingCliSendIdRef.current !== first.id) {
+					return;
+				}
+				console.warn("[pendingCliSend] start acknowledgement timed out", {
+					pendingSendId: first.id,
+					sessionId: first.sessionId,
+				});
+				activePendingCliSendIdRef.current = null;
+				void processPendingCliSends();
+			}, 35_000);
 		} catch (error) {
+			activePendingCliSendIdRef.current = null;
 			console.error("[pendingCliSend] drain failed:", error);
 		}
 	}, [
@@ -2053,6 +2073,26 @@ function AppShell({
 		queryClient,
 		queuePendingPromptForSession,
 	]);
+
+	const handlePendingPromptConsumedWithAck = useCallback(
+		(pendingSendId?: string | null) => {
+			handlePendingPromptConsumed();
+			if (!pendingSendId) {
+				return;
+			}
+			void ackPendingCliSendStarted(pendingSendId)
+				.catch((error) => {
+					console.error("[pendingCliSend] ack failed:", error);
+				})
+				.finally(() => {
+					if (activePendingCliSendIdRef.current === pendingSendId) {
+						activePendingCliSendIdRef.current = null;
+					}
+					void processPendingCliSends();
+				});
+		},
+		[handlePendingPromptConsumed, processPendingCliSends],
+	);
 
 	useUiSyncBridge({
 		queryClient,
@@ -2427,7 +2467,9 @@ function AppShell({
 													workspaceChangeRequest={workspaceChangeRequest}
 													onSessionAborted={handleSessionAborted}
 													pendingPromptForSession={pendingPromptForSession}
-													onPendingPromptConsumed={handlePendingPromptConsumed}
+													onPendingPromptConsumed={
+														handlePendingPromptConsumedWithAck
+													}
 													pendingInsertRequests={pendingComposerInserts}
 													onPendingInsertRequestsConsumed={
 														handlePendingComposerInsertsConsumed

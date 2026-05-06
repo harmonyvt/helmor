@@ -12,7 +12,23 @@ fn is_dev_returns_true_in_debug() {
 
 #[test]
 fn data_mode_label_returns_development_in_debug() {
+    let _guard = TEST_ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let old_home = std::env::var_os("HOME");
+    let old_override = std::env::var_os("HELMOR_DATA_DIR");
+    std::env::set_var("HOME", temp.path());
+    std::env::remove_var("HELMOR_DATA_DIR");
+
     assert_eq!(data_mode_label(), "development");
+
+    match old_home {
+        Some(value) => std::env::set_var("HOME", value),
+        None => std::env::remove_var("HOME"),
+    }
+    match old_override {
+        Some(value) => std::env::set_var("HELMOR_DATA_DIR", value),
+        None => std::env::remove_var("HELMOR_DATA_DIR"),
+    }
 }
 
 #[test]

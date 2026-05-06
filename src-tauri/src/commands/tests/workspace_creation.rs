@@ -221,6 +221,12 @@ fn create_goal_child_workspace_inserts_code_child_linked_to_goal() {
         goal_workspace_id: "goal-create".to_string(),
         goal_card_id: None,
         title: Some("Build the API".to_string()),
+        description: None,
+        lane: None,
+        target_branch: None,
+        assigned_provider: None,
+        assigned_model_id: None,
+        assigned_effort_level: None,
     })
     .unwrap();
 
@@ -288,6 +294,12 @@ fn create_goal_child_workspace_rejects_goal_without_remote_branch() {
         goal_workspace_id: "goal-local-only".to_string(),
         goal_card_id: None,
         title: Some("Should fail".to_string()),
+        description: None,
+        lane: None,
+        target_branch: None,
+        assigned_provider: None,
+        assigned_model_id: None,
+        assigned_effort_level: None,
     })
     .expect_err("child workspaces require the Goal branch on the remote");
 
@@ -325,6 +337,12 @@ fn create_goal_child_workspace_rejects_unfinalized_goal() {
         goal_workspace_id: "goal-initializing".to_string(),
         goal_card_id: None,
         title: Some("Should fail".to_string()),
+        description: None,
+        lane: None,
+        target_branch: None,
+        assigned_provider: None,
+        assigned_model_id: None,
+        assigned_effort_level: None,
     })
     .expect_err("initializing Goal workspaces must not create children");
 
@@ -332,6 +350,86 @@ fn create_goal_child_workspace_rejects_unfinalized_goal() {
         error.to_string().contains("not ready for child workspaces"),
         "unexpected error: {error:#}"
     );
+}
+
+#[test]
+fn create_goal_child_workspace_applies_lane_target_and_session_metadata() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "update-ref",
+            "refs/heads/helmor/goal/meta",
+            "HEAD",
+        ],
+        None,
+    )
+    .unwrap();
+
+    connection
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, active_session_id, branch,
+              state, initialization_parent_branch, intended_target_branch,
+              status, workspace_kind, goal_workspace_id, pr_sync_state, unread
+            ) VALUES (
+              'goal-meta', ?1, 'goal-meta', NULL, 'helmor/goal/meta',
+              'ready', 'main', 'main', 'backlog', 'goal', NULL, 'open', 0
+            )
+            "#,
+            [&harness.repo_id],
+        )
+        .unwrap();
+
+    let response = workspaces::create_goal_child_workspace(workspaces::GoalChildWorkspaceRequest {
+        goal_workspace_id: "goal-meta".to_string(),
+        goal_card_id: None,
+        title: Some("Investigate flaky tests".to_string()),
+        description: Some("Find the highest-signal failure source".to_string()),
+        lane: Some(WorkspaceStatus::Review),
+        target_branch: Some("main".to_string()),
+        assigned_provider: Some("claude".to_string()),
+        assigned_model_id: Some("claude-sonnet-4-5".to_string()),
+        assigned_effort_level: Some("high".to_string()),
+    })
+    .unwrap();
+
+    let (status, init_parent, target_branch): (String, String, String) = connection
+        .query_row(
+            "SELECT status, initialization_parent_branch, intended_target_branch FROM workspaces WHERE id = ?1",
+            [&response.workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "review");
+    assert_eq!(init_parent, "main");
+    assert_eq!(target_branch, "main");
+
+    let (session_title, session_model, effort): (String, String, String) = connection
+        .query_row(
+            "SELECT title, model, effort_level FROM sessions WHERE id = ?1",
+            [&response.initial_session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(session_title, "Investigate flaky tests");
+    assert_eq!(session_model, "claude-sonnet-4-5");
+    assert_eq!(effort, "high");
+
+    let card_child: String = connection
+        .query_row(
+            "SELECT child_workspace_id FROM goal_cards WHERE goal_workspace_id = 'goal-meta'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(card_child, response.workspace_id);
 }
 
 #[test]
@@ -347,6 +445,12 @@ fn create_goal_child_workspace_rejects_non_goal_parent() {
         goal_workspace_id: "workspace-ordinary-goal-parent".to_string(),
         goal_card_id: None,
         title: Some("Should fail".to_string()),
+        description: None,
+        lane: None,
+        target_branch: None,
+        assigned_provider: None,
+        assigned_model_id: None,
+        assigned_effort_level: None,
     })
     .expect_err("ordinary workspaces must not create goal children");
 

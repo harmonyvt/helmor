@@ -5,11 +5,15 @@ export interface PiNormalizedEvent {
 	readonly [key: string]: unknown;
 }
 
+interface ReasoningState {
+	id: string;
+	text: string;
+}
+
 interface PiEventState {
 	requestId: string | null;
 	messageItemId: string | null;
-	reasoningItemId: string | null;
-	reasoningText: string;
+	reasoningByIndex: Map<number, ReasoningState>;
 	turnId: string | null;
 	turnIndex: number;
 	toolArgsById: Map<string, unknown>;
@@ -21,8 +25,7 @@ export function createPiEventState(
 	return {
 		requestId,
 		messageItemId: null,
-		reasoningItemId: null,
-		reasoningText: "",
+		reasoningByIndex: new Map(),
 		turnId: null,
 		turnIndex: 0,
 		toolArgsById: new Map(),
@@ -40,6 +43,7 @@ export function normalizePiEvent(
 			const turnId = piScopedId(state, "turn", turnIndex);
 			state.turnId = turnId;
 			state.turnIndex = turnIndex;
+			state.reasoningByIndex.clear();
 			return [{ type: "turn/started", turn: { id: turnId } }];
 		}
 		case "message_start": {
@@ -128,6 +132,9 @@ export function normalizePiEvent(
 		case "turn_end": {
 			const turnId = state.turnId ?? piScopedId(state, "turn", state.turnIndex);
 			const usage = asRecord(asRecord(event.message)?.usage);
+			state.turnId = null;
+			state.reasoningByIndex.clear();
+			state.turnIndex += 1;
 			return [
 				{
 					type: "turn/completed",
@@ -136,8 +143,18 @@ export function normalizePiEvent(
 				},
 			];
 		}
-		default:
+		case "agent_start":
+		case "agent_end":
+		case "queue_update":
+		case "compaction_start":
+		case "compaction_end":
+		case "session_info_changed":
+		case "thinking_level_changed":
+		case "auto_retry_start":
+		case "auto_retry_end":
 			return [];
+		default:
+			return [unknownPiEventCard(event, state)];
 	}
 }
 
@@ -161,9 +178,9 @@ function normalizeAssistantMessageUpdate(
 		];
 	}
 	if (eventType === "thinking_start") {
-		const id = piScopedId(state, "reasoning", state.turnIndex);
-		state.reasoningItemId = id;
-		state.reasoningText = "";
+		const contentIndex = assistantContentIndex(assistantEvent);
+		const id = piReasoningId(state, contentIndex);
+		state.reasoningByIndex.set(contentIndex, { id, text: "" });
 		return [
 			{ type: "item/started", item: { id, type: "reasoning", text: "" } },
 		];
@@ -172,38 +189,49 @@ function normalizeAssistantMessageUpdate(
 		const text =
 			typeof assistantEvent?.delta === "string" ? assistantEvent.delta : "";
 		if (!text) return [];
-		state.reasoningText += text;
+		const contentIndex = assistantContentIndex(assistantEvent);
+		const reasoning = ensureReasoningState(state, contentIndex);
+		reasoning.text += text;
 		return [
 			{
 				type: "item/reasoning/textDelta",
-				itemId:
-					state.reasoningItemId ??
-					piScopedId(state, "reasoning", state.turnIndex),
+				itemId: reasoning.id,
 				text,
 			},
 		];
 	}
 	if (eventType === "thinking_end") {
-		const id =
-			state.reasoningItemId ?? piScopedId(state, "reasoning", state.turnIndex);
+		const contentIndex = assistantContentIndex(assistantEvent);
+		const reasoning = ensureReasoningState(state, contentIndex);
 		const text =
 			typeof assistantEvent?.content === "string"
 				? assistantEvent.content
-				: state.reasoningText;
-		state.reasoningItemId = null;
-		state.reasoningText = "";
+				: reasoning.text;
+		state.reasoningByIndex.delete(contentIndex);
 		return [
 			{
 				type: "item/completed",
 				item: {
-					id,
+					id: reasoning.id,
 					type: "reasoning",
 					text,
 				},
 			},
 		];
 	}
-	return [];
+	if (
+		eventType === "start" ||
+		eventType === "text_start" ||
+		eventType === "text_end" ||
+		eventType === "toolcall_start" ||
+		eventType === "toolcall_delta" ||
+		eventType === "toolcall_end" ||
+		eventType === "done" ||
+		eventType === "error"
+	) {
+		return [];
+	}
+	return [unknownPiAssistantEventCard(assistantEvent, state)];
 }
 
 function toolItem(
@@ -229,7 +257,7 @@ function toolItem(
 		return withoutUndefined({
 			id,
 			type: "file_change",
-			changes: [],
+			changes: normalizeFileChanges(toolName, args, result),
 			status:
 				result === undefined ? undefined : isError ? "failed" : "completed",
 			result,
@@ -262,8 +290,121 @@ function normalizeToolName(
 	toolName: string,
 ): "command_execution" | "file_change" | "mcp_tool_call" {
 	if (toolName === "bash") return "command_execution";
-	if (toolName === "edit" || toolName === "write") return "file_change";
+	if (isFileChangeTool(toolName)) return "file_change";
 	return "mcp_tool_call";
+}
+
+function isFileChangeTool(toolName: string): boolean {
+	return ["edit", "write", "delete", "remove", "rm", "unlink"].includes(
+		toolName,
+	);
+}
+
+function normalizeFileChanges(
+	toolName: string,
+	args: unknown,
+	result: unknown,
+): Array<Record<string, unknown>> {
+	const input = asRecord(args);
+	const path = stringField(input, ["path", "file_path"]);
+	if (!path) return [];
+
+	const resultDiff = resultDetailsDiff(result);
+	if (toolName === "edit") {
+		const edits = normalizeEditReplacements(input);
+		return [
+			withoutUndefined({
+				path,
+				kind: "modify",
+				diff: resultDiff ?? editPreviewDiff(edits),
+				edits,
+			}),
+		];
+	}
+
+	if (toolName === "write") {
+		const content = typeof input?.content === "string" ? input.content : "";
+		return [
+			withoutUndefined({
+				path,
+				kind: "create",
+				diff: resultDiff ?? writePreviewDiff(content),
+				contentLength: content.length,
+			}),
+		];
+	}
+
+	return [
+		withoutUndefined({
+			path,
+			kind: "delete",
+			diff: resultDiff,
+		}),
+	];
+}
+
+function normalizeEditReplacements(
+	input: Record<string, unknown> | undefined,
+): Array<{ oldText: string; newText: string }> {
+	const rawEdits = input?.edits;
+	let parsedEdits = rawEdits;
+	if (typeof rawEdits === "string") {
+		try {
+			parsedEdits = JSON.parse(rawEdits);
+		} catch {
+			parsedEdits = rawEdits;
+		}
+	}
+
+	const edits = Array.isArray(parsedEdits)
+		? parsedEdits
+				.map((edit) => asRecord(edit))
+				.filter((edit) => edit !== undefined)
+				.filter(
+					(edit) =>
+						typeof edit.oldText === "string" &&
+						typeof edit.newText === "string",
+				)
+				.map((edit) => ({
+					oldText: edit.oldText as string,
+					newText: edit.newText as string,
+				}))
+		: [];
+
+	if (
+		typeof input?.oldText === "string" &&
+		typeof input?.newText === "string"
+	) {
+		edits.push({ oldText: input.oldText, newText: input.newText });
+	}
+
+	return edits;
+}
+
+function resultDetailsDiff(result: unknown): string | undefined {
+	const details = asRecord(asRecord(result)?.details);
+	const diff = details?.diff;
+	return typeof diff === "string" && diff.trim() ? diff : undefined;
+}
+
+function editPreviewDiff(
+	edits: ReadonlyArray<{ oldText: string; newText: string }>,
+): string | undefined {
+	const lines: string[] = [];
+	for (const edit of edits) {
+		lines.push(...prefixedLines("-", edit.oldText));
+		lines.push(...prefixedLines("+", edit.newText));
+	}
+	return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+function writePreviewDiff(content: string): string | undefined {
+	return prefixedLines("+", content).join("\n");
+}
+
+function prefixedLines(prefix: "+" | "-", text: string): string[] {
+	if (!text) return [];
+	return text.split("\n").map((line) => `${prefix}${line}`);
 }
 
 function assistantText(message: Record<string, unknown> | undefined): string {
@@ -304,6 +445,81 @@ function piScopedId(
 	return state.requestId
 		? `pi-${kind}-${state.requestId}-${turnIndex}`
 		: `pi-${kind}-${turnIndex}`;
+}
+
+function piReasoningId(state: PiEventState, contentIndex: number): string {
+	const base = piScopedId(state, "reasoning", state.turnIndex);
+	return contentIndex === 0 ? base : `${base}-${contentIndex}`;
+}
+
+function ensureReasoningState(
+	state: PiEventState,
+	contentIndex: number,
+): ReasoningState {
+	const existing = state.reasoningByIndex.get(contentIndex);
+	if (existing) return existing;
+	const created = { id: piReasoningId(state, contentIndex), text: "" };
+	state.reasoningByIndex.set(contentIndex, created);
+	return created;
+}
+
+function assistantContentIndex(
+	assistantEvent: Record<string, unknown> | undefined,
+): number {
+	const value = assistantEvent?.contentIndex;
+	return typeof value === "number" && Number.isInteger(value) && value >= 0
+		? value
+		: 0;
+}
+
+function unknownPiEventCard(
+	event: AgentSessionEvent,
+	state: PiEventState,
+): PiNormalizedEvent {
+	return unknownPiCard(
+		`pi-unknown-${state.requestId ?? "event"}-${state.turnIndex}-${stableEventType(event.type)}`,
+		"Pi SDK event not rendered",
+		`Unhandled Pi event: ${event.type}`,
+		event,
+	);
+}
+
+function unknownPiAssistantEventCard(
+	assistantEvent: Record<string, unknown> | undefined,
+	state: PiEventState,
+): PiNormalizedEvent {
+	const type =
+		typeof assistantEvent?.type === "string" ? assistantEvent.type : "unknown";
+	return unknownPiCard(
+		`pi-unknown-assistant-${state.requestId ?? "event"}-${state.turnIndex}-${stableEventType(type)}`,
+		"Pi assistant event not rendered",
+		`Unhandled Pi assistant event: ${type}`,
+		assistantEvent ?? { type: "unknown" },
+	);
+}
+
+function unknownPiCard(
+	id: string,
+	title: string,
+	body: string,
+	details: unknown,
+): PiNormalizedEvent {
+	return {
+		type: "item/completed",
+		item: {
+			id,
+			type: "generic_card",
+			provider: "pi",
+			severity: "warning",
+			title,
+			body,
+			details,
+		},
+	};
+}
+
+function stableEventType(type: string): string {
+	return type.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 80) || "unknown";
 }
 
 function normalizeUsage(

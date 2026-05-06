@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import {
-	createGoalChildWorkspace,
-	finalizeWorkspaceFromRepo,
+	createGoalChildWorkspaceAndStart,
 	setGoalChildWorkspaceStatus,
 	updateGoalWorkspaceMeta,
 	type WorkspaceDetail,
@@ -99,26 +98,20 @@ export function GoalWorkspaceContainer({
 	);
 
 	const createMutation = useMutation({
-		mutationFn: async (title: string) => {
-			const prepared = await createGoalChildWorkspace({
-				goalWorkspaceId: workspaceId,
-				title: title || undefined,
-			});
-			await finalizeWorkspaceFromRepo(prepared.workspaceId, {
-				...(prepared.sourceStartBranch
-					? { startBranch: prepared.sourceStartBranch, fetchStartBranch: true }
-					: {}),
-			});
-			return prepared;
-		},
-		onSuccess: async (prepared) => {
-			setSelectedId(prepared.workspaceId);
+		mutationFn: async (title: string) =>
+			createGoalChildWorkspaceAndStart({
+				goalWorkspace: workspaceId,
+				title,
+				finalize: true,
+			}),
+		onSuccess: async (created) => {
+			setSelectedId(created.workspaceId);
 			setShowAddPanel(false);
 			setNewWorkspaceTitle("");
 			await Promise.all([
 				invalidateBoard(),
 				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceDetail(prepared.workspaceId),
+					queryKey: helmorQueryKeys.workspaceDetail(created.workspaceId),
 				}),
 			]);
 		},

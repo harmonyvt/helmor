@@ -139,6 +139,7 @@ export type PendingPromptForSession = {
 	 *  host-triggered prompts (e.g. git-pull conflict resolution) that
 	 *  must never interrupt the active turn. */
 	forceQueue?: boolean;
+	pendingSendId?: string | null;
 };
 
 export function useWorkspaceCommitLifecycle({

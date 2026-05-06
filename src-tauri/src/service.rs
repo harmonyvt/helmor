@@ -130,6 +130,10 @@ pub struct SendMessageResult {
     pub provider: String,
     pub model: String,
     pub persisted: bool,
+    pub app_running: bool,
+    pub queued: bool,
+    pub pending_send_id: Option<String>,
+    pub agent_started: bool,
 }
 
 /// Send a prompt to an AI agent. When the Helmor desktop app is running,
@@ -208,7 +212,7 @@ pub fn send_message(
             params![user_msg_id, session_id, user_content, timestamp],
         )?;
 
-        insert_pending_cli_send(
+        let pending_send_id = insert_pending_cli_send(
             &workspace_id,
             &session_id,
             &params.prompt,
@@ -218,6 +222,7 @@ pub fn send_message(
 
         let _ = crate::ui_sync::notify_running_app(
             crate::ui_sync::UiMutationEvent::PendingCliSendQueued {
+                pending_send_id: pending_send_id.clone(),
                 workspace_id: workspace_id.clone(),
                 session_id: session_id.clone(),
                 prompt: params.prompt.clone(),
@@ -241,6 +246,10 @@ pub fn send_message(
             provider: model.provider.to_string(),
             model: model.id.to_string(),
             persisted: true,
+            app_running: true,
+            queued: true,
+            pending_send_id: Some(pending_send_id),
+            agent_started: false,
         });
     }
 
@@ -490,6 +499,10 @@ pub fn send_message(
         provider: model.provider.to_string(),
         model: resolved_model,
         persisted: true,
+        app_running: false,
+        queued: false,
+        pending_send_id: None,
+        agent_started: true,
     })
 }
 
@@ -545,6 +558,9 @@ pub struct PendingCliSend {
     pub prompt: String,
     pub model_id: Option<String>,
     pub permission_mode: Option<String>,
+    pub status: String,
+    pub last_drained_at: Option<String>,
+    pub started_at: Option<String>,
     pub created_at: String,
 }
 
@@ -567,16 +583,40 @@ pub fn insert_pending_cli_send(
     Ok(id)
 }
 
-/// Read and delete all pending sends in one atomic operation.
-/// Returns them oldest-first so the App processes them in order.
+/// Claim the next queued pending send without deleting it. The frontend must
+/// call [`ack_pending_cli_send_started`] after the prompt has been handed to
+/// the composer submit path. This avoids silently losing prompts if the app
+/// drains the table but never starts streaming.
 pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
-    let conn = crate::models::db::write_conn()?;
-    let mut stmt = conn.prepare(
-        "SELECT id, workspace_id, session_id, prompt, model_id, permission_mode, created_at
-         FROM pending_cli_sends ORDER BY datetime(created_at) ASC",
-    )?;
-    let rows: Vec<PendingCliSend> = stmt
-        .query_map([], |row| {
+    let mut conn = crate::models::db::write_conn()?;
+    let tx = conn
+        .transaction()
+        .context("Failed to start pending send drain")?;
+
+    tx.execute(
+        r#"
+        UPDATE pending_cli_sends
+        SET status = 'queued', last_drained_at = NULL
+        WHERE status = 'draining'
+          AND last_drained_at IS NOT NULL
+          AND datetime(last_drained_at) < datetime('now', '-30 seconds')
+        "#,
+        [],
+    )
+    .context("Failed to reset stale pending CLI sends")?;
+
+    let row = {
+        let mut stmt = tx.prepare(
+            r#"
+            SELECT id, workspace_id, session_id, prompt, model_id, permission_mode,
+                   status, last_drained_at, started_at, created_at
+            FROM pending_cli_sends
+            WHERE status = 'queued'
+            ORDER BY datetime(created_at) ASC, id ASC
+            LIMIT 1
+            "#,
+        )?;
+        let mut rows = stmt.query_map([], |row| {
             Ok(PendingCliSend {
                 id: row.get(0)?,
                 workspace_id: row.get(1)?,
@@ -584,18 +624,54 @@ pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
                 prompt: row.get(3)?,
                 model_id: row.get(4)?,
                 permission_mode: row.get(5)?,
-                created_at: row.get(6)?,
+                status: row.get(6)?,
+                last_drained_at: row.get(7)?,
+                started_at: row.get(8)?,
+                created_at: row.get(9)?,
             })
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .context("Failed to read pending CLI sends")?;
+        })?;
+        rows.next()
+            .transpose()
+            .context("Failed to read pending CLI send")?
+    };
 
-    if !rows.is_empty() {
-        conn.execute("DELETE FROM pending_cli_sends", [])
-            .context("Failed to delete pending CLI sends")?;
-    }
+    let Some(send) = row else {
+        tx.commit()
+            .context("Failed to commit empty pending send drain")?;
+        return Ok(Vec::new());
+    };
 
-    Ok(rows)
+    let drained_at = crate::models::db::current_timestamp()?;
+    tx.execute(
+        "UPDATE pending_cli_sends SET status = 'draining', last_drained_at = ?2 WHERE id = ?1",
+        params![&send.id, &drained_at],
+    )
+    .context("Failed to mark pending CLI send as draining")?;
+    tx.commit().context("Failed to commit pending send drain")?;
+
+    Ok(vec![PendingCliSend {
+        status: "draining".to_string(),
+        last_drained_at: Some(drained_at),
+        ..send
+    }])
+}
+
+/// Acknowledge that the frontend has handed a pending CLI send to the normal
+/// submit/start path. The row is removed only after this acknowledgement.
+pub fn ack_pending_cli_send_started(id: &str) -> Result<()> {
+    let conn = crate::models::db::write_conn()?;
+    conn.execute(
+        r#"
+        UPDATE pending_cli_sends
+        SET status = 'started', started_at = datetime('now')
+        WHERE id = ?1
+        "#,
+        [id],
+    )
+    .with_context(|| format!("Failed to acknowledge pending CLI send {id}"))?;
+    conn.execute("DELETE FROM pending_cli_sends WHERE id = ?1", [id])
+        .with_context(|| format!("Failed to delete acknowledged pending CLI send {id}"))?;
+    Ok(())
 }
 
 /// Check if the Helmor App is running by testing the MCP bridge port.
@@ -682,13 +758,22 @@ mod tests {
         assert_eq!(sends[0].model_id.as_deref(), Some("opus"));
         assert_eq!(sends[0].permission_mode.as_deref(), Some("default"));
 
-        // Second drain should be empty — rows were deleted.
+        assert_eq!(sends[0].status, "draining");
+        assert!(sends[0].last_drained_at.is_some());
+        assert!(sends[0].started_at.is_none());
+
+        // Second drain skips the in-flight row until the frontend acknowledges
+        // that it was handed to the submit path.
         let sends2 = drain_pending_cli_sends().unwrap();
         assert!(sends2.is_empty());
+
+        ack_pending_cli_send_started(&id).unwrap();
+        let sends3 = drain_pending_cli_sends().unwrap();
+        assert!(sends3.is_empty());
     }
 
     #[test]
-    fn drain_returns_oldest_first() {
+    fn drain_claims_one_send_at_a_time_in_oldest_order() {
         let _lock = TEST_ENV_LOCK.lock().unwrap();
         let _dir = TestDataDir::new("drain-order");
 
@@ -698,9 +783,13 @@ mod tests {
         insert_pending_cli_send("ws-1", "sess-b", "second", None, None).unwrap();
 
         let sends = drain_pending_cli_sends().unwrap();
-        assert_eq!(sends.len(), 2);
+        assert_eq!(sends.len(), 1);
         assert_eq!(sends[0].prompt, "first");
-        assert_eq!(sends[1].prompt, "second");
+        ack_pending_cli_send_started(&sends[0].id).unwrap();
+
+        let sends = drain_pending_cli_sends().unwrap();
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].prompt, "second");
     }
 
     #[test]
