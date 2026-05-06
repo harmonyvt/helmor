@@ -229,7 +229,7 @@ function toolItem(
 		return withoutUndefined({
 			id,
 			type: "file_change",
-			changes: [],
+			changes: normalizeFileChanges(toolName, args, result),
 			status:
 				result === undefined ? undefined : isError ? "failed" : "completed",
 			result,
@@ -262,8 +262,121 @@ function normalizeToolName(
 	toolName: string,
 ): "command_execution" | "file_change" | "mcp_tool_call" {
 	if (toolName === "bash") return "command_execution";
-	if (toolName === "edit" || toolName === "write") return "file_change";
+	if (isFileChangeTool(toolName)) return "file_change";
 	return "mcp_tool_call";
+}
+
+function isFileChangeTool(toolName: string): boolean {
+	return ["edit", "write", "delete", "remove", "rm", "unlink"].includes(
+		toolName,
+	);
+}
+
+function normalizeFileChanges(
+	toolName: string,
+	args: unknown,
+	result: unknown,
+): Array<Record<string, unknown>> {
+	const input = asRecord(args);
+	const path = stringField(input, ["path", "file_path"]);
+	if (!path) return [];
+
+	const resultDiff = resultDetailsDiff(result);
+	if (toolName === "edit") {
+		const edits = normalizeEditReplacements(input);
+		return [
+			withoutUndefined({
+				path,
+				kind: "modify",
+				diff: resultDiff ?? editPreviewDiff(edits),
+				edits,
+			}),
+		];
+	}
+
+	if (toolName === "write") {
+		const content = typeof input?.content === "string" ? input.content : "";
+		return [
+			withoutUndefined({
+				path,
+				kind: "create",
+				diff: resultDiff ?? writePreviewDiff(content),
+				contentLength: content.length,
+			}),
+		];
+	}
+
+	return [
+		withoutUndefined({
+			path,
+			kind: "delete",
+			diff: resultDiff,
+		}),
+	];
+}
+
+function normalizeEditReplacements(
+	input: Record<string, unknown> | undefined,
+): Array<{ oldText: string; newText: string }> {
+	const rawEdits = input?.edits;
+	let parsedEdits = rawEdits;
+	if (typeof rawEdits === "string") {
+		try {
+			parsedEdits = JSON.parse(rawEdits);
+		} catch {
+			parsedEdits = rawEdits;
+		}
+	}
+
+	const edits = Array.isArray(parsedEdits)
+		? parsedEdits
+				.map((edit) => asRecord(edit))
+				.filter((edit) => edit !== undefined)
+				.filter(
+					(edit) =>
+						typeof edit.oldText === "string" &&
+						typeof edit.newText === "string",
+				)
+				.map((edit) => ({
+					oldText: edit.oldText as string,
+					newText: edit.newText as string,
+				}))
+		: [];
+
+	if (
+		typeof input?.oldText === "string" &&
+		typeof input?.newText === "string"
+	) {
+		edits.push({ oldText: input.oldText, newText: input.newText });
+	}
+
+	return edits;
+}
+
+function resultDetailsDiff(result: unknown): string | undefined {
+	const details = asRecord(asRecord(result)?.details);
+	const diff = details?.diff;
+	return typeof diff === "string" && diff.trim() ? diff : undefined;
+}
+
+function editPreviewDiff(
+	edits: ReadonlyArray<{ oldText: string; newText: string }>,
+): string | undefined {
+	const lines: string[] = [];
+	for (const edit of edits) {
+		lines.push(...prefixedLines("-", edit.oldText));
+		lines.push(...prefixedLines("+", edit.newText));
+	}
+	return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+function writePreviewDiff(content: string): string | undefined {
+	return prefixedLines("+", content).join("\n");
+}
+
+function prefixedLines(prefix: "+" | "-", text: string): string[] {
+	if (!text) return [];
+	return text.split("\n").map((line) => `${prefix}${line}`);
 }
 
 function assistantText(message: Record<string, unknown> | undefined): string {

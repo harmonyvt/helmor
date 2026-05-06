@@ -4,6 +4,7 @@ import {
 	ClipboardList,
 	FilePlus,
 	FileText,
+	FileX,
 	FolderSearch,
 	Globe,
 	MessageSquareMore,
@@ -14,7 +15,7 @@ import {
 	Sparkles,
 	Terminal,
 } from "lucide-react";
-import type { FileChangeInfo, ToolInfo } from "./shared";
+import type { ToolInfo } from "./shared";
 import { basename, isObj, str, truncate } from "./shared";
 
 const fallbackIcon = (
@@ -164,22 +165,38 @@ export function getToolInfo(
 			}
 			return {
 				name: path ? basename(path) : "unknown",
+				kind: str(c.kind),
 				diffAdd: add || undefined,
 				diffDel: del || undefined,
 				rawDiff: diff || undefined,
-			} satisfies FileChangeInfo;
+			};
 		});
 		const totalAdd = parsed.reduce((s, f) => s + (f.diffAdd ?? 0), 0);
 		const totalDel = parsed.reduce((s, f) => s + (f.diffDel ?? 0), 0);
+		const singleKind = parsed[0]?.kind;
+		const singleAction =
+			singleKind === "delete" || singleKind === "remove"
+				? "Delete"
+				: singleKind === "create" || singleKind === "write"
+					? "Write"
+					: "Edit";
+		const singleIcon =
+			singleAction === "Delete" ? (
+				<FileX className={neutralToolIconClassName} strokeWidth={1.8} />
+			) : singleAction === "Write" ? (
+				<FilePlus className={neutralToolIconClassName} strokeWidth={1.8} />
+			) : (
+				<Pencil className={neutralToolIconClassName} strokeWidth={1.8} />
+			);
 		const icon = (
 			<Pencil className={neutralToolIconClassName} strokeWidth={1.8} />
 		);
 
 		if (parsed.length <= 1) {
 			return {
-				action: "Edit",
+				action: singleAction,
 				file: parsed[0]?.name,
-				icon,
+				icon: singleIcon,
 				diffAdd: totalAdd || undefined,
 				diffDel: totalDel || undefined,
 				rawDiff: parsed[0]?.rawDiff,

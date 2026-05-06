@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use super::StreamAccumulator;
+use crate::pipeline::file_change::file_change_result_text;
 use crate::pipeline::pi_tools::{canonical_pi_tool_name, mcp_result_text, normalize_pi_tool_args};
 use crate::pipeline::types::{CollectedTurn, MessageRole};
 
@@ -547,11 +548,7 @@ fn handle_file_change(
     );
 
     if let Some(s) = status {
-        let result_text = match s {
-            "completed" => "Patch applied".to_string(),
-            "failed" => "Patch failed".to_string(),
-            other => format!("Patch {other}"),
-        };
+        let result_text = file_change_result_text(item, s);
         let synthetic_result = serde_json::json!({
             "type": "user",
             "message": {

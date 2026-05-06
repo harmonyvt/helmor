@@ -14,6 +14,7 @@
 use serde_json::Value;
 
 use super::blocks::parse_codex_todolist_items;
+use crate::pipeline::file_change::file_change_result_text;
 use crate::pipeline::pi_tools::{canonical_pi_tool_name, mcp_result_text, normalize_pi_tool_args};
 use crate::pipeline::types::{
     ExtendedMessagePart, ImageSource, IntermediateMessage, MessagePart, MessageRole, MessageStatus,
@@ -194,11 +195,7 @@ fn render_file_change(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("completed");
-    let result_text = match status {
-        "completed" => "Patch applied".to_string(),
-        "failed" => "Patch failed".to_string(),
-        other => format!("Patch {other}"),
-    };
+    let result_text = file_change_result_text(item, status);
     let failed = status == "failed";
     let args = serde_json::json!({"changes": changes});
     let args_text = serde_json::to_string(&args).unwrap_or_default();

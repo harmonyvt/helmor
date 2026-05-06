@@ -32,6 +32,7 @@
 mod common;
 
 use common::*;
+use helmor_lib::pipeline::PipelineEmit;
 use insta::assert_yaml_snapshot;
 use serde::Serialize;
 use serde_json::json;
@@ -1483,6 +1484,113 @@ fn codex_file_change_empty_changes() {
         &serde_json::to_string(&parsed).unwrap(),
     )];
     assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn pi_file_change_write_historical_preserves_file_and_result_details() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi_write_1",
+            "type": "file_change",
+            "changes": [
+                {
+                    "path": "src/new.ts",
+                    "kind": "create",
+                    "diff": "+one\n+two",
+                    "contentLength": 7
+                }
+            ],
+            "status": "completed",
+            "result": {
+                "content": [
+                    { "type": "text", "text": "Successfully wrote 7 bytes to src/new.ts" }
+                ]
+            }
+        }
+    });
+    let msgs = vec![make_record(
+        "piw1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn pi_file_change_failed_historical_preserves_error_details() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi_edit_failed",
+            "type": "file_change",
+            "changes": [
+                { "path": "src/app.ts", "kind": "modify", "diff": "-missing\n+new" }
+            ],
+            "status": "failed",
+            "result": {
+                "content": [
+                    { "type": "text", "text": "Could not find edits[0] in src/app.ts." }
+                ]
+            }
+        }
+    });
+    let msgs = vec![make_record(
+        "pif1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[derive(Serialize)]
+struct FileChangeRenderPair {
+    live: Vec<common::NormThreadMessage>,
+    historical: Vec<common::NormThreadMessage>,
+}
+
+#[test]
+fn pi_file_change_live_and_historical_reload_match() {
+    let event = json!({
+        "type": "item/completed",
+        "item": {
+            "id": "pi_edit_1",
+            "type": "file_change",
+            "changes": [
+                { "path": "src/app.ts", "kind": "modify", "diff": "-1 old\n+1 new" }
+            ],
+            "status": "completed",
+            "result": {
+                "content": [
+                    { "type": "text", "text": "Successfully replaced 1 block(s) in src/app.ts." }
+                ],
+                "details": { "diff": "-1 old\n+1 new", "firstChangedLine": 1 }
+            }
+        }
+    });
+    let line = serde_json::to_string(&event).unwrap();
+    let mut pipeline = MessagePipeline::new("pi", "test-model", "ctx", "sess");
+    let live = match pipeline.push_event(&event, &line) {
+        PipelineEmit::Full(messages) => normalize_all(&messages),
+        PipelineEmit::Partial(message) => normalize_all(&[message]),
+        PipelineEmit::None => Vec::new(),
+    };
+    pipeline.accumulator.flush_pending();
+    let historical_records: Vec<_> = (0..pipeline.accumulator.turns_len())
+        .map(|i| {
+            let turn = pipeline.accumulator.turn_at(i);
+            HistoricalRecord {
+                id: format!("hist-{i}"),
+                role: turn.role,
+                content: turn.content_json.clone(),
+                parsed_content: serde_json::from_str(&turn.content_json).ok(),
+                created_at: "2026-04-08T00:00:00.000Z".to_string(),
+            }
+        })
+        .collect();
+    let historical = normalize_all(&MessagePipeline::convert_historical(&historical_records));
+
+    assert_yaml_snapshot!(FileChangeRenderPair { live, historical });
 }
 
 #[test]
