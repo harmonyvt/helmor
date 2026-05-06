@@ -80,10 +80,11 @@ type WorkspaceConversationContainerProps = {
 		/** When true, submit must queue if a turn is already streaming,
 		 *  regardless of the user's `followUpBehavior` setting. */
 		forceQueue?: boolean;
+		pendingSendId?: string | null;
 	} | null;
 	/** Called after the pending prompt has been handed off to the composer's
 	 * submit flow, so the caller can clear the queue. */
-	onPendingPromptConsumed?: () => void;
+	onPendingPromptConsumed?: (pendingSendId?: string | null) => void;
 	pendingInsertRequests?: ResolvedComposerInsertRequest[];
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 	onQueuePendingPromptForSession?: (request: {

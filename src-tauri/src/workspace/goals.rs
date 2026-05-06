@@ -55,6 +55,12 @@ pub struct GoalChildWorkspaceRequest {
     pub goal_workspace_id: String,
     pub goal_card_id: Option<String>,
     pub title: Option<String>,
+    pub description: Option<String>,
+    pub lane: Option<WorkspaceStatus>,
+    pub target_branch: Option<String>,
+    pub assigned_provider: Option<String>,
+    pub assigned_model_id: Option<String>,
+    pub assigned_effort_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -245,6 +251,14 @@ pub fn create_goal_child_workspace(
             )
         })?
         .to_string();
+    let target_branch = request
+        .target_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(goal_branch.as_str())
+        .to_string();
+    let status = request.lane.unwrap_or(WorkspaceStatus::Backlog);
     let default_branch = repository
         .default_branch
         .clone()
@@ -277,11 +291,11 @@ pub fn create_goal_child_workspace(
         &directory_name,
         &branch,
         workspace_models::InitializingWorkspaceMetadata {
-            initialization_parent_branch: &goal_branch,
-            intended_target_branch: &goal_branch,
+            initialization_parent_branch: &target_branch,
+            intended_target_branch: &target_branch,
             workspace_kind: WorkspaceKind::Code,
             goal_workspace_id: Some(&request.goal_workspace_id),
-            status: WorkspaceStatus::Backlog,
+            status,
             pr_title: request.title.as_deref(),
             pr_sync_state: PrSyncState::None,
             pr_url: None,
@@ -289,8 +303,65 @@ pub fn create_goal_child_workspace(
         },
     )?;
 
+    if let Some(title) = request
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        crate::sessions::rename_session(&session_id, title)?;
+    }
+
+    if request
+        .assigned_model_id
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || request
+            .assigned_effort_level
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        update_initial_session_agent_settings(
+            &session_id,
+            request.assigned_model_id.as_deref(),
+            request.assigned_effort_level.as_deref(),
+        )?;
+    }
+
     if let Some(card_id) = request.goal_card_id.as_deref() {
         let _ = goal_models::link_goal_card_workspace(card_id, &workspace_id)?;
+    } else if request
+        .description
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || request
+            .assigned_provider
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || request
+            .assigned_model_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || request
+            .assigned_effort_level
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        let _ = goal_models::upsert_goal_card(goal_models::UpsertGoalCardInput {
+            id: None,
+            goal_workspace_id: request.goal_workspace_id.clone(),
+            title: request
+                .title
+                .clone()
+                .unwrap_or_else(|| directory_name.clone()),
+            description: normalize_optional_string(request.description.clone()),
+            lane: Some(status),
+            sort_order: None,
+            assigned_provider: normalize_optional_string(request.assigned_provider.clone()),
+            assigned_model_id: normalize_optional_string(request.assigned_model_id.clone()),
+            assigned_effort_level: normalize_optional_string(request.assigned_effort_level.clone()),
+            child_workspace_id: Some(workspace_id.clone()),
+        })?;
     }
 
     let repo_scripts = repos::load_repo_scripts(&repository.id, Some(&workspace_id)).unwrap_or(
@@ -313,9 +384,9 @@ pub fn create_goal_child_workspace(
         directory_name,
         branch,
         default_branch,
-        intended_target_branch: goal_branch.clone(),
-        status: WorkspaceStatus::Backlog,
-        source_start_branch: Some(goal_branch),
+        intended_target_branch: target_branch.clone(),
+        status,
+        source_start_branch: Some(target_branch),
         pr_number: None,
         pr_title: request.title,
         pr_sync_state: PrSyncState::None,
@@ -331,6 +402,32 @@ pub fn set_goal_child_workspace_status(request: GoalChildWorkspaceStatusRequest)
         &request.child_workspace_id,
         request.status,
     )
+}
+
+fn update_initial_session_agent_settings(
+    session_id: &str,
+    model_id: Option<&str>,
+    effort_level: Option<&str>,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            r#"
+            UPDATE sessions SET
+              model = COALESCE(?2, model),
+              effort_level = COALESCE(?3, effort_level)
+            WHERE id = ?1
+            "#,
+            rusqlite::params![
+                session_id,
+                model_id.map(str::trim).filter(|value| !value.is_empty()),
+                effort_level
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+            ],
+        )
+        .context("Failed to update initial goal child session settings")?;
+    Ok(())
 }
 
 fn update_goal_pr_metadata(workspace_id: &str, title: &str, pr_url: Option<&str>) -> Result<()> {
@@ -526,4 +623,10 @@ fn normalize_required(value: &str, label: &str) -> Result<String> {
         bail!("{label} is required");
     }
     Ok(trimmed.to_string())
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }

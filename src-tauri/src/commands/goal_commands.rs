@@ -94,6 +94,29 @@ pub async fn create_goal_child_workspace(
 }
 
 #[tauri::command]
+pub async fn create_goal_child_workspace_and_start(
+    app: AppHandle,
+    request: crate::goal_orchestration::GoalChildWorkspaceCreateParams,
+) -> CmdResult<crate::goal_orchestration::GoalChildWorkspaceCreateResult> {
+    let goal_workspace_ref = request.goal_workspace.clone();
+    let result = run_blocking(move || {
+        fn ignore_event(_: &crate::agents::AgentStreamEvent) {}
+        let mut on_event = ignore_event;
+        crate::goal_orchestration::create_goal_child_workspace_and_start(request, &mut on_event)
+    })
+    .await?;
+    let goal_workspace_id =
+        crate::service::resolve_workspace_ref(&goal_workspace_ref).unwrap_or(goal_workspace_ref);
+    publish_goal_child_workspace_changes(
+        &app,
+        goal_workspace_id,
+        Some(result.workspace_id.clone()),
+    );
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
+#[tauri::command]
 pub async fn set_goal_child_workspace_status(
     app: AppHandle,
     request: workspaces::GoalChildWorkspaceStatusRequest,

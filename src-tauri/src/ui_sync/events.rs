@@ -40,6 +40,7 @@ pub enum UiMutationEvent {
         key: Option<String>,
     },
     PendingCliSendQueued {
+        pending_send_id: String,
         workspace_id: String,
         session_id: String,
         prompt: String,
@@ -110,6 +111,7 @@ mod tests {
             },
             UiMutationEvent::SettingsChanged { key: None },
             UiMutationEvent::PendingCliSendQueued {
+                pending_send_id: "p1".into(),
                 workspace_id: "w".into(),
                 session_id: "s".into(),
                 prompt: "p".into(),
@@ -155,6 +157,7 @@ mod tests {
     #[test]
     fn pending_cli_send_queued_includes_optional_fields_when_set() {
         let event = UiMutationEvent::PendingCliSendQueued {
+            pending_send_id: "pending-1".into(),
             workspace_id: "w".into(),
             session_id: "s".into(),
             prompt: "hello".into(),
@@ -164,6 +167,7 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["modelId"], "claude-sonnet-4-5");
         assert_eq!(json["permissionMode"], "acceptEdits");
+        assert_eq!(json["pendingSendId"], "pending-1");
         assert_eq!(json["workspaceId"], "w");
         assert_eq!(json["sessionId"], "s");
         assert_eq!(json["prompt"], "hello");

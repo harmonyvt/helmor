@@ -560,6 +560,42 @@ export type GoalChildWorkspaceRequest = {
 	goalWorkspaceId: string;
 	goalCardId?: string | null;
 	title?: string | null;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	targetBranch?: string | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+};
+
+export type GoalChildWorkspaceCreateRequest = {
+	goalWorkspace: string;
+	title: string;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	targetBranch?: string | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	prompt?: string | null;
+	permissionMode?: string | null;
+	finalize?: boolean | null;
+};
+
+export type GoalChildWorkspaceCreateResult = {
+	workspaceId: string;
+	directoryName: string;
+	directory?: string | null;
+	branch: string;
+	sessionId: string;
+	state: WorkspaceState;
+	status: WorkspaceStatus;
+	intendedTargetBranch: string;
+	promptQueued: boolean;
+	agentStarted: boolean;
+	pendingSendId?: string | null;
+	provider?: string | null;
+	model?: string | null;
 };
 
 export type WorkspaceCreationSource =
@@ -1337,6 +1373,7 @@ export type UiMutationEvent =
 	| { type: "settingsChanged"; key: string | null }
 	| {
 			type: "pendingCliSendQueued";
+			pendingSendId: string;
 			workspaceId: string;
 			sessionId: string;
 			prompt: string;
@@ -1952,6 +1989,9 @@ export type PendingCliSend = {
 	prompt: string;
 	modelId: string | null;
 	permissionMode: string | null;
+	status: string;
+	lastDrainedAt: string | null;
+	startedAt: string | null;
 	createdAt: string;
 };
 
@@ -1962,6 +2002,10 @@ export type PendingCliSend = {
  */
 export async function drainPendingCliSends(): Promise<PendingCliSend[]> {
 	return invoke<PendingCliSend[]>("drain_pending_cli_sends");
+}
+
+export async function ackPendingCliSendStarted(id: string): Promise<void> {
+	return invoke<void>("ack_pending_cli_send_started", { id });
 }
 
 export async function permanentlyDeleteWorkspace(
@@ -2145,6 +2189,15 @@ export async function createGoalChildWorkspace(
 	return invoke<PrepareWorkspaceResponse>("create_goal_child_workspace", {
 		request,
 	});
+}
+
+export async function createGoalChildWorkspaceAndStart(
+	request: GoalChildWorkspaceCreateRequest,
+): Promise<GoalChildWorkspaceCreateResult> {
+	return invoke<GoalChildWorkspaceCreateResult>(
+		"create_goal_child_workspace_and_start",
+		{ request },
+	);
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ pub mod error;
 pub mod forge;
 pub mod git;
 pub mod global_hotkey;
+pub mod goal_orchestration;
 pub mod image_store;
 mod import;
 pub mod logging;
@@ -240,6 +241,7 @@ pub fn run() {
             commands::goal_commands::upsert_goal_card,
             commands::goal_commands::link_goal_card_workspace,
             commands::goal_commands::create_goal_child_workspace,
+            commands::goal_commands::create_goal_child_workspace_and_start,
             commands::goal_commands::set_goal_child_workspace_status,
             commands::forge_commands::get_workspace_pr_comment_insert_text,
             commands::forge_commands::merge_workspace_change_request,
@@ -323,6 +325,7 @@ pub fn run() {
             commands::editor_commands::unstage_workspace_file,
             commands::editor_commands::get_workspace_git_action_status,
             commands::system_commands::drain_pending_cli_sends,
+            commands::system_commands::ack_pending_cli_send_started,
             commands::editor_commands::read_editor_file,
             commands::editor_commands::read_file_at_ref,
             commands::workspace_commands::set_workspace_status,

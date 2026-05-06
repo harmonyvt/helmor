@@ -10,8 +10,7 @@ import type {
 	WorkspaceStatus,
 } from "@/lib/api";
 import {
-	createGoalChildWorkspace,
-	finalizeWorkspaceFromRepo,
+	createGoalChildWorkspaceAndStart,
 	listGoalChildWorkspaces,
 	loadSessionThreadMessages,
 	loadWorkspaceSessions,
@@ -84,27 +83,40 @@ export function GoalsAiPanel({
 				if (event.tool === "list_kanban_cards") {
 					result = await listGoalChildWorkspaces(workspaceId);
 				} else if (event.tool === "create_kanban_card") {
-					const prepared = await createGoalChildWorkspace({
-						goalWorkspaceId: workspaceId,
+					const created = await createGoalChildWorkspaceAndStart({
+						goalWorkspace: workspaceId,
 						title: String(args.title ?? "Untitled"),
-					});
-					await finalizeWorkspaceFromRepo(prepared.workspaceId, {
-						...(prepared.sourceStartBranch
-							? {
-									startBranch: prepared.sourceStartBranch,
-									fetchStartBranch: true,
-								}
-							: {}),
+						description:
+							typeof args.description === "string" ? args.description : null,
+						lane: String(args.lane ?? "backlog") as WorkspaceStatus,
+						targetBranch:
+							typeof args.targetBranch === "string" ? args.targetBranch : null,
+						assignedProvider:
+							typeof args.assignedProvider === "string"
+								? args.assignedProvider
+								: null,
+						assignedModelId:
+							typeof args.assignedModelId === "string"
+								? args.assignedModelId
+								: null,
+						prompt: typeof args.prompt === "string" ? args.prompt : null,
+						permissionMode:
+							typeof args.permissionMode === "string"
+								? args.permissionMode
+								: null,
+						finalize: true,
 					});
 					await invalidateBoard();
 					const children = await listGoalChildWorkspaces(workspaceId);
 					const newWorkspace = children.find(
-						(child) => child.id === prepared.workspaceId,
+						(child) => child.id === created.workspaceId,
 					);
 					if (newWorkspace) {
 						onCardCreated?.(newWorkspace);
 					}
-					result = newWorkspace ?? { workspaceId: prepared.workspaceId };
+					result = newWorkspace
+						? { ...created, workspace: newWorkspace }
+						: created;
 				} else if (event.tool === "move_kanban_card") {
 					const childWorkspaceId = String(
 						args.cardId ?? args.workspaceId ?? "",
