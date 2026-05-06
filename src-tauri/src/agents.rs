@@ -208,6 +208,18 @@ pub struct AgentSendRequest {
     /// round-trip without regex re-extraction.
     #[serde(default)]
     pub images: Option<Vec<String>>,
+    /// Goal workspace id. When present for Pi, the sidecar registers the
+    /// goal-board Kanban/thread tools and writes the board context file.
+    #[serde(default)]
+    pub kanban_workspace_id: Option<String>,
+    /// JSON-serialized snapshot of the current goal board.
+    #[serde(default)]
+    pub kanban_snapshot: Option<String>,
+    /// Optional goal metadata injected into Pi's goal-board context.
+    #[serde(default)]
+    pub goal_title: Option<String>,
+    #[serde(default)]
+    pub goal_description: Option<String>,
 }
 
 #[cfg(test)]
@@ -666,7 +678,7 @@ pub async fn send_kanban_tool_result(
 
 /// Send the result of a Pi extension interactive UI request (select/confirm/input)
 /// back to the sidecar. Called by the frontend after the user interacts with the
-/// corresponding element rendered in the Goals AI panel.
+/// corresponding element rendered by the shared conversation UI.
 #[tauri::command]
 pub async fn respond_to_pi_ui(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,

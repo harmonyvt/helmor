@@ -166,6 +166,10 @@ pub(super) fn stream_via_sidecar(
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
         images: &images_for_wire,
+        kanban_workspace_id: request.kanban_workspace_id.as_deref(),
+        kanban_snapshot: request.kanban_snapshot.as_deref(),
+        goal_title: request.goal_title.as_deref(),
+        goal_description: request.goal_description.as_deref(),
     });
 
     // Surface the `/add-dir` decision in logs — we often debug linked-
@@ -999,8 +1003,9 @@ pub(super) fn stream_via_sidecar(
                 }
                 "pi_ui_request" => {
                     // Pi extension interactive UI request — forward to the
-                    // frontend so the Goals AI panel can render a picker or
-                    // confirm dialog and respond via `respond_to_pi_ui`.
+                    // frontend so the shared conversation surface can render
+                    // a picker/input/confirm card and respond via
+                    // `respond_to_pi_ui`.
                     let interaction_id = event
                         .raw
                         .get("interactionId")

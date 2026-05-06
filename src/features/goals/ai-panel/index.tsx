@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import type {
@@ -15,13 +15,10 @@ import {
 	loadSessionThreadMessages,
 	loadWorkspaceSessions,
 	renameSession,
-	respondToPiUi,
 	sendKanbanToolResult,
 	setGoalChildWorkspaceStatus,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
-import { PiConfirmCard, PiInputCard, PiSelectCard } from "./pi-ui-cards";
-import type { PiUiState } from "./types";
 
 type GoalsAiPanelProps = {
 	workspaceId: string;
@@ -54,9 +51,6 @@ export function GoalsAiPanel({
 	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
 		null,
 	);
-	const [piUiState, setPiUiState] = useState<PiUiState>(null);
-	const [inputAnswer, setInputAnswer] = useState("");
-
 	const handleSelectSession = useCallback((sessionId: string | null) => {
 		setSelectedSessionId(sessionId);
 		setDisplayedSessionId(sessionId);
@@ -181,106 +175,6 @@ export function GoalsAiPanel({
 		[workspaceId, queryClient, onCardCreated],
 	);
 
-	const handlePiUiRequest = useCallback(
-		(event: Extract<AgentStreamEvent, { kind: "piUiRequest" }>) => {
-			const payload = event.payload;
-			if (event.uiKind === "select") {
-				setPiUiState({
-					type: "select",
-					interactionId: event.interactionId,
-					title: String(payload.title ?? "Select an option"),
-					options: Array.isArray(payload.options)
-						? payload.options.map(String)
-						: [],
-				});
-			} else if (event.uiKind === "confirm") {
-				setPiUiState({
-					type: "confirm",
-					interactionId: event.interactionId,
-					title: String(payload.title ?? "Confirm"),
-					message: String(payload.message ?? ""),
-				});
-			} else if (event.uiKind === "input") {
-				setInputAnswer("");
-				setPiUiState({
-					type: "input",
-					interactionId: event.interactionId,
-					title: String(payload.title ?? "Enter text"),
-					placeholder: String(payload.placeholder ?? ""),
-				});
-			}
-		},
-		[],
-	);
-
-	const handleSelect = useCallback(
-		async (option: string) => {
-			if (!piUiState || piUiState.type !== "select") return;
-			const { interactionId } = piUiState;
-			setPiUiState(null);
-			await respondToPiUi(interactionId, option);
-		},
-		[piUiState],
-	);
-
-	const handleConfirm = useCallback(
-		async (confirmed: boolean) => {
-			if (!piUiState || piUiState.type !== "confirm") return;
-			const { interactionId } = piUiState;
-			setPiUiState(null);
-			await respondToPiUi(interactionId, confirmed);
-		},
-		[piUiState],
-	);
-
-	const handleInput = useCallback(async () => {
-		if (!piUiState || piUiState.type !== "input") return;
-		const { interactionId } = piUiState;
-		const value = inputAnswer.trim();
-		setPiUiState(null);
-		setInputAnswer("");
-		await respondToPiUi(interactionId, value || null);
-	}, [piUiState, inputAnswer]);
-
-	const handleInputCancel = useCallback(async () => {
-		if (!piUiState || piUiState.type !== "input") return;
-		const { interactionId } = piUiState;
-		setPiUiState(null);
-		setInputAnswer("");
-		await respondToPiUi(interactionId, null);
-	}, [piUiState]);
-
-	const composerAccessory = useMemo(() => {
-		if (!piUiState) return null;
-
-		return (
-			<div className="mb-3">
-				{piUiState.type === "select" && (
-					<PiSelectCard state={piUiState} onSelect={handleSelect} />
-				)}
-				{piUiState.type === "confirm" && (
-					<PiConfirmCard state={piUiState} onConfirm={handleConfirm} />
-				)}
-				{piUiState.type === "input" && (
-					<PiInputCard
-						state={piUiState}
-						value={inputAnswer}
-						onChange={setInputAnswer}
-						onSubmit={handleInput}
-						onCancel={handleInputCancel}
-					/>
-				)}
-			</div>
-		);
-	}, [
-		piUiState,
-		handleSelect,
-		handleConfirm,
-		inputAnswer,
-		handleInput,
-		handleInputCancel,
-	]);
-
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<WorkspaceConversationContainer
@@ -298,8 +192,6 @@ export function GoalsAiPanel({
 					goalDescription: goalDescription ?? null,
 				})}
 				onKanbanToolCall={handleKanbanToolCall}
-				onPiUiRequest={handlePiUiRequest}
-				composerAccessory={composerAccessory}
 				compact={true}
 				headerLeading={
 					<span className="text-[11px] font-medium tracking-[0.04em] text-muted-foreground/70">
