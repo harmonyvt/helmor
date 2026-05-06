@@ -727,7 +727,7 @@ export function useWorkspacesSidebarController({
 					title,
 					description,
 				});
-				onSelectWorkspace(prepared.workspaceId);
+				await finalizeGoalWorkspace(prepared.workspaceId, description);
 				await Promise.all([
 					queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceGroups,
@@ -736,33 +736,14 @@ export function useWorkspacesSidebarController({
 						queryKey: helmorQueryKeys.workspaceDetail(prepared.workspaceId),
 					}),
 				]);
-				void finalizeGoalWorkspace(prepared.workspaceId, description)
-					.then(() =>
-						Promise.all([
-							queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.workspaceGroups,
-							}),
-							queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.workspaceDetail(prepared.workspaceId),
-							}),
-						]),
-					)
-					.catch((error) => {
-						pushWorkspaceToast(
-							describeUnknownError(error, "Unable to create Goal PR."),
-							"Goal setup failed",
-							"destructive",
-						);
-						void queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceGroups,
-						});
-					});
+				onSelectWorkspace(prepared.workspaceId);
 			} catch (error) {
 				pushWorkspaceToast(
 					describeUnknownError(error, "Unable to create Goal workspace."),
 					"Goal creation failed",
 					"destructive",
 				);
+				throw error;
 			} finally {
 				setCreatingWorkspaceRepoId(null);
 			}

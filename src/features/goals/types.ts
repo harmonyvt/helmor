@@ -5,6 +5,7 @@ export type GoalAiSurfaceContext = {
 	goalTitle: string | null;
 	goalDescription: string | null;
 	kanbanSnapshot: string;
+	canCreateCards: boolean;
 };
 
 export type GoalAiSurfaceProps = GoalAiSurfaceContext & {

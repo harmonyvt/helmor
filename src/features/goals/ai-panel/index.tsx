@@ -28,6 +28,7 @@ type GoalsAiPanelProps = {
 	kanbanSnapshot: string;
 	goalTitle?: string | null;
 	goalDescription?: string | null;
+	canCreateCards?: boolean;
 	onClose: () => void;
 	/** Called when Pi creates a workspace card so the parent can select it. */
 	onCardCreated?: (ws: WorkspaceDetail) => void;
@@ -41,6 +42,7 @@ export function GoalsAiPanel({
 	kanbanSnapshot,
 	goalTitle,
 	goalDescription,
+	canCreateCards = true,
 	onClose,
 	onCardCreated,
 }: GoalsAiPanelProps) {
@@ -77,6 +79,11 @@ export function GoalsAiPanel({
 				if (event.tool === "list_kanban_cards") {
 					result = await listGoalChildWorkspaces(workspaceId);
 				} else if (event.tool === "create_kanban_card") {
+					if (!canCreateCards) {
+						throw new Error(
+							"Goal setup must finish before Pi can create cards.",
+						);
+					}
 					const created = await createGoalChildWorkspaceAndStart({
 						goalWorkspace: workspaceId,
 						title: String(args.title ?? "Untitled"),

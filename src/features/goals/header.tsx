@@ -10,6 +10,7 @@ type GoalHeaderProps = {
 	onEditGoal: () => void;
 	onShowAi: () => void;
 	onShowAddCard: () => void;
+	canCreateCards?: boolean;
 };
 
 export function GoalHeader({
@@ -20,6 +21,7 @@ export function GoalHeader({
 	onEditGoal,
 	onShowAi,
 	onShowAddCard,
+	canCreateCards = true,
 }: GoalHeaderProps) {
 	return (
 		<>
@@ -52,7 +54,12 @@ export function GoalHeader({
 						size="sm"
 						className="cursor-pointer"
 						onClick={onShowAi}
-						title="Pi AI assistant"
+						title={
+							canCreateCards
+								? "Pi AI assistant"
+								: "Goal setup must finish before Pi can create cards"
+						}
+						disabled={!canCreateCards}
 					>
 						<Bot className="size-3.5" />
 						AI
@@ -62,6 +69,12 @@ export function GoalHeader({
 						size="sm"
 						className="cursor-pointer"
 						onClick={onShowAddCard}
+						disabled={!canCreateCards}
+						title={
+							canCreateCards
+								? "Add card"
+								: "Goal setup must finish before adding cards"
+						}
 					>
 						<Plus className="size-3.5" />
 						Add card

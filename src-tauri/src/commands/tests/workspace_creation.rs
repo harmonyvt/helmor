@@ -189,6 +189,17 @@ fn create_goal_child_workspace_inserts_code_child_linked_to_goal() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
     let connection = Connection::open(harness.db_path()).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "update-ref",
+            "refs/heads/helmor/goal/create",
+            "HEAD",
+        ],
+        None,
+    )
+    .unwrap();
 
     connection
         .execute(
@@ -196,10 +207,10 @@ fn create_goal_child_workspace_inserts_code_child_linked_to_goal() {
             INSERT INTO workspaces (
               id, repository_id, directory_name, active_session_id, branch,
               state, initialization_parent_branch, intended_target_branch,
-              status, workspace_kind, goal_workspace_id, unread
+              status, workspace_kind, goal_workspace_id, pr_sync_state, unread
             ) VALUES (
               'goal-create', ?1, 'goal-create', NULL, 'helmor/goal/create',
-              'ready', 'main', 'main', 'backlog', 'goal', NULL, 0
+              'ready', 'main', 'main', 'backlog', 'goal', NULL, 'open', 0
             )
             "#,
             [&harness.repo_id],
@@ -256,7 +267,7 @@ fn create_goal_child_workspace_inserts_code_child_linked_to_goal() {
 }
 
 #[test]
-fn create_goal_child_workspace_applies_lane_target_and_session_metadata() {
+fn create_goal_child_workspace_rejects_goal_without_remote_branch() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -269,10 +280,107 @@ fn create_goal_child_workspace_applies_lane_target_and_session_metadata() {
             INSERT INTO workspaces (
               id, repository_id, directory_name, active_session_id, branch,
               state, initialization_parent_branch, intended_target_branch,
-              status, workspace_kind, goal_workspace_id, unread
+              status, workspace_kind, goal_workspace_id, pr_sync_state, unread
+            ) VALUES (
+              'goal-local-only', ?1, 'goal-local-only', NULL, 'helmor/goal/local-only',
+              'ready', 'main', 'main', 'backlog', 'goal', NULL, 'open', 0
+            )
+            "#,
+            [&harness.repo_id],
+        )
+        .unwrap();
+
+    let error = workspaces::create_goal_child_workspace(workspaces::GoalChildWorkspaceRequest {
+        goal_workspace_id: "goal-local-only".to_string(),
+        goal_card_id: None,
+        title: Some("Should fail".to_string()),
+        description: None,
+        lane: None,
+        target_branch: None,
+        assigned_provider: None,
+        assigned_model_id: None,
+        assigned_effort_level: None,
+    })
+    .expect_err("child workspaces require the Goal branch on the remote");
+
+    assert!(
+        error.to_string().contains("not available on remote"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn create_goal_child_workspace_rejects_unfinalized_goal() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+
+    connection
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, active_session_id, branch,
+              state, initialization_parent_branch, intended_target_branch,
+              status, workspace_kind, goal_workspace_id, pr_sync_state, unread
+            ) VALUES (
+              'goal-initializing', ?1, 'goal-initializing', NULL, 'helmor/goal/initializing',
+              'initializing', 'main', 'main', 'backlog', 'goal', NULL, 'none', 0
+            )
+            "#,
+            [&harness.repo_id],
+        )
+        .unwrap();
+
+    let error = workspaces::create_goal_child_workspace(workspaces::GoalChildWorkspaceRequest {
+        goal_workspace_id: "goal-initializing".to_string(),
+        goal_card_id: None,
+        title: Some("Should fail".to_string()),
+        description: None,
+        lane: None,
+        target_branch: None,
+        assigned_provider: None,
+        assigned_model_id: None,
+        assigned_effort_level: None,
+    })
+    .expect_err("initializing Goal workspaces must not create children");
+
+    assert!(
+        error.to_string().contains("not ready for child workspaces"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn create_goal_child_workspace_applies_lane_target_and_session_metadata() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "update-ref",
+            "refs/heads/helmor/goal/meta",
+            "HEAD",
+        ],
+        None,
+    )
+    .unwrap();
+
+    connection
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, active_session_id, branch,
+              state, initialization_parent_branch, intended_target_branch,
+              status, workspace_kind, goal_workspace_id, pr_sync_state, unread
             ) VALUES (
               'goal-meta', ?1, 'goal-meta', NULL, 'helmor/goal/meta',
-              'ready', 'main', 'main', 'backlog', 'goal', NULL, 0
+              'ready', 'main', 'main', 'backlog', 'goal', NULL, 'open', 0
             )
             "#,
             [&harness.repo_id],

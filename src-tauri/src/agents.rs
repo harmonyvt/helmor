@@ -1023,6 +1023,10 @@ mod tests {
             user_message_id: None,
             files: None,
             images: None,
+            kanban_workspace_id: None,
+            kanban_snapshot: None,
+            goal_title: None,
+            goal_description: None,
         };
 
         let resolved = resolve_stream_working_directory(&request).unwrap();
@@ -1060,6 +1064,10 @@ mod tests {
             user_message_id: None,
             files: None,
             images: None,
+            kanban_workspace_id: None,
+            kanban_snapshot: None,
+            goal_title: None,
+            goal_description: None,
         };
 
         let error = resolve_stream_working_directory(&request).unwrap_err();

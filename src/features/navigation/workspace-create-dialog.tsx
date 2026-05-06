@@ -222,9 +222,12 @@ export function WorkspaceCreateDialog({
 				goalTitle.trim(),
 				goalDescription.trim(),
 			);
+			onOpenChange(false);
+		} catch {
+			// The sidebar controller owns the destructive error toast. Keep the
+			// dialog open so the user remains in the Goal create flow.
 		} finally {
 			setSubmitting(false);
-			onOpenChange(false);
 		}
 	}, [
 		goalDescription,
@@ -305,6 +308,7 @@ export function WorkspaceCreateDialog({
 					<TabsContent value="branch" className="min-h-[340px] min-w-0">
 						<div className="flex min-w-0 flex-col gap-3">
 							<RepositorySelect
+								id="workspace-create-branch-repo"
 								label="Repository"
 								value={remoteRepoId}
 								repositories={repositories}
@@ -351,6 +355,7 @@ export function WorkspaceCreateDialog({
 					<TabsContent value="pr" className="min-h-[340px] min-w-0">
 						<div className="flex min-w-0 flex-col gap-3">
 							<RepositorySelect
+								id="workspace-create-pr-repo"
 								label="Repository"
 								value={prRepoId}
 								repositories={repositories}
@@ -417,6 +422,7 @@ export function WorkspaceCreateDialog({
 					<TabsContent value="goal" className="min-h-[340px] min-w-0">
 						<div className="flex min-w-0 flex-col gap-3">
 							<RepositorySelect
+								id="workspace-create-goal-repo"
 								label="Repository"
 								value={goalRepoId}
 								repositories={repositories}
@@ -532,12 +538,14 @@ function RepositoryList({
 }
 
 function RepositorySelect({
+	id,
 	label,
 	value,
 	repositories,
 	onChange,
 	disabled,
 }: {
+	id: string;
 	label: string;
 	value: string;
 	repositories: RepositoryCreateOption[];
@@ -546,10 +554,14 @@ function RepositorySelect({
 }) {
 	return (
 		<div className="flex flex-col gap-1">
-			<Label className="text-[12px] font-medium tracking-[-0.01em]">
+			<Label
+				htmlFor={id}
+				className="text-[12px] font-medium tracking-[-0.01em]"
+			>
 				{label}
 			</Label>
 			<select
+				id={id}
 				value={value}
 				onChange={(event) => onChange(event.target.value)}
 				disabled={disabled}

@@ -41,9 +41,11 @@ const apiMocks = vi.hoisted(() => {
 		permanentlyDeleteWorkspace: vi.fn(),
 		pinWorkspace: vi.fn(),
 		prepareArchiveWorkspace: vi.fn(),
+		prepareGoalWorkspace: vi.fn(),
 		restoreWorkspace: vi.fn(),
 		setWorkspaceStatus: vi.fn(),
 		startArchiveWorkspace: vi.fn(),
+		finalizeGoalWorkspace: vi.fn(),
 		unpinWorkspace: vi.fn(),
 		validateRestoreWorkspace: vi.fn(),
 		listenArchiveExecutionFailed: vi.fn(async (callback) => {
@@ -94,9 +96,11 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		permanentlyDeleteWorkspace: apiMocks.permanentlyDeleteWorkspace,
 		pinWorkspace: apiMocks.pinWorkspace,
 		prepareArchiveWorkspace: apiMocks.prepareArchiveWorkspace,
+		prepareGoalWorkspace: apiMocks.prepareGoalWorkspace,
 		restoreWorkspace: apiMocks.restoreWorkspace,
 		setWorkspaceStatus: apiMocks.setWorkspaceStatus,
 		startArchiveWorkspace: apiMocks.startArchiveWorkspace,
+		finalizeGoalWorkspace: apiMocks.finalizeGoalWorkspace,
 		unpinWorkspace: apiMocks.unpinWorkspace,
 		validateRestoreWorkspace: apiMocks.validateRestoreWorkspace,
 	};
@@ -252,6 +256,35 @@ describe("useWorkspacesSidebarController archive flow", () => {
 				workspaceId,
 			}),
 		);
+		apiMocks.prepareGoalWorkspace.mockResolvedValue({
+			workspaceId: "goal-1",
+			initialSessionId: "session-goal-1",
+			repoId: "repo-1",
+			repoName: "helmor",
+			directoryName: "goal-build-api",
+			branch: "helmor/goal/build-api",
+			defaultBranch: "main",
+			intendedTargetBranch: "main",
+			title: "Build API",
+			description: "Ship the API",
+			state: "initializing" as const,
+			repoScripts: {
+				setupScript: null,
+				runScript: null,
+				archiveScript: null,
+				setupFromProject: false,
+				runFromProject: false,
+				archiveFromProject: false,
+				autoRunSetup: true,
+			},
+		});
+		apiMocks.finalizeGoalWorkspace.mockResolvedValue({
+			workspaceId: "goal-1",
+			finalState: "ready" as const,
+			prTitle: "Build API",
+			prUrl: "https://example.test/pr/1",
+			prSyncState: "open" as const,
+		});
 		apiMocks.permanentlyDeleteWorkspace.mockResolvedValue(undefined);
 		apiMocks.startArchiveWorkspace.mockResolvedValue(undefined);
 		apiMocks.validateRestoreWorkspace.mockResolvedValue({
@@ -744,6 +777,113 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		expect(
 			result.current.groups.find((group) => group.id === "done")?.rows ?? [],
 		).toEqual([]);
+	});
+
+	it("awaits Goal finalization before selecting the Goal", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		let resolveFinalize:
+			| ((value: {
+					workspaceId: string;
+					finalState: "ready";
+					prTitle: string;
+					prUrl: string;
+					prSyncState: "open";
+			  }) => void)
+			| null = null;
+
+		apiMocks.finalizeGoalWorkspace.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveFinalize = resolve;
+				}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace,
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows).toHaveLength(2);
+		});
+		onSelectWorkspace.mockClear();
+
+		await act(async () => {
+			void result.current.handleCreateGoalWorkspace(
+				"repo-1",
+				"Build API",
+				"Ship the API",
+			);
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.finalizeGoalWorkspace).toHaveBeenCalledWith(
+				"goal-1",
+				"Ship the API",
+			);
+		});
+		expect(onSelectWorkspace).not.toHaveBeenCalled();
+		expect(result.current.creatingWorkspaceRepoId).toBe("repo-1");
+
+		await act(async () => {
+			resolveFinalize?.({
+				workspaceId: "goal-1",
+				finalState: "ready",
+				prTitle: "Build API",
+				prUrl: "https://example.test/pr/1",
+				prSyncState: "open",
+			});
+		});
+
+		await waitFor(() => {
+			expect(onSelectWorkspace).toHaveBeenCalledWith("goal-1");
+		});
+		expect(result.current.creatingWorkspaceRepoId).toBeNull();
+	});
+
+	it("keeps Goal creation open when draft PR finalization fails", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		const pushWorkspaceToast = vi.fn();
+		apiMocks.finalizeGoalWorkspace.mockRejectedValue(
+			new Error("gh pr create failed"),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace,
+					pushWorkspaceToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await expect(
+			result.current.handleCreateGoalWorkspace(
+				"repo-1",
+				"Build API",
+				"Ship the API",
+			),
+		).rejects.toThrow("gh pr create failed");
+
+		expect(onSelectWorkspace).not.toHaveBeenCalled();
+		expect(pushWorkspaceToast).toHaveBeenCalledWith(
+			"gh pr create failed",
+			"Goal creation failed",
+			"destructive",
+		);
+		expect(result.current.creatingWorkspaceRepoId).toBeNull();
 	});
 
 	// The pending creation row and the navigation refetch share the same

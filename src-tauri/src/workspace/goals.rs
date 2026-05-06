@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -183,6 +186,11 @@ pub fn finalize_goal_workspace(
     let finalized = super::lifecycle::finalize_workspace_from_repo_impl(workspace_id)?;
     let refreshed = workspace_models::load_workspace_record_by_id(workspace_id)?
         .with_context(|| format!("Workspace not found after finalize: {workspace_id}"))?;
+    let repo_root = refreshed
+        .root_path
+        .as_deref()
+        .map(PathBuf::from)
+        .with_context(|| format!("Goal workspace {workspace_id} is missing repository root"))?;
     let workspace_dir =
         crate::data_dir::workspace_dir(&refreshed.repo_name, &refreshed.directory_name)?;
     let branch = refreshed
@@ -195,23 +203,44 @@ pub fn finalize_goal_workspace(
         .clone()
         .unwrap_or_else(|| helpers::display_title(&refreshed));
     let body = build_goal_pr_body(description);
+    let mut pushed_branch = false;
 
-    ensure_goal_empty_commit(&workspace_dir, branch, &title, description)?;
-    git_ops::run_git_with_timeout(
-        [
-            "-C",
-            workspace_dir.to_str().unwrap_or(""),
-            "push",
-            "-u",
-            remote,
-            branch,
-        ],
-        None,
-        git_ops::GIT_NETWORK_TIMEOUT,
-    )?;
+    let setup_result = (|| -> Result<Option<String>> {
+        ensure_goal_empty_commit(&workspace_dir, branch, &title, description)?;
+        git_ops::run_git_with_timeout(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap_or(""),
+                "push",
+                "-u",
+                remote,
+                branch,
+            ],
+            None,
+            git_ops::GIT_NETWORK_TIMEOUT,
+        )?;
+        pushed_branch = true;
 
-    let pr_url = create_draft_change_request(&workspace_dir, &title, &body, branch, &refreshed)?;
-    update_goal_pr_metadata(workspace_id, &title, pr_url.as_deref())?;
+        let pr_url =
+            create_draft_change_request(&workspace_dir, &title, &body, branch, &refreshed)?;
+        update_goal_pr_metadata(workspace_id, &title, pr_url.as_deref())?;
+        Ok(pr_url)
+    })();
+
+    let pr_url = match setup_result {
+        Ok(pr_url) => pr_url,
+        Err(error) => {
+            cleanup_failed_goal_workspace(
+                workspace_id,
+                &repo_root,
+                &workspace_dir,
+                branch,
+                remote,
+                pushed_branch,
+            );
+            return Err(error);
+        }
+    };
 
     Ok(FinalizeGoalWorkspaceResponse {
         workspace_id: workspace_id.to_string(),
@@ -238,6 +267,12 @@ pub fn create_goal_child_workspace(
     request: GoalChildWorkspaceRequest,
 ) -> Result<super::lifecycle::PrepareWorkspaceResponse> {
     let goal = workspace_models::load_goal_workspace_record(&request.goal_workspace_id)?;
+    if goal.state != WorkspaceState::Ready || goal.pr_sync_state != PrSyncState::Open {
+        bail!(
+            "Goal workspace {} is not ready for child workspaces",
+            request.goal_workspace_id
+        );
+    }
     let repository = repos::load_repository_by_id(&goal.repo_id)?
         .with_context(|| format!("Repository not found: {}", goal.repo_id))?;
     let repo_root = PathBuf::from(repository.root_path.trim());
@@ -251,6 +286,11 @@ pub fn create_goal_child_workspace(
             )
         })?
         .to_string();
+    let remote = repository
+        .remote
+        .clone()
+        .unwrap_or_else(|| "origin".to_string());
+    ensure_remote_goal_branch_exists(&repo_root, &remote, &goal_branch)?;
     let target_branch = request
         .target_branch
         .as_deref()
@@ -394,6 +434,56 @@ pub fn create_goal_child_workspace(
         state: WorkspaceState::Initializing,
         repo_scripts,
     })
+}
+
+fn ensure_remote_goal_branch_exists(repo_root: &Path, remote: &str, branch: &str) -> Result<()> {
+    git_ops::run_git_with_timeout(
+        [
+            "-C",
+            repo_root.to_str().unwrap_or(""),
+            "ls-remote",
+            "--exit-code",
+            "--heads",
+            remote,
+            branch,
+        ],
+        None,
+        git_ops::GIT_NETWORK_TIMEOUT,
+    )
+    .map(|_| ())
+    .with_context(|| {
+        format!(
+            "Goal branch {branch} is not available on remote {remote}; wait for Goal setup to finish"
+        )
+    })
+}
+
+fn cleanup_failed_goal_workspace(
+    workspace_id: &str,
+    repo_root: &Path,
+    workspace_dir: &Path,
+    branch: &str,
+    remote: &str,
+    pushed_branch: bool,
+) {
+    if pushed_branch {
+        let _ = git_ops::run_git_with_timeout(
+            [
+                "-C",
+                repo_root.to_str().unwrap_or(""),
+                "push",
+                remote,
+                "--delete",
+                branch,
+            ],
+            None,
+            git_ops::GIT_NETWORK_TIMEOUT,
+        );
+    }
+    let _ = git_ops::remove_worktree(repo_root, workspace_dir);
+    let _ = fs::remove_dir_all(workspace_dir);
+    let _ = git_ops::remove_branch(repo_root, branch);
+    let _ = workspace_models::delete_workspace_and_session_rows(workspace_id);
 }
 
 pub fn set_goal_child_workspace_status(request: GoalChildWorkspaceStatusRequest) -> Result<()> {

@@ -134,6 +134,12 @@ export function GoalWorkspaceContainer({
 	const isPanelOpen = selectedWorkspace !== null || showAddPanel || showAiPanel;
 	const goalTitle = workspace?.goalTitle ?? workspace?.title ?? "Goal";
 	const goalDescription = workspace?.goalDescription ?? null;
+	const isGoalReadyForChildren = Boolean(
+		workspace?.state === "ready" &&
+			workspace.branch &&
+			workspace.intendedTargetBranch &&
+			workspace.prSyncState === "open",
+	);
 	const kanbanSnapshot = useMemo(
 		() => createGoalKanbanSnapshot(childWorkspaces),
 		[childWorkspaces],
@@ -144,6 +150,7 @@ export function GoalWorkspaceContainer({
 		goalTitle: workspace?.goalTitle ?? null,
 		goalDescription,
 		kanbanSnapshot,
+		canCreateCards: isGoalReadyForChildren,
 		onClose: () => setShowAiPanel(false),
 	};
 
@@ -156,6 +163,7 @@ export function GoalWorkspaceContainer({
 				kanbanSnapshot={props.kanbanSnapshot}
 				goalTitle={props.goalTitle}
 				goalDescription={props.goalDescription}
+				canCreateCards={isGoalReadyForChildren}
 				onClose={props.onClose}
 				onCardCreated={(createdWorkspace) => setSelectedId(createdWorkspace.id)}
 			/>
@@ -176,13 +184,16 @@ export function GoalWorkspaceContainer({
 				goalTitle={goalTitle}
 				goalDescription={goalDescription}
 				prUrl={workspace?.prUrl}
+				canCreateCards={isGoalReadyForChildren}
 				onEditGoal={() => setShowGoalSheet(true)}
 				onShowAi={() => {
+					if (!isGoalReadyForChildren) return;
 					setShowAiPanel((isOpen) => !isOpen);
 					setSelectedId(null);
 					setShowAddPanel(false);
 				}}
 				onShowAddCard={() => {
+					if (!isGoalReadyForChildren) return;
 					setShowAddPanel(true);
 					setSelectedId(null);
 					setShowAiPanel(false);
