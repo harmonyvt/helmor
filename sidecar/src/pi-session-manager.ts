@@ -79,6 +79,7 @@ export class PiSessionManager implements SessionManager {
 			const { authStorage, modelRegistry, resourceLoader } =
 				await createPiRuntimeResources(params.cwd);
 			const model = resolvePiModel(modelRegistry, params.model);
+			const trace = createPiTrace(requestId, params.model, params.cwd ?? "");
 			const tools = toolsForPermissionMode(params.permissionMode);
 
 			// Write Pi extension file + board snapshot before the agent starts
@@ -139,13 +140,15 @@ export class PiSessionManager implements SessionManager {
 				active: true,
 			};
 			this.sessions.set(params.sessionId, live);
-			await bindPiExtensionsForHelmor(session, emitter, requestId);
+			await bindPiExtensionsForHelmor(session, emitter, requestId, () =>
+				trace.recordVisibleActivity("extension_card"),
+			);
 
 			const state = createPiEventState(requestId);
-			const trace = createPiTrace(requestId, params.model, params.cwd ?? "");
 			live.unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 				trace.record(event);
 				for (const normalized of normalizePiEvent(event, state)) {
+					trace.recordPipelineEvent(normalized);
 					emitter.passthrough(requestId, {
 						...normalized,
 						session_id: providerSessionId,
@@ -366,22 +369,40 @@ function createPiTrace(
 	cwd: string,
 ) {
 	const counts = new Map<string, number>();
-	let visibleAssistantMessageCount = 0;
+	let visibleActivityCount = 0;
 	let errorEventCount = 0;
 	return {
 		record(event: AgentSessionEvent) {
 			counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+			if (event.type === "message_update") {
+				const assistantEvent = asRecord(event.assistantMessageEvent);
+				const assistantEventType = assistantEvent?.type;
+				if (
+					assistantEventType === "text_delta" ||
+					assistantEventType === "thinking_delta" ||
+					assistantEventType === "toolcall_delta"
+				) {
+					const delta = assistantEvent?.delta;
+					if (typeof delta === "string" && delta.length > 0) {
+						visibleActivityCount += 1;
+					}
+				}
+			}
+			if (
+				event.type === "tool_execution_start" ||
+				event.type === "tool_execution_update" ||
+				event.type === "tool_execution_end"
+			) {
+				visibleActivityCount += 1;
+			}
 			if (event.type === "message_end") {
 				const message = asRecord(event.message);
 				if (
 					message?.role === "assistant" &&
 					assistantHasVisibleContent(message)
 				) {
-					visibleAssistantMessageCount += 1;
+					visibleActivityCount += 1;
 				}
-			}
-			if (event.type === "message_end") {
-				const message = asRecord(event.message);
 				if (
 					message?.role === "assistant" &&
 					typeof message.errorMessage === "string"
@@ -390,35 +411,81 @@ function createPiTrace(
 				}
 			}
 		},
+		recordPipelineEvent(event: {
+			readonly type: string;
+			readonly [key: string]: unknown;
+		}) {
+			if (isVisiblePiPipelineEvent(event)) visibleActivityCount += 1;
+			if (event.type === "error") errorEventCount += 1;
+		},
+		recordVisibleActivity(kind: string) {
+			counts.set(kind, (counts.get(kind) ?? 0) + 1);
+			visibleActivityCount += 1;
+		},
 		finish(errorMessage: string | undefined) {
 			logger.debug("Pi prompt event summary", {
 				requestId,
 				model,
 				cwd,
 				events: Object.fromEntries(counts),
-				visibleAssistantMessageCount,
+				visibleActivityCount,
 				errorEventCount,
 				errorMessage,
 			});
 		},
 		shouldEmitEmptyTurnNotice() {
-			return visibleAssistantMessageCount === 0 && errorEventCount === 0;
+			return visibleActivityCount === 0 && errorEventCount === 0;
 		},
 	};
 }
 
 function assistantHasVisibleContent(message: Record<string, unknown>): boolean {
-	return extractAssistantText(message).trim().length > 0;
+	const content = message.content;
+	if (!Array.isArray(content)) return false;
+	return content.some((item) => {
+		const block = asRecord(item);
+		if (!block) return false;
+		if (block.type === "text") {
+			return typeof block.text === "string" && block.text.trim().length > 0;
+		}
+		if (block.type === "thinking") {
+			return (
+				typeof block.thinking === "string" && block.thinking.trim().length > 0
+			);
+		}
+		return block.type === "toolCall";
+	});
 }
 
-function extractAssistantText(message: Record<string, unknown>): string {
-	const content = message.content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.map((item) => asRecord(item))
-		.filter((item) => item?.type === "text" && typeof item.text === "string")
-		.map((item) => item?.text as string)
-		.join("");
+function isVisiblePiPipelineEvent(event: {
+	readonly type: string;
+	readonly [key: string]: unknown;
+}): boolean {
+	if (event.type === "item/agentMessage/delta") {
+		return typeof event.text === "string" && event.text.length > 0;
+	}
+	if (event.type === "item/reasoning/textDelta") {
+		return typeof event.text === "string" && event.text.length > 0;
+	}
+	if (event.type === "item/commandExecution/outputDelta") {
+		return typeof event.output === "string" && event.output.length > 0;
+	}
+	if (event.type === "item/started" || event.type === "item/completed") {
+		const item = asRecord(event.item);
+		const itemType = item?.type;
+		if (itemType === "agent_message") {
+			const text = item?.text;
+			return typeof text === "string" && text.trim().length > 0;
+		}
+		return (
+			itemType === "reasoning" ||
+			itemType === "command_execution" ||
+			itemType === "file_change" ||
+			itemType === "mcp_tool_call" ||
+			itemType === "generic_card"
+		);
+	}
+	return false;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

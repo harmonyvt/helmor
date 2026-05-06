@@ -451,6 +451,99 @@ describe("Pi event normalization", () => {
 		]);
 	});
 
+	test("scopes reasoning IDs by content index and fallback turn index", () => {
+		const state = createPiEventState("request-a");
+
+		expect(
+			normalizePiEvent(
+				{ type: "turn_start", timestamp: 1 } as AgentSessionEvent,
+				state,
+			),
+		).toEqual([{ type: "turn/started", turn: { id: "pi-turn-request-a-0" } }]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_update",
+					message: { role: "assistant", content: [] },
+					assistantMessageEvent: { type: "thinking_start", contentIndex: 1 },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/started",
+				item: {
+					id: "pi-reasoning-request-a-0-1",
+					type: "reasoning",
+					text: "",
+				},
+			},
+		]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_update",
+					message: { role: "assistant", content: [] },
+					assistantMessageEvent: {
+						type: "thinking_delta",
+						contentIndex: 1,
+						delta: "indexed thought",
+					},
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/reasoning/textDelta",
+				itemId: "pi-reasoning-request-a-0-1",
+				text: "indexed thought",
+			},
+		]);
+		normalizePiEvent(
+			{
+				type: "turn_end",
+				message: { role: "assistant", usage: { input: 1, output: 2 } },
+			} as unknown as AgentSessionEvent,
+			state,
+		);
+		expect(
+			normalizePiEvent(
+				{ type: "turn_start", timestamp: 2 } as AgentSessionEvent,
+				state,
+			),
+		).toEqual([{ type: "turn/started", turn: { id: "pi-turn-request-a-1" } }]);
+	});
+
+	test("surfaces unknown Pi events as diagnostic cards", () => {
+		const state = createPiEventState("request-a");
+
+		expect(
+			normalizePiEvent(
+				{
+					type: "new_transcript_event",
+					payload: { text: "surprise" },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/completed",
+				item: {
+					id: "pi-unknown-request-a-0-new_transcript_event",
+					type: "generic_card",
+					provider: "pi",
+					severity: "warning",
+					title: "Pi SDK event not rendered",
+					body: "Unhandled Pi event: new_transcript_event",
+					details: {
+						type: "new_transcript_event",
+						payload: { text: "surprise" },
+					},
+				},
+			},
+		]);
+	});
+
 	test("turns assistant error completions into sidecar errors", () => {
 		const state = createPiEventState("request-a");
 
