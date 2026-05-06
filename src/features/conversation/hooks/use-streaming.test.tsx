@@ -299,6 +299,10 @@ describe("useConversationStreaming", () => {
 			},
 		);
 
+		const buildSendRequestExtras = vi.fn(() => ({
+			kanbanWorkspaceId: "goal-workspace-1",
+			goalTitle: "Launch Goal",
+		}));
 		const { Wrapper } = createWrapper();
 		const { result } = renderHook(
 			() =>
@@ -310,6 +314,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					buildSendRequestExtras,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -321,8 +326,19 @@ describe("useConversationStreaming", () => {
 			);
 		});
 
+		expect(buildSendRequestExtras).toHaveBeenCalledWith({
+			workspaceId: "workspace-1",
+			sessionId: "session-1",
+			prompt: "",
+			model: expect.objectContaining({
+				id: "opus-1m",
+				provider: "claude",
+			}),
+		});
 		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
 			expect.objectContaining({
+				kanbanWorkspaceId: "goal-workspace-1",
+				goalTitle: "Launch Goal",
 				provider: "claude",
 				modelId: "opus-1m",
 				resumeOnly: true,

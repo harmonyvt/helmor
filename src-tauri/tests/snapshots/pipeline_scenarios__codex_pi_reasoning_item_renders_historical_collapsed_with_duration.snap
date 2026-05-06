@@ -1,0 +1,18 @@
+---
+source: tests/pipeline_scenarios.rs
+assertion_line: 1357
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: reasoning
+      text_length: 50
+      text_preview: Pi considered the goal state before calling tools.
+      streaming: ~
+      duration_ms: 2400
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

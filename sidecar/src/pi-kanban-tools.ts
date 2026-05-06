@@ -121,9 +121,9 @@ export function createKanbanTools(
 		name: "create_kanban_card",
 		label: "Create Goal Board Workspace",
 		description:
-			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. `assigned_provider` is optional and must be one of: claude, codex, pi.",
+			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. `assigned_provider` is optional and must be one of: claude, codex, pi. Include `prompt` when the child workspace should immediately start an agent thread.",
 		promptSnippet:
-			"create_kanban_card({ title, lane, description?, assigned_provider? }) → new child workspace card",
+			"create_kanban_card({ title, lane, description?, assigned_provider?, assigned_model_id?, prompt? }) → new child workspace card and optional started thread",
 		promptGuidelines: [
 			"Use create_kanban_card when the user asks to add, create, or track a new goal task workspace.",
 			"Default lane is 'backlog' when unspecified.",
@@ -143,6 +143,29 @@ export function createKanbanTools(
 					description: "Optional agent provider: claude | codex | pi",
 				}),
 			),
+			assigned_model_id: Type.Optional(
+				Type.String({
+					description: "Optional Helmor model id for the first thread",
+				}),
+			),
+			target_branch: Type.Optional(
+				Type.String({
+					description:
+						"Optional branch to start/target instead of the goal branch",
+				}),
+			),
+			prompt: Type.Optional(
+				Type.String({
+					description:
+						"Optional prompt to immediately start in the child workspace's initial thread",
+				}),
+			),
+			permission_mode: Type.Optional(
+				Type.String({
+					description:
+						"Optional permission mode for the prompt, e.g. plan, auto, acceptEdits, bypassPermissions",
+				}),
+			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const result = await callKanbanTool(
@@ -155,6 +178,10 @@ export function createKanbanTools(
 					lane: params.lane || "backlog",
 					description: params.description,
 					assignedProvider: params.assigned_provider,
+					assignedModelId: params.assigned_model_id,
+					targetBranch: params.target_branch,
+					prompt: params.prompt,
+					permissionMode: params.permission_mode,
 				},
 				emitter,
 				requestId,

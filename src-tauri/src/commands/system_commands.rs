@@ -929,6 +929,11 @@ pub async fn drain_pending_cli_sends() -> CmdResult<Vec<service::PendingCliSend>
 }
 
 #[tauri::command]
+pub async fn ack_pending_cli_send_started(id: String) -> CmdResult<()> {
+    run_blocking(move || service::ack_pending_cli_send_started(&id)).await
+}
+
+#[tauri::command]
 pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<String> {
     run_blocking(move || {
         use std::fs;

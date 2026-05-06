@@ -201,10 +201,11 @@ type WorkspaceComposerContainerProps = {
 		permissionMode?: string | null;
 		/** Force queue (bypass `followUpBehavior`) if a turn is streaming. */
 		forceQueue?: boolean;
+		pendingSendId?: string | null;
 	} | null;
 	/** Called after the pending prompt has been dispatched, so the caller can
 	 * clear the queue. */
-	onPendingPromptConsumed?: () => void;
+	onPendingPromptConsumed?: (pendingSendId?: string | null) => void;
 	pendingInsertRequests?: ResolvedComposerInsertRequest[];
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 	/** Follow-up queue rendered above composer when `followUpBehavior === 'queue'`. */
@@ -1105,7 +1106,7 @@ export const WorkspaceComposerContainer = memo(
 				fastMode: supportsFastMode ? fastMode : false,
 				forceQueue: pendingPromptForSession.forceQueue,
 			});
-			onPendingPromptConsumed?.();
+			onPendingPromptConsumed?.(pendingPromptForSession.pendingSendId);
 		}, [
 			displayedSessionId,
 			effectiveModel,

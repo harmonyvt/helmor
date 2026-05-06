@@ -39,6 +39,13 @@ impl TestEnv {
         data_dir::ensure_directory_structure().unwrap();
         let conn = rusqlite::Connection::open(data_dir::db_path().unwrap()).unwrap();
         helmor_lib::schema::ensure_schema(&conn).unwrap();
+        conn.execute_batch(
+            "DELETE FROM session_messages;
+             DELETE FROM sessions;
+             DELETE FROM workspaces;
+             DELETE FROM repos;",
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO repos (id, name, default_branch) VALUES ('r-1', 'Repo One', 'main')",
             [],
@@ -83,6 +90,11 @@ fn seed_workspace_session(
 }
 
 fn build(_env: &TestEnv, input: BuildSendMessageParamsInput<'_>) -> Value {
+    // Integration tests compile `helmor_lib` without `cfg(test)`, so the
+    // global DB pool uses the production fast path. Rebuild it after each
+    // test's fixture writes so the linked-directory lookup observes the
+    // current temp DB contents.
+    helmor_lib::models::db::init_pools().unwrap();
     build_send_message_params(input)
 }
 
@@ -101,6 +113,10 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         claude_base_url: None,
         claude_auth_token: None,
         images: &[],
+        kanban_workspace_id: None,
+        kanban_snapshot: None,
+        goal_title: None,
+        goal_description: None,
     }
 }
 
@@ -125,6 +141,24 @@ fn includes_additional_directories_from_workspace() {
 
     let params = build(&env, base_input(Some("s-2")));
     assert_yaml_snapshot!("params_with_linked_dirs", &params);
+}
+
+#[test]
+fn includes_goal_pi_context_for_kanban_tools() {
+    let env = TestEnv::new();
+    seed_workspace_session(&env.connection(), "w-goal", "s-goal", None);
+
+    let mut input = base_input(Some("s-goal"));
+    input.provider = "pi";
+    input.cli_model = "anthropic/claude-opus-4-7";
+    input.kanban_workspace_id = Some("goal-workspace-1");
+    input.kanban_snapshot = Some(r#"[{"id":"child-1","title":"Build UI"}]"#);
+    input.goal_title = Some("Launch Goal");
+    input.goal_description = Some("Ship the launch board");
+
+    let params = build(&env, input);
+
+    assert_yaml_snapshot!("params_with_goal_pi_context", &params);
 }
 
 #[test]

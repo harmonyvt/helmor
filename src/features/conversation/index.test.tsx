@@ -1,11 +1,19 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlanReviewPart, ThreadMessageLike } from "@/lib/api";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
 
 const apiMockState = vi.hoisted(() => ({
 	createSession: vi.fn(),
+	respondToPiUi: vi.fn(),
 }));
 
 const composerMockState = vi.hoisted(() => ({
@@ -15,36 +23,51 @@ const composerMockState = vi.hoisted(() => ({
 		| null,
 }));
 
+const streamingMockState = vi.hoisted(() => ({
+	lastArgs: null as {
+		onPiUiRequest?: (event: {
+			kind: "piUiRequest";
+			interactionId: string;
+			uiKind: "select" | "confirm" | "input";
+			payload: Record<string, unknown>;
+		}) => void;
+	} | null,
+}));
+
 vi.mock("@/lib/api", async () => {
 	const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
 	return {
 		...actual,
 		createSession: apiMockState.createSession,
+		respondToPiUi: apiMockState.respondToPiUi,
 	};
 });
 
 vi.mock("./hooks/use-streaming", () => ({
-	useConversationStreaming: () => ({
-		activeSendError: null,
-		handleComposerSubmit: vi.fn(),
-		handleDeferredToolResponse: vi.fn(),
-		handleElicitationResponse: vi.fn(),
-		handlePermissionResponse: vi.fn(),
-		handleStopStream: vi.fn(),
-		handleSteerQueued: vi.fn(),
-		handleRemoveQueued: vi.fn(),
-		elicitationResponsePending: false,
-		isSending: false,
-		pendingElicitation: null,
-		pendingDeferredTool: null,
-		pendingPermissions: [],
-		restoreCustomTags: [],
-		restoreDraft: null,
-		restoreFiles: [],
-		restoreImages: [],
-		restoreNonce: 0,
-		sendingSessionIds: new Set<string>(),
-	}),
+	useConversationStreaming: (args: typeof streamingMockState.lastArgs) => {
+		streamingMockState.lastArgs = args;
+		return {
+			activeSendError: null,
+			handleComposerSubmit: vi.fn(),
+			handleDeferredToolResponse: vi.fn(),
+			handleElicitationResponse: vi.fn(),
+			handlePermissionResponse: vi.fn(),
+			handleStopStream: vi.fn(),
+			handleSteerQueued: vi.fn(),
+			handleRemoveQueued: vi.fn(),
+			elicitationResponsePending: false,
+			isSending: false,
+			pendingElicitation: null,
+			pendingDeferredTool: null,
+			pendingPermissions: [],
+			restoreCustomTags: [],
+			restoreDraft: null,
+			restoreFiles: [],
+			restoreImages: [],
+			restoreNonce: 0,
+			sendingSessionIds: new Set<string>(),
+		};
+	},
 }));
 
 vi.mock("@/lib/settings", () => ({
@@ -112,13 +135,61 @@ describe("WorkspaceConversationContainer", () => {
 		apiMockState.createSession.mockResolvedValue({
 			sessionId: "session-clean",
 		});
+		apiMockState.respondToPiUi.mockReset();
+		apiMockState.respondToPiUi.mockResolvedValue(undefined);
 		composerMockState.lastPlanReview = null;
 		composerMockState.lastOnImplementPlanInCleanThread = null;
+		streamingMockState.lastArgs = null;
 	});
 
 	afterEach(() => {
 		cleanup();
 		vi.clearAllMocks();
+	});
+
+	it("renders Pi UI requests through the shared conversation accessory", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onPiUiRequest = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceConversationContainer
+					selectedWorkspaceId="workspace-1"
+					displayedWorkspaceId="workspace-1"
+					selectedSessionId="session-1"
+					displayedSessionId="session-1"
+					onSelectSession={vi.fn()}
+					onResolveDisplayedSession={vi.fn()}
+					onPiUiRequest={onPiUiRequest}
+				/>
+			</QueryClientProvider>,
+		);
+
+		act(() => {
+			streamingMockState.lastArgs?.onPiUiRequest?.({
+				kind: "piUiRequest",
+				interactionId: "interaction-1",
+				uiKind: "select",
+				payload: {
+					title: "Pick a lane",
+					options: ["Backlog", "Done"],
+				},
+			});
+		});
+
+		expect(onPiUiRequest).toHaveBeenCalledWith(
+			expect.objectContaining({ interactionId: "interaction-1" }),
+		);
+		expect(screen.getByText("Pick a lane")).toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+		await waitFor(() => {
+			expect(apiMockState.respondToPiUi).toHaveBeenCalledWith(
+				"interaction-1",
+				"Done",
+			);
+		});
 	});
 
 	it("creates a new session and queues the visible plan prompt for clean-thread implementation", async () => {

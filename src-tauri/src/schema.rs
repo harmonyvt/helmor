@@ -434,6 +434,23 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         .execute_batch(GOAL_CARDS_SCHEMA)
         .context("Failed to ensure goal_cards schema")?;
 
+    if has_table(connection, "pending_cli_sends") {
+        for (column, definition) in [
+            ("status", "TEXT NOT NULL DEFAULT 'queued'"),
+            ("last_drained_at", "TEXT"),
+            ("started_at", "TEXT"),
+            ("error", "TEXT"),
+        ] {
+            if !has_column(connection, "pending_cli_sends", column) {
+                connection
+                    .execute_batch(&format!(
+                        "ALTER TABLE pending_cli_sends ADD COLUMN {column} {definition}"
+                    ))
+                    .with_context(|| format!("Failed to add pending_cli_sends.{column}"))?;
+            }
+        }
+    }
+
     let had_workspace_status =
         has_table(connection, "workspaces") && has_column(connection, "workspaces", "status");
     if has_table(connection, "workspaces") && !had_workspace_status {
@@ -541,6 +558,10 @@ CREATE TABLE IF NOT EXISTS pending_cli_sends (
     prompt TEXT NOT NULL,
     model_id TEXT,
     permission_mode TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    last_drained_at TEXT,
+    started_at TEXT,
+    error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
