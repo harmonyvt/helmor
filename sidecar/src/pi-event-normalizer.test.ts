@@ -178,6 +178,198 @@ describe("Pi event normalization", () => {
 		]);
 	});
 
+	test("maps Pi write to file_change with file path and synthetic additions", () => {
+		const state = createPiEventState();
+
+		expect(
+			normalizePiEvent(
+				{
+					type: "tool_execution_end",
+					toolCallId: "tool-write",
+					toolName: "write",
+					args: { path: "src/new.ts", content: "one\ntwo" },
+					result: {
+						content: [
+							{
+								type: "text",
+								text: "Successfully wrote 7 bytes to src/new.ts",
+							},
+						],
+					},
+					isError: false,
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/completed",
+				item: {
+					id: "tool-write",
+					type: "file_change",
+					changes: [
+						{
+							path: "src/new.ts",
+							kind: "create",
+							diff: "+one\n+two",
+							contentLength: 7,
+						},
+					],
+					status: "completed",
+					result: {
+						content: [
+							{
+								type: "text",
+								text: "Successfully wrote 7 bytes to src/new.ts",
+							},
+						],
+					},
+				},
+			},
+		]);
+	});
+
+	test("maps Pi edit to file_change using result diff when available", () => {
+		const state = createPiEventState();
+		normalizePiEvent(
+			{
+				type: "tool_execution_start",
+				toolCallId: "tool-edit",
+				toolName: "edit",
+				args: {
+					path: "src/app.ts",
+					edits: [{ oldText: "old", newText: "new" }],
+				},
+			} as unknown as AgentSessionEvent,
+			state,
+		);
+
+		expect(
+			normalizePiEvent(
+				{
+					type: "tool_execution_end",
+					toolCallId: "tool-edit",
+					toolName: "edit",
+					result: {
+						content: [
+							{
+								type: "text",
+								text: "Successfully replaced 1 block(s) in src/app.ts.",
+							},
+						],
+						details: { diff: "-1 old\n+1 new", firstChangedLine: 1 },
+					},
+					isError: false,
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/completed",
+				item: {
+					id: "tool-edit",
+					type: "file_change",
+					changes: [
+						{
+							path: "src/app.ts",
+							kind: "modify",
+							diff: "-1 old\n+1 new",
+							edits: [{ oldText: "old", newText: "new" }],
+						},
+					],
+					status: "completed",
+					result: {
+						content: [
+							{
+								type: "text",
+								text: "Successfully replaced 1 block(s) in src/app.ts.",
+							},
+						],
+						details: { diff: "-1 old\n+1 new", firstChangedLine: 1 },
+					},
+				},
+			},
+		]);
+	});
+
+	test("preserves Pi edit path and failure result details", () => {
+		const state = createPiEventState();
+
+		expect(
+			normalizePiEvent(
+				{
+					type: "tool_execution_end",
+					toolCallId: "tool-edit-failed",
+					toolName: "edit",
+					args: { path: "src/app.ts", oldText: "missing", newText: "new" },
+					result: {
+						content: [
+							{
+								type: "text",
+								text: "Could not find edits[0] in src/app.ts.",
+							},
+						],
+					},
+					isError: true,
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/completed",
+				item: {
+					id: "tool-edit-failed",
+					type: "file_change",
+					changes: [
+						{
+							path: "src/app.ts",
+							kind: "modify",
+							diff: "-missing\n+new",
+							edits: [{ oldText: "missing", newText: "new" }],
+						},
+					],
+					status: "failed",
+					result: {
+						content: [
+							{
+								type: "text",
+								text: "Could not find edits[0] in src/app.ts.",
+							},
+						],
+					},
+				},
+			},
+		]);
+	});
+
+	test("maps Pi remove-like tools to delete file_change items", () => {
+		const state = createPiEventState();
+
+		expect(
+			normalizePiEvent(
+				{
+					type: "tool_execution_end",
+					toolCallId: "tool-delete",
+					toolName: "remove",
+					args: { path: "src/old.ts" },
+					result: { content: [{ type: "text", text: "Removed src/old.ts" }] },
+					isError: false,
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/completed",
+				item: {
+					id: "tool-delete",
+					type: "file_change",
+					changes: [{ path: "src/old.ts", kind: "delete" }],
+					status: "completed",
+					result: { content: [{ type: "text", text: "Removed src/old.ts" }] },
+				},
+			},
+		]);
+	});
+
 	test("preserves Pi MCP tool arguments when completion events omit args", () => {
 		const state = createPiEventState();
 		normalizePiEvent(
