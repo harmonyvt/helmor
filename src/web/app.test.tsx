@@ -141,7 +141,7 @@ describe("WebApp navigation", () => {
 		});
 	});
 
-	it("restores saved selection when the URL has no target", async () => {
+	it("keeps root route on the workspace list even with a saved selection", async () => {
 		vi.mocked(invoke).mockImplementation(
 			async (command: string, args?: unknown) => {
 				switch (command) {
@@ -169,11 +169,9 @@ describe("WebApp navigation", () => {
 		render(<WebApp />);
 
 		await waitFor(() => {
-			expect(screen.getByTestId("workspace-id")).toHaveTextContent("ws-1");
-			expect(screen.getByTestId("session-id")).toHaveTextContent("session-1");
-			expect(window.location.pathname).toBe(
-				"/workspaces/ws-1/sessions/session-1",
-			);
+			expect(screen.getByTestId("workspace-id")).toHaveTextContent("");
+			expect(screen.getByTestId("session-id")).toHaveTextContent("");
+			expect(window.location.pathname).toBe("/");
 		});
 	});
 });
