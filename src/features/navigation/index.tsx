@@ -175,6 +175,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		repoId: string,
 		title: string,
 		description: string,
+		sourceBranch?: string | null,
 	) => Promise<void> | void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
@@ -885,8 +886,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					}
 					return onCreateWorkspace?.(repoId);
 				}}
-				onCreateGoalWorkspace={(repoId, title, description) =>
-					onCreateGoalWorkspace?.(repoId, title, description)
+				onCreateGoalWorkspace={(repoId, title, description, sourceBranch) =>
+					onCreateGoalWorkspace?.(repoId, title, description, sourceBranch)
 				}
 			/>
 

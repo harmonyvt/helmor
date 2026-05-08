@@ -39,6 +39,7 @@ struct GithubCheckRunOutput {
 pub struct GithubPullRequestSummary {
     pub number: i64,
     pub title: String,
+    pub body: String,
     pub url: String,
     pub state: String,
     pub is_merged: bool,
@@ -61,6 +62,7 @@ query($owner: String!, $name: String!) {
         number
         state
         title
+        body
         merged
         headRefName
         baseRefName
@@ -112,9 +114,10 @@ query($owner: String!, $name: String!, $number: Int!) {
       url
       number
       state
-      title
-      merged
-      headRefName
+        title
+        body
+        merged
+        headRefName
       baseRefName
       additions
       deletions
@@ -144,6 +147,62 @@ query($owner: String!, $name: String!, $number: Int!) {
         .context("GitHub pull request was not found")?;
     let full_name = format!("{owner}/{name}");
     pull_request_summary_from_node(node, &full_name)
+}
+
+pub(crate) fn resolve_repository_pull_request_by_head_branch(
+    repository: &repos::RepositoryRecord,
+    branch: &str,
+) -> Result<Option<GithubPullRequestSummary>> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        bail!("Branch name is required");
+    }
+    let (owner, name) = resolve_github_repository(repository)?;
+    let query = r#"
+query($owner: String!, $name: String!, $head: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $head, states: [OPEN], first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        url
+        number
+        state
+        title
+        body
+        merged
+        headRefName
+        baseRefName
+        additions
+        deletions
+        headRepository { nameWithOwner }
+        baseRepository { nameWithOwner }
+      }
+    }
+  }
+}
+"#;
+    let envelope: RepositoryPullRequestListEnvelope = github_cli::graphql(
+        query,
+        &[
+            ("owner", owner.clone()),
+            ("name", name.clone()),
+            ("head", branch.to_string()),
+        ],
+    )?;
+    ensure_no_graphql_errors(envelope.errors.as_deref())?;
+    let Some(data) = envelope.data else {
+        return Ok(None);
+    };
+    let Some(repository) = data.repository else {
+        return Ok(None);
+    };
+    let full_name = format!("{owner}/{name}");
+    repository
+        .pull_requests
+        .nodes
+        .into_iter()
+        .next()
+        .map(|node| pull_request_summary_from_node(node, &full_name))
+        .transpose()
 }
 
 fn ensure_no_graphql_errors(errors: Option<&[GraphqlError]>) -> Result<()> {
@@ -237,6 +296,7 @@ fn pull_request_summary_from_node(
     Ok(GithubPullRequestSummary {
         number: node.number,
         title: node.title,
+        body: node.body,
         url: node.url,
         state: node.state,
         is_merged: node.merged,
@@ -954,6 +1014,7 @@ struct RepositoryPullRequestNode {
     number: i64,
     state: String,
     title: String,
+    body: String,
     merged: bool,
     head_ref_name: String,
     base_ref_name: String,
@@ -1919,6 +1980,7 @@ mod tests {
             number: 42,
             state: state.to_string(),
             title: "Review this".to_string(),
+            body: "Review details".to_string(),
             merged,
             head_ref_name: "feature/review".to_string(),
             base_ref_name: "main".to_string(),

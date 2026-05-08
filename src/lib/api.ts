@@ -294,6 +294,7 @@ export type GithubRepositorySummary = {
 export type GithubPullRequestSummary = {
 	number: number;
 	title: string;
+	body: string;
 	url: string;
 	state: string;
 	isMerged: boolean;
@@ -503,6 +504,7 @@ export type PrepareGoalWorkspaceRequest = {
 	title: string;
 	description: string;
 	targetBranch?: string | null;
+	sourceBranch?: string | null;
 };
 
 export type PrepareGoalWorkspaceResponse = {
@@ -514,6 +516,7 @@ export type PrepareGoalWorkspaceResponse = {
 	branch: string;
 	defaultBranch: string;
 	intendedTargetBranch: string;
+	sourceStartBranch?: string | null;
 	title: string;
 	description: string;
 	state: WorkspaceState;
@@ -2156,10 +2159,12 @@ export async function prepareGoalWorkspace(
 export async function finalizeGoalWorkspace(
 	workspaceId: string,
 	description: string,
+	sourceStartBranch?: string | null,
 ): Promise<FinalizeGoalWorkspaceResponse> {
 	return invoke<FinalizeGoalWorkspaceResponse>("finalize_goal_workspace", {
 		workspaceId,
 		description,
+		sourceStartBranch: sourceStartBranch ?? null,
 	});
 }
 

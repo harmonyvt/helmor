@@ -654,6 +654,79 @@ fn create_workspace_from_github_pr_allows_existing_local_head_branch() {
 }
 
 #[test]
+fn prepare_goal_workspace_from_existing_pr_branch_uses_pr_metadata() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let branch = "feature/goal-pr";
+    create_local_branch_with_commit(&harness, branch, "goal-pr.txt", "goal pr branch");
+    install_mock_gh_for_pr(&harness, branch, "develop");
+    git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/octocat/hello-world.git",
+        ],
+        None,
+    )
+    .unwrap();
+
+    let prepared = workspaces::prepare_goal_workspace(workspaces::PrepareGoalWorkspaceRequest {
+        repo_id: harness.repo_id.clone(),
+        title: String::new(),
+        description: String::new(),
+        target_branch: None,
+        source_branch: Some(branch.to_string()),
+    })
+    .unwrap();
+
+    assert_eq!(prepared.branch, branch);
+    assert_eq!(prepared.source_start_branch.as_deref(), Some(branch));
+    assert_eq!(prepared.intended_target_branch, "develop");
+    assert_eq!(prepared.title, "Review this");
+    assert_eq!(prepared.description, "Review details");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (status, pr_title, pr_url, pr_sync_state, goal_title, goal_description): (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT status, pr_title, pr_url, pr_sync_state,
+              goal_title, goal_description
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&prepared.workspace_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(status, "review");
+    assert_eq!(pr_title, "Review this");
+    assert_eq!(pr_url, "https://github.com/octocat/hello-world/pull/42");
+    assert_eq!(pr_sync_state, "open");
+    assert_eq!(goal_title, "Review this");
+    assert_eq!(goal_description, "Review details");
+}
+
+#[test]
 fn finalize_pr_workspace_uses_existing_local_head_branch() {
     let _guard = TEST_LOCK
         .lock()
@@ -1419,11 +1492,28 @@ fn install_mock_gh_for_pr(harness: &CreateTestHarness, head_branch: &str, base_b
     let response = serde_json::json!({
         "data": {
             "repository": {
+                "pullRequests": {
+                    "nodes": [{
+                        "url": "https://github.com/octocat/hello-world/pull/42",
+                        "number": 42,
+                        "state": "OPEN",
+                        "title": "Review this",
+                        "body": "Review details",
+                        "merged": false,
+                        "headRefName": head_branch,
+                        "baseRefName": base_branch,
+                        "additions": 0,
+                        "deletions": 0,
+                        "headRepository": { "nameWithOwner": "octocat/hello-world" },
+                        "baseRepository": { "nameWithOwner": "octocat/hello-world" }
+                    }]
+                },
                 "pullRequest": {
                     "url": "https://github.com/octocat/hello-world/pull/42",
                     "number": 42,
                     "state": "OPEN",
                     "title": "Review this",
+                    "body": "Review details",
                     "merged": false,
                     "headRefName": head_branch,
                     "baseRefName": base_branch,

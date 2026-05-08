@@ -50,6 +50,7 @@ type WorkspaceCreateDialogProps = {
 		repoId: string,
 		title: string,
 		description: string,
+		sourceBranch?: string | null,
 	) => Promise<void> | void;
 };
 
@@ -76,6 +77,13 @@ export function WorkspaceCreateDialog({
 	const [prLoading, setPrLoading] = useState(false);
 	const [prError, setPrError] = useState<string | null>(null);
 	const [goalRepoId, setGoalRepoId] = useState("");
+	const [goalBranches, setGoalBranches] = useState<string[]>([]);
+	const [goalBranch, setGoalBranch] = useState("");
+	const [goalPullRequests, setGoalPullRequests] = useState<
+		GithubPullRequestSummary[]
+	>([]);
+	const [goalLoading, setGoalLoading] = useState(false);
+	const [goalError, setGoalError] = useState<string | null>(null);
 	const [goalTitle, setGoalTitle] = useState("");
 	const [goalDescription, setGoalDescription] = useState("");
 	const [submitting, setSubmitting] = useState(false);
@@ -183,6 +191,72 @@ export function WorkspaceCreateDialog({
 		};
 	}, [open, prRepoId]);
 
+	useEffect(() => {
+		setGoalBranches([]);
+		setGoalBranch("");
+		setGoalPullRequests([]);
+		setGoalError(null);
+		if (!open || !goalRepoId) {
+			return;
+		}
+		let canceled = false;
+		setGoalLoading(true);
+		Promise.allSettled([
+			listRemoteBranches({ repoId: goalRepoId }),
+			listGithubPullRequestsForRepo(goalRepoId),
+		])
+			.then(([branchesResult, prsResult]) => {
+				if (canceled) {
+					return;
+				}
+				if (branchesResult.status === "fulfilled") {
+					setGoalBranches(branchesResult.value);
+				}
+				if (prsResult.status === "fulfilled") {
+					setGoalPullRequests(prsResult.value);
+				}
+				if (
+					branchesResult.status === "rejected" &&
+					prsResult.status === "rejected"
+				) {
+					setGoalError(
+						describeUnknownError(
+							branchesResult.reason,
+							"Unable to load branches or pull requests.",
+						),
+					);
+				}
+			})
+			.finally(() => {
+				if (!canceled) {
+					setGoalLoading(false);
+				}
+			});
+		void prefetchRemoteRefs({ repoId: goalRepoId })
+			.then(({ fetched }) => {
+				if (fetched && !canceled) {
+					return listRemoteBranches({ repoId: goalRepoId }).then((branches) => {
+						if (!canceled) {
+							setGoalBranches(branches);
+						}
+					});
+				}
+			})
+			.catch(() => {});
+		return () => {
+			canceled = true;
+		};
+	}, [goalRepoId, open]);
+
+	useEffect(() => {
+		const pr = goalPullRequests.find((item) => item.headBranch === goalBranch);
+		if (!pr) {
+			return;
+		}
+		setGoalTitle(pr.title);
+		setGoalDescription(pr.body);
+	}, [goalBranch, goalPullRequests]);
+
 	// Derived busy flag — true while either the async handshake (Phase 1 /
 	// GitHub API) is in-flight from this dialog OR the parent controller has a
 	// creation already running (Phase 2 / git worktree).
@@ -209,8 +283,8 @@ export function WorkspaceCreateDialog({
 	const handleCreateGoal = useCallback(async () => {
 		if (
 			!goalRepoId ||
-			!goalTitle.trim() ||
-			!goalDescription.trim() ||
+			(!goalBranch && !goalTitle.trim()) ||
+			(!goalBranch && !goalDescription.trim()) ||
 			submitting
 		) {
 			return;
@@ -221,6 +295,7 @@ export function WorkspaceCreateDialog({
 				goalRepoId,
 				goalTitle.trim(),
 				goalDescription.trim(),
+				goalBranch.trim() || null,
 			);
 			onOpenChange(false);
 		} catch {
@@ -231,6 +306,7 @@ export function WorkspaceCreateDialog({
 		}
 	}, [
 		goalDescription,
+		goalBranch,
 		goalRepoId,
 		goalTitle,
 		onCreateGoalWorkspace,
@@ -431,6 +507,38 @@ export function WorkspaceCreateDialog({
 							/>
 							<div className="flex flex-col gap-1">
 								<Label
+									htmlFor="workspace-create-goal-branch"
+									className="text-[12px] font-medium tracking-[-0.01em]"
+								>
+									Branch
+								</Label>
+								<select
+									id="workspace-create-goal-branch"
+									value={goalBranch}
+									onChange={(event) => setGoalBranch(event.target.value)}
+									disabled={busy || goalLoading}
+									className="h-8 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60"
+								>
+									<option value="">Create a new Goal branch</option>
+									{goalBranches.map((branch) => {
+										const pr = goalPullRequests.find(
+											(item) => item.headBranch === branch,
+										);
+										return (
+											<option key={branch} value={branch}>
+												{pr ? `${branch} — PR #${pr.number}` : branch}
+											</option>
+										);
+									})}
+								</select>
+								<p className="text-[11px] text-app-muted-foreground">
+									Pick an existing branch to make the Goal workspace use it. If
+									it has an open PR, the PR title and body fill in
+									automatically.
+								</p>
+							</div>
+							<div className="flex flex-col gap-1">
+								<Label
 									htmlFor="workspace-create-goal-title"
 									className="text-[12px] font-medium tracking-[-0.01em]"
 								>
@@ -461,13 +569,14 @@ export function WorkspaceCreateDialog({
 									className="min-h-28 resize-none rounded-md border border-input bg-background px-2 py-2 text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60"
 								/>
 							</div>
+							<StatusText loading={goalLoading} error={goalError} />
 							<div className="flex justify-end">
 								<Button
 									size="sm"
 									disabled={
 										!goalRepoId ||
-										!goalTitle.trim() ||
-										!goalDescription.trim() ||
+										(!goalBranch && !goalTitle.trim()) ||
+										(!goalBranch && !goalDescription.trim()) ||
 										busy
 									}
 									onClick={() => void handleCreateGoal()}

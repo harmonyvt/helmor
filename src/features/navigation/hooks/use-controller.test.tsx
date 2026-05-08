@@ -265,6 +265,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			branch: "helmor/goal/build-api",
 			defaultBranch: "main",
 			intendedTargetBranch: "main",
+			sourceStartBranch: null,
 			title: "Build API",
 			description: "Ship the API",
 			state: "initializing" as const,
@@ -828,6 +829,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			expect(apiMocks.finalizeGoalWorkspace).toHaveBeenCalledWith(
 				"goal-1",
 				"Ship the API",
+				null,
 			);
 		});
 		expect(onSelectWorkspace).not.toHaveBeenCalled();
@@ -847,6 +849,68 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			expect(onSelectWorkspace).toHaveBeenCalledWith("goal-1");
 		});
 		expect(result.current.creatingWorkspaceRepoId).toBeNull();
+	});
+
+	it("passes an existing Goal branch through prepare and finalize", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		apiMocks.prepareGoalWorkspace.mockResolvedValueOnce({
+			workspaceId: "goal-pr-1",
+			initialSessionId: "session-goal-pr-1",
+			repoId: "repo-1",
+			repoName: "helmor",
+			directoryName: "goal-existing-pr",
+			branch: "feature/existing-goal",
+			defaultBranch: "main",
+			intendedTargetBranch: "develop",
+			sourceStartBranch: "feature/existing-goal",
+			title: "Existing PR title",
+			description: "Existing PR body",
+			state: "initializing" as const,
+			repoScripts: {
+				setupScript: null,
+				runScript: null,
+				archiveScript: null,
+				setupFromProject: false,
+				runFromProject: false,
+				archiveFromProject: false,
+				autoRunSetup: true,
+			},
+		});
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace,
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleCreateGoalWorkspace(
+				"repo-1",
+				"Ignored title",
+				"Ignored body",
+				"feature/existing-goal",
+			);
+		});
+
+		expect(apiMocks.prepareGoalWorkspace).toHaveBeenCalledWith({
+			repoId: "repo-1",
+			title: "Ignored title",
+			description: "Ignored body",
+			sourceBranch: "feature/existing-goal",
+		});
+		expect(apiMocks.finalizeGoalWorkspace).toHaveBeenCalledWith(
+			"goal-pr-1",
+			"Existing PR body",
+			"feature/existing-goal",
+		);
+		expect(onSelectWorkspace).toHaveBeenCalledWith("goal-pr-1");
 	});
 
 	it("keeps Goal creation open when draft PR finalization fails", async () => {

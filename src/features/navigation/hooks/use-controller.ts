@@ -712,7 +712,12 @@ export function useWorkspacesSidebarController({
 	// Stable ref so the conflict-recovery toast can call back into the latest
 	// version of handleCreateWorkspaceFromRepo without creating a circular dep.
 	const handleCreateGoalWorkspace = useCallback(
-		async (repoId: string, title: string, description: string) => {
+		async (
+			repoId: string,
+			title: string,
+			description: string,
+			sourceBranch?: string | null,
+		) => {
 			if (creatingWorkspaceRepoId) return;
 			setCreatingWorkspaceRepoId(repoId);
 			try {
@@ -720,8 +725,13 @@ export function useWorkspacesSidebarController({
 					repoId,
 					title,
 					description,
+					sourceBranch: sourceBranch ?? null,
 				});
-				await finalizeGoalWorkspace(prepared.workspaceId, description);
+				await finalizeGoalWorkspace(
+					prepared.workspaceId,
+					prepared.description,
+					prepared.sourceStartBranch ?? null,
+				);
 				await Promise.all([
 					queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceGroups,

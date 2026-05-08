@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db, git_ops, helpers,
+    db, git_ops, github_graphql, helpers,
     models::{goals as goal_models, workspaces as workspace_models},
     repos,
     workspace_kind::WorkspaceKind,
@@ -23,6 +23,7 @@ pub struct PrepareGoalWorkspaceRequest {
     pub title: String,
     pub description: String,
     pub target_branch: Option<String>,
+    pub source_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -36,6 +37,7 @@ pub struct PrepareGoalWorkspaceResponse {
     pub branch: String,
     pub default_branch: String,
     pub intended_target_branch: String,
+    pub source_start_branch: Option<String>,
     pub title: String,
     pub description: String,
     pub state: WorkspaceState,
@@ -95,25 +97,66 @@ pub fn prepare_goal_workspace(
         );
     }
 
-    let title = normalize_required(&request.title, "Goal title")?;
-    let description = normalize_required(&request.description, "Goal description")?;
+    let title = normalize_optional_str(&request.title);
+    let description = normalize_optional_str(&request.description);
     let default_branch = repository
         .default_branch
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "main".to_string());
-    let target_branch = request
-        .target_branch
+    let source_branch = request
+        .source_branch
         .as_deref()
-        .map(str::trim)
+        .map(normalize_source_branch)
+        .transpose()?;
+    let existing_pr = source_branch
+        .as_deref()
+        .map(|branch| {
+            github_graphql::resolve_repository_pull_request_by_head_branch(&repository, branch)
+        })
+        .transpose()?
+        .flatten();
+    let title = existing_pr
+        .as_ref()
+        .map(|pr| pr.title.trim())
         .filter(|value| !value.is_empty())
-        .unwrap_or(default_branch.as_str())
-        .to_string();
+        .map(ToOwned::to_owned)
+        .or(title)
+        .context("Goal title is required")?;
+    let description = existing_pr
+        .as_ref()
+        .map(|pr| pr.body.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or(description)
+        .context("Goal description is required")?;
+    let target_branch = existing_pr
+        .as_ref()
+        .map(|pr| pr.base_branch.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            request
+                .target_branch
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| default_branch.clone());
+    if existing_pr.is_none() {
+        if let Some(branch) = source_branch.as_deref() {
+            ensure_source_branch_available(&repo_root, branch)?;
+        }
+    }
     let directory_name = allocate_goal_directory_name(&request.repo_id, &title)?;
-    let branch = helpers::next_available_branch_name(
-        &repo_root,
-        &format!("helmor/goal/{}", slugify(&title)),
-    )?;
+    let branch = match source_branch.clone() {
+        Some(branch) => branch,
+        None => helpers::next_available_branch_name(
+            &repo_root,
+            &format!("helmor/goal/{}", slugify(&title)),
+        )?,
+    };
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let timestamp = db::current_timestamp()?;
@@ -129,10 +172,18 @@ pub fn prepare_goal_workspace(
             intended_target_branch: &target_branch,
             workspace_kind: WorkspaceKind::Goal,
             goal_workspace_id: None,
-            status: WorkspaceStatus::Backlog,
+            status: if existing_pr.is_some() {
+                WorkspaceStatus::Review
+            } else {
+                WorkspaceStatus::Backlog
+            },
             pr_title: Some(&title),
-            pr_sync_state: PrSyncState::None,
-            pr_url: None,
+            pr_sync_state: if existing_pr.is_some() {
+                PrSyncState::Open
+            } else {
+                PrSyncState::None
+            },
+            pr_url: existing_pr.as_ref().map(|pr| pr.url.as_str()),
             timestamp: &timestamp,
         },
     )?;
@@ -166,6 +217,7 @@ pub fn prepare_goal_workspace(
         branch,
         default_branch,
         intended_target_branch: target_branch,
+        source_start_branch: source_branch,
         title,
         description,
         state: WorkspaceState::Initializing,
@@ -176,6 +228,7 @@ pub fn prepare_goal_workspace(
 pub fn finalize_goal_workspace(
     workspace_id: &str,
     description: &str,
+    source_start_branch: Option<&str>,
 ) -> Result<FinalizeGoalWorkspaceResponse> {
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
@@ -183,7 +236,14 @@ pub fn finalize_goal_workspace(
         bail!("Workspace is not a Goal: {workspace_id}");
     }
 
-    let finalized = super::lifecycle::finalize_workspace_from_repo_impl(workspace_id)?;
+    let finalized = super::lifecycle::finalize_workspace_from_repo_with_options_impl(
+        workspace_id,
+        super::lifecycle::FinalizeWorkspaceOptions {
+            start_branch: source_start_branch.map(ToOwned::to_owned),
+            fetch_start_branch: source_start_branch.map(|_| true),
+            migrate_from_path: None,
+        },
+    )?;
     let refreshed = workspace_models::load_workspace_record_by_id(workspace_id)?
         .with_context(|| format!("Workspace not found after finalize: {workspace_id}"))?;
     let repo_root = refreshed
@@ -202,6 +262,15 @@ pub fn finalize_goal_workspace(
         .pr_title
         .clone()
         .unwrap_or_else(|| helpers::display_title(&refreshed));
+    if refreshed.pr_sync_state == PrSyncState::Open && refreshed.pr_url.is_some() {
+        return Ok(FinalizeGoalWorkspaceResponse {
+            workspace_id: workspace_id.to_string(),
+            final_state: finalized.final_state,
+            pr_title: title,
+            pr_url: refreshed.pr_url,
+            pr_sync_state: PrSyncState::Open,
+        });
+    }
     let body = build_goal_pr_body(description);
     let mut pushed_branch = false;
 
@@ -707,12 +776,31 @@ fn slugify(value: &str) -> String {
     }
 }
 
-fn normalize_required(value: &str, label: &str) -> Result<String> {
+fn normalize_optional_str(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        bail!("{label} is required");
+        None
+    } else {
+        Some(trimmed.to_string())
     }
-    Ok(trimmed.to_string())
+}
+
+fn normalize_source_branch(branch: &str) -> Result<String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        bail!("Branch name is required");
+    }
+    if branch == "HEAD" || branch.starts_with("refs/") {
+        bail!("Unsupported branch name: {branch}");
+    }
+    Ok(branch.to_string())
+}
+
+fn ensure_source_branch_available(repo_root: &Path, branch: &str) -> Result<()> {
+    if git_ops::verify_branch_exists(repo_root, branch).is_ok() {
+        bail!("Local branch already exists: {branch}");
+    }
+    Ok(())
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
