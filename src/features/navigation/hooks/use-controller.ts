@@ -203,9 +203,13 @@ export function useWorkspacesSidebarController({
 	const goalProjection = useMemo<GoalProjection | null>(
 		() =>
 			layoutMode === "goal"
-				? projectSidebarListsByGoal(groups, EMPTY_PENDING_CREATIONS)
+				? projectSidebarListsByGoal(
+						groups,
+						EMPTY_PENDING_CREATIONS,
+						baseArchivedSummaries,
+					)
 				: null,
-		[layoutMode, groups],
+		[layoutMode, groups, baseArchivedSummaries],
 	);
 
 	const updateArchivingWorkspaceId = useCallback(
