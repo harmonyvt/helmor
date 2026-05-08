@@ -49,10 +49,16 @@ pub async fn finalize_goal_workspace(
     app: AppHandle,
     workspace_id: String,
     description: String,
+    source_start_branch: Option<String>,
 ) -> CmdResult<workspaces::FinalizeGoalWorkspaceResponse> {
-    let result =
-        run_blocking(move || workspaces::finalize_goal_workspace(&workspace_id, &description))
-            .await?;
+    let result = run_blocking(move || {
+        workspaces::finalize_goal_workspace(
+            &workspace_id,
+            &description,
+            source_start_branch.as_deref(),
+        )
+    })
+    .await?;
     notify_workspace_changed_in_background(app);
     Ok(result)
 }
