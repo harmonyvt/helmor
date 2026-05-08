@@ -16,6 +16,8 @@ export type GroupTone =
  * Kept as a string literal union so existing `ws.state === "archived"` checks
  * keep working without runtime changes.
  */
+export type WorkspaceKind = "code" | "goal";
+
 export type WorkspaceState =
 	| "initializing"
 	| "setup_pending"
@@ -49,7 +51,6 @@ export type PrSyncState = "none" | "open" | "closed" | "merged";
  */
 export type ActionKind =
 	| "create-pr"
-	| "review"
 	| "commit-and-push"
 	| "push"
 	| "fix"
@@ -64,11 +65,12 @@ export type WorkspaceRow = {
 	title: string;
 	avatar?: string;
 	directoryName?: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	repoName?: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	state?: WorkspaceState;
-	mode?: WorkspaceMode;
 	hasUnread?: boolean;
 	workspaceUnread?: number;
 	unreadSessionCount?: number;
@@ -88,6 +90,7 @@ export type WorkspaceRow = {
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
+	intendedTargetBranch?: string | null;
 	pinnedAt?: string | null;
 	sessionCount?: number;
 	messageCount?: number;
@@ -108,14 +111,43 @@ export type WorkspaceGroup = {
 	rows: WorkspaceRow[];
 };
 
+export type DataDirPreference = "automatic" | "production" | "development";
+
 export type DataInfo = {
 	dataMode: string;
-	dataRoot: string;
+	defaultDataMode: "production" | "development";
+	dataDir: string;
 	dbPath: string;
-	archiveRoot: string;
+	dataDirPreference: DataDirPreference;
+	dataDirPreferencePath: string;
+	dataDirLockedByEnv: boolean;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor";
+export type WebDaemonStatus = {
+	state: "running" | "stopped";
+	pid: number | null;
+	url: string;
+	openUrl: string;
+	reachableUrls: string[];
+	host: string;
+	listenHost: string;
+	port: number;
+	dataDir: string;
+	frontendDir: string;
+	frontendExists: boolean;
+	identity: string;
+	command: string;
+	startedAtMs: number | null;
+	lastError: string | null;
+};
+
+export type WebDaemonStartConfig = {
+	host?: string | null;
+	port?: number | null;
+	frontendDir?: string | null;
+};
+
+export type AgentProvider = "claude" | "codex" | "pi";
 
 export type AgentModelOption = {
 	id: string;
@@ -137,6 +169,19 @@ export type AgentModelSection = {
 	options: AgentModelOption[];
 };
 
+export type PiModelProviderSummary = {
+	key: string;
+	label: string;
+	modelCount: number;
+};
+
+export type PiModelCheckResponse = {
+	status: AgentModelSectionStatus;
+	providers: PiModelProviderSummary[];
+	models: AgentModelOption[];
+	error?: string | null;
+};
+
 export type AgentSendRequest = {
 	provider: AgentProvider;
 	modelId: string;
@@ -146,6 +191,7 @@ export type AgentSendRequest = {
 	 *  content keeps `prompt` only — the prefix never enters the DB or
 	 *  the chat bubble. */
 	promptPrefix?: string | null;
+	resumeOnly?: boolean | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
@@ -160,17 +206,34 @@ export type AgentSendRequest = {
 	 *  matching `@<path>` substrings out as image attachments without
 	 *  re-parsing the text — paths may contain whitespace. */
 	images?: string[] | null;
+	/**
+	 * When set, the Pi agent registers Kanban custom tools so it can
+	 * create, move, and update cards. Must be the goal workspace id.
+	 */
+	kanbanWorkspaceId?: string | null;
+	/**
+	 * JSON-serialised current `GoalCard[]` snapshot. Written to
+	 * `.pi/context/kanban.json` before the agent starts so the
+	 * `helmor-kanban` Pi extension can inject board state into the
+	 * system prompt.
+	 */
+	kanbanSnapshot?: string | null;
+	/** Goal workspace title — injected into the Pi extension system prompt. */
+	goalTitle?: string | null;
+	/** Goal workspace description — injected into the Pi extension system prompt. */
+	goalDescription?: string | null;
 };
 
 export type WorkspaceSummary = {
 	id: string;
 	title: string;
 	directoryName: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	repoName: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	state: WorkspaceState;
-	mode?: WorkspaceMode;
 	hasUnread: boolean;
 	workspaceUnread: number;
 	unreadSessionCount: number;
@@ -194,22 +257,14 @@ export type WorkspaceSummary = {
 	lastUserMessageAt?: string | null;
 };
 
-export type BranchPrefixType = "username" | "custom" | "none";
-
 export type RepositoryCreateOption = {
 	id: string;
 	name: string;
 	remote?: string | null;
 	remoteUrl?: string | null;
 	defaultBranch?: string | null;
-	/** Per-repo branch prefix mode. NULL is treated as "github" by the
-	 * backend resolver — keeps legacy rows behaving as before. */
-	branchPrefixType?: BranchPrefixType | null;
 	branchPrefixCustom?: string | null;
 	forgeProvider?: ForgeProvider | null;
-	/** gh/glab account login bound to this repo, or null when none had
-	 * access at add-time. UI shows a "Connect" prompt when null. */
-	forgeLogin?: string | null;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 };
@@ -218,18 +273,59 @@ export type AddRepositoryDefaults = {
 	lastCloneDirectory?: string | null;
 };
 
-/** A single gh / glab account with display profile attached. Listed
- * by `listForgeAccounts` for the Settings → Account panel. */
-export type ForgeAccount = {
-	provider: ForgeProvider;
-	host: string;
+export type GithubCliStatus =
+	| {
+			status: "ready";
+			host: string;
+			login: string;
+			version: string;
+			message: string;
+	  }
+	| {
+			status: "unauthenticated";
+			host: string;
+			version?: string | null;
+			message: string;
+	  }
+	| { status: "unavailable"; host: string; message: string }
+	| {
+			status: "error";
+			host: string;
+			version?: string | null;
+			message: string;
+	  };
+
+export type GithubCliUser = {
 	login: string;
+	id: number;
 	name?: string | null;
 	avatarUrl?: string | null;
 	email?: string | null;
-	/** True for the gh account currently marked active by `gh auth
-	 * switch`. Always true for GitLab (one account per host). */
-	active: boolean;
+};
+
+export type GithubRepositorySummary = {
+	id: number;
+	name: string;
+	fullName: string;
+	ownerLogin: string;
+	private: boolean;
+	defaultBranch?: string | null;
+	htmlUrl: string;
+	updatedAt?: string | null;
+	pushedAt?: string | null;
+};
+
+export type GithubPullRequestSummary = {
+	number: number;
+	title: string;
+	body: string;
+	url: string;
+	state: string;
+	isMerged: boolean;
+	headBranch: string;
+	baseBranch: string;
+	additions: number;
+	deletions: number;
 };
 
 export type ForgeProvider = "github" | "gitlab" | "unknown";
@@ -241,6 +337,34 @@ export type ForgeLabels = {
 	changeRequestFullName: string;
 	connectAction: string;
 };
+
+export type ForgeCliStatus =
+	| {
+			status: "ready";
+			provider: ForgeProvider;
+			host: string;
+			cliName: string;
+			login: string;
+			version: string;
+			message: string;
+	  }
+	| {
+			status: "unauthenticated";
+			provider: ForgeProvider;
+			host: string;
+			cliName: string;
+			version?: string | null;
+			message: string;
+			loginCommand: string;
+	  }
+	| {
+			status: "error";
+			provider: ForgeProvider;
+			host: string;
+			cliName: string;
+			version?: string | null;
+			message: string;
+	  };
 
 export type ForgeDetectionSignal = {
 	/** Layer that produced this signal (wellKnownHost, hostPattern, urlPath, repoFile, httpProbe, cliProbe). */
@@ -256,6 +380,7 @@ export type ForgeDetection = {
 	repo?: string | null;
 	remoteUrl?: string | null;
 	labels: ForgeLabels;
+	cli?: ForgeCliStatus | null;
 	/**
 	 * Signals that caused the current provider classification. Empty when
 	 * the provider is `unknown` or when the result came from the cached
@@ -267,13 +392,9 @@ export type ForgeDetection = {
 export type AddRepositoryResponse = {
 	repositoryId: string;
 	createdRepository: boolean;
-	/**
-	 * `string` only when the repo was already in the DB and has a visible
-	 * workspace — UI focuses it. `null` for newly-added repos and re-adds
-	 * with only archived workspaces — UI lands on the start page with this
-	 * repo selected.
-	 */
-	selectedWorkspaceId: string | null;
+	selectedWorkspaceId: string;
+	createdWorkspaceId?: string | null;
+	createdWorkspaceState: WorkspaceState;
 };
 
 export type WorkspaceDetail = {
@@ -288,6 +409,8 @@ export type WorkspaceDetail = {
 	defaultBranch?: string | null;
 	rootPath?: string | null;
 	directoryName: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	state: WorkspaceState;
 	hasUnread: boolean;
 	workspaceUnread: number;
@@ -300,7 +423,6 @@ export type WorkspaceDetail = {
 	branch?: string | null;
 	initializationParentBranch?: string | null;
 	intendedTargetBranch?: string | null;
-	mode: WorkspaceMode;
 	pinnedAt?: string | null;
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
@@ -308,10 +430,10 @@ export type WorkspaceDetail = {
 	archiveCommit?: string | null;
 	sessionCount: number;
 	messageCount: number;
-	forgeProvider?: ForgeProvider | null;
-	/** gh/glab account login bound to the parent repo. NULL means no
-	 * account is bound — UI shows the "Connect" prompt. */
-	forgeLogin?: string | null;
+	/** User-editable title for goal workspaces. Null if never set. */
+	goalTitle?: string | null;
+	/** User-editable description for goal workspaces. Null if never set. */
+	goalDescription?: string | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -334,10 +456,6 @@ export type WorkspaceSessionSummary = {
 	 * inspector commit button (e.g. "create-pr", "commit-and-push"). Drives
 	 * post-stream verifiers and auto-close behavior. */
 	actionKind?: ActionKind | null;
-	parentSessionId?: string | null;
-	parentMessageId?: string | null;
-	delegationStatus?: string | null;
-	childCount?: number;
 	active: boolean;
 };
 
@@ -389,20 +507,128 @@ export type PrepareWorkspaceResponse = {
 	directoryName: string;
 	branch: string;
 	defaultBranch: string;
+	intendedTargetBranch: string;
+	status: WorkspaceStatus;
+	sourceStartBranch?: string | null;
+	prNumber?: number | null;
+	prTitle?: string | null;
+	prSyncState: PrSyncState;
+	prUrl?: string | null;
 	state: WorkspaceState;
 	repoScripts: RepoScripts;
-	/** CWD the agent CLI must run in. Local mode: filled with `repo.root_path`
-	 *  immediately. Worktree mode: null until finalize materialises the
-	 *  worktree — callers MUST then read `FinalizeWorkspaceResponse.workingDirectory`. */
-	workingDirectory: string | null;
 };
 
 export type FinalizeWorkspaceResponse = {
 	workspaceId: string;
 	finalState: WorkspaceState;
-	/** CWD the agent CLI must run in. Always populated when finalize succeeds. */
-	workingDirectory: string;
 };
+
+export type PrepareGoalWorkspaceRequest = {
+	repoId: string;
+	title: string;
+	description: string;
+	targetBranch?: string | null;
+	sourceBranch?: string | null;
+};
+
+export type PrepareGoalWorkspaceResponse = {
+	workspaceId: string;
+	initialSessionId: string;
+	repoId: string;
+	repoName: string;
+	directoryName: string;
+	branch: string;
+	defaultBranch: string;
+	intendedTargetBranch: string;
+	sourceStartBranch?: string | null;
+	title: string;
+	description: string;
+	state: WorkspaceState;
+	repoScripts: RepoScripts;
+};
+
+export type FinalizeGoalWorkspaceResponse = {
+	workspaceId: string;
+	finalState: WorkspaceState;
+	prTitle: string;
+	prUrl?: string | null;
+	prSyncState: PrSyncState;
+};
+
+export type GoalCard = {
+	id: string;
+	goalWorkspaceId: string;
+	title: string;
+	description?: string | null;
+	lane: WorkspaceStatus;
+	sortOrder: number;
+	assignedProvider?: AgentProvider | string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	childWorkspaceId?: string | null;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type UpsertGoalCardInput = {
+	id?: string | null;
+	goalWorkspaceId: string;
+	title: string;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	sortOrder?: number | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	childWorkspaceId?: string | null;
+};
+
+export type GoalChildWorkspaceRequest = {
+	goalWorkspaceId: string;
+	goalCardId?: string | null;
+	title?: string | null;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	targetBranch?: string | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+};
+
+export type GoalChildWorkspaceCreateRequest = {
+	goalWorkspace: string;
+	title: string;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	targetBranch?: string | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	prompt?: string | null;
+	permissionMode?: string | null;
+	finalize?: boolean | null;
+};
+
+export type GoalChildWorkspaceCreateResult = {
+	workspaceId: string;
+	directoryName: string;
+	directory?: string | null;
+	branch: string;
+	sessionId: string;
+	state: WorkspaceState;
+	status: WorkspaceStatus;
+	intendedTargetBranch: string;
+	promptQueued: boolean;
+	agentStarted: boolean;
+	pendingSendId?: string | null;
+	provider?: string | null;
+	model?: string | null;
+};
+
+export type WorkspaceCreationSource =
+	| { type: "defaultBranch" }
+	| { type: "remoteBranch"; branch: string }
+	| { type: "githubPullRequest"; number: number };
 
 export type MarkWorkspaceReadResponse = undefined;
 
@@ -486,16 +712,67 @@ export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
 	}
 }
 
-/**
- * Re-run the per-repo forge auto-bind. Frontend calls this after the
- * user finishes a `gh auth login` / `glab auth login` flow so the repo
- * picks up the new account without an app restart. Returns the bound
- * login (or `null` when no logged-in account had access).
- */
-export async function retryRepoForgeBinding(
+export async function loadGithubCliStatus(): Promise<GithubCliStatus> {
+	try {
+		return await invoke<GithubCliStatus>("get_github_cli_status");
+	} catch (error) {
+		return {
+			status: "error",
+			host: "github.com",
+			message: describeInvokeError(error, "Unable to load GitHub CLI state."),
+		};
+	}
+}
+
+export async function loadGithubCliUser(): Promise<GithubCliUser | null> {
+	try {
+		return await invoke<GithubCliUser | null>("get_github_cli_user");
+	} catch {
+		return null;
+	}
+}
+
+export async function listGithubAccessibleRepositories(): Promise<
+	GithubRepositorySummary[]
+> {
+	try {
+		return await invoke<GithubRepositorySummary[]>(
+			"list_github_accessible_repositories",
+		);
+	} catch {
+		return [];
+	}
+}
+
+export async function listGithubPullRequestsForRepo(
 	repoId: string,
-): Promise<string | null> {
-	return invoke<string | null>("retry_repo_forge_binding", { repoId });
+): Promise<GithubPullRequestSummary[]> {
+	try {
+		return await invoke<GithubPullRequestSummary[]>(
+			"list_github_pull_requests_for_repo",
+			{ repoId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load GitHub pull requests."),
+		);
+	}
+}
+
+export async function resolveGithubPullRequestForRepo(
+	repoId: string,
+	input: string,
+): Promise<GithubPullRequestSummary> {
+	try {
+		return await invoke<GithubPullRequestSummary>(
+			"resolve_github_pull_request_for_repo",
+			{ repoId, input },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to resolve GitHub pull request."),
+		);
+	}
 }
 
 export async function getWorkspaceForge(
@@ -510,85 +787,34 @@ export async function getWorkspaceForge(
 	}
 }
 
-/** Enumerate all gh accounts plus one glab account per known host.
- * `gitlabHosts` is the list of GitLab hosts to probe (gathered from the
- * repos table — we don't shell out to glab for hosts the user isn't
- * actively using). */
-export async function listForgeAccounts(
-	gitlabHosts: string[],
-): Promise<ForgeAccount[]> {
-	try {
-		return await invoke<ForgeAccount[]>("list_forge_accounts", {
-			gitlabHosts,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to list forge accounts."),
-		);
-	}
-}
-
-/** Spot-fetch the gh/glab account bound to a workspace's parent repo,
- * with display profile (avatar / name / email). Returns null when the
- * repo has no resolvable forge account. Backed by the same per-process
- * cache that `listForgeAccounts` populates. */
-export async function getWorkspaceAccountProfile(
-	workspaceId: string,
-): Promise<ForgeAccount | null> {
-	try {
-		return await invoke<ForgeAccount | null>("get_workspace_account_profile", {
-			workspaceId,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to load workspace account profile."),
-		);
-	}
-}
-
-/** Download a forge avatar URL into the local on-disk cache and return
- * the absolute filesystem path. Idempotent: repeated calls with the
- * same URL hit the cache. Pair with `convertFileSrc` to render via the
- * `asset://` protocol so page navigations don't re-fetch + re-decode. */
-export async function cacheForgeAvatar(url: string): Promise<string> {
-	try {
-		return await invoke<string>("cache_forge_avatar", { url });
-	} catch (error) {
-		throw new Error(describeInvokeError(error, "Unable to cache avatar."));
-	}
-}
-
-/** Lightweight login-only enumeration for `(provider, host)`. Used by
- * the auth-terminal completion poll: take a snapshot before opening the
- * terminal, then poll until the set grows. Skips the per-account
- * profile fetch that `listForgeAccounts` does, so the poll loop stays
- * cheap. */
-export async function listForgeLogins(
+export async function getForgeCliStatus(
 	provider: ForgeProvider,
-	host: string,
-	options: { forceRefresh?: boolean } = {},
-): Promise<string[]> {
+	host?: string | null,
+): Promise<ForgeCliStatus> {
 	try {
-		return await invoke<string[]>("list_forge_logins", {
+		return await invoke<ForgeCliStatus>("get_forge_cli_status", {
 			provider,
 			host,
-			forceRefresh: options.forceRefresh ?? false,
 		});
 	} catch (error) {
-		throw new Error(describeInvokeError(error, "Unable to list forge logins."));
+		throw new Error(
+			describeInvokeError(error, "Unable to load forge CLI state."),
+		);
 	}
 }
 
-/** Re-run auto-bind for every repo whose `forge_login` is still NULL.
- * Triggered after Settings → Account adds a fresh CLI login so legacy
- * repos pick up the new credentials without an app restart. Returns the
- * count of repos that ended up newly bound on this sweep. */
-export async function backfillForgeRepoBindings(): Promise<number> {
+export async function openForgeCliAuthTerminal(
+	provider: ForgeProvider,
+	host?: string | null,
+): Promise<void> {
 	try {
-		return await invoke<number>("backfill_forge_repo_bindings");
+		return await invoke<void>("open_forge_cli_auth_terminal", {
+			provider,
+			host,
+		});
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to backfill forge bindings."),
+			describeInvokeError(error, "Unable to open forge CLI auth terminal."),
 		);
 	}
 }
@@ -619,21 +845,6 @@ export async function stopForgeCliAuthTerminal(
 		host,
 		instanceId,
 	});
-}
-
-/** Drop the per-process forge caches (login enumeration, status pairs,
- * profile) for `(provider, host)` so the very next `listForgeLogins`
- * poll bypasses the rate-limiter cache. Call this immediately after
- * the auth terminal exits. */
-export async function invalidateForgeCaches(
-	provider: ForgeProvider,
-	host: string | null,
-): Promise<void> {
-	try {
-		await invoke<void>("invalidate_forge_caches", { provider, host });
-	} catch {
-		// Best-effort: stale cache only delays detection by the cache TTL.
-	}
 }
 
 export async function writeForgeCliAuthTerminalStdin(
@@ -672,6 +883,40 @@ export async function loadDataInfo(): Promise<DataInfo | null> {
 	} catch {
 		return null;
 	}
+}
+
+export async function setDataDirPreference(
+	preference: DataDirPreference,
+): Promise<void> {
+	await invoke("set_data_dir_preference", { preference });
+}
+
+export async function getWebDaemonStatus(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("get_web_daemon_status");
+}
+
+export async function startWebDaemon(
+	config?: WebDaemonStartConfig,
+): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("start_web_daemon", {
+		config: config ?? null,
+	});
+}
+
+export async function stopWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("stop_web_daemon");
+}
+
+export async function deleteWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("delete_web_daemon");
+}
+
+export async function cleanupWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("cleanup_web_daemon");
+}
+
+export async function restartApp(force = false): Promise<void> {
+	await invoke("restart_app", { force });
 }
 
 export type CliStatus = {
@@ -754,12 +999,14 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex" | "cursor";
+export type AgentLoginProvider = "claude" | "codex" | "pi";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
-	cursor: boolean;
+	pi: boolean;
+	codexProvider?: string | null;
+	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
@@ -894,12 +1141,10 @@ export async function updateRepositoryDefaultBranch(
 
 export async function updateRepositoryBranchPrefix(
 	repoId: string,
-	branchPrefixType: BranchPrefixType | null,
-	branchPrefixCustom: string | null,
+	branchPrefixCustom?: string | null,
 ): Promise<void> {
 	await invoke<void>("update_repository_branch_prefix", {
 		repoId,
-		branchPrefixType,
 		branchPrefixCustom,
 	});
 }
@@ -914,236 +1159,40 @@ export async function loadAddRepositoryDefaults(): Promise<AddRepositoryDefaults
 
 export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	try {
-		return await invoke<AgentModelSection[]>("list_agent_model_sections");
+		console.info("[api-debug] invoking list_agent_model_sections");
+		const sections = await invoke<AgentModelSection[]>(
+			"list_agent_model_sections",
+		);
+		console.info("[api-debug] list_agent_model_sections resolved", {
+			sectionCount: sections.length,
+			sections: sections.map((section) => ({
+				id: section.id,
+				label: section.label,
+				status: section.status ?? "ready",
+				optionCount: section.options.length,
+			})),
+		});
+		return sections;
 	} catch (error) {
+		console.warn("[api-debug] list_agent_model_sections failed", error);
 		throw new Error(describeInvokeError(error, "Unable to load agent models."));
 	}
 }
 
-export type CursorModelParameterValue = {
-	value: string;
-	displayName?: string;
-};
-
-export type CursorModelParameter = {
-	id: string;
-	displayName?: string;
-	values: CursorModelParameterValue[];
-};
-
-export type CursorModelEntry = {
-	id: string;
-	label: string;
-	/** Raw `parameters[]` — persisted into `cursorProvider.cachedModels`. */
-	parameters?: CursorModelParameter[];
-};
-
-/// Live `Cursor.models.list` via sidecar. Optional `apiKey` overrides
-/// the stored key for one-off probes (e.g. onboarding validation).
-export async function listCursorModels(
-	apiKey?: string,
-): Promise<CursorModelEntry[]> {
+export async function checkPiModels(): Promise<PiModelCheckResponse> {
 	try {
-		return await invoke<CursorModelEntry[]>("list_cursor_models", {
-			apiKey: apiKey ?? null,
+		console.info("[api-debug] invoking check_pi_models");
+		const result = await invoke<PiModelCheckResponse>("check_pi_models");
+		console.info("[api-debug] check_pi_models resolved", {
+			status: result.status,
+			modelCount: result.models.length,
+			providerCount: result.providers.length,
+			error: result.error ?? null,
 		});
+		return result;
 	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to list Cursor models."),
-		);
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Inbox (kanban-mode left sidebar)
-// ---------------------------------------------------------------------------
-
-export type InboxItemSource =
-	| "github_issue"
-	| "github_pr"
-	| "github_discussion";
-
-export type InboxItemStateTone =
-	| "open"
-	| "closed"
-	| "merged"
-	| "draft"
-	| "answered"
-	| "unanswered"
-	| "urgent"
-	| "neutral";
-
-export type InboxItem = {
-	id: string;
-	source: InboxItemSource;
-	externalId: string;
-	externalUrl: string;
-	title: string;
-	subtitle?: string | null;
-	state?: { label: string; tone: InboxItemStateTone } | null;
-	lastActivityAt: number;
-};
-
-export type InboxItemDetailRef = {
-	provider: Extract<ForgeProvider, "github">;
-	login: string;
-	source: InboxItemSource;
-	externalId: string;
-};
-
-export type GitHubIssueDetail = {
-	externalId: string;
-	title: string;
-	body?: string | null;
-	url: string;
-	state: string;
-	stateReason?: string | null;
-	authorLogin?: string | null;
-	createdAt?: string | null;
-	updatedAt?: string | null;
-	closedAt?: string | null;
-};
-
-export type GitHubPullRequestDetail = {
-	externalId: string;
-	title: string;
-	body?: string | null;
-	url: string;
-	state: string;
-	merged: boolean;
-	draft: boolean;
-	authorLogin?: string | null;
-	baseRefName?: string | null;
-	headRefName?: string | null;
-	createdAt?: string | null;
-	updatedAt?: string | null;
-};
-
-export type GitHubDiscussionDetail = {
-	externalId: string;
-	title: string;
-	body?: string | null;
-	url: string;
-	answered?: boolean | null;
-	authorLogin?: string | null;
-	categoryName?: string | null;
-	categoryEmoji?: string | null;
-	createdAt?: string | null;
-	updatedAt?: string | null;
-};
-
-export type InboxItemDetail =
-	| { type: "github_issue"; data: GitHubIssueDetail }
-	| { type: "github_pr"; data: GitHubPullRequestDetail }
-	| { type: "github_discussion"; data: GitHubDiscussionDetail };
-
-export type InboxPage = {
-	items: InboxItem[];
-	/** Opaque cursor — pass back verbatim to fetch the next page. `null`
-	 * when there are no more pages from any enabled source. */
-	nextCursor: string | null;
-};
-
-export type InboxToggles = {
-	issues: boolean;
-	prs: boolean;
-	discussions: boolean;
-};
-
-export type InboxStateFilter =
-	| "open"
-	| "closed"
-	| "merged"
-	| "all"
-	| "answered"
-	| "unanswered";
-
-export type InboxScopeFilter =
-	| "involves"
-	| "assigned"
-	| "mentioned"
-	| "created"
-	| "author"
-	| "assignee"
-	| "mentions"
-	| "reviewRequested"
-	| "reviewedBy"
-	| "all";
-
-export type InboxSortFilter = "updated" | "created" | "comments";
-export type InboxDraftFilter = "exclude" | "include" | "only";
-
-export type InboxFilters = {
-	query?: string | null;
-	state?: InboxStateFilter | null;
-	scope?: InboxScopeFilter[] | null;
-	sort?: InboxSortFilter | null;
-	draft?: InboxDraftFilter | null;
-	labels?: string | null;
-};
-
-export type GithubLabelOption = {
-	name: string;
-	color?: string | null;
-	description?: string | null;
-};
-
-export async function listGithubLabels(args: {
-	login: string;
-	repos: string[];
-}): Promise<GithubLabelOption[]> {
-	try {
-		return await invoke<GithubLabelOption[]>("list_github_labels", {
-			login: args.login,
-			repos: args.repos,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to load GitHub labels."),
-		);
-	}
-}
-
-export async function listInboxItems(args: {
-	provider: ForgeProvider;
-	login: string;
-	toggles: InboxToggles;
-	cursor?: string | null;
-	limit?: number;
-	/** GitHub `owner/name` filter — when present, all enabled kinds are
-	 *  scoped to that single repo via a `repo:owner/name` qualifier. */
-	repo?: string | null;
-	filters?: InboxFilters | null;
-}): Promise<InboxPage> {
-	try {
-		return await invoke<InboxPage>("list_inbox_items", {
-			provider: args.provider,
-			login: args.login,
-			toggles: args.toggles,
-			cursor: args.cursor ?? null,
-			limit: args.limit ?? 20,
-			repo: args.repo ?? null,
-			filters: args.filters ?? null,
-		});
-	} catch (error) {
-		throw new Error(describeInvokeError(error, "Unable to load inbox items."));
-	}
-}
-
-export async function getInboxItemDetail(
-	ref: InboxItemDetailRef,
-): Promise<InboxItemDetail | null> {
-	try {
-		return await invoke<InboxItemDetail | null>("get_inbox_item_detail", {
-			provider: ref.provider,
-			login: ref.login,
-			source: ref.source,
-			externalId: ref.externalId,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to load inbox item details."),
-		);
+		console.warn("[api-debug] check_pi_models failed", error);
+		throw new Error(describeInvokeError(error, "Unable to check Pi models."));
 	}
 }
 
@@ -1158,7 +1207,8 @@ export type SlashCommandEntry = {
 	 *   of inserting `/<name>` into the prompt (e.g. `/add-dir` opens the
 	 *   link-directories dialog).
 	 */
-	source: "builtin" | "skill" | "client-action";
+	source: "builtin" | "extension" | "prompt" | "skill" | "client-action";
+	sourceInfo?: Record<string, unknown> | null;
 };
 
 export type SlashCommandsResponse = {
@@ -1219,91 +1269,39 @@ export async function loadWorkspaceDetail(
 	}
 }
 
+/**
+ * Update the user-editable goal title and/or description for a goal workspace.
+ * The backend broadcasts a `WorkspaceChanged` event so the frontend cache
+ * is automatically invalidated.
+ */
+export async function updateGoalWorkspaceMeta(
+	workspaceId: string,
+	goalTitle: string | null,
+	goalDescription: string | null,
+): Promise<void> {
+	try {
+		await invoke("update_goal_workspace_meta", {
+			workspaceId,
+			goalTitle,
+			goalDescription,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to update goal workspace metadata."),
+		);
+	}
+}
+
 export async function listRemoteBranches(opts: {
 	workspaceId?: string;
 	repoId?: string;
 }): Promise<string[]> {
 	try {
 		return await invoke<string[]>("list_remote_branches", opts);
-	} catch (error) {
-		console.warn("[helmor] listRemoteBranches failed:", error);
+	} catch {
 		return [];
 	}
 }
-
-/**
- * Current HEAD branch of the repo's local working directory. Used by
- * the start page in local mode to default the picker to the branch
- * the user is currently on. `null` when the repo path is missing or
- * HEAD is detached.
- */
-export async function getRepoCurrentBranch(
-	repoId: string,
-): Promise<string | null> {
-	try {
-		return await invoke<string | null>("get_repo_current_branch", {
-			repoId,
-		});
-	} catch (error) {
-		console.warn("[helmor] getRepoCurrentBranch failed:", error);
-		return null;
-	}
-}
-
-/**
- * Merged local + remote branches for the local-mode start picker.
- * Deduped by name, alphabetical. Worktree mode still uses
- * `listRemoteBranches` (remote-only).
- */
-export async function listBranchesForLocalPicker(
-	repoId: string,
-): Promise<string[]> {
-	try {
-		return await invoke<string[]>("list_branches_for_local_picker", {
-			repoId,
-		});
-	} catch (error) {
-		console.warn("[helmor] listBranchesForLocalPicker failed:", error);
-		return [];
-	}
-}
-
-/**
- * `git checkout -b <branch>` against the repo's source path. Caller is
- * responsible for refreshing whatever query feeds the branch picker.
- */
-export async function createAndCheckoutBranch(
-	repoId: string,
-	branch: string,
-): Promise<void> {
-	await invoke("create_and_checkout_branch", { repoId, branch });
-}
-
-export type MoveLocalToWorktreeResponse = {
-	workspaceId: string;
-	directoryName: string;
-	branch: string;
-	state: WorkspaceState;
-};
-
-/**
- * Move a local-mode workspace into a fresh worktree (relocation, not a
- * clone — the workspace's mode flips Local → Worktree, same id). The
- * new worktree gets an auto-named branch with the local repo's
- * current state (tracked + untracked) carried over. The local repo
- * itself is not modified.
- */
-export async function moveLocalWorkspaceToWorktree(
-	workspaceId: string,
-): Promise<MoveLocalToWorktreeResponse> {
-	return invoke<MoveLocalToWorktreeResponse>(
-		"move_local_workspace_to_worktree",
-		{ workspaceId },
-	);
-}
-
-/** How a workspace's filesystem is provisioned. */
-export type WorkspaceMode = "worktree" | "local";
 
 export type UpdateIntendedTargetBranchResponse = {
 	/** True if the workspace's local branch was hard-reset to origin/<target>. */
@@ -1415,26 +1413,24 @@ export type UiMutationEvent =
 	| { type: "workspaceListChanged" }
 	| { type: "workspaceChanged"; workspaceId: string }
 	| { type: "sessionListChanged"; workspaceId: string }
-	| { type: "sessionMessagesChanged"; workspaceId: string; sessionId: string }
 	| { type: "contextUsageChanged"; sessionId: string }
-	| { type: "codexGoalChanged"; sessionId: string }
-	| { type: "sessionMessagesAppended"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
 	| { type: "workspaceChangeRequestChanged"; workspaceId: string }
+	| { type: "workspaceBrowserTabsChanged"; workspaceId: string }
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
 	| {
 			type: "pendingCliSendQueued";
+			pendingSendId: string;
 			workspaceId: string;
 			sessionId: string;
 			prompt: string;
 			modelId: string | null;
 			permissionMode: string | null;
-	  }
-	| { type: "activeStreamsChanged" };
+	  };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
@@ -1454,16 +1450,11 @@ export async function listenGitRefsChanged(
 
 export async function subscribeUiMutations(
 	callback: (event: UiMutationEvent) => void,
-): Promise<UnlistenFn> {
+): Promise<void> {
 	const { Channel } = await import("@tauri-apps/api/core");
-	const subscriptionId = crypto.randomUUID();
 	const onEvent = new Channel<UiMutationEvent>();
 	onEvent.onmessage = callback;
-	await invoke("subscribe_ui_mutations", { subscriptionId, onEvent });
-	return () => {
-		onEvent.onmessage = () => {};
-		void invoke("unsubscribe_ui_mutations", { subscriptionId });
-	};
+	await invoke("subscribe_ui_mutations", { onEvent });
 }
 
 export type PrefetchRemoteRefsResponse = {
@@ -1790,10 +1781,6 @@ export type WorkspaceGitActionStatus = {
 	behindTargetCount: number;
 	remoteTrackingRef?: string | null;
 	aheadOfRemoteCount: number;
-	/** Commits this branch has on top of its target branch's remote ref
-	 *  (e.g. `origin/main`). Stays accurate for unpublished branches —
-	 *  unlike `aheadOfRemoteCount`, which reads as 0 without an upstream. */
-	aheadOfTargetCount: number;
 	pushStatus?: WorkspacePushStatus;
 };
 
@@ -1801,7 +1788,7 @@ export type SyncWorkspaceTargetOutcome =
 	| "updated"
 	| "alreadyUpToDate"
 	| "conflict"
-	| "stashPopConflict";
+	| "dirtyWorktree";
 
 export type SyncWorkspaceTargetResponse = {
 	outcome: SyncWorkspaceTargetOutcome;
@@ -1837,6 +1824,26 @@ export type ForgeActionStatus = {
 	checks: ForgeActionItem[];
 	remoteState: "ok" | "noPr" | "unauthenticated" | "unavailable" | "error";
 	message?: string | null;
+};
+
+/// A single comment from a PR — either the root of an inline review thread
+/// or a general issue-style comment on the PR.
+export type PrComment = {
+	id: string;
+	author: string;
+	body: string;
+	url: string;
+	/** File path for inline review thread comments; absent for general comments. */
+	filePath?: string | null;
+	/** True when the parent review thread has been marked resolved on GitHub. */
+	isThreadResolved: boolean;
+	createdAt: string;
+};
+
+export type PrCommentData = {
+	comments: PrComment[];
+	prNumber?: number | null;
+	prUrl?: string | null;
 };
 
 export async function refreshWorkspaceChangeRequest(
@@ -1929,6 +1936,50 @@ export async function getWorkspaceForgeCheckInsertText(
 	}
 }
 
+export async function getWorkspaceForgeDeploymentInsertText(
+	workspaceId: string,
+	itemId: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("get_workspace_forge_deployment_insert_text", {
+			workspaceId,
+			itemId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load deployment details."),
+		);
+	}
+}
+
+export async function getWorkspacePrComments(
+	workspaceId: string,
+): Promise<PrCommentData> {
+	try {
+		return await invoke<PrCommentData>("get_workspace_pr_comments", {
+			workspaceId,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load PR comments."));
+	}
+}
+
+export async function getWorkspacePrCommentInsertText(
+	workspaceId: string,
+	commentId: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("get_workspace_pr_comment_insert_text", {
+			workspaceId,
+			commentId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load PR comment details."),
+		);
+	}
+}
+
 export async function mergeWorkspaceChangeRequest(
 	workspaceId: string,
 ): Promise<ChangeRequestInfo | null> {
@@ -1989,6 +2040,9 @@ export type PendingCliSend = {
 	prompt: string;
 	modelId: string | null;
 	permissionMode: string | null;
+	status: string;
+	lastDrainedAt: string | null;
+	startedAt: string | null;
 	createdAt: string;
 };
 
@@ -1999,6 +2053,10 @@ export type PendingCliSend = {
  */
 export async function drainPendingCliSends(): Promise<PendingCliSend[]> {
 	return invoke<PendingCliSend[]>("drain_pending_cli_sends");
+}
+
+export async function ackPendingCliSendStarted(id: string): Promise<void> {
+	return invoke<void>("ack_pending_cli_send_started", { id });
 }
 
 export async function permanentlyDeleteWorkspace(
@@ -2068,7 +2126,6 @@ export async function updateSessionSettings(
 		model?: string;
 		effortLevel?: string;
 		permissionMode?: string;
-		fastMode?: boolean;
 	},
 ): Promise<void> {
 	await invoke("update_session_settings", {
@@ -2076,7 +2133,6 @@ export async function updateSessionSettings(
 		model: settings.model ?? null,
 		effortLevel: settings.effortLevel ?? null,
 		permissionMode: settings.permissionMode ?? null,
-		fastMode: settings.fastMode ?? null,
 	});
 }
 
@@ -2094,20 +2150,22 @@ export async function createWorkspaceFromRepo(
  * workspace + session UUIDs, inserts the `initializing` DB row + initial
  * session, and returns all metadata plus repo-level scripts. The
  * frontend paints with this response immediately — no placeholders.
- *
- * `sourceBranch` (optional): branch to branch the new workspace from. When
- * omitted, the repo's default branch is used. The kanban "create" flow
- * forwards the user's branch picker selection here.
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
-	sourceBranch?: string | null,
-	mode?: WorkspaceMode | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
-		sourceBranch: sourceBranch ?? null,
-		mode: mode ?? null,
+	});
+}
+
+export async function prepareWorkspaceFromSource(
+	repoId: string,
+	source: WorkspaceCreationSource,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_source", {
+		repoId,
+		source,
 	});
 }
 
@@ -2119,9 +2177,16 @@ export async function prepareWorkspaceFromRepo(
  */
 export async function finalizeWorkspaceFromRepo(
 	workspaceId: string,
+	options?: {
+		startBranch?: string | null;
+		fetchStartBranch?: boolean | null;
+		/** Move this existing worktree path into the Helmor workspace location instead of creating a new one. */
+		migrateFromPath?: string | null;
+	},
 ): Promise<FinalizeWorkspaceResponse> {
 	return invoke<FinalizeWorkspaceResponse>("finalize_workspace_from_repo", {
 		workspaceId,
+		options: options ?? null,
 	});
 }
 
@@ -2129,6 +2194,99 @@ export async function completeWorkspaceSetup(
 	workspaceId: string,
 ): Promise<void> {
 	return invoke("complete_workspace_setup", { workspaceId });
+}
+
+export async function prepareGoalWorkspace(
+	request: PrepareGoalWorkspaceRequest,
+): Promise<PrepareGoalWorkspaceResponse> {
+	return invoke<PrepareGoalWorkspaceResponse>("prepare_goal_workspace", {
+		request,
+	});
+}
+
+export async function finalizeGoalWorkspace(
+	workspaceId: string,
+	description: string,
+	sourceStartBranch?: string | null,
+): Promise<FinalizeGoalWorkspaceResponse> {
+	return invoke<FinalizeGoalWorkspaceResponse>("finalize_goal_workspace", {
+		workspaceId,
+		description,
+		sourceStartBranch: sourceStartBranch ?? null,
+	});
+}
+
+export async function listGoalCards(workspaceId: string): Promise<GoalCard[]> {
+	return invoke<GoalCard[]>("list_goal_cards", { workspaceId });
+}
+
+export async function upsertGoalCard(
+	input: UpsertGoalCardInput,
+): Promise<GoalCard> {
+	return invoke<GoalCard>("upsert_goal_card", { input });
+}
+
+export async function linkGoalCardWorkspace(
+	goalCardId: string,
+	workspaceId: string,
+): Promise<GoalCard> {
+	return invoke<GoalCard>("link_goal_card_workspace", {
+		goalCardId,
+		workspaceId,
+	});
+}
+
+export async function createGoalChildWorkspace(
+	request: GoalChildWorkspaceRequest,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("create_goal_child_workspace", {
+		request,
+	});
+}
+
+export async function createGoalChildWorkspaceAndStart(
+	request: GoalChildWorkspaceCreateRequest,
+): Promise<GoalChildWorkspaceCreateResult> {
+	return invoke<GoalChildWorkspaceCreateResult>(
+		"create_goal_child_workspace_and_start",
+		{ request },
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Goals AI panel — Pi Kanban bridge
+// ---------------------------------------------------------------------------
+
+/**
+ * Send the result of a Pi Kanban custom tool call back to the sidecar.
+ * Called after the frontend has executed the corresponding Tauri IPC action
+ * in response to a `kanban_tool_call` pipeline event.
+ */
+export async function sendKanbanToolResult(
+	toolCallId: string,
+	result: unknown,
+	isError = false,
+): Promise<void> {
+	return invoke("send_kanban_tool_result", {
+		toolCallId,
+		result: result ?? null,
+		isError,
+	});
+}
+
+/**
+ * Respond to a Pi extension interactive UI request (select / confirm / input).
+ * Called after the user interacts with the shared conversation UI rendered in
+ * response to a `pi_ui_request` event from a Pi extension.
+ */
+export async function respondToPiUi(
+	interactionId: string,
+	result: unknown,
+): Promise<void> {
+	return invoke("respond_to_pi_ui", {
+		interactionId,
+		result: result ?? null,
+	});
 }
 
 export async function addRepositoryFromLocalPath(
@@ -2185,6 +2343,34 @@ export async function setWorkspaceStatus(
 	return invoke<void>("set_workspace_status", { workspaceId, status });
 }
 
+export async function setGoalChildWorkspaceStatus(
+	goalWorkspaceId: string,
+	childWorkspaceId: string,
+	status: WorkspaceStatus,
+): Promise<void> {
+	return invoke<void>("set_goal_child_workspace_status", {
+		request: { goalWorkspaceId, childWorkspaceId, status },
+	});
+}
+
+export async function assignWorkspaceToGoal(
+	workspaceId: string,
+	goalWorkspaceId: string,
+	status: WorkspaceStatus,
+): Promise<void> {
+	return invoke<void>("assign_workspace_to_goal", {
+		request: { workspaceId, goalWorkspaceId, status },
+	});
+}
+
+export async function listGoalChildWorkspaces(
+	goalWorkspaceId: string,
+): Promise<WorkspaceDetail[]> {
+	return invoke<WorkspaceDetail[]>("list_goal_child_workspaces", {
+		goalWorkspaceId,
+	});
+}
+
 // ---------------------------------------------------------------------------
 // Streaming agent API
 // ---------------------------------------------------------------------------
@@ -2192,48 +2378,6 @@ export async function setWorkspaceStatus(
 export type AgentStreamStartResponse = {
 	streamId: string;
 };
-
-export type DelegateAgentRequest = {
-	parentSessionId: string;
-	task: string;
-	provider: AgentProvider;
-	modelId?: string | null;
-	effortLevel?: string | null;
-	permissionMode?: string | null;
-	title?: string | null;
-	outputSchema: Record<string, unknown>;
-	timeoutMs?: number | null;
-	parentProvider?: string | null;
-};
-
-export type DelegationRecord = {
-	id: string;
-	parentSessionId: string;
-	childSessionId: string;
-	parentMessageId: string;
-	provider: string;
-	modelId?: string | null;
-	title: string;
-	status: string;
-	outputSchema: unknown;
-	structuredResult?: unknown;
-	error?: string | null;
-	createdAt: string;
-	startedAt?: string | null;
-	completedAt?: string | null;
-};
-
-export type DelegateAgentResponse = {
-	delegation: DelegationRecord;
-	childSessionId: string;
-	result: unknown;
-};
-
-export async function delegateAgent(
-	request: DelegateAgentRequest,
-): Promise<DelegateAgentResponse> {
-	return invoke<DelegateAgentResponse>("delegate_agent", { request });
-}
 
 // ---------------------------------------------------------------------------
 // Pipeline output types — match Rust pipeline::types serde output exactly
@@ -2330,21 +2474,16 @@ export type PlanReviewPart = {
 	planFilePath?: string | null;
 	allowedPrompts?: PlanReviewAllowedPrompt[];
 };
-export type DelegationAnchorPart = {
-	type: "delegation-anchor";
+export type GenericCardPart = {
+	type: "generic-card";
 	id: string;
-	delegationId: string;
-	parentSessionId: string;
-	childSessionId: string;
 	title: string;
-	provider: string;
-	modelId?: string | null;
-	status: string;
-	outputSchema: unknown;
-	structuredResult?: unknown;
-	error?: string | null;
-	startedAt?: string | null;
-	completedAt?: string | null;
+	subtitle?: string | null;
+	body?: string | null;
+	severity?: NoticeSeverity | null;
+	status?: string | null;
+	provider?: string | null;
+	details?: unknown;
 };
 export type MessagePart =
 	| TextPart
@@ -2356,7 +2495,7 @@ export type MessagePart =
 	| PromptSuggestionPart
 	| FileMentionPart
 	| PlanReviewPart
-	| DelegationAnchorPart;
+	| GenericCardPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";
@@ -2436,24 +2575,45 @@ export type AgentStreamEvent =
 			description?: string | null;
 	  }
 	| {
-			kind: "userInputRequest";
+			kind: "deferredToolUse";
 			provider: AgentProvider;
 			modelId: string;
 			resolvedModel: string;
 			sessionId?: string | null;
 			workingDirectory: string;
 			permissionMode?: string | null;
-			userInputId: string;
-			source: string;
+			toolUseId: string;
+			toolName: string;
+			toolInput: Record<string, unknown>;
+	  }
+	| {
+			kind: "elicitationRequest";
+			provider: AgentProvider;
+			modelId: string;
+			resolvedModel: string;
+			sessionId?: string | null;
+			workingDirectory: string;
+			elicitationId?: string | null;
+			serverName: string;
 			message: string;
-			/** Discriminated by `payload.kind`:
-			 *  - `ask-user-question` → Claude AskUserQuestion (raw multi-question / option / preview shape)
-			 *  - `form` → JSON-Schema form (MCP form elicitation or Codex's synthesized form)
-			 *  - `url` → URL launcher (MCP url-mode elicitation)
-			 *  See `pending-user-input.ts` for the typed payload union. */
-			payload: Record<string, unknown>;
+			mode?: string | null;
+			url?: string | null;
+			requestedSchema?: Record<string, unknown> | null;
 	  }
 	| { kind: "planCaptured" }
+	| {
+			kind: "kanbanToolCall";
+			toolCallId: string;
+			tool: string;
+			workspaceId: string;
+			args: Record<string, unknown>;
+	  }
+	| {
+			kind: "piUiRequest";
+			interactionId: string;
+			uiKind: "select" | "confirm" | "input";
+			payload: Record<string, unknown>;
+	  }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
@@ -2466,25 +2626,8 @@ export async function savePastedImage(
 	return invoke<string>("save_pasted_image", { data, mediaType });
 }
 
-/**
- * Write a UTF-8 string to an absolute path the user just picked from the
- * `plugin-dialog` Save dialog. Used by the chat-view table-download menu
- * (streamdown's built-in download relies on a synthetic `<a download>` click
- * that Tauri's webview ignores).
- */
-export async function saveTextFileAs(
-	path: string,
-	contents: string,
-): Promise<void> {
-	await invoke("save_text_file_as", { path, contents });
-}
-
 export async function showImageInFinder(path: string): Promise<void> {
 	await invoke("show_image_in_finder", { path });
-}
-
-export async function revealPathInFinder(path: string): Promise<void> {
-	await invoke("reveal_path_in_finder", { path });
 }
 
 export async function copyImageToClipboard(path: string): Promise<void> {
@@ -2518,22 +2661,6 @@ export async function stopAgentStream(
 	await invoke("stop_agent_stream", {
 		request: { sessionId, provider: provider ?? null },
 	});
-}
-
-/** UI projection of a registered, in-flight agent stream. Mirror of
- *  `agents::streaming::ActiveStreamSummary` on the Rust side. */
-export type ActiveStreamSummary = {
-	sessionId: string;
-	workspaceId: string | null;
-	provider: string;
-};
-
-/** Snapshot of currently in-flight agent streams. The frontend derives
- *  `busy / stoppable / busy-workspace` Sets from this list. Refetched
- *  whenever a `UiMutationEvent::ActiveStreamsChanged` lands via the
- *  ui-sync bridge. */
-export async function listActiveStreams(): Promise<ActiveStreamSummary[]> {
-	return await invoke<ActiveStreamSummary[]>("list_active_streams");
 }
 
 export type AgentSteerRequest = {
@@ -2587,28 +2714,32 @@ export async function respondToPermissionRequest(
 	});
 }
 
-/**
- * Resolve a parked unified `userInputRequest`. The sidecar's pending
- * resolver closure (`canUseTool` for AskUserQuestion, `onElicitation`
- * for MCP, Codex's `requestUserInput` JSON-RPC handler) translates
- * this generic resolution into the matching SDK-specific shape.
- *
- * - `submit` → frontend produced a content payload (matched to whatever
- *   the matching renderer asks for: AUQ updatedInput, schema content
- *   map, or `{}` for url-mode).
- * - `decline` → user explicitly rejected; sidecar surfaces this as the
- *   provider's matching "deny" signal.
- * - `cancel` → user dismissed without answering; treated as cancel by
- *   each provider.
- */
-export async function respondToUserInput(
-	userInputId: string,
-	action: "submit" | "decline" | "cancel",
+export async function respondToDeferredTool(
+	toolUseId: string,
+	behavior: "allow" | "deny",
+	options?: {
+		reason?: string | null;
+		updatedInput?: Record<string, unknown> | null;
+	},
+): Promise<void> {
+	await invoke("respond_to_deferred_tool", {
+		request: {
+			toolUseId,
+			behavior,
+			reason: options?.reason ?? null,
+			updatedInput: options?.updatedInput ?? null,
+		},
+	});
+}
+
+export async function respondToElicitationRequest(
+	elicitationId: string,
+	action: "accept" | "decline" | "cancel",
 	content?: Record<string, unknown> | null,
 ): Promise<void> {
-	await invoke("respond_to_user_input", {
+	await invoke("respond_to_elicitation_request", {
 		request: {
-			userInputId,
+			elicitationId,
 			action,
 			content: content ?? null,
 		},
@@ -2686,25 +2817,12 @@ export async function createSession(
 	options?: {
 		actionKind?: ActionKind | null;
 		permissionMode?: string | null;
-		/** Pin the session row's `model` at creation. Inspector helpers
-		 *  (Create PR/MR, Review) push the user's configured model here so
-		 *  the composer reads it off the row instead of falling back to
-		 *  settings.defaultModelId. Leave null for the default flow. */
-		model?: string | null;
-		/** Pin `effort_level` at creation; null falls back to the user
-		 *  setting on the backend. */
-		effortLevel?: string | null;
-		/** Pin `fast_mode` at creation; null/undefined defaults to false. */
-		fastMode?: boolean | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
 		actionKind: options?.actionKind ?? null,
 		permissionMode: options?.permissionMode ?? null,
-		model: options?.model ?? null,
-		effortLevel: options?.effortLevel ?? null,
-		fastMode: options?.fastMode ?? null,
 	});
 }
 
@@ -2766,71 +2884,6 @@ export async function getSessionContextUsage(
 	});
 }
 
-/** Active Codex `/goal` payload as JSON. Null when no goal is set. */
-export type CodexGoalState = {
-	threadId: string;
-	objective: string;
-	status: "active" | "paused" | "budgetLimited" | "complete";
-	tokenBudget: number | null;
-	tokensUsed: number;
-	timeUsedSeconds: number;
-	createdAt: number;
-	updatedAt: number;
-};
-
-/** Read the active Codex `/goal` for one session. Null when no goal. */
-export async function getSessionCodexGoal(
-	sessionId: string,
-): Promise<CodexGoalState | null> {
-	const raw = await invoke<string | null>("get_session_codex_goal", {
-		sessionId,
-	});
-	if (!raw) return null;
-	try {
-		return JSON.parse(raw) as CodexGoalState;
-	} catch {
-		return null;
-	}
-}
-
-/** Out-of-band Codex `/goal` lifecycle control. `pause` is fired by the
- *  Composer Stop button (so abort doesn't get re-spawned by codex's
- *  continuation loop); `clear` is the banner's Clear button. Resume is
- *  intentionally NOT here — it goes through `/goal resume` on the
- *  sendMessage path so the resulting stream subscription catches the
- *  goal-continuation turn codex auto-spawns. */
-export async function mutateCodexGoal(
-	sessionId: string,
-	action: "pause" | "clear",
-): Promise<void> {
-	await invoke("mutate_codex_goal", { sessionId, action });
-}
-
-/** One row of `listSessionDrafts`. `draftState` is opaque JSON (Lexical
- *  SerializedEditorState) — frontend parses on read. */
-export type SessionDraftRow = {
-	sessionId: string;
-	draftState: string;
-};
-
-/** Bulk-load every persisted composer draft. Called once at app boot
- *  to hydrate the in-memory draft cache that backs the synchronous
- *  `loadPersistedDraft` API. */
-export async function listSessionDrafts(): Promise<SessionDraftRow[]> {
-	return await invoke<SessionDraftRow[]>("list_session_drafts");
-}
-
-/** Persist (or clear) a session's composer draft. Pass `null` to clear. */
-export async function setSessionDraft(
-	sessionId: string,
-	draftState: string | null,
-): Promise<void> {
-	await invoke<void>("set_session_draft", {
-		sessionId,
-		draftState,
-	});
-}
-
 /** Read the account-global Codex rate-limit snapshot. Null until Codex has
  *  emitted at least one `account/rateLimits/updated` notification. */
 export async function getCodexRateLimits(): Promise<string | null> {
@@ -2888,8 +2941,6 @@ export async function loadHiddenSessions(
 
 // ---- Repository scripts ----
 
-export type RunScriptMode = "concurrent" | "non-concurrent";
-
 export type RepoScripts = {
 	setupScript?: string | null;
 	runScript?: string | null;
@@ -2899,17 +2950,10 @@ export type RepoScripts = {
 	archiveFromProject: boolean;
 	/** Auto-run the setup script on workspace creation. Defaults to true. */
 	autoRunSetup: boolean;
-	/**
-	 * "non-concurrent" makes a new run stop any other run script in the
-	 * same repo first — useful when the script binds a fixed port.
-	 * Defaults to "concurrent".
-	 */
-	runScriptMode: RunScriptMode;
 };
 
 export type RepoPreferences = {
 	createPr?: string | null;
-	review?: string | null;
 	fixErrors?: string | null;
 	resolveConflicts?: string | null;
 	branchRename?: string | null;
@@ -2967,13 +3011,6 @@ export async function updateRepoAutoRunSetup(
 	await invoke("update_repo_auto_run_setup", { repoId, enabled });
 }
 
-export async function updateRepoRunScriptMode(
-	repoId: string,
-	mode: RunScriptMode,
-): Promise<void> {
-	await invoke("update_repo_run_script_mode", { repoId, mode });
-}
-
 export async function loadRepoPreferences(
 	repoId: string,
 ): Promise<RepoPreferences> {
@@ -2994,7 +3031,7 @@ export async function updateRepoPreferences(
 
 export async function executeRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	onEvent: (event: ScriptEvent) => void,
 	workspaceId?: string | null,
 ): Promise<void> {
@@ -3010,7 +3047,7 @@ export async function executeRepoScript(
 
 export async function stopRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	workspaceId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("stop_repo_script", {
@@ -3031,7 +3068,7 @@ export async function stopRepoScript(
  */
 export async function writeRepoScriptStdin(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	workspaceId: string | null,
 	data: string,
 ): Promise<boolean> {
@@ -3049,7 +3086,7 @@ export async function writeRepoScriptStdin(
  */
 export async function resizeRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: "setup" | "run" | "archive",
 	workspaceId: string | null,
 	cols: number,
 	rows: number,
@@ -3130,6 +3167,173 @@ export async function resizeTerminal(
 		instanceId,
 		cols,
 		rows,
+	});
+}
+
+export type BrowserTabRecord = {
+	id: string;
+	workspaceId: string;
+	url: string;
+	title: string | null;
+	displayOrder: number;
+	active: boolean;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type BrowserRuntimeActionResponse = {
+	tabId: string;
+	action: string;
+	implemented: boolean;
+	message: string;
+};
+
+export type BrowserProfileOptions = {
+	workspaceId: string;
+	tabId?: string;
+	dataDirectory: string;
+	dataStoreIdentifier: number[];
+};
+
+export type BrowserWebviewBounds = {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+};
+
+export async function listWorkspaceBrowserTabs(
+	workspaceId: string,
+): Promise<BrowserTabRecord[]> {
+	return invoke<BrowserTabRecord[]>("list_workspace_browser_tabs", {
+		workspaceId,
+	});
+}
+
+export async function createBrowserTab(
+	workspaceId: string,
+	initialUrl?: string | null,
+): Promise<BrowserTabRecord> {
+	return invoke<BrowserTabRecord>("create_browser_tab", {
+		workspaceId,
+		initialUrl: initialUrl ?? null,
+	});
+}
+
+export async function selectBrowserTab(
+	tabId: string,
+): Promise<BrowserTabRecord> {
+	return invoke<BrowserTabRecord>("select_browser_tab", { tabId });
+}
+
+export async function navigateBrowserTab(
+	tabId: string,
+	url: string,
+): Promise<BrowserTabRecord> {
+	return invoke<BrowserTabRecord>("navigate_browser_tab", { tabId, url });
+}
+
+export async function updateBrowserTabTitle(
+	tabId: string,
+	title: string | null,
+): Promise<BrowserTabRecord | null> {
+	return invoke<BrowserTabRecord | null>("update_browser_tab_title", {
+		tabId,
+		title,
+	});
+}
+
+export async function closeBrowserTab(
+	tabId: string,
+): Promise<BrowserTabRecord | null> {
+	return invoke<BrowserTabRecord | null>("close_browser_tab", { tabId });
+}
+
+export async function getWorkspaceBrowserProfile(
+	workspaceId: string,
+): Promise<BrowserProfileOptions> {
+	return invoke<BrowserProfileOptions>("get_workspace_browser_profile", {
+		workspaceId,
+	});
+}
+
+export async function getBrowserTabProfile(
+	tabId: string,
+): Promise<BrowserProfileOptions> {
+	return invoke<BrowserProfileOptions>("get_browser_tab_profile", { tabId });
+}
+
+export async function createBrowserWebviewHost(
+	label: string,
+	url: string,
+	bounds: BrowserWebviewBounds,
+	profile: BrowserProfileOptions,
+	userAgent: string,
+): Promise<void> {
+	return invoke<void>("create_browser_webview", {
+		label,
+		url,
+		bounds,
+		profile,
+		userAgent,
+	});
+}
+
+export async function browserGoBack(tabId: string): Promise<void> {
+	return invoke<void>("browser_go_back", { tabId });
+}
+
+export async function browserGoForward(tabId: string): Promise<void> {
+	return invoke<void>("browser_go_forward", { tabId });
+}
+
+export async function openBrowserDevtools(tabId: string): Promise<void> {
+	return invoke<void>("open_browser_devtools", { tabId });
+}
+
+export async function browserSnapshot(
+	tabId: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_snapshot", { tabId });
+}
+
+export async function browserScreenshot(
+	tabId: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_screenshot", { tabId });
+}
+
+export async function browserClick(
+	tabId: string,
+	x: number,
+	y: number,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_click", { tabId, x, y });
+}
+
+export async function browserType(
+	tabId: string,
+	text: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_type", { tabId, text });
+}
+
+export async function browserKey(
+	tabId: string,
+	key: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_key", { tabId, key });
+}
+
+export async function browserScroll(
+	tabId: string,
+	deltaX: number,
+	deltaY: number,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_scroll", {
+		tabId,
+		deltaX,
+		deltaY,
 	});
 }
 

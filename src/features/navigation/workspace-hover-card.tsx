@@ -3,7 +3,6 @@ import { formatDistanceToNow } from "date-fns";
 import {
 	ArrowDown,
 	ArrowUp,
-	Bot,
 	FileDiff,
 	GitBranch,
 	GitPullRequest,
@@ -30,7 +29,7 @@ import {
 	workspaceGitActionStatusQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
-import { useBusySessionIds } from "@/lib/session-run-state-context";
+import { useSendingSessionIds } from "@/lib/sending-sessions-context";
 import {
 	readSessionThread,
 	sessionThreadCacheKey,
@@ -157,17 +156,17 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 
 /**
  * Pick the streaming session for the live preview: prefer non-hidden,
- * non-action sessions in `busySessionIds`; tiebreak on thread length;
+ * non-action sessions in `sendingSessionIds`; tiebreak on thread length;
  * fall back to `primarySessionId` if none are streaming.
  */
 export function chooseLiveSessionId({
 	workspaceSessions,
-	busySessionIds,
+	sendingSessionIds,
 	primarySessionId,
 	queryClient,
 }: {
 	workspaceSessions: WorkspaceSessionSummary[] | undefined;
-	busySessionIds: ReadonlySet<string>;
+	sendingSessionIds: ReadonlySet<string>;
 	primarySessionId: string | null | undefined;
 	queryClient: ReturnType<typeof useQueryClient>;
 }): string | null {
@@ -175,7 +174,7 @@ export function chooseLiveSessionId({
 		(session) =>
 			!session.isHidden &&
 			!session.actionKind &&
-			busySessionIds.has(session.id),
+			sendingSessionIds.has(session.id),
 	);
 
 	if (candidates.length === 0) {
@@ -294,14 +293,14 @@ function StreamingElapsed({
 	primarySessionId: string | null | undefined;
 }) {
 	const queryClient = useQueryClient();
-	const busySessionIds = useBusySessionIds();
+	const sendingSessionIds = useSendingSessionIds();
 	const { data: workspaceSessions } = useQuery(
 		workspaceSessionsQueryOptions(workspaceId, { staleTime: 5_000 }),
 	);
 
 	const sessionId = chooseLiveSessionId({
 		workspaceSessions,
-		busySessionIds,
+		sendingSessionIds,
 		primarySessionId,
 		queryClient,
 	});
@@ -386,7 +385,7 @@ function LiveSessionPreview({
 	primarySessionId: string | null | undefined;
 }) {
 	const queryClient = useQueryClient();
-	const busySessionIds = useBusySessionIds();
+	const sendingSessionIds = useSendingSessionIds();
 
 	// Pre-warm streamdown so Suspense rarely fires once the card opens.
 	useEffect(() => {
@@ -401,7 +400,7 @@ function LiveSessionPreview({
 	const sessionId =
 		chooseLiveSessionId({
 			workspaceSessions,
-			busySessionIds,
+			sendingSessionIds,
 			primarySessionId,
 			queryClient,
 		}) ?? null;
@@ -492,12 +491,10 @@ export function WorkspaceHoverCard({
 	isSending?: boolean;
 	children: React.ReactNode;
 }) {
-	const [isOpen, setIsOpen] = useState(false);
 	// Measured on open so the card's left edge snaps to the sidebar divider.
 	const [sideOffset, setSideOffset] = useState(HOVER_CARD_DEFAULT_SIDE_OFFSET);
 	const handleOpenChange = useCallback(
 		(open: boolean) => {
-			setIsOpen(open);
 			if (!open) return;
 			const rowEl = document.querySelector<HTMLElement>(
 				`[data-workspace-row-id="${row.id}"]`,
@@ -555,14 +552,6 @@ export function WorkspaceHoverCard({
 			: "Created";
 	const createdAt = relativeTime(row.createdAt);
 	const sessionCount = row.sessionCount ?? 0;
-	const { data: workspaceSessions } = useQuery({
-		...workspaceSessionsQueryOptions(row.id, { staleTime: 5_000 }),
-		enabled: isOpen,
-	});
-	const totalChildCount = (workspaceSessions ?? []).reduce(
-		(sum, s) => sum + (s.childCount ?? 0),
-		0,
-	);
 
 	return (
 		<HoverCardRoot
@@ -644,13 +633,6 @@ export function WorkspaceHoverCard({
 							{sessionCount > 0 ? (
 								<span className="tabular-nums">
 									{sessionCount} {sessionCount === 1 ? "session" : "sessions"}
-								</span>
-							) : null}
-							{totalChildCount > 0 ? (
-								<span className="flex items-center gap-1 tabular-nums">
-									<Bot className="size-3 shrink-0" strokeWidth={1.8} />
-									{totalChildCount}{" "}
-									{totalChildCount === 1 ? "sub-agent" : "sub-agents"}
 								</span>
 							) : null}
 						</div>

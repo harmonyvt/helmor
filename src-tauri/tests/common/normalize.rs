@@ -93,16 +93,14 @@ pub enum NormPart {
     FileMention {
         path: String,
     },
-    DelegationAnchor {
-        delegation_id: String,
-        parent_session_id: String,
-        child_session_id: String,
+    GenericCard {
         title: String,
-        provider: String,
-        model_id: Option<String>,
-        status: String,
-        has_structured_result: bool,
-        has_error: bool,
+        subtitle: Option<String>,
+        body: Option<String>,
+        severity: Option<String>,
+        status: Option<String>,
+        provider: Option<String>,
+        has_details: bool,
     },
 }
 
@@ -257,24 +255,23 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 .collect(),
         },
         MessagePart::FileMention { path, .. } => NormPart::FileMention { path: path.clone() },
-        MessagePart::DelegationAnchor {
+        MessagePart::GenericCard {
             title,
-            provider,
-            model_id,
+            subtitle,
+            body,
+            severity,
             status,
-            structured_result,
-            error,
+            provider,
+            details,
             ..
-        } => NormPart::DelegationAnchor {
-            delegation_id: "<redacted-delegation-id>".to_string(),
-            parent_session_id: "<redacted-parent-session-id>".to_string(),
-            child_session_id: "<redacted-child-session-id>".to_string(),
+        } => NormPart::GenericCard {
             title: truncate(title),
-            provider: provider.clone(),
-            model_id: model_id.clone(),
+            subtitle: subtitle.as_deref().map(truncate),
+            body: body.as_deref().map(truncate),
+            severity: severity.as_ref().map(|s| format!("{s:?}").to_lowercase()),
             status: status.clone(),
-            has_structured_result: structured_result.is_some(),
-            has_error: error.is_some(),
+            provider: provider.clone(),
+            has_details: details.is_some(),
         },
     }
 }

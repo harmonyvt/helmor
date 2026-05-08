@@ -30,6 +30,7 @@ pub struct EditorSpec {
     pub id: &'static str,
     pub name: &'static str,
     /// macOS `CFBundleIdentifier`s. Multiple entries cover stable/preview/CE variants.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub bundle_ids: &'static [&'static str],
     /// Well-known install paths. `$HOME` is expanded at runtime.
     pub known_paths: &'static [&'static str],
@@ -485,7 +486,8 @@ pub async fn open_workspace_in_editor(workspace_id: String, editor: String) -> C
         let record = workspace_models::load_workspace_record_by_id(&workspace_id)?
             .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-        let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
+        let workspace_dir =
+            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
         if !workspace_dir.is_dir() {
             return Err(anyhow::anyhow!(
                 "Workspace directory not found: {}",
@@ -508,7 +510,8 @@ pub async fn open_workspace_in_finder(workspace_id: String) -> CmdResult<()> {
         let record = workspace_models::load_workspace_record_by_id(&workspace_id)?
             .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-        let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
+        let workspace_dir =
+            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
         if !workspace_dir.is_dir() {
             return Err(anyhow::anyhow!(
                 "Workspace directory not found: {}",

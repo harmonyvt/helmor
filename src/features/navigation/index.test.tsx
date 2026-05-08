@@ -8,7 +8,11 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
+import type {
+	RepositoryCreateOption,
+	WorkspaceGroup,
+	WorkspaceRow,
+} from "@/lib/api";
 
 import { WorkspacesSidebar } from "./index";
 
@@ -28,6 +32,21 @@ const workspaceGroups: WorkspaceGroup[] = [
 	},
 ];
 
+const repositories: RepositoryCreateOption[] = [
+	{
+		id: "repo-1",
+		name: "helmor",
+		defaultBranch: "main",
+		repoInitials: "HE",
+	},
+	{
+		id: "repo-2",
+		name: "dosu-cli",
+		defaultBranch: "develop",
+		repoInitials: "DO",
+	},
+];
+
 afterEach(() => {
 	cleanup();
 	window.localStorage.clear();
@@ -41,7 +60,7 @@ describe("WorkspacesSidebar", () => {
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
-					busyWorkspaceIds={new Set()}
+					sendingWorkspaceIds={new Set()}
 				/>
 			</TooltipProvider>,
 		);
@@ -57,7 +76,7 @@ describe("WorkspacesSidebar", () => {
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
-					busyWorkspaceIds={new Set(["workspace-1"])}
+					sendingWorkspaceIds={new Set(["workspace-1"])}
 				/>
 			</TooltipProvider>,
 		);
@@ -89,16 +108,17 @@ describe("WorkspacesSidebar", () => {
 		expect(screen.getByLabelText("Unread")).toBeInTheDocument();
 	});
 
-	it("opens the workspace start page from the new workspace button", async () => {
+	it("opens the repository picker and creates a workspace from the selected repository", async () => {
 		const user = userEvent.setup();
-		const onOpenNewWorkspace = vi.fn();
+		const onCreateWorkspace = vi.fn();
 
 		const { container } = render(
 			<TooltipProvider delayDuration={0}>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
-					onOpenNewWorkspace={onOpenNewWorkspace}
+					availableRepositories={repositories}
+					onCreateWorkspace={onCreateWorkspace}
 				/>
 			</TooltipProvider>,
 		);
@@ -110,8 +130,13 @@ describe("WorkspacesSidebar", () => {
 
 		expect(screen.queryByPlaceholderText("Search repositories")).toBeNull();
 		expect(screen.queryByText("Repositories")).toBeNull();
+		expect(screen.getByRole("option", { name: /helmor/i })).toBeInTheDocument();
+
+		const [firstRepositoryOption] = screen.getAllByRole("option");
+		await user.click(firstRepositoryOption);
+
+		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
 		expect(screen.queryByRole("option", { name: /helmor/i })).toBeNull();
-		expect(onOpenNewWorkspace).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows an Open in Finder action for active workspaces", async () => {

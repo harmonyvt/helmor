@@ -1,8 +1,7 @@
 use anyhow::Context;
-use tauri::State;
 
 use crate::{
-    agents::ActionKind, db, rate_limits::throttle::Throttle, settings, sidecar::ManagedSidecar,
+    agents::ActionKind, data_dir::DataDirPreference, db, rate_limits::throttle::Throttle, settings,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -43,10 +42,8 @@ pub async fn get_app_settings() -> CmdResult<std::collections::HashMap<String, S
 
 #[tauri::command]
 pub async fn update_app_settings(
-    sidecar: State<'_, ManagedSidecar>,
     settings_map: std::collections::HashMap<String, String>,
 ) -> CmdResult<()> {
-    let touched_cursor_key = settings_map.contains_key("app.cursor_provider");
     run_blocking(move || {
         for (key, value) in &settings_map {
             if !key.starts_with("app.") && !key.starts_with("branch_prefix_") {
@@ -56,13 +53,12 @@ pub async fn update_app_settings(
         }
         Ok(())
     })
-    .await?;
+    .await
+}
 
-    // Hot-push the key — restart would interrupt other providers.
-    if touched_cursor_key {
-        sidecar.push_cursor_api_key(crate::sidecar::load_cursor_api_key());
-    }
-    Ok(())
+#[tauri::command]
+pub async fn set_data_dir_preference(preference: DataDirPreference) -> CmdResult<()> {
+    run_blocking(move || crate::data_dir::set_data_dir_preference(preference)).await
 }
 
 /// Read the account-global Codex rate-limit snapshot. Each call attempts

@@ -1,20 +1,36 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
+import { ArchiveTab } from "@/features/inspector/sections/archive";
+import { CommentsTab } from "@/features/inspector/sections/comments";
+import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import {
 	type ShortcutHandler,
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
-import type { ChangeRequestInfo } from "@/lib/api";
+import {
+	type ChangeRequestInfo,
+	createSession,
+	type PrComment,
+	type PrCommentData,
+	type WorkspaceDetail,
+	type WorkspaceSessionSummary,
+} from "@/lib/api";
 import type { DiffOpenOptions } from "@/lib/editor-session";
+import {
+	helmorQueryKeys,
+	workspacePrCommentsQueryOptions,
+} from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
 import { useScriptStatus } from "./hooks/use-script-status";
 import { useSetupAutoRun } from "./hooks/use-setup-auto-run";
 import { HorizontalResizeHandle, InspectorTabsSection } from "./layout";
+import { buildReviewAllPrompt } from "./pr-comments";
 import type { ScriptStatus } from "./script-store";
 import { ActionsSection } from "./sections/actions";
 import { ChangesSection } from "./sections/changes";
@@ -24,7 +40,7 @@ import { TerminalInstancePanel } from "./sections/terminal";
 import {
 	closeTerminal,
 	createTerminal,
-	setTerminalHoverZoomDisabled,
+	getTerminals,
 	subscribeToWorkspaceList,
 	TERMINAL_INSTANCE_LIMIT,
 	type TerminalInstance,
@@ -37,14 +53,12 @@ type WorkspaceInspectorSidebarProps = {
 	workspaceBranch?: string | null;
 	workspaceTargetBranch?: string | null;
 	workspaceRemote?: string | null;
-	workspaceRemoteUrl?: string | null;
 	workspaceState?: string | null;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
-	onReviewAction?: () => Promise<void>;
 	currentSessionId?: string | null;
 	onQueuePendingPromptForSession?: (request: {
 		sessionId: string;
@@ -62,33 +76,36 @@ type WorkspaceInspectorSidebarProps = {
 	 */
 	forgeIsRefreshing?: boolean;
 	onOpenSettings?: () => void;
+	/** Called after a new session is created (e.g. "Review all") so the app
+	 * can navigate to it and the queued prompt actually fires. */
+	onSelectSession?: (sessionId: string) => void;
+	/** Opens the full-viewport browser surface. */
+	onOpenBrowserMode?: () => void;
 };
 
 export function WorkspaceInspectorSidebar({
 	workspaceId,
 	workspaceRootPath,
-	workspaceBranch,
 	workspaceTargetBranch,
 	workspaceRemote,
-	workspaceRemoteUrl,
 	workspaceState,
 	repoId,
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
 	onCommitAction,
-	onReviewAction,
 	currentSessionId,
 	onQueuePendingPromptForSession,
+	onSelectSession,
 	commitButtonMode,
 	commitButtonState,
 	changeRequest,
 	forgeIsRefreshing = false,
 	onOpenSettings,
+	onOpenBrowserMode,
 }: WorkspaceInspectorSidebarProps) {
 	const {
 		actionsHeight,
-		actionsOpen,
 		actionsRef,
 		activeTab,
 		changes,
@@ -96,16 +113,13 @@ export function WorkspaceInspectorSidebar({
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
-		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
-		isPanelToggleAnimating,
 		isResizing,
 		isTabsResizing,
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
-		tabsBodyHeight,
 		tabsOpen,
 		tabsWrapperRef,
 	} = useWorkspaceInspectorSidebar({
@@ -113,6 +127,26 @@ export function WorkspaceInspectorSidebar({
 		workspaceId: workspaceId ?? null,
 		repoId: repoId ?? null,
 	});
+	const queryClient = useQueryClient();
+
+	// PR comments — fetched at sidebar level so the Comments tab badge and
+	// the CommentsTab body both share the same query instance.
+	const isArchived = workspaceState === "archived";
+	const prCommentsQuery = useQuery({
+		...workspacePrCommentsQueryOptions(workspaceId ?? "__none__"),
+		enabled: workspaceId !== null && !isArchived,
+	});
+	const EMPTY_PR_COMMENT_DATA: PrCommentData = {
+		comments: [],
+		prNumber: null,
+		prUrl: null,
+	};
+	const prCommentData = prCommentsQuery.data ?? EMPTY_PR_COMMENT_DATA;
+	const showCommentsTab =
+		prCommentData.comments.length > 0 || prCommentsQuery.isFetching;
+	const hasUnresolvedComments = prCommentData.comments.some(
+		(c: { isThreadResolved: boolean }) => !c.isThreadResolved,
+	);
 
 	// Fire setup auto-run / auto-complete at the sidebar level so it runs even
 	// when the Setup tab isn't mounted (tabsOpen=false).
@@ -148,6 +182,40 @@ export function WorkspaceInspectorSidebar({
 		"run",
 		!!repoScripts?.runScript?.trim(),
 	);
+	const archiveScriptState = useScriptStatus(
+		workspaceId ?? null,
+		"archive",
+		!!repoScripts?.archiveScript?.trim(),
+	);
+
+	const handleReviewAllComments = useCallback(
+		async (comments: PrComment[]) => {
+			if (!workspaceId || !onQueuePendingPromptForSession) return;
+			const { sessionId } = await createSession(workspaceId);
+			seedNewSessionInCache({
+				queryClient,
+				workspaceId,
+				sessionId,
+				workspace:
+					queryClient.getQueryData<WorkspaceDetail | null>(
+						helmorQueryKeys.workspaceDetail(workspaceId),
+					) ?? null,
+				existingSessions:
+					queryClient.getQueryData<WorkspaceSessionSummary[]>(
+						helmorQueryKeys.workspaceSessions(workspaceId),
+					) ?? [],
+			});
+			onQueuePendingPromptForSession({
+				sessionId,
+				prompt: buildReviewAllPrompt(comments),
+				// Force-queue so the prompt fires even if a turn is currently streaming.
+				forceQueue: true,
+			});
+			// Navigate to the new session so the pending prompt is consumed.
+			onSelectSession?.(sessionId);
+		},
+		[queryClient, workspaceId, onQueuePendingPromptForSession, onSelectSession],
+	);
 
 	// Live list of Terminal sub-tabs for the current workspace, observed at
 	// the sidebar level so each terminal can be rendered as its own tab in
@@ -175,14 +243,6 @@ export function WorkspaceInspectorSidebar({
 		const next = createTerminal(repoId, workspaceId);
 		if (next) setActiveTab(next.id);
 	}, [repoId, workspaceId, setActiveTab]);
-
-	const handleToggleTerminalHoverZoom = useCallback(
-		(instanceId: string, disabled: boolean) => {
-			if (!workspaceId) return;
-			setTerminalHoverZoomDisabled(workspaceId, instanceId, disabled);
-		},
-		[workspaceId],
-	);
 
 	const handleCloseTerminal = useCallback(
 		(instanceId: string) => {
@@ -349,25 +409,47 @@ export function WorkspaceInspectorSidebar({
 	});
 
 	// Reset to "setup" when the active tab is a terminal id that no longer
-	// matches any current instance — happens when switching workspaces while
-	// a terminal tab was active in the previous one.
+	// matches any current instance, or when the Comments tab disappears
+	// (e.g. PR was merged / comments cleared). Read the terminal store
+	// synchronously too: on workspace switches the persisted tab id may
+	// restore before this component's subscribed terminal list has received
+	// its first snapshot.
 	useEffect(() => {
-		if (activeTab === "setup" || activeTab === "run") return;
+		if (activeTab === "setup" || activeTab === "run" || activeTab === "archive")
+			return;
+		if (activeTab === "comments") {
+			if (showCommentsTab) return;
+			setActiveTab("setup");
+			return;
+		}
 		if (terminalInstances.some((t) => t.id === activeTab)) return;
+		if (
+			workspaceId &&
+			getTerminals(workspaceId).some((t) => t.id === activeTab)
+		) {
+			return;
+		}
 		setActiveTab("setup");
-	}, [activeTab, terminalInstances, setActiveTab]);
+	}, [
+		activeTab,
+		terminalInstances,
+		workspaceId,
+		setActiveTab,
+		showCommentsTab,
+	]);
 
 	// Only allow hover-to-zoom when the active tab has real terminal output.
 	// "idle" = script configured but never run; "no-script" = nothing to run.
 	// In both cases the body is a placeholder (Run / Open-settings button)
 	// that doesn't benefit from — and shouldn't trigger — the enlargement.
 	const scriptTabState =
-		activeTab === "setup" ? setupScriptState : runScriptState;
-	const activeTerminalInstance = isTerminalTabActive
-		? terminalInstances.find((t) => t.id === activeTab)
-		: undefined;
+		activeTab === "setup"
+			? setupScriptState
+			: activeTab === "archive"
+				? archiveScriptState
+				: runScriptState;
 	const canHoverExpand = isTerminalTabActive
-		? !activeTerminalInstance?.hoverZoomDisabled
+		? true
 		: scriptTabState === "running" ||
 			scriptTabState === "success" ||
 			scriptTabState === "failure";
@@ -383,10 +465,9 @@ export function WorkspaceInspectorSidebar({
 			)}
 		>
 			<ChangesSection
+				bodyHeight={changesHeight}
 				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}
-				workspaceBranch={workspaceBranch ?? null}
-				workspaceRemoteUrl={workspaceRemoteUrl ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
 				editorMode={editorMode}
@@ -398,41 +479,37 @@ export function WorkspaceInspectorSidebar({
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
-				bodyHeight={changesHeight}
-				animatePanelToggle={isPanelToggleAnimating}
-				isResizing={isResizing}
 			/>
-			{actionsOpen ? (
-				<HorizontalResizeHandle
-					onMouseDown={handleResizeStart("actions")}
-					isActive={isActionsResizing}
-				/>
-			) : null}
+
+			<HorizontalResizeHandle
+				onMouseDown={handleResizeStart("actions")}
+				isActive={isActionsResizing}
+			/>
+
 			<ActionsSection
 				workspaceId={workspaceId ?? null}
 				workspaceState={workspaceState ?? null}
 				repoId={repoId ?? null}
 				workspaceRemote={workspaceRemote ?? null}
 				sectionRef={actionsRef}
-				open={actionsOpen}
-				onToggle={handleToggleActions}
 				bodyHeight={actionsHeight}
-				isResizing={isResizing}
+				expanded={!tabsOpen}
 				onCommitAction={onCommitAction}
-				onReviewAction={onReviewAction}
 				currentSessionId={currentSessionId ?? null}
 				onQueuePendingPromptForSession={onQueuePendingPromptForSession}
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
-				animatePanelToggle={isPanelToggleAnimating}
+				onOpenBrowserMode={onOpenBrowserMode}
 			/>
-			{tabsOpen ? (
+
+			{tabsOpen && (
 				<HorizontalResizeHandle
 					onMouseDown={handleResizeStart("tabs")}
 					isActive={isTabsResizing}
 				/>
-			) : null}
+			)}
+
 			<InspectorTabsSection
 				wrapperRef={tabsWrapperRef}
 				open={tabsOpen}
@@ -442,15 +519,14 @@ export function WorkspaceInspectorSidebar({
 				tabActions={runTabActions}
 				setupScriptState={setupScriptState}
 				runScriptState={runScriptState}
+				archiveScriptState={archiveScriptState}
 				terminalInstances={terminalInstances}
 				onAddTerminal={handleAddTerminal}
 				onCloseTerminal={handleCloseTerminal}
-				onToggleTerminalHoverZoom={handleToggleTerminalHoverZoom}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
-				bodyHeight={tabsBodyHeight}
-				animatePanelToggle={isPanelToggleAnimating}
-				isResizing={isResizing}
+				showCommentsTab={showCommentsTab}
+				hasUnresolvedComments={hasUnresolvedComments}
 			>
 				<SetupTab
 					repoId={repoId ?? null}
@@ -467,6 +543,20 @@ export function WorkspaceInspectorSidebar({
 					onOpenSettings={handleOpenSettings}
 					onStatusChange={setRunStatus}
 					onUrlsChange={setRunUrls}
+				/>
+				<ArchiveTab
+					repoId={repoId ?? null}
+					workspaceId={workspaceId ?? null}
+					archiveScript={repoScripts?.archiveScript ?? null}
+					isActive={activeTab === "archive"}
+					onOpenSettings={handleOpenSettings}
+				/>
+				<CommentsTab
+					workspaceId={workspaceId ?? null}
+					prCommentData={prCommentData}
+					isFetching={prCommentsQuery.isFetching}
+					isActive={activeTab === "comments"}
+					onReviewAllComments={handleReviewAllComments}
 				/>
 				{terminalInstances.map((instance) => (
 					<TerminalInstancePanel

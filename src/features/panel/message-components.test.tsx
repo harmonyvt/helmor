@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import {
 	act,
 	cleanup,
@@ -8,8 +7,6 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
-import { createHelmorQueryClient } from "@/lib/query-client";
-import { renderWithProviders } from "@/test/render-with-providers";
 import { MemoConversationMessage } from "./message-components";
 import { serializeMessageForClipboard } from "./message-components/copy-message";
 import { AssistantToolCall } from "./message-components/tool-call";
@@ -259,7 +256,7 @@ describe("MemoConversationMessage plan review", () => {
 		expect(writeTextMock).toHaveBeenCalledWith("Ship the action slot.");
 	});
 
-	it("auto-collapses a completed reasoning block and shows elapsed time", () => {
+	it("keeps a completed reasoning block open and shows elapsed time", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-04-20T12:00:00.000Z"));
 
@@ -322,10 +319,9 @@ describe("MemoConversationMessage plan review", () => {
 		);
 
 		expect(screen.getByText("Thought for 2s")).toBeInTheDocument();
-		// Content is hidden because reasoning auto-collapses on completion.
 		expect(
-			screen.queryByText("Inspecting the streamed reasoning block."),
-		).not.toBeInTheDocument();
+			screen.getByText("Inspecting the streamed reasoning block."),
+		).toBeInTheDocument();
 		expect(screen.getByText("Done.")).toBeInTheDocument();
 	});
 
@@ -370,14 +366,9 @@ describe("MemoConversationMessage plan review", () => {
 		);
 
 		expect(screen.getByText("Thought for 4s")).toBeInTheDocument();
-		// `just-finished` blocks default closed now — matches what historical
-		// reloads do, so a session that finishes thinking while the user is
-		// switched to another workspace doesn't come back full of expanded
-		// reasoning walls. The text is still in the DOM (CollapsibleContent
-		// hides via attributes, not unmount), so query through the trigger's
-		// state instead of looking for the body text.
-		const trigger = screen.getByText("Thought for 4s").closest("button");
-		expect(trigger?.getAttribute("data-state")).toBe("closed");
+		// The block should be open (not auto-collapsed) because the
+		// pipeline signaled a just-completed live reasoning run.
+		expect(screen.getByText("Figured it out quickly.")).toBeInTheDocument();
 	});
 
 	it("keeps a historical reasoning block collapsed without a duration", () => {
@@ -441,7 +432,7 @@ describe("ChatUserMessage with spaces in attachment paths", () => {
 		expect(screen.getByText(/Clicking on pull/)).toBeInTheDocument();
 	});
 
-	it("renders an image badge with its full filename for an image-extension mention", () => {
+	it("renders an inline image for an image-extension mention", () => {
 		const path =
 			"/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg";
 		const message: ThreadMessageLike = {
@@ -454,7 +445,7 @@ describe("ChatUserMessage with spaces in attachment paths", () => {
 			],
 		};
 
-		render(
+		const { container } = render(
 			<MemoConversationMessage
 				message={message}
 				sessionId="session-1"
@@ -462,101 +453,11 @@ describe("ChatUserMessage with spaces in attachment paths", () => {
 			/>,
 		);
 
-		expect(
-			screen.getAllByText(/CleanShot 2026-04-29 at 08\.24\.35@2x\.jpg/),
-		).toHaveLength(1);
+		const image = container.querySelector("img");
+		expect(image).not.toBeNull();
+		expect(image?.getAttribute("src")).toContain(
+			"CleanShot 2026-04-29 at 08.24.35@2x.jpg",
+		);
 		expect(screen.queryByText(/Support\/CleanShot\/CleanShot/)).toBeNull();
-	});
-});
-describe("delegation anchors", () => {
-	it("renders nested delegated messages and opens the child session", async () => {
-		const message: ThreadMessageLike = {
-			id: "parent-message-1",
-			role: "assistant",
-			createdAt: "2026-05-08T00:00:00.000Z",
-			content: [
-				{
-					type: "delegation-anchor",
-					id: "parent-message-1:delegation",
-					delegationId: "delegation-1",
-					parentSessionId: "parent-session",
-					childSessionId: "child-session",
-					title: "Inspect parser",
-					provider: "codex",
-					modelId: "gpt-5.4",
-					status: "succeeded",
-					outputSchema: { type: "object" },
-					structuredResult: { summary: "ok" },
-				},
-			],
-		};
-		const childMessages: ThreadMessageLike[] = [
-			{
-				id: "child-message-1",
-				role: "assistant",
-				createdAt: "2026-05-08T00:00:01.000Z",
-				content: [{ type: "text", id: "child-text-1", text: "Child summary" }],
-			},
-		];
-		const onFocusChild = vi.fn();
-		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(
-			["sessionMessages", "child-session", "thread"],
-			childMessages,
-		);
-		renderWithProviders(
-			<MemoConversationMessage
-				message={message}
-				sessionId="parent-session"
-				itemIndex={0}
-				onFocusChild={onFocusChild}
-			/>,
-			{ queryClient },
-		);
-
-		expect(screen.getByText("Inspect parser")).toBeInTheDocument();
-		expect(screen.getByText("Child summary")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: /open/i }));
-		expect(onFocusChild).toHaveBeenCalledWith(
-			"child-session",
-			"parent-session",
-		);
-	});
-
-	it("renders an error when the delegated thread cannot load", async () => {
-		vi.mocked(invoke).mockRejectedValueOnce(new Error("load failed"));
-		const message: ThreadMessageLike = {
-			id: "parent-message-2",
-			role: "assistant",
-			createdAt: "2026-05-08T00:00:00.000Z",
-			content: [
-				{
-					type: "delegation-anchor",
-					id: "parent-message-2:delegation",
-					delegationId: "delegation-2",
-					parentSessionId: "parent-session",
-					childSessionId: "missing-child-session",
-					title: "Inspect failure",
-					provider: "codex",
-					status: "running",
-					outputSchema: {},
-				},
-			],
-		};
-
-		renderWithProviders(
-			<MemoConversationMessage
-				message={message}
-				sessionId="parent-session"
-				itemIndex={0}
-			/>,
-		);
-
-		expect(
-			await screen.findByText("Failed to load delegated thread."),
-		).toBeInTheDocument();
-		expect(
-			screen.queryByText("Waiting for delegated thread…"),
-		).not.toBeInTheDocument();
 	});
 });

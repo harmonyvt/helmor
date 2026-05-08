@@ -1,10 +1,4 @@
-import {
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-	waitFor,
-} from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -20,11 +14,7 @@ const apiMocks = vi.hoisted(() => ({
 	createWorkspaceFromRepo: vi.fn(),
 	prepareWorkspaceFromRepo: vi.fn(),
 	finalizeWorkspaceFromRepo: vi.fn(),
-	listSessionDrafts: vi.fn(),
-}));
-
-const streamingMocks = vi.hoisted(() => ({
-	handleComposerSubmit: vi.fn(),
+	getWorkspacePrComments: vi.fn(),
 }));
 
 const createRuntime = vi.hoisted(() => ({
@@ -36,31 +26,6 @@ const createRuntime = vi.hoisted(() => ({
 vi.mock("./App.css", () => ({}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
 	open: vi.fn(),
-}));
-
-vi.mock("@/features/conversation/hooks/use-streaming", () => ({
-	useConversationStreaming: () => ({
-		activeSendError: null,
-		handleComposerSubmit: streamingMocks.handleComposerSubmit,
-		handleDeferredToolResponse: vi.fn(),
-		handleElicitationResponse: vi.fn(),
-		handlePermissionResponse: vi.fn(),
-		handleStopStream: vi.fn(),
-		handleSteerQueued: vi.fn(),
-		handleRemoveQueued: vi.fn(),
-		elicitationResponsePending: false,
-		isSending: false,
-		pendingElicitation: null,
-		pendingDeferredTool: null,
-		pendingPermissions: [],
-		restoreCustomTags: [],
-		restoreDraft: null,
-		restoreFiles: [],
-		restoreImages: [],
-		restoreNonce: 0,
-		activeFastPreludes: {},
-		busySessionIds: new Set(),
-	}),
 }));
 
 vi.mock("./lib/api", async (importOriginal) => {
@@ -80,40 +45,17 @@ vi.mock("./lib/api", async (importOriginal) => {
 		createWorkspaceFromRepo: apiMocks.createWorkspaceFromRepo,
 		prepareWorkspaceFromRepo: apiMocks.prepareWorkspaceFromRepo,
 		finalizeWorkspaceFromRepo: apiMocks.finalizeWorkspaceFromRepo,
-		listSessionDrafts: apiMocks.listSessionDrafts,
+		getWorkspacePrComments: apiMocks.getWorkspacePrComments,
 	};
 });
 
 import App from "./App";
-
-function commitComposerText(editor: HTMLElement, text: string) {
-	const paragraph = editor.querySelector("p");
-	if (!paragraph) {
-		throw new Error("Composer paragraph element not found.");
-	}
-	fireEvent.compositionStart(editor, { data: "" });
-	paragraph.textContent = text;
-	const textNode = paragraph.firstChild;
-	if (textNode) {
-		const selection = editor.ownerDocument.defaultView?.getSelection();
-		if (selection) {
-			const range = editor.ownerDocument.createRange();
-			range.setStart(textNode, text.length);
-			range.setEnd(textNode, text.length);
-			selection.removeAllRanges();
-			selection.addRange(range);
-		}
-	}
-	fireEvent.compositionUpdate(editor, { data: text });
-	fireEvent.compositionEnd(editor, { data: text });
-}
 
 describe("App create workspace flow", () => {
 	beforeEach(() => {
 		createRuntime.created = false;
 		createRuntime.workspaceId = null;
 		createRuntime.sessionId = null;
-		streamingMocks.handleComposerSubmit.mockReset();
 
 		apiMocks.loadWorkspaceGroups.mockReset();
 		apiMocks.loadArchivedWorkspaces.mockReset();
@@ -133,8 +75,6 @@ describe("App create workspace flow", () => {
 		});
 		apiMocks.listRepositories.mockReset();
 		apiMocks.createWorkspaceFromRepo.mockReset();
-		apiMocks.listSessionDrafts.mockReset();
-		apiMocks.listSessionDrafts.mockResolvedValue([]);
 
 		apiMocks.listRepositories.mockResolvedValue([
 			{
@@ -290,6 +230,12 @@ describe("App create workspace flow", () => {
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.prepareWorkspaceFromRepo.mockReset();
 		apiMocks.finalizeWorkspaceFromRepo.mockReset();
+		apiMocks.getWorkspacePrComments.mockReset();
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			comments: [],
+			prNumber: null,
+			prUrl: null,
+		});
 		apiMocks.prepareWorkspaceFromRepo.mockImplementation(async () => {
 			// Backend generates the ids now. Mirror by generating once per
 			// call and stashing for subsequent finalize + detail mocks.
@@ -334,153 +280,38 @@ describe("App create workspace flow", () => {
 		cleanup();
 	});
 
-	it("opens the start composer from the new workspace button", async () => {
-		const user = userEvent.setup({ pointerEventsCheck: 0 });
-		apiMocks.loadAgentModelSections.mockResolvedValue([
-			{
-				id: "claude",
-				label: "Claude",
-				options: [
-					{
-						id: "opus-1m",
-						provider: "claude",
-						label: "Opus 4.7 1M",
-						cliModel: "opus-1m",
-						effortLevels: ["low", "medium", "high"],
-					},
-				],
-			},
-		]);
+	it("creates a workspace from the repo picker and selects its first session", async () => {
+		const user = userEvent.setup();
 
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
-
-		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
-		await waitFor(() => {
-			expect(
-				screen.getByRole("button", { name: "New Workspace" }),
-			).toBeEnabled();
-		});
-		expect(apiMocks.prepareWorkspaceFromRepo).not.toHaveBeenCalled();
-	});
-
-	it("creates a workspace from an empty start composer without streaming", async () => {
-		const user = userEvent.setup({ pointerEventsCheck: 0 });
-		apiMocks.loadAgentModelSections.mockResolvedValue([
-			{
-				id: "claude",
-				label: "Claude",
-				options: [
-					{
-						id: "opus-1m",
-						provider: "claude",
-						label: "Opus 4.7 1M",
-						cliModel: "opus-1m",
-						effortLevels: ["low", "medium", "high"],
-					},
-				],
-			},
-		]);
-
-		render(<App />);
-		await screen.findByRole("main", { name: "Application shell" });
-
-		await user.click(screen.getByRole("button", { name: "New workspace" }));
-		const createButton = await screen.findByRole("button", {
-			name: "New Workspace",
-		});
-		await waitFor(() => {
-			expect(createButton).toBeEnabled();
-		});
-
-		await user.click(createButton);
+		await user.click(await screen.findByText("dosu-cli"));
 
 		await waitFor(() => {
-			expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
-				"repo-1",
-				"main",
-				"worktree",
-			);
+			expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith("repo-1");
+		});
+		await waitFor(() => {
+			expect(createRuntime.workspaceId).not.toBeNull();
 		});
 		await waitFor(() => {
 			expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 				createRuntime.workspaceId,
+				undefined,
 			);
 		});
 		await waitFor(() => {
-			expect(
-				screen.getByLabelText("Workspace panel drag region"),
-			).toBeInTheDocument();
+			expect(screen.getByText("Acamar")).toBeInTheDocument();
 		});
-		expect(streamingMocks.handleComposerSubmit).not.toHaveBeenCalled();
-	});
-
-	it("creates from the start composer and stays on the created workspace", async () => {
-		const user = userEvent.setup({ pointerEventsCheck: 0 });
-		apiMocks.loadAgentModelSections.mockResolvedValue([
-			{
-				id: "claude",
-				label: "Claude",
-				options: [
-					{
-						id: "opus-1m",
-						provider: "claude",
-						label: "Opus 4.7 1M",
-						cliModel: "opus-1m",
-						effortLevels: ["low", "medium", "high"],
-					},
-				],
-			},
-		]);
-
-		render(<App />);
-		await screen.findByRole("main", { name: "Application shell" });
-
-		await user.click(screen.getByRole("button", { name: "New workspace" }));
-		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
-		expect(
-			screen.queryByLabelText("Workspace panel drag region"),
-		).not.toBeInTheDocument();
-
-		commitComposerText(
-			screen.getByLabelText("Workspace input"),
-			"Build a dashboard",
+		// Thread messages for the newly created session are NOT fetched —
+		// use-controller pre-seeds an empty thread via the prepare response
+		// so the panel paints "nothing here yet" on the first frame without
+		// a cold placeholder. Loads from unrelated sessions (e.g. the
+		// previously selected workspace) are fine; this test only cares
+		// about the new one.
+		expect(apiMocks.loadSessionThreadMessages).not.toHaveBeenCalledWith(
+			createRuntime.sessionId,
 		);
-		await waitFor(() => {
-			expect(screen.getByRole("button", { name: "Start now" })).toBeEnabled();
-		});
-		await user.click(screen.getByRole("button", { name: "Start now" }));
-
-		await waitFor(() => {
-			expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
-				"repo-1",
-				"main",
-				"worktree",
-			);
-		});
-		await waitFor(() => {
-			expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
-				createRuntime.workspaceId,
-			);
-		});
-		await waitFor(() => {
-			expect(apiMocks.loadWorkspaceDetail).toHaveBeenCalledWith(
-				createRuntime.workspaceId,
-			);
-			expect(apiMocks.loadWorkspaceSessions).toHaveBeenCalledWith(
-				createRuntime.workspaceId,
-			);
-		});
-		await waitFor(() => {
-			expect(
-				screen.getByLabelText("Workspace panel drag region"),
-			).toBeInTheDocument();
-			expect(
-				screen.queryByRole("button", { name: "Start now" }),
-			).not.toBeInTheDocument();
-		});
-		expect(streamingMocks.handleComposerSubmit).toHaveBeenCalled();
 	});
 });

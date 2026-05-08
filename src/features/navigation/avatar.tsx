@@ -1,5 +1,10 @@
 import { memo, useEffect, useState } from "react";
-import { Avatar, AvatarBadge, AvatarImage } from "@/components/ui/avatar";
+import {
+	Avatar,
+	AvatarBadge,
+	AvatarFallback,
+	AvatarImage,
+} from "@/components/ui/avatar";
 import { ShineBorder } from "@/components/ui/shine-border";
 import { cn } from "@/lib/utils";
 
@@ -63,18 +68,15 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 	useEffect(() => {
 		setHasImage(Boolean(src));
 	}, [src]);
-	const showFallback = !src || !hasImage;
 
 	return (
 		<Avatar
-			key={src ?? "fallback"}
 			aria-hidden="true"
 			data-slot="workspace-avatar"
 			data-fallback={fallback}
 			className={cn(
 				"size-[16px] shrink-0 rounded-[5px] border-0 bg-transparent outline-none",
 				className,
-				showFallback && "rounded-full",
 			)}
 		>
 			{src ? (
@@ -89,17 +91,16 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 					}}
 				/>
 			) : null}
-			{showFallback ? (
-				<span
-					data-slot="avatar-fallback"
+			{!hasImage ? (
+				<AvatarFallback
+					delayMs={0}
 					className={cn(
-						"grid size-full place-items-center bg-muted text-center text-[7px] font-semibold leading-none uppercase tracking-[0.02em] text-muted-foreground",
+						"bg-muted text-[7px] font-semibold uppercase tracking-[0.02em] text-muted-foreground",
 						fallbackClassName,
-						"rounded-full",
 					)}
 				>
-					<span className="translate-y-px">{fallback}</span>
-				</span>
+					{fallback}
+				</AvatarFallback>
 			) : null}
 			{isRunning ? (
 				<ShineBorder

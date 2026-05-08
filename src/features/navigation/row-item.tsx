@@ -4,15 +4,13 @@ import {
 	Circle,
 	FolderOpen,
 	GitBranch,
-	Laptop,
 	LoaderCircle,
 	Pin,
 	PinOff,
 	RotateCcw,
-	Split,
 	Trash2,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,6 +24,7 @@ import {
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { HyperText } from "@/components/ui/hyper-text";
+import { ShinyFlash } from "@/components/ui/shiny-flash";
 import {
 	Tooltip,
 	TooltipContent,
@@ -40,7 +39,6 @@ import { recordSidebarRowRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import { getWorkspaceBranchTone } from "@/lib/workspace-helpers";
 import { WorkspaceAvatar } from "./avatar";
-import { MoveToWorktreeDialog } from "./move-to-worktree-dialog";
 import {
 	branchToneClasses,
 	GroupIcon,
@@ -69,11 +67,14 @@ export type WorkspaceRowItemProps = {
 	selected: boolean;
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
+	/** When true, displays the PR number extracted from `row.prUrl` as a badge. */
+	showPrNumber?: boolean;
+	/** When true, the row title plays the shiny-flash animation once. */
+	isFlashing?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
-	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onOpenInFinder?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
@@ -85,6 +86,12 @@ export type WorkspaceRowItemProps = {
 	restoringWorkspaceId?: string | null;
 	workspaceActionsDisabled?: boolean;
 };
+
+function extractPrNumber(prUrl: string | null | undefined): number | null {
+	if (!prUrl) return null;
+	const match = prUrl.match(/\/(\d+)\/?$/);
+	return match ? parseInt(match[1], 10) : null;
+}
 
 /**
  * Subscribes to this workspace's `run`-script status via the module-level
@@ -112,11 +119,12 @@ export const WorkspaceRowItem = memo(
 		selected,
 		isSending,
 		isInteractionRequired,
+		showPrNumber,
+		isFlashing,
 		rowRef,
 		onSelect,
 		onPrefetch,
 		onArchiveWorkspace,
-		onMoveLocalToWorktree,
 		onMarkWorkspaceUnread: _onMarkWorkspaceUnread,
 		onOpenInFinder,
 		onRestoreWorkspace,
@@ -130,30 +138,8 @@ export const WorkspaceRowItem = memo(
 	}: WorkspaceRowItemProps) {
 		useEffect(() => {
 			recordSidebarRowRender(row.id);
-		}, [row.id]);
+		});
 		const isRunScriptRunning = useIsRunScriptRunning(row.id);
-
-		// Hover-intent debounce: skip prefetch when the mouse just sweeps over
-		// the row. ~120ms is short enough that the data is still warm by the
-		// time HoverCard's 400ms openDelay elapses, but long enough to absorb
-		// fast cursor movement across a long sidebar.
-		const prefetchTimerRef = useRef<number | null>(null);
-		const cancelPendingPrefetch = useCallback(() => {
-			if (prefetchTimerRef.current !== null) {
-				window.clearTimeout(prefetchTimerRef.current);
-				prefetchTimerRef.current = null;
-			}
-		}, []);
-		const handlePointerEnter = useCallback(() => {
-			cancelPendingPrefetch();
-			const id = row.id;
-			prefetchTimerRef.current = window.setTimeout(() => {
-				prefetchTimerRef.current = null;
-				onPrefetch?.(id);
-			}, 120);
-		}, [cancelPendingPrefetch, onPrefetch, row.id]);
-		useEffect(() => cancelPendingPrefetch, [cancelPendingPrefetch]);
-		const [moveDialogOpen, setMoveDialogOpen] = useState(false);
 		const actionLabel =
 			row.state === "archived" ? "Restore workspace" : "Archive workspace";
 		const isArchiving = archivingWorkspaceIds?.has(row.id) ?? false;
@@ -199,15 +185,11 @@ export const WorkspaceRowItem = memo(
 			? "bg-yellow-500"
 			: "bg-chart-2";
 		const showStatusDot = statusDotLabel !== null;
-		// Local workspaces don't carry a meaningful per-row branch label
-		// (multiple locals share the repo + a single HEAD), so always
-		// fall back to the auto-titled session title (`row.title`).
-		const displayTitle =
-			row.mode === "local"
-				? row.title
-				: row.branch
-					? humanizeBranch(row.branch)
-					: row.title;
+		const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
+		const prNumber = showPrNumber ? extractPrNumber(row.prUrl) : null;
+		const statusTone =
+			STATUS_OPTIONS.find((o) => o.value === effectiveStatus)?.tone ??
+			"backlog";
 
 		const rowBody = (
 			<div
@@ -219,8 +201,9 @@ export const WorkspaceRowItem = memo(
 				data-has-unread={row.hasUnread ? "true" : "false"}
 				data-busy={isBusy ? "true" : undefined}
 				style={rowFadeStyle}
-				onPointerEnter={handlePointerEnter}
-				onPointerLeave={cancelPendingPrefetch}
+				onMouseEnter={() => {
+					onPrefetch?.(row.id);
+				}}
 				onFocus={() => {
 					onPrefetch?.(row.id);
 				}}
@@ -253,12 +236,9 @@ export const WorkspaceRowItem = memo(
 					<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
 						{isSending && !isInteractionRequired ? (
 							<HelmorThinkingIndicator size={13} />
-						) : row.mode === "local" ? (
-							<Laptop
-								className={cn(
-									"size-[13px] shrink-0",
-									branchToneClasses[branchTone],
-								)}
+						) : row.state === "initializing" ? (
+							<LoaderCircle
+								className="size-[13px] shrink-0 animate-spin text-muted-foreground"
 								strokeWidth={1.9}
 							/>
 						) : (
@@ -285,8 +265,23 @@ export const WorkspaceRowItem = memo(
 										: "font-medium",
 							)}
 						>
-							<HyperText text={displayTitle} className="inline" />
+							<ShinyFlash active={isFlashing ?? false}>
+								<HyperText text={displayTitle} className="inline" />
+							</ShinyFlash>
 						</span>
+					</div>
+					<div
+						className={cn(
+							"shrink-0 flex items-center gap-1 group-hover/row:opacity-0 transition-opacity",
+							isBusy && "opacity-0",
+						)}
+					>
+						<GroupIcon tone={statusTone} />
+						{prNumber !== null && (
+							<span className="rounded px-1 py-0 text-[10px] tabular-nums font-medium text-foreground/40">
+								#{prNumber}
+							</span>
+						)}
 					</div>
 				</div>
 
@@ -294,7 +289,7 @@ export const WorkspaceRowItem = memo(
 					<span
 						className={cn(
 							"pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 pr-2.5",
-							"opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100",
+							"opacity-0 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100",
 							isBusy && "pointer-events-auto opacity-100",
 						)}
 					>
@@ -369,109 +364,84 @@ export const WorkspaceRowItem = memo(
 		);
 
 		return (
-			<>
-				<ContextMenu>
-					<WorkspaceHoverCard row={row} isSending={isSending}>
-						<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
-					</WorkspaceHoverCard>
-					<ContextMenuContent className="min-w-48">
-						<ContextMenuItem onClick={() => onTogglePin?.(row.id, isPinned)}>
-							{isPinned ? (
-								<PinOff className="size-4 shrink-0" strokeWidth={1.6} />
-							) : (
-								<Pin className="size-4 shrink-0" strokeWidth={1.6} />
-							)}
-							<span>{isPinned ? "Unpin" : "Pin"}</span>
-						</ContextMenuItem>
-
-						<ContextMenuSub>
-							<ContextMenuSubTrigger>
-								<Circle className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Set status</span>
-							</ContextMenuSubTrigger>
-							<ContextMenuSubContent>
-								{STATUS_OPTIONS.map((opt) => (
-									<ContextMenuItem
-										key={opt.value}
-										onClick={() => onSetWorkspaceStatus?.(row.id, opt.value)}
-									>
-										<GroupIcon tone={opt.tone} />
-										<span className="flex-1">{opt.label}</span>
-										{effectiveStatus === opt.value ? (
-											<span className="ml-auto text-foreground">✓</span>
-										) : null}
-									</ContextMenuItem>
-								))}
-							</ContextMenuSubContent>
-						</ContextMenuSub>
-
-						{_onMarkWorkspaceUnread ? (
-							<ContextMenuItem
-								disabled={
-									row.hasUnread || isBusy || Boolean(workspaceActionsDisabled)
-								}
-								onClick={() => _onMarkWorkspaceUnread(row.id)}
-							>
-								<Circle className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Mark as unread</span>
-							</ContextMenuItem>
-						) : null}
-
-						{onOpenInFinder && !isRestoreAction ? (
-							<ContextMenuItem
-								disabled={isBusy || Boolean(workspaceActionsDisabled)}
-								onClick={() => onOpenInFinder(row.id)}
-							>
-								<FolderOpen className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Open in Finder</span>
-							</ContextMenuItem>
-						) : null}
-
-						{row.mode === "local" &&
-						onMoveLocalToWorktree &&
-						!isRestoreAction ? (
-							<ContextMenuItem
-								disabled={isBusy || Boolean(workspaceActionsDisabled)}
-								onClick={() => setMoveDialogOpen(true)}
-							>
-								<Split
-									className="size-4 shrink-0 rotate-90"
-									strokeWidth={1.6}
-								/>
-								<span>Move into a new worktree</span>
-							</ContextMenuItem>
-						) : null}
-
-						<ContextMenuSeparator />
-
-						{isRestoreAction ? (
-							<ContextMenuItem
-								disabled={isBusy || workspaceActionsDisabled}
-								onClick={() => onRestoreWorkspace?.(row.id)}
-							>
-								<RotateCcw className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Restore</span>
-							</ContextMenuItem>
+			<ContextMenu>
+				<WorkspaceHoverCard row={row} isSending={isSending}>
+					<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
+				</WorkspaceHoverCard>
+				<ContextMenuContent className="min-w-48">
+					<ContextMenuItem onClick={() => onTogglePin?.(row.id, isPinned)}>
+						{isPinned ? (
+							<PinOff className="size-4 shrink-0" strokeWidth={1.6} />
 						) : (
-							<ContextMenuItem
-								disabled={isBusy || workspaceActionsDisabled}
-								onClick={() => onArchiveWorkspace?.(row.id)}
-							>
-								<Archive className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Archive</span>
-							</ContextMenuItem>
+							<Pin className="size-4 shrink-0" strokeWidth={1.6} />
 						)}
-					</ContextMenuContent>
-				</ContextMenu>
-				{onMoveLocalToWorktree ? (
-					<MoveToWorktreeDialog
-						open={moveDialogOpen}
-						onOpenChange={setMoveDialogOpen}
-						workspaceTitle={displayTitle}
-						onConfirm={() => onMoveLocalToWorktree(row.id)}
-					/>
-				) : null}
-			</>
+						<span>{isPinned ? "Unpin" : "Pin"}</span>
+					</ContextMenuItem>
+
+					<ContextMenuSub>
+						<ContextMenuSubTrigger>
+							<Circle className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Set status</span>
+						</ContextMenuSubTrigger>
+						<ContextMenuSubContent>
+							{STATUS_OPTIONS.map((opt) => (
+								<ContextMenuItem
+									key={opt.value}
+									onClick={() => onSetWorkspaceStatus?.(row.id, opt.value)}
+								>
+									<GroupIcon tone={opt.tone} />
+									<span className="flex-1">{opt.label}</span>
+									{effectiveStatus === opt.value ? (
+										<span className="ml-auto text-foreground">✓</span>
+									) : null}
+								</ContextMenuItem>
+							))}
+						</ContextMenuSubContent>
+					</ContextMenuSub>
+
+					{_onMarkWorkspaceUnread ? (
+						<ContextMenuItem
+							disabled={
+								row.hasUnread || isBusy || Boolean(workspaceActionsDisabled)
+							}
+							onClick={() => _onMarkWorkspaceUnread(row.id)}
+						>
+							<Circle className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Mark as unread</span>
+						</ContextMenuItem>
+					) : null}
+
+					{onOpenInFinder && !isRestoreAction ? (
+						<ContextMenuItem
+							disabled={isBusy || Boolean(workspaceActionsDisabled)}
+							onClick={() => onOpenInFinder(row.id)}
+						>
+							<FolderOpen className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Open in Finder</span>
+						</ContextMenuItem>
+					) : null}
+
+					<ContextMenuSeparator />
+
+					{isRestoreAction ? (
+						<ContextMenuItem
+							disabled={isBusy || workspaceActionsDisabled}
+							onClick={() => onRestoreWorkspace?.(row.id)}
+						>
+							<RotateCcw className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Restore</span>
+						</ContextMenuItem>
+					) : (
+						<ContextMenuItem
+							disabled={isBusy || workspaceActionsDisabled}
+							onClick={() => onArchiveWorkspace?.(row.id)}
+						>
+							<Archive className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Archive</span>
+						</ContextMenuItem>
+					)}
+				</ContextMenuContent>
+			</ContextMenu>
 		);
 	},
 	function areWorkspaceRowItemPropsEqual(
@@ -483,6 +453,7 @@ export const WorkspaceRowItem = memo(
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
 			previous.isInteractionRequired === next.isInteractionRequired &&
+			previous.isFlashing === next.isFlashing &&
 			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&

@@ -117,7 +117,6 @@ export function useShellPanels() {
 
 	const handleResizeStart = useCallback(
 		(target: ResizeTarget) => (event: MouseEvent<HTMLDivElement>) => {
-			if (event.button !== 0) return;
 			event.preventDefault();
 			setResizeState({
 				pointerX: event.clientX,

@@ -2,7 +2,6 @@ import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,
 	AlertTriangle,
-	Goal,
 	Info,
 	MessageSquareText,
 } from "lucide-react";
@@ -18,6 +17,7 @@ import type {
 	SystemNoticePart,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useCompactThread } from "../compact-thread-context";
 import { CopyMessageButton } from "./copy-message";
 import type { RenderedMessage } from "./shared";
 import {
@@ -101,18 +101,6 @@ function SystemText({ text }: { text: string }) {
 			</span>
 		);
 	}
-	// Codex `/goal` lifecycle markers — narrated by
-	// `agents::streaming::codex_goal::goal_transition_label` on the
-	// backend ("Goal set" / "Goal paused" / etc.). Prefix-detect them
-	// here so they share an icon, same shape as the Error case above.
-	if (text.startsWith("Goal ")) {
-		return (
-			<span className="inline-flex items-center gap-1">
-				<Goal className="size-3 shrink-0" strokeWidth={1.8} />
-				{text}
-			</span>
-		);
-	}
 	return <span>{text}</span>;
 }
 
@@ -136,10 +124,16 @@ function MessageTimestamp({ createdAt }: { createdAt?: string }) {
 
 // Only the turn-end row (Claude `result` / Codex `turn.completed`) gets a
 // timestamp — the adapter tags its text part id with `:turn-result`.
+function isTurnResultPart(part: MessagePart) {
+	return isTextPart(part) && part.id.endsWith(":turn-result");
+}
+
 function shouldShowTimestamp(parts: MessagePart[]) {
-	return parts.some(
-		(part) => isTextPart(part) && part.id.endsWith(":turn-result"),
-	);
+	return parts.some(isTurnResultPart);
+}
+
+function isOnlyTurnResult(parts: MessagePart[]) {
+	return parts.length > 0 && parts.every(isTurnResultPart);
 }
 
 export function ChatSystemMessage({
@@ -150,10 +144,15 @@ export function ChatSystemMessage({
 	previousAssistantMessage?: RenderedMessage | null;
 }) {
 	const parts = message.content as MessagePart[];
+	const compact = useCompactThread();
 	const copyTarget =
 		previousAssistantMessage?.role === "assistant"
 			? previousAssistantMessage
 			: message;
+
+	if (compact && isOnlyTurnResult(parts)) {
+		return null;
+	}
 
 	return (
 		<div

@@ -1,5 +1,4 @@
 import { memo, type ReactNode, useEffect } from "react";
-import { SourceDetailView } from "@/features/source-detail";
 import type {
 	AgentProvider,
 	ChangeRequestInfo,
@@ -7,8 +6,8 @@ import type {
 	WorkspaceSessionSummary,
 } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
-import type { ContextCard } from "@/lib/sources/types";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
+import { CompactThreadContext } from "./compact-thread-context";
 import { WorkspacePanelHeader } from "./header";
 import { EmptyState, preloadStreamdown } from "./message-components";
 import {
@@ -36,13 +35,9 @@ type WorkspacePanelProps = {
 	refreshingWorkspace?: boolean;
 	refreshingSession?: boolean;
 	sending?: boolean;
-	busySessionIds?: Set<string>;
+	sendingSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
-	contextPreviewCard?: ContextCard | null;
-	contextPreviewActive?: boolean;
 	onSelectSession?: (sessionId: string) => void;
-	onSelectContextPreview?: () => void;
-	onCloseContextPreview?: () => void;
 	onPrefetchSession?: (sessionId: string) => void;
 	onSessionsChanged?: () => void;
 	onSessionRenamed?: (sessionId: string, title: string) => void;
@@ -53,8 +48,8 @@ type WorkspacePanelProps = {
 	newSessionShortcut?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
-	onFocusChildSession?: (sessionId: string) => void;
-	activeSessionParentId?: string | null;
+	/** Renders a compact single-row header with no branch or session tabs. */
+	compact?: boolean;
 };
 
 export const WorkspacePanel = memo(function WorkspacePanel({
@@ -69,13 +64,9 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	refreshingWorkspace: _refreshingWorkspace = false,
 	refreshingSession: _refreshingSession = false,
 	sending = false,
-	busySessionIds,
+	sendingSessionIds,
 	interactionRequiredSessionIds,
-	contextPreviewCard = null,
-	contextPreviewActive = false,
 	onSelectSession,
-	onSelectContextPreview,
-	onCloseContextPreview,
 	onPrefetchSession,
 	onSessionsChanged,
 	onSessionRenamed,
@@ -86,8 +77,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	newSessionShortcut,
 	missingScriptTypes = [],
 	onInitializeScript,
-	onFocusChildSession,
-	activeSessionParentId,
+	compact = false,
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionId) ?? null;
@@ -132,50 +122,49 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					selectedSessionId={selectedSessionId}
 					sessionDisplayProviders={sessionDisplayProviders}
 					sending={sending}
-					busySessionIds={busySessionIds}
+					sendingSessionIds={sendingSessionIds}
 					interactionRequiredSessionIds={interactionRequiredSessionIds}
 					loadingWorkspace={loadingWorkspace}
-					activeSessionParentId={activeSessionParentId}
-					contextPreviewCard={contextPreviewCard}
-					contextPreviewActive={contextPreviewActive}
 					headerActions={headerActions}
 					headerLeading={headerLeading}
 					onSelectSession={onSelectSession}
-					onSelectContextPreview={onSelectContextPreview}
-					onCloseContextPreview={onCloseContextPreview}
 					onPrefetchSession={onPrefetchSession}
 					onSessionsChanged={onSessionsChanged}
 					onSessionRenamed={onSessionRenamed}
 					onWorkspaceChanged={onWorkspaceChanged}
 					onRequestCloseSession={onRequestCloseSession}
 					newSessionShortcut={newSessionShortcut}
+					compact={compact}
 				/>
 
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-					{contextPreviewActive && contextPreviewCard ? (
-						<div className="min-h-0 flex-1 overflow-hidden px-0 pt-4 pb-3">
-							<SourceDetailView card={contextPreviewCard} />
-						</div>
-					) : activePane?.hasLoaded ? (
-						<ActiveThreadViewport
-							hasSession={!!selectedSession}
-							pane={activePane}
-							missingScriptTypes={missingScriptTypes}
-							onInitializeScript={onInitializeScript}
-							onFocusChildSession={onFocusChildSession}
-						/>
-					) : loadingWorkspace || loadingSession ? (
-						<ConversationColdPlaceholder />
-					) : (
-						<div className="flex min-h-full flex-1 items-center justify-center px-8">
-							<EmptyState
-								workspaceState={workspace?.state ?? null}
+					<CompactThreadContext.Provider value={compact}>
+						{activePane?.hasLoaded ? (
+							<ActiveThreadViewport
 								hasSession={!!selectedSession}
-								missingScriptTypes={missingScriptTypes}
-								onInitializeScript={onInitializeScript}
+								pane={activePane}
+								workspaceBranch={workspace?.branch ?? null}
+								workspacePrTitle={workspace?.prTitle ?? null}
+								workspaceState={workspace?.state ?? null}
+								missingScriptTypes={compact ? [] : missingScriptTypes}
+								onInitializeScript={compact ? undefined : onInitializeScript}
+								compact={compact}
 							/>
-						</div>
-					)}
+						) : loadingWorkspace || loadingSession ? (
+							<ConversationColdPlaceholder />
+						) : (
+							<div className="flex min-h-full flex-1 items-center justify-center px-8">
+								<EmptyState
+									workspaceState={workspace?.state ?? null}
+									workspaceBranch={workspace?.branch ?? null}
+									workspacePrTitle={workspace?.prTitle ?? null}
+									hasSession={!!selectedSession}
+									missingScriptTypes={compact ? [] : missingScriptTypes}
+									onInitializeScript={compact ? undefined : onInitializeScript}
+								/>
+							</div>
+						)}
+					</CompactThreadContext.Provider>
 				</div>
 			</div>
 		</HelmorProfiler>

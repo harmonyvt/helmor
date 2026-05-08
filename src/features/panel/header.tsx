@@ -1,17 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	AlertCircle,
-	ArrowLeft,
 	ArrowRight,
-	Bot,
 	Check,
 	ChevronDown,
 	Clock3,
 	Copy,
 	GitBranch,
 	History,
-	Laptop,
-	Layers,
 	Pencil,
 	Plus,
 	RotateCcw,
@@ -19,25 +15,15 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import {
-	AccountHoverCardContent,
-	accountInfoFromForgeAccount,
-} from "@/components/account-hover-card-content";
 import { BranchPickerPopover } from "@/components/branch-picker";
-import { CachedAvatar } from "@/components/cached-avatar";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
-import { ClaudeIcon, CursorIcon, OpenAIIcon } from "@/components/icons";
+import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-	HoverCard,
-	HoverCardContent,
-	HoverCardTrigger,
-} from "@/components/ui/hover-card";
 import { HyperText } from "@/components/ui/hyper-text";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -63,24 +49,15 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
-import { extractError } from "@/lib/errors";
-import { initialsFor } from "@/lib/initials";
-import {
-	helmorQueryKeys,
-	workspaceAccountProfileQueryOptions,
-	workspaceForgeActionStatusQueryOptions,
-} from "@/lib/query-client";
-import type { ContextCard } from "@/lib/sources/types";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import {
 	getWorkspaceBranchTone,
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
-import { normalizeBranchRenameInput } from "./branch-rename";
 import { seedNewSessionInCache } from "./session-cache";
 import { closeWorkspaceSession } from "./session-close";
-import { isSessionRunningStatus } from "./session-running";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
 type WorkspacePanelHeaderProps = {
@@ -88,25 +65,23 @@ type WorkspacePanelHeaderProps = {
 	changeRequest?: ChangeRequestInfo | null;
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
-	activeSessionParentId?: string | null;
 	sessionDisplayProviders?: Record<string, AgentProvider>;
 	sending: boolean;
-	busySessionIds?: Set<string>;
+	sendingSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
 	loadingWorkspace: boolean;
-	contextPreviewCard?: ContextCard | null;
-	contextPreviewActive?: boolean;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
 	onSelectSession?: (sessionId: string) => void;
-	onSelectContextPreview?: () => void;
-	onCloseContextPreview?: () => void;
 	onPrefetchSession?: (sessionId: string) => void;
 	onSessionsChanged?: () => void;
 	onSessionRenamed?: (sessionId: string, title: string) => void;
 	onWorkspaceChanged?: () => void;
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
 	newSessionShortcut?: string | null;
+	/** When true renders a minimal single-row header with no branch info or
+	 *  session tabs — suited for narrow embedded panels like the Pi surface. */
+	compact?: boolean;
 };
 
 export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
@@ -114,35 +89,27 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	changeRequest = null,
 	sessions,
 	selectedSessionId,
-	activeSessionParentId = null,
 	sessionDisplayProviders,
 	sending,
-	busySessionIds,
+	sendingSessionIds,
 	interactionRequiredSessionIds,
 	loadingWorkspace,
-	contextPreviewCard = null,
-	contextPreviewActive = false,
 	headerActions,
 	headerLeading,
 	onSelectSession,
-	onSelectContextPreview,
-	onCloseContextPreview,
 	onPrefetchSession,
 	onSessionsChanged,
 	onSessionRenamed,
 	onWorkspaceChanged,
 	onRequestCloseSession,
 	newSessionShortcut,
+	compact = false,
 }: WorkspacePanelHeaderProps) {
 	const branchTone = getWorkspaceBranchTone({
 		workspaceState: workspace?.state,
 		status: workspace?.status,
 		changeRequest,
 	});
-	const contextTabValue = "__context_preview__";
-	const tabsValue = contextPreviewActive
-		? contextTabValue
-		: (selectedSessionId ?? sessions[0]?.id);
 	const [showHistory, setShowHistory] = useState(false);
 	const [hiddenSessions, setHiddenSessions] = useState<
 		WorkspaceSessionSummary[]
@@ -158,35 +125,12 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	});
 	const remoteBranches = branchesQuery.data ?? [];
 	const loadingBranches = branchesQuery.isFetching;
-	const accountProfileQuery = useQuery(
-		workspaceAccountProfileQueryOptions(
-			workspace?.forgeLogin ? (workspace?.id ?? null) : null,
-		),
-	);
-	const accountProfile = accountProfileQuery.data ?? null;
-	const accountLogin = accountProfile?.login ?? workspace?.forgeLogin ?? null;
-	const accountDisplayName = accountProfile?.name?.trim() || accountLogin || "";
-	// Mirror the inspector's Connect-CTA condition: when the workspace is
-	// in `unauthenticated` state, the bound `forgeLogin` no longer has
-	// access (token revoked / removed account / etc.). Suppress the
-	// avatar in that case so it doesn't masquerade as another account
-	// while the right-side panel is asking the user to reconnect.
-	const forgeStatusQuery = useQuery({
-		...workspaceForgeActionStatusQueryOptions(workspace?.id ?? ""),
-		enabled: !!workspace?.id,
-	});
-	const forgeNeedsConnect =
-		forgeStatusQuery.data?.remoteState === "unauthenticated";
 	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 	const [editingTitle, setEditingTitle] = useState("");
 	const [editingBranch, setEditingBranch] = useState<string | null>(null);
 	const [branchCopied, setBranchCopied] = useState(false);
 	const tabsScrollRef = useRef<HTMLDivElement>(null);
 	const [hasRightOverflow, setHasRightOverflow] = useState(false);
-	const selectedSession =
-		sessions.find((s) => s.id === selectedSessionId) ?? null;
-	const selectedSessionParentId =
-		selectedSession?.parentSessionId ?? activeSessionParentId ?? null;
 
 	const updateOverflow = useCallback(() => {
 		const el = tabsScrollRef.current;
@@ -214,8 +158,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		if (editingBranch === null || !workspace) {
 			return;
 		}
-		const normalized = normalizeBranchRenameInput(editingBranch);
-		if (normalized && normalized !== workspace.branch) {
+		const trimmed = editingBranch.trim();
+		if (trimmed && trimmed !== workspace.branch) {
 			const detailKey = helmorQueryKeys.workspaceDetail(workspace.id);
 			const previous = queryClient.getQueryData<WorkspaceDetail | null>(
 				detailKey,
@@ -223,18 +167,21 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			if (previous) {
 				queryClient.setQueryData<WorkspaceDetail | null>(detailKey, {
 					...previous,
-					branch: normalized,
+					branch: trimmed,
 				});
 			}
 			try {
-				await renameWorkspaceBranch(workspace.id, normalized);
+				await renameWorkspaceBranch(workspace.id, trimmed);
 				onWorkspaceChanged?.();
 			} catch (error: unknown) {
 				if (previous) {
 					queryClient.setQueryData<WorkspaceDetail | null>(detailKey, previous);
 				}
-				const { message } = extractError(error, "Unable to rename branch.");
-				pushToast(message, "Branch rename failed", "destructive");
+				pushToast(
+					error instanceof Error ? error.message : String(error),
+					"Branch rename failed",
+					"destructive",
+				);
 			}
 		}
 		setEditingBranch(null);
@@ -396,6 +343,135 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		event.stopPropagation();
 	}, []);
 
+	if (compact) {
+		return (
+			<header className="relative z-20">
+				{/* Single compact row: scrollable tabs + new-session + close */}
+				<div className="flex items-center gap-0.5 border-b border-border/40 px-2 pb-1">
+					<div className="group/tabs-scroll relative min-w-0 flex-1">
+						{hasRightOverflow && (
+							<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-gradient-to-l from-background to-transparent" />
+						)}
+						<div
+							ref={tabsScrollRef}
+							onScroll={updateOverflow}
+							className="scrollbar-none min-w-0 flex-1 overflow-x-auto"
+						>
+							{loadingWorkspace ? (
+								<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+									<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
+									Loading
+								</div>
+							) : sessions.length > 0 ? (
+								<Tabs
+									value={selectedSessionId ?? sessions[0]?.id}
+									onValueChange={(value) => onSelectSession?.(value)}
+									className="min-w-max gap-0"
+								>
+									<TabsList
+										aria-label="Sessions"
+										className="inline-flex w-max min-w-full justify-start self-start"
+									>
+										{sessions.map((session) => {
+											const selected = session.id === selectedSessionId;
+											const isActivelySending = sendingSessionIds
+												? sendingSessionIds.has(session.id)
+												: selected && sending;
+											const isInteractionRequired =
+												interactionRequiredSessionIds?.has(session.id) ?? false;
+											const isActive =
+												isActivelySending && !isInteractionRequired;
+											const hasUnread = session.unreadCount > 0;
+											const hasStatusDot =
+												isInteractionRequired || (!selected && hasUnread);
+
+											return (
+												<TabsTrigger
+													key={session.id}
+													value={session.id}
+													onMouseEnter={() => onPrefetchSession?.(session.id)}
+													onFocus={() => onPrefetchSession?.(session.id)}
+													className="group/tab relative h-full w-auto min-w-[4rem] max-w-[9rem] shrink-0 flex-none justify-start gap-1 overflow-hidden pr-4 text-[12px] text-muted-foreground data-[state=active]:text-foreground"
+												>
+													<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1">
+														<SessionProviderIcon
+															agentType={
+																sessionDisplayProviders?.[session.id] ??
+																session.agentType
+															}
+															active={isActive}
+														/>
+														<span
+															className={cn(
+																"truncate font-medium",
+																hasStatusDot && !selected
+																	? "text-foreground"
+																	: undefined,
+															)}
+														>
+															{displaySessionTitle(session)}
+														</span>
+														{hasStatusDot ? (
+															<span
+																aria-label={
+																	isInteractionRequired
+																		? "Interaction required"
+																		: "Unread session"
+																}
+																className={cn(
+																	"size-1.5 shrink-0 rounded-full",
+																	isInteractionRequired
+																		? "bg-yellow-500"
+																		: "bg-chart-2",
+																)}
+															/>
+														) : null}
+													</span>
+													<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center pr-0.5 group-hover/tab:pointer-events-auto group-hover/tab:visible">
+														<span
+															role="button"
+															aria-label="Close session"
+															onPointerDown={stopTabActionPointerDown}
+															onClick={(event) =>
+																handleHideSession(session.id, event)
+															}
+															className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+														>
+															<X className="size-3" strokeWidth={2} />
+														</span>
+													</span>
+												</TabsTrigger>
+											);
+										})}
+									</TabsList>
+								</Tabs>
+							) : (
+								<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+									<AlertCircle className="size-3" strokeWidth={1.8} />
+									No sessions
+								</div>
+							)}
+						</div>
+					</div>
+
+					<Button
+						aria-label="New session"
+						onClick={handleCreateSession}
+						variant="ghost"
+						size="icon-sm"
+						className="ml-0.5 shrink-0 cursor-pointer text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+					>
+						<Plus className="size-3.5" strokeWidth={1.8} />
+					</Button>
+
+					{headerActions ? (
+						<div className="flex shrink-0 items-center">{headerActions}</div>
+					) : null}
+				</div>
+			</header>
+		);
+	}
+
 	return (
 		<header className="relative z-20">
 			<div
@@ -403,60 +479,16 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				className="flex h-9 items-center justify-between gap-3 px-[18px]"
 				data-tauri-drag-region
 			>
-				<div
-					data-tauri-drag-region
-					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]"
-				>
+				<div className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]">
 					{headerLeading}
-					<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
-						{(() => {
-							// Avatar always wins when we have a URL AND the
-							// workspace's bound account is still valid (mirrors the
-							// right-side Connect CTA). Otherwise fall back to a
-							// mode-appropriate glyph: Laptop for local, GitBranch
-							// for worktree.
-							const FallbackIcon =
-								workspace?.mode === "local" ? Laptop : GitBranch;
-							const showAvatar =
-								accountProfile?.avatarUrl && !forgeNeedsConnect;
-							const hoverInfo = showAvatar
-								? accountInfoFromForgeAccount(accountProfile)
-								: null;
-							if (!showAvatar || !hoverInfo) {
-								return (
-									<FallbackIcon
-										className={cn(
-											"size-3.5 shrink-0",
-											getBranchToneClassName(branchTone),
-										)}
-										strokeWidth={1.9}
-									/>
-								);
-							}
-							return (
-								<HoverCard openDelay={120} closeDelay={80}>
-									<HoverCardTrigger asChild>
-										<span className="inline-flex">
-											<CachedAvatar
-												className="size-4 shrink-0 cursor-default"
-												src={accountProfile?.avatarUrl}
-												alt={accountLogin ?? ""}
-												fallback={initialsFor(accountDisplayName)}
-												fallbackClassName="bg-muted text-[8px] font-semibold uppercase text-muted-foreground"
-											/>
-										</span>
-									</HoverCardTrigger>
-									<HoverCardContent
-										side="bottom"
-										align="start"
-										sideOffset={8}
-										className="w-auto max-w-[260px] p-3"
-									>
-										<AccountHoverCardContent account={hoverInfo} />
-									</HoverCardContent>
-								</HoverCard>
-							);
-						})()}
+					<span className="group/branch relative inline-flex items-center gap-1 overflow-hidden px-1 py-0.5 font-medium text-foreground">
+						<GitBranch
+							className={cn(
+								"size-3.5 shrink-0",
+								getBranchToneClassName(branchTone),
+							)}
+							strokeWidth={1.9}
+						/>
 						{editingBranch !== null ? (
 							<Input
 								autoFocus
@@ -525,7 +557,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								strokeWidth={1.8}
 							/>
 							{workspace.state === "archived" ? (
-								<span className="min-w-0 truncate px-1 py-0.5 font-medium text-muted-foreground">
+								<span className="px-1 py-0.5 font-medium text-muted-foreground">
 									{workspace.remote ?? "origin"}/
 									{workspace.intendedTargetBranch}
 								</span>
@@ -633,16 +665,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				) : null}
 			</div>
 
-			{selectedSessionParentId ? (
-				<button
-					type="button"
-					onClick={() => onSelectSession?.(selectedSessionParentId)}
-					className="flex cursor-pointer items-center gap-1 px-3 pb-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-				>
-					<ArrowLeft className="size-3" strokeWidth={2} />
-					Back to parent
-				</button>
-			) : null}
 			<div className="flex items-center px-4 pb-1">
 				<div className="group/tabs-scroll relative min-w-0 flex-1">
 					{hasRightOverflow && (
@@ -658,14 +680,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
 								Loading
 							</div>
-						) : sessions.length > 0 || contextPreviewCard ? (
+						) : sessions.length > 0 ? (
 							<Tabs
-								value={tabsValue}
+								value={selectedSessionId ?? sessions[0]?.id}
 								onValueChange={(value) => {
-									if (value === contextTabValue) {
-										onSelectContextPreview?.();
-										return;
-									}
 									onSelectSession?.(value);
 								}}
 								className="min-w-max gap-0"
@@ -674,63 +692,11 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									aria-label="Sessions"
 									className="inline-flex min-w-full w-max justify-start self-start"
 								>
-									{contextPreviewCard ? (
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<TabsTrigger
-													value={contextTabValue}
-													aria-label="Context preview"
-													onKeyDownCapture={(event) => {
-														if (
-															event.key.toLowerCase() !== "w" ||
-															(!event.metaKey && !event.ctrlKey)
-														) {
-															return;
-														}
-														event.preventDefault();
-														event.stopPropagation();
-														onCloseContextPreview?.();
-													}}
-													className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
-												>
-													<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
-														<Layers className="size-3.5" strokeWidth={1.8} />
-														<span className="truncate font-medium">
-															{contextPreviewCard.title}
-														</span>
-													</span>
-													<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
-														<span
-															role="button"
-															aria-label="Close context preview"
-															onPointerDown={stopTabActionPointerDown}
-															onClick={(event) => {
-																event.preventDefault();
-																event.stopPropagation();
-																onCloseContextPreview?.();
-															}}
-															className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-														>
-															<X className="size-3" strokeWidth={2} />
-														</span>
-													</span>
-												</TabsTrigger>
-											</TooltipTrigger>
-											<TooltipContent
-												side="bottom"
-												sideOffset={4}
-												className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
-											>
-												<span>{contextPreviewCard.title}</span>
-											</TooltipContent>
-										</Tooltip>
-									) : null}
 									{sessions.map((session) => {
 										const selected = session.id === selectedSessionId;
-										const isActivelySending =
-											busySessionIds?.has(session.id) === true ||
-											isSessionRunningStatus(session.status) ||
-											(selected && sending);
+										const isActivelySending = sendingSessionIds
+											? sendingSessionIds.has(session.id)
+											: selected && sending;
 										const hasUnread = session.unreadCount > 0;
 										const isInteractionRequired =
 											interactionRequiredSessionIds?.has(session.id) ?? false;
@@ -756,12 +722,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														{/* Content wrapper: text fades out on the right when hovered so
 														    the action icons can sit on the tab's own background. */}
 														<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
-															{session.parentSessionId ? (
-																<Bot
-																	className="size-3 shrink-0 text-muted-foreground/60"
-																	strokeWidth={1.8}
-																/>
-															) : null}
 															<SessionProviderIcon
 																agentType={
 																	sessionDisplayProviders?.[session.id] ??
@@ -995,9 +955,6 @@ function SessionProviderIcon({
 	if (agentType === "codex") {
 		return <OpenAIIcon className="size-3 shrink-0 text-muted-foreground" />;
 	}
-	if (agentType === "cursor") {
-		return <CursorIcon className="size-3 shrink-0 text-muted-foreground" />;
-	}
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }
 
@@ -1038,7 +995,7 @@ function BranchPicker({
 				size="xs"
 				className="h-6 min-w-0 max-w-[180px] gap-1 rounded-md px-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground"
 			>
-				<span className="block min-w-0 truncate">
+				<span className="truncate">
 					{displayRemote}/{currentBranch}
 				</span>
 				<ChevronDown data-icon="inline-end" strokeWidth={2} />

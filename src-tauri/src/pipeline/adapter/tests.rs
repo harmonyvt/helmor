@@ -279,6 +279,42 @@ fn merge_tool_result_into_tool_call() {
 }
 
 #[test]
+fn codex_historical_pi_mcp_read_uses_text_result() {
+    let messages = vec![im(
+        "1",
+        "assistant",
+        json!({
+            "type": "item.completed",
+            "item": {
+                "type": "mcp_tool_call",
+                "id": "pi-read-1",
+                "server": "pi",
+                "tool": "read",
+                "arguments": {"path": "src/App.tsx", "limit": 20},
+                "status": "completed",
+                "result": {"content": [{"type": "text", "text": "file contents"}]}
+            }
+        }),
+    )];
+
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+        tool_name,
+        args,
+        result: Some(tool_result),
+        ..
+    }) = &result[0].content[0]
+    {
+        assert_eq!(tool_name, "mcp__pi__read");
+        assert_eq!(args["path"].as_str(), Some("src/App.tsx"));
+        assert_eq!(tool_result.as_str(), Some("file contents"));
+    } else {
+        panic!("expected Pi MCP read tool-call");
+    }
+}
+
+#[test]
 fn merge_adjacent_assistant_messages() {
     let messages = vec![
         im(

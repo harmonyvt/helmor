@@ -6,18 +6,23 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ComponentProps } from "react";
+import type { ComponentProps, MutableRefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForgeActionStatus, WorkspaceGitActionStatus } from "@/lib/api";
 import { ComposerInsertProvider } from "@/lib/composer-insert-context";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { WorkspaceInspectorSidebar } from "./index";
+import { _resetTabsUiStateForTesting } from "./tabs-ui-state-store";
+import { _resetForTesting as resetTerminalStoreForTesting } from "./terminal-store";
 
 const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChangesWithContent: vi.fn(),
 	getWorkspaceForgeCheckInsertText: vi.fn(),
+	getWorkspacePrCommentInsertText: vi.fn(),
+	createSession: vi.fn(),
 	loadWorkspaceGitActionStatus: vi.fn(),
 	loadWorkspaceForgeActionStatus: vi.fn(),
+	getWorkspacePrComments: vi.fn(),
 	syncWorkspaceWithTargetBranch: vi.fn(),
 }));
 
@@ -34,13 +39,41 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
+		createSession: apiMocks.createSession,
 		getWorkspaceForgeCheckInsertText: apiMocks.getWorkspaceForgeCheckInsertText,
+		getWorkspacePrCommentInsertText: apiMocks.getWorkspacePrCommentInsertText,
 		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
 		loadWorkspaceGitActionStatus: apiMocks.loadWorkspaceGitActionStatus,
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
+		getWorkspacePrComments: apiMocks.getWorkspacePrComments,
 		syncWorkspaceWithTargetBranch: apiMocks.syncWorkspaceWithTargetBranch,
 	};
 });
+
+vi.mock("@/components/terminal-output", () => ({
+	TerminalOutput: ({
+		className,
+		terminalRef,
+	}: {
+		className?: string;
+		terminalRef?: MutableRefObject<{
+			clear: () => void;
+			focus: () => void;
+			refit: () => void;
+			write: (data: string) => void;
+		} | null>;
+	}) => {
+		if (terminalRef) {
+			terminalRef.current = {
+				clear: vi.fn(),
+				focus: vi.fn(),
+				refit: vi.fn(),
+				write: vi.fn(),
+			};
+		}
+		return <div data-testid="terminal" className={className} />;
+	},
+}));
 
 function cleanGitStatus(): WorkspaceGitActionStatus {
 	return {
@@ -51,7 +84,6 @@ function cleanGitStatus(): WorkspaceGitActionStatus {
 		behindTargetCount: 0,
 		remoteTrackingRef: "refs/remotes/origin/main",
 		aheadOfRemoteCount: 0,
-		aheadOfTargetCount: 0,
 		pushStatus: "published",
 	};
 }
@@ -104,10 +136,15 @@ function expectTextBefore(
 
 describe("WorkspaceInspectorSidebar Actions section", () => {
 	beforeEach(() => {
+		_resetTabsUiStateForTesting();
+		resetTerminalStoreForTesting();
 		apiMocks.listWorkspaceChangesWithContent.mockReset();
 		apiMocks.getWorkspaceForgeCheckInsertText.mockReset();
+		apiMocks.getWorkspacePrCommentInsertText.mockReset();
+		apiMocks.createSession.mockReset();
 		apiMocks.loadWorkspaceGitActionStatus.mockReset();
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
+		apiMocks.getWorkspacePrComments.mockReset();
 		apiMocks.syncWorkspaceWithTargetBranch.mockReset();
 		openerMocks.openUrl.mockReset();
 
@@ -118,8 +155,17 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.getWorkspaceForgeCheckInsertText.mockResolvedValue(
 			"Content Log:\ncheck output",
 		);
+		apiMocks.getWorkspacePrCommentInsertText.mockResolvedValue(
+			"PR Comment by @reviewer",
+		);
+		apiMocks.createSession.mockResolvedValue({ sessionId: "session-review" });
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue(cleanGitStatus());
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(emptyPrStatus());
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			comments: [],
+			prNumber: null,
+			prUrl: null,
+		});
 		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
 			outcome: "updated",
 			targetBranch: "main",
@@ -137,8 +183,12 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		await screen.findByText("No uncommitted changes");
 
 		const actions = screen.getByLabelText("Inspector section Actions");
-		expect(within(actions).queryByText("Deployments")).not.toBeInTheDocument();
-		expect(within(actions).queryByText("Checks")).not.toBeInTheDocument();
+		await waitFor(() => {
+			expect(
+				within(actions).queryByText("Deployments"),
+			).not.toBeInTheDocument();
+			expect(within(actions).queryByText("Checks")).not.toBeInTheDocument();
+		});
 		expect(within(actions).queryByText("marketing")).not.toBeInTheDocument();
 		expect(
 			within(actions).queryByText("staging-locked"),
@@ -215,11 +265,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 	});
 
-	it("queues a narrow stash-pop-conflict prompt when restoring stashed work fails", async () => {
+	it("queues the pull task into the current chat when the worktree is dirty", async () => {
 		const user = userEvent.setup();
 		const onQueuePendingPromptForSession = vi.fn();
 		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
-			outcome: "stashPopConflict",
+			outcome: "dirtyWorktree",
 			targetBranch: "main",
 			conflictedFiles: [],
 		});
@@ -240,7 +290,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
 				sessionId: "session-1",
 				prompt:
-					"Resolve the conflicts from restoring the stashed uncommitted work in this branch. Don't commit. Don't push.",
+					"Commit uncommitted changes, then merge testuser/main into this branch. Then push.",
 				forceQueue: true,
 			});
 		});
@@ -270,8 +320,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		await waitFor(() => {
 			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
 				sessionId: "session-1",
-				prompt:
-					"Bring this branch up to date with testuser/main. Resolve any conflicts. Preserve any uncommitted work. Don't push.",
+				prompt: "Merge testuser/main into this branch. Then push.",
 				forceQueue: true,
 			});
 		});
@@ -304,8 +353,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		await waitFor(() => {
 			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
 				sessionId: "session-1",
-				prompt:
-					"Bring this branch up to date with Origin/testuser/testing. Resolve any conflicts. Preserve any uncommitted work. Don't push.",
+				prompt: "Merge Origin/testuser/testing into this branch. Then push.",
 				forceQueue: true,
 			});
 		});
@@ -528,9 +576,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(pushButton).toBeDisabled();
 		expect(pushButton).toHaveAttribute("aria-busy", "true");
 		expect(
-			pushButton.querySelector(".animate-spin.text-current"),
+			pushButton.querySelector(".helmor-shimmer-text"),
 		).toBeInTheDocument();
-		expect(pushButton).not.toHaveTextContent("Push");
+		expect(pushButton).toHaveTextContent("Push");
 	});
 
 	it("shows a neutral loading spinner on commit-and-push while that lifecycle is busy", async () => {
@@ -555,9 +603,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(commitButton).toBeDisabled();
 		expect(commitButton).toHaveAttribute("aria-busy", "true");
 		expect(
-			commitButton.querySelector(".animate-spin.text-current"),
+			commitButton.querySelector(".helmor-shimmer-text"),
 		).toBeInTheDocument();
-		expect(commitButton).not.toHaveTextContent("Commit and push");
+		expect(commitButton).toHaveTextContent("Commit and push");
 	});
 
 	it("shows a neutral loading spinner on pull while sync is pending", async () => {
@@ -593,9 +641,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(pullButton).toBeDisabled();
 		expect(pullButton).toHaveAttribute("aria-busy", "true");
 		expect(
-			pullButton.querySelector(".animate-spin.text-current"),
+			pullButton.querySelector(".helmor-shimmer-text"),
 		).toBeInTheDocument();
-		expect(pullButton).not.toHaveTextContent("Pull");
+		expect(pullButton).toHaveTextContent("Pull");
 
 		resolveSync({
 			outcome: "updated",
@@ -814,7 +862,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(openButton).toHaveClass("hover:opacity-100");
 	});
 
-	it("inserts check details into the composer and keeps deployments without insert buttons", async () => {
+	it("inserts check details into the composer and exposes deployment insert buttons", async () => {
 		const user = userEvent.setup();
 		const insertIntoComposer = vi.fn();
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
@@ -863,8 +911,8 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 
 		await screen.findByText("Preview");
 		expect(
-			screen.queryByRole("button", { name: "Append Preview to composer" }),
-		).not.toBeInTheDocument();
+			screen.getByRole("button", { name: "Append Preview to composer" }),
+		).toBeInTheDocument();
 
 		await user.click(
 			screen.getByRole("button", { name: "Append changes to composer" }),
@@ -897,6 +945,100 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 	});
 
+	it("inserts PR comment details from cached comment data without refetching", async () => {
+		const user = userEvent.setup();
+		const insertIntoComposer = vi.fn();
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			prNumber: 12,
+			prUrl: "https://github.com/acme/repo/pull/12",
+			comments: [
+				{
+					id: "comment-1",
+					author: "reviewer",
+					body: "Please fix this path.",
+					url: "https://github.com/acme/repo/pull/12#discussion_r1",
+					filePath: "src/problem.ts",
+					isThreadResolved: false,
+					createdAt: "2026-05-04T00:00:00Z",
+				},
+			],
+		});
+
+		renderWithProviders(
+			<ComposerInsertProvider value={insertIntoComposer}>
+				<WorkspaceInspectorSidebar
+					workspaceId="workspace-1"
+					workspaceRootPath="/tmp/workspace"
+					workspaceBranch="feature/actions"
+					workspaceTargetBranch="main"
+					workspaceRemote="origin"
+					editorMode={false}
+					onOpenEditorFile={vi.fn()}
+				/>
+			</ComposerInsertProvider>,
+		);
+
+		await user.click(await screen.findByRole("tab", { name: /Comments/ }));
+		await screen.findByText("Please fix this path.");
+		await user.click(
+			screen.getByRole("button", {
+				name: "Append Comment on src/problem.ts to composer",
+			}),
+		);
+
+		expect(apiMocks.getWorkspacePrCommentInsertText).not.toHaveBeenCalled();
+		expect(insertIntoComposer).toHaveBeenCalledWith({
+			target: { workspaceId: "workspace-1" },
+			items: [
+				{
+					kind: "text",
+					text: "PR Comment by @reviewer\nFile: src/problem.ts\nStatus: Unresolved\n\n> Please fix this path.\n\nURL: https://github.com/acme/repo/pull/12#discussion_r1",
+				},
+			],
+			behavior: "append",
+		});
+	});
+
+	it("review all selects the new session immediately after creating it", async () => {
+		const user = userEvent.setup();
+		const onQueuePendingPromptForSession = vi.fn();
+		const onSelectSession = vi.fn();
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			prNumber: 12,
+			prUrl: "https://github.com/acme/repo/pull/12",
+			comments: [
+				{
+					id: "comment-1",
+					author: "reviewer",
+					body: "Please fix this path.",
+					url: "https://github.com/acme/repo/pull/12#discussion_r1",
+					filePath: "src/problem.ts",
+					isThreadResolved: false,
+					createdAt: "2026-05-04T00:00:00Z",
+				},
+			],
+		});
+
+		renderInspector({ onQueuePendingPromptForSession, onSelectSession });
+
+		await user.click(await screen.findByRole("tab", { name: /Comments/ }));
+		await user.click(
+			await screen.findByRole("button", { name: "Review all PR comments" }),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1");
+		});
+		expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
+			sessionId: "session-review",
+			prompt: expect.stringContaining(
+				"Please review and address all outstanding PR review comments.",
+			),
+			forceQueue: true,
+		});
+		expect(onSelectSession).toHaveBeenCalledWith("session-review");
+	});
+
 	it("uses the workspace remote when formatting sync target labels", async () => {
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
 			uncommittedCount: 0,
@@ -924,11 +1066,72 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		const tabsSection = screen.getByLabelText("Inspector section Tabs");
 
 		expect(filterLayer).not.toBeNull();
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
 
 		fireEvent.mouseEnter(tabsBody);
 		fireEvent.mouseLeave(tabsSection.parentElement as HTMLElement);
 
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
+	});
+
+	it("restores the open terminal tab when switching back to a workspace", async () => {
+		const user = userEvent.setup();
+		const { rerender } = renderWithProviders(
+			<WorkspaceInspectorSidebar
+				workspaceId="workspace-1"
+				repoId="repo-1"
+				workspaceRootPath="/tmp/workspace-1"
+				workspaceBranch="feature/one"
+				workspaceTargetBranch="main"
+				workspaceRemote="origin"
+				editorMode={false}
+				onOpenEditorFile={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole("tab", { name: "Terminal" }));
+		expect(
+			await screen.findByRole("tab", { name: "Terminal" }),
+		).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
+
+		rerender(
+			<WorkspaceInspectorSidebar
+				workspaceId="workspace-2"
+				repoId="repo-1"
+				workspaceRootPath="/tmp/workspace-2"
+				workspaceBranch="feature/two"
+				workspaceTargetBranch="main"
+				workspaceRemote="origin"
+				editorMode={false}
+				onOpenEditorFile={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByRole("tab", { name: "Setup" })).toHaveAttribute(
+			"aria-selected",
+			"true",
+		);
+		expect(
+			screen.queryByLabelText("Inspector tabs body"),
+		).not.toBeInTheDocument();
+
+		rerender(
+			<WorkspaceInspectorSidebar
+				workspaceId="workspace-1"
+				repoId="repo-1"
+				workspaceRootPath="/tmp/workspace-1"
+				workspaceBranch="feature/one"
+				workspaceTargetBranch="main"
+				workspaceRemote="origin"
+				editorMode={false}
+				onOpenEditorFile={vi.fn()}
+			/>,
+		);
+
+		expect(
+			await screen.findByRole("tab", { name: "Terminal" }),
+		).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
 	});
 });

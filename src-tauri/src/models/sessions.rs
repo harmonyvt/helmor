@@ -31,10 +31,6 @@ pub struct WorkspaceSessionSummary {
     /// uses this to drive post-stream verifiers and the auto-close behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_kind: Option<ActionKind>,
-    pub parent_session_id: Option<String>,
-    pub parent_message_id: Option<String>,
-    pub delegation_status: Option<String>,
-    pub child_count: i64,
     pub active: bool,
 }
 
@@ -64,20 +60,9 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
               s.updated_at,
               s.last_user_message_at,
               s.is_hidden,
-              s.action_kind,
-              child.parent_session_id,
-              child.parent_message_id,
-              child.status AS delegation_status,
-              COALESCE(child_counts.child_count, 0) AS child_count
+              s.action_kind
             FROM sessions s
-            LEFT JOIN session_delegations child ON child.child_session_id = s.id
-            LEFT JOIN (
-              SELECT parent_session_id, COUNT(*) AS child_count
-              FROM session_delegations
-              GROUP BY parent_session_id
-            ) child_counts ON child_counts.parent_session_id = s.id
             WHERE s.workspace_id = ?1 AND COALESCE(s.is_hidden, 0) = 0
-              AND child.child_session_id IS NULL
             ORDER BY
               datetime(s.created_at) ASC
             "#,
@@ -104,10 +89,6 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
             last_user_message_at: row.get(13)?,
             is_hidden: row.get::<_, i64>(14)? != 0,
             action_kind: row.get(15)?,
-            parent_session_id: row.get(16)?,
-            parent_message_id: row.get(17)?,
-            delegation_status: row.get(18)?,
-            child_count: row.get(19)?,
         })
     })?;
 
@@ -119,24 +100,6 @@ pub fn list_session_historical_records(session_id: &str) -> Result<Vec<Historica
     list_session_historical_records_with_connection(&connection, session_id)
 }
 
-/// All `provider_session_id`s belonging to a workspace's Claude sessions.
-/// Includes hidden sessions — they can be unhidden and resumed later, so
-/// migrators (e.g. local→worktree cwd change) need to cover them too.
-pub fn list_claude_provider_session_ids(workspace_id: &str) -> Result<Vec<String>> {
-    let connection = db::read_conn()?;
-    let mut statement = connection.prepare(
-        r#"
-            SELECT provider_session_id
-            FROM sessions
-            WHERE workspace_id = ?1
-              AND agent_type = 'claude'
-              AND provider_session_id IS NOT NULL
-            "#,
-    )?;
-    let rows = statement.query_map([workspace_id], |row| row.get::<_, String>(0))?;
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
-}
-
 fn adjacent_visible_session_id(
     transaction: &Transaction<'_>,
     workspace_id: &str,
@@ -144,12 +107,9 @@ fn adjacent_visible_session_id(
 ) -> Result<Option<String>> {
     let mut statement = transaction.prepare(
         r#"
-            SELECT s.id FROM sessions s
-            LEFT JOIN session_delegations child ON child.child_session_id = s.id
-            WHERE s.workspace_id = ?1
-              AND COALESCE(s.is_hidden, 0) = 0
-              AND child.child_session_id IS NULL
-            ORDER BY datetime(s.created_at) ASC
+            SELECT id FROM sessions
+            WHERE workspace_id = ?1 AND COALESCE(is_hidden, 0) = 0
+            ORDER BY datetime(created_at) ASC
             "#,
     )?;
     let visible_session_ids = statement
@@ -386,39 +346,23 @@ fn default_session_title_for_action_kind_with_workspace(
     Ok(kind.default_title_for_change_request(change_request_name))
 }
 
-/// Optional per-session config carried at create time. Inspector helpers
-/// (Create PR/MR, Review) push the user's configured model/effort/fast-mode
-/// here so the new session row is born with the right values — the composer
-/// then reads them off the row via the normal `currentSession` chain instead
-/// of routing them through a transient pendingPromptForSession override.
-#[derive(Debug, Default, Clone)]
-pub struct CreateSessionOverrides<'a> {
-    pub model: Option<&'a str>,
-    pub effort_level: Option<&'a str>,
-    pub fast_mode: Option<bool>,
-}
-
 pub fn create_session(
     workspace_id: &str,
     action_kind: Option<ActionKind>,
     permission_mode: Option<&str>,
-    overrides: CreateSessionOverrides<'_>,
 ) -> Result<CreateSessionResponse> {
     let mut connection = db::write_conn()?;
 
-    // Effort falls back to the user setting when the caller doesn't pin one
-    // (matches the historical behaviour). Callers that want to force a value
-    // — e.g. PR/MR creation using settings.prEffort — pass it via overrides.
-    let effort_level = match overrides.effort_level {
-        Some(value) if !value.is_empty() => value.to_string(),
-        _ => settings::load_setting_value("app.default_effort")
-            .ok()
-            .flatten()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "high".to_string()),
-    };
-    let model = overrides.model.filter(|s| !s.is_empty());
-    let fast_mode = overrides.fast_mode.unwrap_or(false);
+    // `model` is left NULL on create: the frontend owns model selection via
+    // `settings.defaultModelId` (kept valid by `useEnsureDefaultModel`), and
+    // the value gets persisted into `sessions.model` by the agent streaming
+    // finalizer on the first message. Reading settings here would be a
+    // redundant second source of truth.
+    let default_effort = settings::load_setting_value("app.default_effort")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "high".to_string());
 
     let transaction = connection
         .transaction()
@@ -448,8 +392,8 @@ pub fn create_session(
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode)
-            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level)
+            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, NULL, ?6)
             "#,
             (
                 &session_id,
@@ -457,9 +401,7 @@ pub fn create_session(
                 &title,
                 permission_mode.unwrap_or("default"),
                 action_kind,
-                model,
-                &effort_level,
-                fast_mode as i64,
+                &default_effort,
             ),
         )
         .context("Failed to create session")?;
@@ -496,25 +438,6 @@ pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
     Ok(model.filter(|s| !s.is_empty()))
 }
 
-/// (model, agent_type) for a session — provider hint for `resolve_model`
-/// when ids like `"default"` are ambiguous.
-pub fn get_session_model_and_provider(
-    session_id: &str,
-) -> Result<(Option<String>, Option<String>)> {
-    let conn = db::read_conn()?;
-    let row: (Option<String>, Option<String>) = conn
-        .query_row(
-            "SELECT model, agent_type FROM sessions WHERE id = ?1",
-            [session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .with_context(|| format!("Failed to read model+provider for session {session_id}"))?;
-    Ok((
-        row.0.filter(|s| !s.is_empty()),
-        row.1.filter(|s| !s.is_empty()),
-    ))
-}
-
 /// Read the opaque `context_usage_meta` JSON for the composer's
 /// context-usage ring. Returns `Ok(None)` for missing rows OR empty meta —
 /// the ring renders a placeholder either way and the frontend RPC contract
@@ -540,84 +463,6 @@ fn read_session_context_usage(conn: &Connection, session_id: &str) -> Result<Opt
         }
     };
     Ok(meta.filter(|s| !s.is_empty()))
-}
-
-/// Read the opaque `codex_goal_meta` JSON for the panel-header goal banner.
-/// `None` means no active goal (cleared, never set, or unknown session).
-pub fn get_session_codex_goal(session_id: &str) -> Result<Option<String>> {
-    let conn = db::read_conn()?;
-    let meta: Option<String> = match conn.query_row(
-        "SELECT codex_goal_meta FROM sessions WHERE id = ?1",
-        [session_id],
-        |row| row.get(0),
-    ) {
-        Ok(value) => value,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!("Failed to read codex_goal_meta for session {session_id}")
-            });
-        }
-    };
-    Ok(meta.filter(|s| !s.is_empty()))
-}
-
-/// One row in `list_session_drafts`. The `state` payload is whatever
-/// JSON the frontend stored — opaque to Rust (Lexical SerializedEditorState
-/// for chat composer drafts). Empty / NULL rows are filtered out before
-/// returning so the caller never has to distinguish "no draft" from
-/// "empty-string draft".
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionDraftRow {
-    pub session_id: String,
-    pub draft_state: String,
-}
-
-/// Bulk-load every session that currently has a non-empty draft. Called
-/// once at app boot to hydrate the in-memory draft map; subsequent
-/// reads / writes go through the per-session `set_session_draft` path.
-pub fn list_session_drafts() -> Result<Vec<SessionDraftRow>> {
-    let conn = db::read_conn()?;
-    let mut statement = conn
-        .prepare(
-            "SELECT id, draft_state FROM sessions \
-             WHERE draft_state IS NOT NULL AND draft_state <> ''",
-        )
-        .context("Failed to prepare list_session_drafts query")?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok(SessionDraftRow {
-                session_id: row.get(0)?,
-                draft_state: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-            })
-        })
-        .context("Failed to query session drafts")?;
-    let mut out = Vec::new();
-    for row in rows {
-        let row = row.context("Failed to read draft row")?;
-        if !row.draft_state.is_empty() {
-            out.push(row);
-        }
-    }
-    Ok(out)
-}
-
-/// Persist (or clear) a single session's draft. Pass `None` to clear.
-/// Returns `Ok(false)` if the session row doesn't exist — caller can
-/// silently drop the write rather than surface an error.
-pub fn set_session_draft(session_id: &str, draft_state: Option<&str>) -> Result<bool> {
-    let conn = db::write_conn()?;
-    // Treat "" as "clear" — frontend can't always send None cleanly
-    // through the IPC layer, and the loader filter already drops empties.
-    let normalized = draft_state.map(str::trim).filter(|s| !s.is_empty());
-    let updated = conn
-        .execute(
-            "UPDATE sessions SET draft_state = ?1 WHERE id = ?2",
-            (normalized, session_id),
-        )
-        .with_context(|| format!("Failed to update draft for session {session_id}"))?;
-    Ok(updated > 0)
 }
 
 pub fn rename_session(session_id: &str, title: &str) -> Result<()> {
@@ -735,7 +580,15 @@ pub fn delete_session(session_id: &str) -> Result<()> {
         _ => None,
     };
 
-    delete_session_tree_in_transaction(&transaction, session_id)?;
+    transaction
+        .execute(
+            "DELETE FROM session_messages WHERE session_id = ?1",
+            [session_id],
+        )
+        .context("Failed to delete messages")?;
+    transaction
+        .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
+        .context("Failed to delete session")?;
 
     // If this was active, persist the same right-then-left tab fallback as the UI.
     if let Some(ws_id) = &workspace_id {
@@ -753,34 +606,6 @@ pub fn delete_session(session_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn delete_session_tree_in_transaction(
-    transaction: &Transaction<'_>,
-    session_id: &str,
-) -> Result<()> {
-    for child_session_id in
-        super::delegations::child_session_ids_for_parent(transaction, session_id)?
-    {
-        delete_session_tree_in_transaction(transaction, &child_session_id)?;
-    }
-
-    transaction
-        .execute(
-            "DELETE FROM session_delegations WHERE parent_session_id = ?1 OR child_session_id = ?1",
-            [session_id],
-        )
-        .context("Failed to delete delegation metadata")?;
-    transaction
-        .execute(
-            "DELETE FROM session_messages WHERE session_id = ?1",
-            [session_id],
-        )
-        .context("Failed to delete messages")?;
-    transaction
-        .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
-        .context("Failed to delete session")?;
-    Ok(())
-}
-
 pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>> {
     let connection = db::read_conn()?;
     let mut statement = connection
@@ -790,17 +615,8 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
               s.id, s.workspace_id, s.title, s.agent_type, s.status, s.model,
               s.permission_mode, s.provider_session_id, s.effort_level,
               s.unread_count, s.fast_mode, s.created_at, s.updated_at,
-              s.last_user_message_at, s.is_hidden, s.action_kind,
-              child.parent_session_id, child.parent_message_id,
-              child.status AS delegation_status,
-              COALESCE(child_counts.child_count, 0) AS child_count
+              s.last_user_message_at, s.is_hidden, s.action_kind
             FROM sessions s
-            LEFT JOIN session_delegations child ON child.child_session_id = s.id
-            LEFT JOIN (
-              SELECT parent_session_id, COUNT(*) AS child_count
-              FROM session_delegations
-              GROUP BY parent_session_id
-            ) child_counts ON child_counts.parent_session_id = s.id
             WHERE s.workspace_id = ?1 AND s.is_hidden = 1
             ORDER BY datetime(s.created_at) ASC
             "#,
@@ -828,10 +644,6 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
                 last_user_message_at: row.get(13)?,
                 is_hidden: row.get::<_, i64>(14)? != 0,
                 action_kind: row.get(15)?,
-                parent_session_id: row.get(16)?,
-                parent_message_id: row.get(17)?,
-                delegation_status: row.get(18)?,
-                child_count: row.get(19)?,
             })
         })
         .context("Failed to query hidden sessions")?;
@@ -1340,67 +1152,5 @@ mod tests {
         .unwrap();
         let meta = read_session_context_usage(&conn, "s1").unwrap();
         assert_eq!(meta, None);
-    }
-    #[test]
-    fn workspace_session_list_hides_delegated_children_and_counts_them() {
-        let _env = crate::testkit::TestEnv::new("delegated-root-list");
-        let conn = crate::models::db::write_conn().unwrap();
-        conn.execute(
-            "INSERT INTO repos (id, name, root_path) VALUES ('repo-root-list', 'repo', '/tmp')",
-            [],
-        )
-        .unwrap();
-        conn.execute("INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('workspace-root-list', 'repo-root-list', 'repo', 'active', 'in-progress')", []).unwrap();
-        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('parent-root-list', 'workspace-root-list', 'idle', 'Parent', 'claude')", []).unwrap();
-        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('child-root-list', 'workspace-root-list', 'idle', 'Child', 'codex')", []).unwrap();
-        conn.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('anchor-root-list', 'parent-root-list', 'assistant', '{}')", []).unwrap();
-        conn.execute("INSERT INTO session_delegations (id, parent_session_id, child_session_id, parent_message_id, provider, model_id, title, status, output_schema) VALUES ('delegation-root-list', 'parent-root-list', 'child-root-list', 'anchor-root-list', 'codex', 'gpt-5.4', 'Child', 'running', '{}')", []).unwrap();
-        drop(conn);
-
-        let sessions = list_workspace_sessions("workspace-root-list").unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, "parent-root-list");
-        assert_eq!(sessions[0].child_count, 1);
-        assert_eq!(sessions[0].parent_session_id, None);
-        assert_eq!(sessions[0].delegation_status, None);
-    }
-
-    #[test]
-    fn deleting_parent_session_removes_delegated_child_tree() {
-        let _env = crate::testkit::TestEnv::new("delegated-delete-cascade");
-        let conn = crate::models::db::write_conn().unwrap();
-        conn.execute(
-            "INSERT INTO repos (id, name, root_path) VALUES ('repo-cascade', 'repo', '/tmp')",
-            [],
-        )
-        .unwrap();
-        conn.execute("INSERT INTO workspaces (id, repository_id, directory_name, state, status, active_session_id) VALUES ('workspace-cascade', 'repo-cascade', 'repo', 'active', 'in-progress', 'parent-cascade')", []).unwrap();
-        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('parent-cascade', 'workspace-cascade', 'idle', 'Parent', 'claude')", []).unwrap();
-        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('child-cascade', 'workspace-cascade', 'idle', 'Child', 'codex')", []).unwrap();
-        conn.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('anchor-cascade', 'parent-cascade', 'assistant', '{}')", []).unwrap();
-        conn.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('child-message-cascade', 'child-cascade', 'assistant', '{}')", []).unwrap();
-        conn.execute("INSERT INTO session_delegations (id, parent_session_id, child_session_id, parent_message_id, provider, model_id, title, status, output_schema) VALUES ('delegation-cascade', 'parent-cascade', 'child-cascade', 'anchor-cascade', 'codex', 'gpt-5.4', 'Child', 'running', '{}')", []).unwrap();
-        drop(conn);
-
-        delete_session("parent-cascade").unwrap();
-        let conn = crate::models::db::read_conn().unwrap();
-        let session_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sessions WHERE id IN ('parent-cascade', 'child-cascade')",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let message_count: i64 = conn.query_row("SELECT COUNT(*) FROM session_messages WHERE id IN ('anchor-cascade', 'child-message-cascade')", [], |row| row.get(0)).unwrap();
-        let delegation_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM session_delegations WHERE id = 'delegation-cascade'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(session_count, 0);
-        assert_eq!(message_count, 0);
-        assert_eq!(delegation_count, 0);
     }
 }

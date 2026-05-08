@@ -27,6 +27,7 @@ pub fn send(args: &SendArgs, cli: &Cli) -> Result<()> {
         model: args.model.clone(),
         permission_mode,
         linked_directories: args.linked_dirs.clone(),
+        delegate_to_running_app: true,
     };
 
     let mut stdout = std::io::stdout().lock();
@@ -78,9 +79,16 @@ pub fn send(args: &SendArgs, cli: &Cli) -> Result<()> {
     })?;
 
     if !json_mode && !quiet {
+        let delivery = if result.agent_started {
+            "started"
+        } else if result.queued {
+            "queued for desktop app"
+        } else {
+            "not started"
+        };
         eprintln!(
-            "[session: {} | model: {}/{}]",
-            result.session_id, result.provider, result.model
+            "[session: {} | model: {}/{} | agent: {}]",
+            result.session_id, result.provider, result.model, delivery
         );
     }
 

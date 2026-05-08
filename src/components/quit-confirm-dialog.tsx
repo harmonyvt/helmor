@@ -2,16 +2,15 @@ import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { requestQuit } from "@/lib/api";
-import type { SessionRunState } from "@/lib/session-run-state";
 
 export function QuitConfirmDialog({
-	sessionRunStates,
+	sendingSessionIds,
 }: {
-	sessionRunStates: ReadonlyMap<string, SessionRunState>;
+	sendingSessionIds: Set<string>;
 }) {
 	const [open, setOpen] = useState(false);
-	const runningRef = useRef(sessionRunStates);
-	runningRef.current = sessionRunStates;
+	const sendingRef = useRef(sendingSessionIds);
+	sendingRef.current = sendingSessionIds;
 
 	const handleQuit = useCallback(async (force: boolean) => {
 		setOpen(false);
@@ -26,7 +25,7 @@ export function QuitConfirmDialog({
 		// app-menu Quit, programmatic ExitRequested) and emits this
 		// event. We're the only gate that knows about in-flight tasks.
 		void listen("helmor://quit-requested", () => {
-			if (runningRef.current.size === 0) {
+			if (sendingRef.current.size === 0) {
 				void requestQuit(false);
 				return;
 			}
@@ -45,7 +44,7 @@ export function QuitConfirmDialog({
 		};
 	}, []);
 
-	const count = sessionRunStates.size;
+	const count = sendingSessionIds.size;
 
 	return (
 		<ConfirmDialog

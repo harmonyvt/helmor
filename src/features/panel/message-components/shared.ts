@@ -1,7 +1,7 @@
 import type {
 	CollapsedGroupPart,
-	DelegationAnchorPart,
 	FileMentionPart,
+	GenericCardPart,
 	ImagePart,
 	MessagePart,
 	PlanReviewPart,
@@ -119,13 +119,11 @@ export function isPlanReviewPart(part: unknown): part is PlanReviewPart {
 	);
 }
 
-export function isDelegationAnchorPart(
-	part: unknown,
-): part is DelegationAnchorPart {
+export function isGenericCardPart(part: unknown): part is GenericCardPart {
 	return (
 		isObj(part) &&
-		part.type === "delegation-anchor" &&
-		typeof part.childSessionId === "string"
+		part.type === "generic-card" &&
+		typeof part.title === "string"
 	);
 }
 

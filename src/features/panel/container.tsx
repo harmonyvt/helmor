@@ -18,7 +18,6 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
-import type { ContextCard } from "@/lib/sources/types";
 import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
 import {
 	WORKSPACE_SCRIPT_PROMPTS,
@@ -29,18 +28,6 @@ import type { SessionCloseRequest } from "./use-confirm-session-close";
 
 const EMPTY_MESSAGES: ThreadMessageLike[] = [];
 
-/** Minimal shape the panel needs to render an optimistic user bubble for a
- *  freshly-created workspace whose first send is still queued behind
- *  `await finalizePromise`. Decoupled from the full
- *  `PendingCreatedWorkspaceSubmit` type so the panel doesn't pull in the
- *  composer payload's transitive deps. */
-export type OptimisticPendingSubmit = {
-	id: string;
-	workspaceId: string;
-	sessionId: string;
-	prompt: string;
-};
-
 type WorkspacePanelContainerProps = {
 	selectedWorkspaceId: string | null;
 	displayedWorkspaceId: string | null;
@@ -48,7 +35,7 @@ type WorkspacePanelContainerProps = {
 	displayedSessionId: string | null;
 	sessionSelectionHistory?: string[];
 	sending: boolean;
-	busySessionIds?: Set<string>;
+	sendingSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
 	modelSelections?: Record<string, string>;
 	workspaceChangeRequest?: ChangeRequestInfo | null;
@@ -61,16 +48,10 @@ type WorkspacePanelContainerProps = {
 		permissionMode?: string | null;
 	}) => void;
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
-	contextPreviewCard?: ContextCard | null;
-	contextPreviewActive?: boolean;
-	onSelectContextPreview?: () => void;
-	onCloseContextPreview?: () => void;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
-	/** Optimistic user bubble for a workspace that's mid-finalize — rendered
-	 *  before the real send actually fires, swapped out as soon as the real
-	 *  user message lands in DB. */
-	optimisticPendingSubmit?: OptimisticPendingSubmit | null;
+	/** Compact mode: minimal header, no session tabs, no script action cards. */
+	compact?: boolean;
 };
 
 export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
@@ -80,7 +61,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	displayedSessionId,
 	sessionSelectionHistory = [],
 	sending,
-	busySessionIds,
+	sendingSessionIds,
 	interactionRequiredSessionIds,
 	modelSelections = {},
 	workspaceChangeRequest = null,
@@ -88,13 +69,9 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	onResolveDisplayedSession,
 	onQueuePendingPromptForSession,
 	onRequestCloseSession,
-	contextPreviewCard = null,
-	contextPreviewActive = false,
-	onSelectContextPreview,
-	onCloseContextPreview,
 	headerActions,
 	headerLeading,
-	optimisticPendingSubmit = null,
+	compact = false,
 }: WorkspacePanelContainerProps) {
 	const queryClient = useQueryClient();
 	const { settings } = useSettings();
@@ -267,8 +244,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 		if (
 			displayedSessionId &&
-			(sessions.some((session) => session.id === displayedSessionId) ||
-				selectedSessionId === displayedSessionId)
+			sessions.some((session) => session.id === displayedSessionId)
 		) {
 			return displayedSessionId;
 		}
@@ -284,7 +260,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		displayedSessionId,
 		displayedWorkspaceId,
 		rememberedSessionId,
-		selectedSessionId,
 		sessions,
 		workspace?.activeSessionId,
 	]);
@@ -357,51 +332,18 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		if (messagesQuery.data === undefined) {
 			return [];
 		}
-
-		// Inject an optimistic user bubble while a freshly-created workspace
-		// is still finalising. The real user message will replace it the
-		// moment the sidecar persists the send. Guard with `!hasUserMessage`
-		// so we never double-render once the real one lands.
-		let renderedMessages = messages;
-		if (
-			optimisticPendingSubmit &&
-			optimisticPendingSubmit.sessionId === preferredPaneSessionId &&
-			optimisticPendingSubmit.workspaceId === displayedWorkspaceId &&
-			!messages.some((m) => m.role === "user") &&
-			optimisticPendingSubmit.prompt.trim().length > 0
-		) {
-			const optimisticId = `optimistic:${optimisticPendingSubmit.id}`;
-			renderedMessages = [
-				{
-					role: "user",
-					id: optimisticId,
-					createdAt: new Date(0).toISOString(),
-					content: [
-						{
-							type: "text",
-							id: `${optimisticId}:text`,
-							text: optimisticPendingSubmit.prompt,
-						},
-					],
-				},
-				...messages,
-			];
-		}
-
 		return [
 			{
 				sessionId: preferredPaneSessionId,
-				messages: renderedMessages,
+				messages,
 				sending,
 				hasLoaded: true,
 				presentationState: "presented" as const,
 			},
 		];
 	}, [
-		displayedWorkspaceId,
 		messages,
 		messagesQuery.data,
-		optimisticPendingSubmit,
 		preferredPaneSessionId,
 		sending,
 		threadSessionId,
@@ -526,20 +468,9 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// stable handler through it.
 	const onSelectSessionRef = useRef(onSelectSession);
 	onSelectSessionRef.current = onSelectSession;
-	const childParentSessionIdsRef = useRef<Record<string, string>>({});
 	const handleSelectSession = useCallback((sessionId: string) => {
 		onSelectSessionRef.current(sessionId);
 	}, []);
-	const handleFocusChildSession = useCallback(
-		(sessionId: string, parentSessionId?: string | null) => {
-			if (parentSessionId) {
-				childParentSessionIdsRef.current[sessionId] = parentSessionId;
-			}
-			onResolveDisplayedSession(sessionId);
-			onSelectSessionRef.current(sessionId);
-		},
-		[onResolveDisplayedSession],
-	);
 	const handleSessionsChanged = useCallback(() => {
 		void invalidateSessionQueries();
 	}, [invalidateSessionQueries]);
@@ -550,11 +481,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionIdForPanel) ??
 		null;
-	const activeSessionParentId = selectedSessionIdForPanel
-		? (selectedSession?.parentSessionId ??
-			childParentSessionIdsRef.current[selectedSessionIdForPanel] ??
-			null)
-		: null;
 	const missingScriptTypes = useMemo<WorkspaceScriptType[]>(() => {
 		if (!selectedSession) {
 			return [];
@@ -596,7 +522,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			workspace={workspace}
 			sessions={sessions}
 			selectedSessionId={selectedSessionIdForPanel}
-			activeSessionParentId={activeSessionParentId}
 			sessionDisplayProviders={sessionDisplayProviders}
 			sessionPanes={sessionPanes}
 			loadingWorkspace={loadingWorkspace}
@@ -604,13 +529,9 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			refreshingWorkspace={refreshingWorkspace}
 			refreshingSession={refreshingSession}
 			sending={sending}
-			busySessionIds={busySessionIds}
+			sendingSessionIds={sendingSessionIds}
 			interactionRequiredSessionIds={interactionRequiredSessionIds}
-			contextPreviewCard={contextPreviewCard}
-			contextPreviewActive={contextPreviewActive}
 			onSelectSession={handleSelectSession}
-			onSelectContextPreview={onSelectContextPreview}
-			onCloseContextPreview={onCloseContextPreview}
 			onPrefetchSession={handlePrefetchSession}
 			onSessionsChanged={handleSessionsChanged}
 			onSessionRenamed={handleSessionRenamed}
@@ -621,8 +542,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			newSessionShortcut={getShortcut(settings.shortcuts, "session.new")}
 			missingScriptTypes={missingScriptTypes}
 			onInitializeScript={handleInitializeScript}
-			onFocusChildSession={handleFocusChildSession}
 			changeRequest={workspaceChangeRequest}
+			compact={compact}
 		/>
 	);
 });

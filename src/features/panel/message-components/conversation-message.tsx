@@ -10,13 +10,11 @@ function ConversationMessage({
 	previousAssistantMessage,
 	sessionId,
 	itemIndex,
-	onFocusChild,
 }: {
 	message: RenderedMessage;
 	previousAssistantMessage?: RenderedMessage | null;
 	sessionId: string;
 	itemIndex: number;
-	onFocusChild?: (sessionId: string, parentSessionId?: string | null) => void;
 }) {
 	const messageKey = message.id ?? `${message.role}:${itemIndex}`;
 	useEffect(() => {
@@ -30,13 +28,7 @@ function ConversationMessage({
 	}
 
 	if (message.role === "assistant") {
-		return (
-			<ChatAssistantMessage
-				message={message}
-				streaming={streaming}
-				onFocusChild={onFocusChild}
-			/>
-		);
+		return <ChatAssistantMessage message={message} streaming={streaming} />;
 	}
 
 	return (
@@ -54,8 +46,7 @@ export const MemoConversationMessage = memo(
 			prev.message === next.message &&
 			prev.previousAssistantMessage === next.previousAssistantMessage &&
 			prev.sessionId === next.sessionId &&
-			prev.itemIndex === next.itemIndex &&
-			prev.onFocusChild === next.onFocusChild
+			prev.itemIndex === next.itemIndex
 		);
 	},
 );

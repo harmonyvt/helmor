@@ -6,12 +6,7 @@ use super::events::UiMutationEvent;
 
 #[derive(Default)]
 pub struct UiSyncManager {
-    subscribers: Mutex<Vec<UiSyncSubscriber>>,
-}
-
-struct UiSyncSubscriber {
-    id: String,
-    channel: Channel<UiMutationEvent>,
+    subscribers: Mutex<Vec<Channel<UiMutationEvent>>>,
 }
 
 impl UiSyncManager {
@@ -19,16 +14,9 @@ impl UiSyncManager {
         Self::default()
     }
 
-    pub fn subscribe(&self, id: String, channel: Channel<UiMutationEvent>) {
+    pub fn subscribe(&self, channel: Channel<UiMutationEvent>) {
         if let Ok(mut subscribers) = self.subscribers.lock() {
-            subscribers.retain(|subscriber| subscriber.id != id);
-            subscribers.push(UiSyncSubscriber { id, channel });
-        }
-    }
-
-    pub fn unsubscribe(&self, id: &str) {
-        if let Ok(mut subscribers) = self.subscribers.lock() {
-            subscribers.retain(|subscriber| subscriber.id != id);
+            subscribers.push(channel);
         }
     }
 
@@ -37,7 +25,7 @@ impl UiSyncManager {
             return;
         };
 
-        subscribers.retain(|subscriber| subscriber.channel.send(event.clone()).is_ok());
+        subscribers.retain(|channel| channel.send(event.clone()).is_ok());
     }
 
     #[cfg(test)]
@@ -60,13 +48,6 @@ mod tests {
     fn publish_with_no_subscribers_is_a_noop() {
         let manager = UiSyncManager::new();
         manager.publish(UiMutationEvent::WorkspaceListChanged);
-        assert_eq!(manager.subscriber_count(), 0);
-    }
-
-    #[test]
-    fn unsubscribe_missing_subscriber_is_a_noop() {
-        let manager = UiSyncManager::new();
-        manager.unsubscribe("missing");
         assert_eq!(manager.subscriber_count(), 0);
     }
 

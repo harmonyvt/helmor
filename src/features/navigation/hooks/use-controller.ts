@@ -5,7 +5,9 @@ import { closeAllTerminalsForWorkspace } from "@/features/inspector/terminal-sto
 import {
 	type AddRepositoryResponse,
 	addRepositoryFromLocalPath,
+	assignWorkspaceToGoal,
 	cloneRepositoryFromUrl,
+	finalizeGoalWorkspace,
 	finalizeWorkspaceFromRepo,
 	listenArchiveExecutionFailed,
 	listenArchiveExecutionSucceeded,
@@ -14,13 +16,16 @@ import {
 	permanentlyDeleteWorkspace,
 	pinWorkspace,
 	prepareArchiveWorkspace,
+	prepareGoalWorkspace,
 	prepareWorkspaceFromRepo,
+	prepareWorkspaceFromSource,
 	type RepositoryCreateOption,
 	restoreWorkspace,
 	setWorkspaceStatus,
 	startArchiveWorkspace,
 	unpinWorkspace,
 	validateRestoreWorkspace,
+	type WorkspaceCreationSource,
 	type WorkspaceDetail,
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
@@ -57,12 +62,19 @@ import {
 	workspaceGroupIdFromStatus,
 } from "@/lib/workspace-helpers";
 import {
+	type GoalProjection,
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
+	type ProjectGroup,
 	projectSidebarLists,
+	projectSidebarListsByGoal,
+	projectSidebarListsByPr,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
 } from "../sidebar-projection";
+
+export type SidebarLayoutMode = "status" | "pr" | "goal";
+const LAYOUT_MODE_KEY = "helmor:workspaces-sidebar:layout-mode";
 
 type WorkspaceToastVariant = "default" | "destructive";
 
@@ -78,31 +90,28 @@ type WorkspaceToastFn = (
 
 type UseWorkspacesSidebarControllerArgs = {
 	selectedWorkspaceId: string | null;
-	autoSelectEnabled?: boolean;
 	onSelectWorkspace: (workspaceId: string | null) => void;
-	onOpenNewWorkspace?: () => void;
-	/**
-	 * Called after a successful add-repo when the backend hands us a
-	 * `selectedWorkspaceId: null` — newly added repo, or re-add with only
-	 * archived workspaces. UI lands on the start page with this repo
-	 * preselected.
-	 */
-	onAddRepositoryNeedsStart?: (repositoryId: string) => void;
 	pushWorkspaceToast: WorkspaceToastFn;
 };
 
 const WORKSPACE_GROUPS_INITIAL_DATA = workspaceGroupsQueryOptions().initialData;
+const EMPTY_PENDING_CREATIONS = new Map<string, PendingCreationEntry>();
 
 export function useWorkspacesSidebarController({
 	selectedWorkspaceId,
-	autoSelectEnabled = true,
 	onSelectWorkspace,
-	onOpenNewWorkspace,
-	onAddRepositoryNeedsStart,
 	pushWorkspaceToast,
 }: UseWorkspacesSidebarControllerArgs) {
 	const queryClient = useQueryClient();
 	const { settings } = useSettings();
+	const [layoutMode, setLayoutModeState] = useState<SidebarLayoutMode>(
+		() =>
+			(localStorage.getItem(LAYOUT_MODE_KEY) as SidebarLayoutMode) ?? "status",
+	);
+	const setLayoutMode = useCallback((mode: SidebarLayoutMode) => {
+		localStorage.setItem(LAYOUT_MODE_KEY, mode);
+		setLayoutModeState(mode);
+	}, []);
 	const [addingRepository, setAddingRepository] = useState(false);
 	const [isCloneDialogOpen, setIsCloneDialogOpen] = useState(false);
 	const [cloneDefaultDirectory, setCloneDefaultDirectory] = useState<
@@ -184,6 +193,26 @@ export function useWorkspacesSidebarController({
 		[projectedSidebar.archivedRows],
 	);
 
+	const projectGroups = useMemo<ProjectGroup[]>(
+		() =>
+			layoutMode === "pr"
+				? projectSidebarListsByPr(groups, EMPTY_PENDING_CREATIONS)
+				: [],
+		[layoutMode, groups],
+	);
+
+	const goalProjection = useMemo<GoalProjection | null>(
+		() =>
+			layoutMode === "goal"
+				? projectSidebarListsByGoal(
+						groups,
+						EMPTY_PENDING_CREATIONS,
+						baseArchivedSummaries,
+					)
+				: null,
+		[layoutMode, groups, baseArchivedSummaries],
+	);
+
 	const updateArchivingWorkspaceId = useCallback(
 		(workspaceId: string, active: boolean) => {
 			setArchivingWorkspaceIds((current) => {
@@ -235,49 +264,32 @@ export function useWorkspacesSidebarController({
 		[pushWorkspaceToast],
 	);
 
-	// Forward-ref so the rollback can call into the recovery toast helper that
-	// is defined below (they form a cycle: the helper depends on
-	// `handleDeleteWorkspace`, which is defined later still).
-	const pushPermanentDeleteRecoveryToastRef = useRef<
-		(
-			workspaceId: string,
-			title: string,
-			error: unknown,
-			fallbackMessage: string,
-		) => void
-	>(() => {});
-
 	const rollbackArchivedWorkspace = useCallback(
 		(workspaceId: string, error: unknown, fallbackMessage: string) => {
 			updateArchivingWorkspaceId(workspaceId, false);
-			let rollback: PendingArchiveEntry | null = null;
 			setPendingArchives((current) => {
 				const existing = current.get(workspaceId) ?? null;
 				if (!existing) {
 					return current;
 				}
-				rollback = existing;
 				const next = new Map(current);
 				next.delete(workspaceId);
 				return next;
 			});
 
-			if (!rollback) {
-				flushSidebarLists();
-			}
+			// Balance the beginSidebarMutation from handleArchiveWorkspace. Only the
+			// final in-flight sidebar mutation may refetch the lists; otherwise this
+			// rollback could overwrite another optimistic sidebar transition.
+			endSidebarMutation();
 
-			// Always offer the permanent-delete escape hatch on archive failure —
-			// matches the restore-failure path. The user already chose to drop
-			// this workspace; if cleanup hits a snag (e.g. trash-dir collision,
-			// stale worktree) they need a way out without restarting the app.
-			pushPermanentDeleteRecoveryToastRef.current(
+			pushWorkspaceErrorToast(
 				workspaceId,
 				"Archive failed",
 				error,
 				fallbackMessage,
 			);
 		},
-		[flushSidebarLists, updateArchivingWorkspaceId],
+		[endSidebarMutation, pushWorkspaceErrorToast, updateArchivingWorkspaceId],
 	);
 
 	useEffect(() => {
@@ -306,6 +318,9 @@ export function useWorkspacesSidebarController({
 			if (disposed) {
 				return;
 			}
+			// Clear the archiving spinner now that the background task has
+			// actually finished (not when startArchiveWorkspace returned).
+			updateArchivingWorkspaceId(payload.workspaceId, false);
 			setPendingArchives((current) => {
 				const existing = current.get(payload.workspaceId);
 				if (!existing || existing.stage === "confirmed") {
@@ -318,11 +333,12 @@ export function useWorkspacesSidebarController({
 				});
 				return next;
 			});
+			// Balance the beginSidebarMutation from handleArchiveWorkspace. The
+			// shared helper only flushes once all overlapping sidebar mutations have
+			// completed, preserving any remaining optimistic rows.
+			endSidebarMutation();
 			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.archivedWorkspaces,
+				predicate: (query) => query.queryKey[0] === "goalChildWorkspaces",
 			});
 		}).then((cleanup) => {
 			if (disposed) {
@@ -337,7 +353,12 @@ export function useWorkspacesSidebarController({
 			unlistenFailure?.();
 			unlistenSuccess?.();
 		};
-	}, [queryClient, rollbackArchivedWorkspace]);
+	}, [
+		endSidebarMutation,
+		queryClient,
+		rollbackArchivedWorkspace,
+		updateArchivingWorkspaceId,
+	]);
 
 	useEffect(() => {
 		if (pendingArchives.size === 0) {
@@ -399,10 +420,6 @@ export function useWorkspacesSidebarController({
 	}, [baseGroups, pendingCreations]);
 
 	useEffect(() => {
-		if (!autoSelectEnabled) {
-			return;
-		}
-
 		if (
 			selectedWorkspaceId === null &&
 			groupsQuery.data === undefined &&
@@ -415,19 +432,6 @@ export function useWorkspacesSidebarController({
 			selectedWorkspaceId === null &&
 			groupsQuery.isFetching &&
 			groupsQuery.data === WORKSPACE_GROUPS_INITIAL_DATA
-		) {
-			return;
-		}
-
-		// A freshly-created workspace lands here BEFORE `groupsQuery`
-		// refetches it from the backend, so `hasWorkspaceId` returns false
-		// and the fallback below would otherwise jump us to whatever sits
-		// in `archivedSummaries[0]` — clobbering the user's brand-new
-		// workspace selection. Hold off until the refetch settles.
-		if (
-			selectedWorkspaceId &&
-			!hasWorkspaceId(selectedWorkspaceId, groups, archivedSummaries) &&
-			groupsQuery.isFetching
 		) {
 			return;
 		}
@@ -459,7 +463,6 @@ export function useWorkspacesSidebarController({
 			onSelectWorkspace(nextWorkspaceId);
 		}
 	}, [
-		autoSelectEnabled,
 		archivedQuery.data,
 		archivedSummaries,
 		groups,
@@ -707,8 +710,90 @@ export function useWorkspacesSidebarController({
 		[flushSidebarLists, pushWorkspaceToast],
 	);
 
+	const handleAssignWorkspaceToGoal = useCallback(
+		async (
+			workspaceId: string,
+			goalWorkspaceId: string,
+			status: WorkspaceStatus,
+		) => {
+			try {
+				await assignWorkspaceToGoal(workspaceId, goalWorkspaceId, status);
+				flushSidebarLists();
+			} catch (error) {
+				pushWorkspaceToast(
+					describeUnknownError(error, "Unable to assign workspace to goal."),
+				);
+			}
+		},
+		[flushSidebarLists, pushWorkspaceToast],
+	);
+
+	// Stable ref so the conflict-recovery toast can call back into the latest
+	// version of handleCreateWorkspaceFromRepo without creating a circular dep.
+	const handleCreateGoalWorkspace = useCallback(
+		async (
+			repoId: string,
+			title: string,
+			description: string,
+			sourceBranch?: string | null,
+		) => {
+			if (creatingWorkspaceRepoId) return;
+			setCreatingWorkspaceRepoId(repoId);
+			try {
+				const prepared = await prepareGoalWorkspace({
+					repoId,
+					title,
+					description,
+					sourceBranch: sourceBranch ?? null,
+				});
+				await finalizeGoalWorkspace(
+					prepared.workspaceId,
+					prepared.description,
+					prepared.sourceStartBranch ?? null,
+				);
+				await Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(prepared.workspaceId),
+					}),
+				]);
+				onSelectWorkspace(prepared.workspaceId);
+			} catch (error) {
+				pushWorkspaceToast(
+					describeUnknownError(error, "Unable to create Goal workspace."),
+					"Goal creation failed",
+					"destructive",
+				);
+				throw error;
+			} finally {
+				setCreatingWorkspaceRepoId(null);
+			}
+		},
+		[
+			creatingWorkspaceRepoId,
+			onSelectWorkspace,
+			pushWorkspaceToast,
+			queryClient,
+		],
+	);
+
+	const handleCreateWorkspaceFromRepoRef = useRef<
+		| ((
+				repoId: string,
+				source?: WorkspaceCreationSource,
+				migrateFromPath?: string,
+		  ) => Promise<void>)
+		| null
+	>(null);
+
 	const handleCreateWorkspaceFromRepo = useCallback(
-		async (repoId: string) => {
+		async (
+			repoId: string,
+			source: WorkspaceCreationSource = { type: "defaultBranch" },
+			migrateFromPath?: string,
+		) => {
 			if (creatingWorkspaceRepoId) {
 				return;
 			}
@@ -732,7 +817,10 @@ export function useWorkspacesSidebarController({
 				// the real workspace/session ids, directory name, branch,
 				// and repo scripts. Nothing is painted yet; the sidebar +
 				// panel are still showing the previously selected workspace.
-				prepareResponse = await prepareWorkspaceFromRepo(repoId);
+				prepareResponse =
+					source.type === "defaultBranch"
+						? await prepareWorkspaceFromRepo(repoId)
+						: await prepareWorkspaceFromSource(repoId, source);
 			} catch (error) {
 				setCreatingWorkspaceRepoId(null);
 				pushWorkspaceToast(
@@ -744,6 +832,8 @@ export function useWorkspacesSidebarController({
 			// Phase 1 succeeded. Paint immediately using the real metadata —
 			// no optimistic title, no optimistic scripts, no placeholder.
 			const createdAt = new Date().toISOString();
+			const intendedTargetBranch =
+				prepareResponse.intendedTargetBranch ?? prepareResponse.defaultBranch;
 			const preparedRow = createPreparedWorkspaceRow(
 				repository,
 				prepareResponse,
@@ -788,8 +878,8 @@ export function useWorkspacesSidebarController({
 					// intended target, matching what Phase 2 writes.
 					remote: repository.remote ?? "origin",
 					defaultBranch: prepareResponse.defaultBranch,
-					initializationParentBranch: prepareResponse.defaultBranch,
-					intendedTargetBranch: prepareResponse.defaultBranch,
+					initializationParentBranch: intendedTargetBranch,
+					intendedTargetBranch,
 				},
 			);
 			queryClient.setQueryData<WorkspaceSessionSummary[]>(
@@ -826,7 +916,7 @@ export function useWorkspacesSidebarController({
 				{
 					uncommittedCount: 0,
 					conflictCount: 0,
-					syncTargetBranch: prepareResponse.defaultBranch,
+					syncTargetBranch: intendedTargetBranch,
 					syncStatus: "upToDate",
 					behindTargetCount: 0,
 					remoteTrackingRef: null,
@@ -836,17 +926,33 @@ export function useWorkspacesSidebarController({
 			);
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceChangeRequest(prepareResponse.workspaceId),
-				null,
+				prepareResponse.prUrl
+					? {
+							url: prepareResponse.prUrl,
+							number: prepareResponse.prNumber ?? 0,
+							state: "OPEN",
+							title: prepareResponse.prTitle ?? "Pull request",
+							isMerged: false,
+						}
+					: null,
 			);
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceForgeActionStatus(prepareResponse.workspaceId),
 				{
-					changeRequest: null,
+					changeRequest: prepareResponse.prUrl
+						? {
+								url: prepareResponse.prUrl,
+								number: prepareResponse.prNumber ?? 0,
+								state: "OPEN",
+								title: prepareResponse.prTitle ?? "Pull request",
+								isMerged: false,
+							}
+						: null,
 					reviewDecision: null,
 					mergeable: null,
 					deployments: [],
 					checks: [],
-					remoteState: "noPr",
+					remoteState: prepareResponse.prUrl ? "ok" : "noPr",
 					message: null,
 				},
 			);
@@ -856,7 +962,19 @@ export function useWorkspacesSidebarController({
 			// background so the UI is already interactive. State flips from
 			// "initializing" → "ready"/"setup_pending" when it completes;
 			// the only visible change is the composer enabling.
-			finalizeWorkspaceFromRepo(prepareResponse.workspaceId)
+			const finalizePromise = finalizeWorkspaceFromRepo(
+				prepareResponse.workspaceId,
+				prepareResponse.sourceStartBranch || migrateFromPath
+					? {
+							...(prepareResponse.sourceStartBranch && {
+								startBranch: prepareResponse.sourceStartBranch,
+								fetchStartBranch: true,
+							}),
+							...(migrateFromPath && { migrateFromPath }),
+						}
+					: undefined,
+			);
+			finalizePromise
 				.then((finalized) => {
 					queryClient.setQueryData<WorkspaceDetail | null>(
 						helmorQueryKeys.workspaceDetail(prepareResponse.workspaceId),
@@ -983,9 +1101,38 @@ export function useWorkspacesSidebarController({
 							previousSelection ?? findInitialWorkspaceId(groups),
 						);
 					}
-					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to create workspace."),
+					// If this was a first attempt (not already a migrate), check whether
+					// git rejected it because the branch is checked out elsewhere.
+					const errorMessage = describeUnknownError(
+						error,
+						"Unable to create workspace.",
 					);
+					const conflictMatch =
+						!migrateFromPath &&
+						errorMessage.match(/already used by worktree at '(.+?)'/);
+					const conflictPath = conflictMatch ? conflictMatch[1] : undefined;
+					if (conflictPath) {
+						const dirName = conflictPath.split("/").pop() ?? conflictPath;
+						pushWorkspaceToast(
+							`Branch already checked out at "${dirName}". Move the existing worktree into Helmor?`,
+							"Workspace conflict",
+							"destructive",
+							{
+								action: {
+									label: "Move into Helmor",
+									onClick: () =>
+										void handleCreateWorkspaceFromRepoRef.current?.(
+											repoId,
+											source,
+											conflictPath,
+										),
+								},
+								persistent: true,
+							},
+						);
+					} else {
+						pushWorkspaceToast(errorMessage);
+					}
 					void refetchNavigation();
 				})
 				.finally(() => {
@@ -1004,37 +1151,25 @@ export function useWorkspacesSidebarController({
 			selectedWorkspaceId,
 		],
 	);
+	// Keep the ref pointing to the latest version so the conflict-recovery
+	// toast can invoke it without being listed in its own deps array.
+	handleCreateWorkspaceFromRepoRef.current = handleCreateWorkspaceFromRepo;
 
 	const applyAddRepositoryResponse = useCallback(
 		async (response: AddRepositoryResponse) => {
 			await refetchNavigation();
-			if (response.selectedWorkspaceId) {
-				// Re-add of an existing repo with a visible workspace —
-				// jump straight to it, same as before.
-				prefetchWorkspace(response.selectedWorkspaceId);
-				onSelectWorkspace(response.selectedWorkspaceId);
-				if (!response.createdRepository) {
-					pushWorkspaceToast(
-						"Switched to the existing workspace.",
-						"Repository already added",
-						"default",
-					);
-				}
-				return;
-			}
-			// No visible workspace to focus → land on the start page with
-			// the new repo selected so the user picks branch + mode.
-			onAddRepositoryNeedsStart?.(response.repositoryId);
+			prefetchWorkspace(response.selectedWorkspaceId);
+			onSelectWorkspace(response.selectedWorkspaceId);
+
 			if (!response.createdRepository) {
 				pushWorkspaceToast(
-					"Repository already added — opened the start page so you can spin up a workspace.",
+					"Switched to the existing workspace.",
 					"Repository already added",
 					"default",
 				);
 			}
 		},
 		[
-			onAddRepositoryNeedsStart,
 			onSelectWorkspace,
 			prefetchWorkspace,
 			pushWorkspaceToast,
@@ -1231,12 +1366,6 @@ export function useWorkspacesSidebarController({
 		handleDeleteWorkspaceRef.current = handleDeleteWorkspace;
 	}, [handleDeleteWorkspace]);
 
-	// Keep the forward-ref used by `rollbackArchivedWorkspace` in sync.
-	useEffect(() => {
-		pushPermanentDeleteRecoveryToastRef.current =
-			pushPermanentDeleteRecoveryToast;
-	}, [pushPermanentDeleteRecoveryToast]);
-
 	const notifyBranchRename = useCallback(
 		(rename: { original: string; actual: string }) => {
 			pushWorkspaceToast(
@@ -1324,6 +1453,12 @@ export function useWorkspacesSidebarController({
 					stage: "running",
 					sortTimestamp,
 				};
+
+				// Gate background refetches (e.g. WorkspaceGitStateChanged) so they
+				// don't overwrite the optimistic cache while the archive is in flight.
+				// Balanced in the success/failure event listeners.
+				beginSidebarMutation();
+
 				setPendingArchives((current) => {
 					const next = new Map(current);
 					next.set(workspaceId, pendingArchive);
@@ -1354,42 +1489,41 @@ export function useWorkspacesSidebarController({
 				const shouldNavigate =
 					!selectedWorkspaceId || selectedWorkspaceId === workspaceId;
 				if (shouldNavigate) {
-					if (onOpenNewWorkspace) {
-						onOpenNewWorkspace();
-					} else {
-						const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
-							currentGroups: groups,
-							currentArchivedRows: archivedRows,
-							nextGroups: optimisticGroups,
-							nextArchivedRows: optimisticArchived.archivedRows,
-							removedWorkspaceId: workspaceId,
-						});
-						if (nextWorkspaceId) {
-							prefetchWorkspace(nextWorkspaceId);
-						}
-						onSelectWorkspace(nextWorkspaceId);
+					const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
+						currentGroups: groups,
+						currentArchivedRows: archivedRows,
+						nextGroups: optimisticGroups,
+						nextArchivedRows: optimisticArchived.archivedRows,
+						removedWorkspaceId: workspaceId,
+					});
+					if (nextWorkspaceId) {
+						prefetchWorkspace(nextWorkspaceId);
 					}
+					onSelectWorkspace(nextWorkspaceId);
 				}
 
-				void startArchiveWorkspace(workspaceId)
-					.catch((error) => {
-						rollbackArchivedWorkspace(
-							workspaceId,
-							error,
-							"Unable to archive workspace.",
-						);
-					})
-					.finally(() => {
-						updateArchivingWorkspaceId(workspaceId, false);
-					});
+				// startArchiveWorkspace returns immediately after spawning the
+				// background Rust task — do NOT clear the spinner here.  The
+				// archiving animation (and the gate) are cleared by the
+				// archive-execution-succeeded / archive-execution-failed event
+				// listeners once the task actually finishes.
+				void startArchiveWorkspace(workspaceId).catch((error) => {
+					// The IPC call itself failed (e.g. prepare plan missing).
+					// rollbackArchivedWorkspace handles spinner, gate, and flush.
+					rollbackArchivedWorkspace(
+						workspaceId,
+						error,
+						"Unable to archive workspace.",
+					);
+				});
 			})();
 		},
 		[
 			archivingWorkspaceIds,
 			baseArchivedSummaries,
+			beginSidebarMutation,
 			groups,
 			onSelectWorkspace,
-			onOpenNewWorkspace,
 			pendingArchives,
 			prefetchWorkspace,
 			pushWorkspaceErrorToast,
@@ -1567,10 +1701,20 @@ export function useWorkspacesSidebarController({
 		creatingWorkspaceRepoId,
 		cloneDefaultDirectory,
 		groups,
+		// True whenever either workspace list query is fetching — covers both
+		// the initial load and every background poll. Used to drive the sidebar
+		// polling shimmer so users know the list is live.
+		isWorkspacesFetching: groupsQuery.isFetching || archivedQuery.isFetching,
+		layoutMode,
+		setLayoutMode,
+		projectGroups,
+		goalProjection,
 		handleAddRepository,
 		handleArchiveWorkspace,
+		handleAssignWorkspaceToGoal,
 		handleCloneFromUrl,
 		handleCreateWorkspaceFromRepo,
+		handleCreateGoalWorkspace,
 		handleDeleteWorkspace,
 		handleMarkWorkspaceUnread,
 		handleOpenCloneDialog,
@@ -1592,6 +1736,10 @@ function createPreparedWorkspaceRow(
 		directoryName: string;
 		branch: string;
 		state: WorkspaceState;
+		status?: WorkspaceStatus;
+		prTitle?: string | null;
+		prSyncState?: "none" | "open" | "closed" | "merged";
+		prUrl?: string | null;
 	},
 ): WorkspaceRow {
 	return {
@@ -1607,13 +1755,15 @@ function createPreparedWorkspaceRow(
 		hasUnread: false,
 		workspaceUnread: 0,
 		unreadSessionCount: 0,
-		status: "in-progress",
+		status: prepared.status ?? "in-progress",
 		branch: prepared.branch,
 		activeSessionId: prepared.initialSessionId,
 		activeSessionTitle: "Untitled",
 		activeSessionAgentType: null,
 		activeSessionStatus: "idle",
-		prTitle: null,
+		prTitle: prepared.prTitle ?? null,
+		prSyncState: prepared.prSyncState ?? "none",
+		prUrl: prepared.prUrl ?? null,
 		pinnedAt: null,
 		sessionCount: 1,
 		messageCount: 0,

@@ -233,6 +233,15 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
                 .filter(|s| !s.trim().is_empty())
                 .map(str::to_string),
         }),
+        "codex_missing_response_item_recovery" => Some(MessagePart::SystemNotice {
+            id: notice_part_id(msg_id),
+            severity: NoticeSeverity::Warning,
+            label: "Recovering Codex context".to_string(),
+            body: Some(
+                "The provider lost part of the prior response context, so Helmor is compacting and retrying."
+                    .to_string(),
+            ),
+        }),
         "codex_reconnecting" => Some(build_codex_reconnecting_notice(parsed, msg_id)),
         "api_retry" => Some(build_api_retry_notice(parsed, msg_id)),
         _ => None,

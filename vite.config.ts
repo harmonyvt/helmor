@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
@@ -5,6 +6,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 const host = process.env.TAURI_DEV_HOST;
+const devPort = Number.parseInt(process.env.HELMOR_DEV_PORT ?? "1420", 10);
+const webMode = process.env.VITE_HELMOR_WEB === "1";
 const WATCH_IGNORED = [
 	"**/src-tauri/**",
 	"**/.local/**",
@@ -22,11 +25,60 @@ export default defineConfig(async () => ({
 			plugins: [["babel-plugin-react-compiler", {}]],
 		}),
 		tailwindcss(),
+		// When building the web bundle, Vite preserves the source filename
+		// (index-web.html → dist-web/index-web.html). The web daemon checks
+		// for dist-web/index.html, so rename it after the bundle is written.
+		...(webMode
+			? [
+					{
+						name: "rename-web-index",
+						closeBundle() {
+							const src = path.resolve(__dirname, "dist-web/index-web.html");
+							const dest = path.resolve(__dirname, "dist-web/index.html");
+							if (fs.existsSync(src)) {
+								fs.renameSync(src, dest);
+							}
+						},
+					},
+				]
+			: []),
 	],
 	resolve: {
 		dedupe: ["react", "react-dom"],
 		alias: {
 			"@": path.resolve(__dirname, "./src"),
+			...(webMode
+				? {
+						"@tauri-apps/api/core": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/core.ts",
+						),
+						"@tauri-apps/api/event": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/event.ts",
+						),
+						"@tauri-apps/api/window": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/window.ts",
+						),
+						"@tauri-apps/api/webview": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/webview.ts",
+						),
+						"@tauri-apps/plugin-dialog": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/plugin-dialog.ts",
+						),
+						"@tauri-apps/plugin-notification": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/plugin-notification.ts",
+						),
+						"@tauri-apps/plugin-opener": path.resolve(
+							__dirname,
+							"./src/lib/web-tauri/plugin-opener.ts",
+						),
+					}
+				: {}),
 			react: path.resolve(__dirname, "./node_modules/react"),
 			"react-dom": path.resolve(__dirname, "./node_modules/react-dom"),
 			"react/jsx-runtime": path.resolve(
@@ -63,15 +115,27 @@ export default defineConfig(async () => ({
 	// 1. prevent Vite from obscuring rust errors
 	clearScreen: false,
 	// 2. tauri expects a fixed port, fail if that port is not available
+	build: {
+		outDir: webMode ? "dist-web" : "dist",
+		emptyOutDir: true,
+		...(webMode
+			? {
+					rollupOptions: {
+						input: path.resolve(__dirname, "./index-web.html"),
+					},
+				}
+			: {}),
+	},
+
 	server: {
-		port: 1420,
+		port: Number.isNaN(devPort) ? 1420 : devPort,
 		strictPort: true,
 		host: host || false,
 		hmr: host
 			? {
 					protocol: "ws",
 					host,
-					port: 1421,
+					port: (Number.isNaN(devPort) ? 1420 : devPort) + 1,
 				}
 			: undefined,
 		watch: {
@@ -90,13 +154,14 @@ export default defineConfig(async () => ({
 		// load. Retry twice in CI so a single scheduling hiccup does not
 		// fail the whole run; local dev stays strict.
 		retry: process.env.CI ? 2 : 0,
-		// Sidecar tests are written for `bun:test`, not vitest. Exclude them
+		// Sidecar and script tests are written for `bun:test`, not vitest. Exclude them
 		// so `bun run test:frontend` doesn't trip on `import ... from "bun:test"`.
 		// Same for the Rust + fixtures trees which contain no TS tests.
 		exclude: [
 			"**/node_modules/**",
 			"**/dist/**",
 			"sidecar/**",
+			"scripts/**",
 			"src-tauri/**",
 			"fixtures/**",
 			"e2e/**",

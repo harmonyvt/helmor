@@ -13,16 +13,13 @@ import {
 } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { useCompactThread } from "../compact-thread-context";
 import { ImageBlock, PlanReviewCard, TodoList } from "./content-parts";
-import {
-	CursorSubagentToolCall,
-	isCursorSubagentToolName,
-} from "./cursor-subagent-tool";
-import { DelegationAnchor } from "./delegation-anchor";
+import { GenericCard } from "./generic-card";
 import type { RenderedMessage, StreamdownMode } from "./shared";
 import {
 	isCollapsedGroupPart,
-	isDelegationAnchorPart,
+	isGenericCardPart,
 	isImagePart,
 	isPlanReviewPart,
 	isReasoningPart,
@@ -31,12 +28,6 @@ import {
 	isToolCallPart,
 	reasoningLifecycle,
 } from "./shared";
-import {
-	isSubagentSpawnPart,
-	isSubagentToolName,
-	SubAgentSpawnGroup,
-	SubAgentToolCall,
-} from "./subagent-tool";
 import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
 
 // --- AssistantText ---
@@ -149,57 +140,18 @@ function MessageStatusBadge({ reason }: { reason?: string }) {
 	);
 }
 
-// Fold consecutive `subagent_spawn` ToolCallParts into a nested array; the
-// render loop then dispatches arrays to SubAgentSpawnGroup.
-function groupConsecutiveSubagentSpawns(
-	parts: ExtendedMessagePart[],
-): Array<ExtendedMessagePart | ToolCallPart[]> {
-	const out: Array<ExtendedMessagePart | ToolCallPart[]> = [];
-	let pending: ToolCallPart[] | null = null;
-
-	const flush = () => {
-		if (pending && pending.length > 0) {
-			out.push(pending);
-		}
-		pending = null;
-	};
-
-	for (const part of parts) {
-		if (
-			part.type === "tool-call" &&
-			isSubagentSpawnPart(part as ToolCallPart)
-		) {
-			if (!pending) pending = [];
-			pending.push(part as ToolCallPart);
-			continue;
-		}
-		flush();
-		out.push(part);
-	}
-	flush();
-	return out;
-}
-
 // --- ChatAssistantMessage ---
 
 export function ChatAssistantMessage({
 	message,
 	streaming,
-	onFocusChild,
 }: {
 	message: RenderedMessage;
 	streaming: boolean;
-	onFocusChild?: (sessionId: string, parentSessionId?: string | null) => void;
 }) {
 	const parts = message.content as ExtendedMessagePart[];
 	const { settings } = useSettings();
-
-	// Group consecutive `subagent_spawn` ToolCallParts so two parallel spawn
-	// calls render as one "Spawned 2 agents" block (matches Codex's own
-	// client). All other parts pass through unchanged. Done at render time
-	// rather than in the Rust collapse stage so we don't need to introduce a
-	// new MessagePart variant just for this UI affordance.
-	const groupedParts = groupConsecutiveSubagentSpawns(parts);
+	const compact = useCompactThread();
 
 	return (
 		<div
@@ -207,14 +159,7 @@ export function ChatAssistantMessage({
 			data-message-role="assistant"
 			className="flex min-w-0 max-w-full flex-col gap-1"
 		>
-			{groupedParts.map((part) => {
-				if (Array.isArray(part)) {
-					// Spawn group: pass the whole array to one collapsible block.
-					const groupKey = `spawn-group:${part[0]!.toolCallId}`;
-					return (
-						<SubAgentSpawnGroup key={groupKey} parts={part as ToolCallPart[]} />
-					);
-				}
+			{parts.map((part) => {
 				const key = partKey(part);
 				if (isTextPart(part)) {
 					return (
@@ -243,22 +188,6 @@ export function ChatAssistantMessage({
 					return <CollapsedToolGroup key={key} group={part} />;
 				}
 				if (isToolCallPart(part)) {
-					if (isCursorSubagentToolName(part.toolName)) {
-						// Cursor subagent invocation (`task` → `cursor_task`) —
-						// dedicated renderer with model/mode chips + agentId
-						// color identity + expandable prompt/result body.
-						return (
-							<CursorSubagentToolCall key={key} part={part as ToolCallPart} />
-						);
-					}
-					if (isSubagentToolName(part.toolName)) {
-						// Sub-agent collab tools (spawn / wait / send / resume /
-						// close) — multi-line layout in a dedicated component.
-						// `subagent_spawn` only reaches here for *isolated*
-						// spawns; consecutive spawns are folded into a
-						// SubAgentSpawnGroup above.
-						return <SubAgentToolCall key={key} part={part as ToolCallPart} />;
-					}
 					return (
 						<AssistantToolCall
 							key={key}
@@ -271,6 +200,7 @@ export function ChatAssistantMessage({
 									: (part as ToolCallPart).isError
 							}
 							streamingStatus={(part as ToolCallPart).streamingStatus}
+							compact={compact}
 							childParts={(part as ToolCallPart).children}
 						/>
 					);
@@ -284,14 +214,8 @@ export function ChatAssistantMessage({
 				if (isPlanReviewPart(part)) {
 					return <PlanReviewCard key={key} part={part} />;
 				}
-				if (isDelegationAnchorPart(part)) {
-					return (
-						<DelegationAnchor
-							key={key}
-							part={part}
-							onFocusChild={onFocusChild}
-						/>
-					);
+				if (isGenericCardPart(part)) {
+					return <GenericCard key={key} part={part} />;
 				}
 				return null;
 			})}

@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PendingUserInput } from "@/features/conversation/pending-user-input";
+import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
+import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import type {
 	AgentModelOption,
 	ThreadMessageLike,
@@ -33,23 +34,14 @@ const apiMocks = vi.hoisted(() => ({
 	loadRepoPreferences: vi.fn(),
 	loadSessionThreadMessages: vi.fn(),
 	renameSession: vi.fn(),
-	respondToUserInput: vi.fn(),
+	respondToDeferredTool: vi.fn(),
+	respondToElicitationRequest: vi.fn(),
 	respondToPermissionRequest: vi.fn(),
 	startAgentMessageStream: vi.fn(),
 	steerAgentStream: vi.fn(),
 	stopAgentStream: vi.fn(),
 }));
 
-// `listActiveStreams` is intentionally NOT mocked here. The hook reads it
-// via React Query, where `activeStreamsQueryOptions` provides
-// `initialData: []`, and `src/test/setup.ts`'s default invoke mock
-// returns `undefined` for unhandled commands — both paths produce an
-// empty array, which matches "no backend-tracked streams" for these
-// unit tests. If a future test wants to assert the backend-truth abort
-// path (e.g. that `handleStopStream` picks up a `provider` published by
-// the Rust registry rather than the local optimistic fallback), mock
-// `listActiveStreams` explicitly here so the default doesn't silently
-// swallow the assertion.
 vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 
@@ -59,7 +51,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		loadRepoPreferences: apiMocks.loadRepoPreferences,
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		renameSession: apiMocks.renameSession,
-		respondToUserInput: apiMocks.respondToUserInput,
+		respondToDeferredTool: apiMocks.respondToDeferredTool,
+		respondToElicitationRequest: apiMocks.respondToElicitationRequest,
 		respondToPermissionRequest: apiMocks.respondToPermissionRequest,
 		startAgentMessageStream: apiMocks.startAgentMessageStream,
 		steerAgentStream: apiMocks.steerAgentStream,
@@ -74,7 +67,7 @@ const MODEL: AgentModelOption = {
 	cliModel: "gpt-5.4",
 };
 
-function createAskUserQuestionInput(): PendingUserInput {
+function createDeferredTool(): PendingDeferredTool {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
@@ -82,34 +75,34 @@ function createAskUserQuestionInput(): PendingUserInput {
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
 		permissionMode: "default",
-		userInputId: "tool-1",
-		source: "Claude",
-		message: "Claude is asking for your input.",
-		payload: {
-			kind: "ask-user-question",
-			questions: [{ question: "Pick one", options: [] }],
+		toolUseId: "tool-1",
+		toolName: "AskUserQuestion",
+		toolInput: {
+			question: "Pick one",
 		},
 	};
 }
 
-function createFormUserInput(): PendingUserInput {
+function createPendingElicitation(): PendingElicitation {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
 		resolvedModel: "opus-1m",
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
-		permissionMode: null,
-		userInputId: "elicitation-1",
-		source: "design-server",
+		elicitationId: "elicitation-1",
+		serverName: "design-server",
 		message: "Need structured input",
-		payload: {
-			kind: "form",
-			schema: {
-				type: "object",
-				properties: { name: { type: "string", title: "Name" } },
-				required: ["name"],
+		mode: "form",
+		requestedSchema: {
+			type: "object",
+			properties: {
+				name: {
+					type: "string",
+					title: "Name",
+				},
 			},
+			required: ["name"],
 		},
 	};
 }
@@ -177,7 +170,7 @@ describe("useConversationStreaming", () => {
 		apiMocks.loadRepoPreferences.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.renameSession.mockReset();
-		apiMocks.respondToUserInput.mockReset();
+		apiMocks.respondToDeferredTool.mockReset();
 		apiMocks.respondToPermissionRequest.mockReset();
 		apiMocks.startAgentMessageStream.mockReset();
 		apiMocks.steerAgentStream.mockReset();
@@ -187,7 +180,8 @@ describe("useConversationStreaming", () => {
 		apiMocks.generateSessionTitle.mockResolvedValue(null);
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.renameSession.mockResolvedValue(undefined);
-		apiMocks.respondToUserInput.mockResolvedValue(undefined);
+		apiMocks.respondToDeferredTool.mockResolvedValue(undefined);
+		apiMocks.respondToElicitationRequest.mockResolvedValue(undefined);
 		apiMocks.respondToPermissionRequest.mockResolvedValue(undefined);
 		// Default: steer claims the turn ended so tests that don't opt in to
 		// steer semantics fall through to the normal send path. Individual
@@ -298,12 +292,17 @@ describe("useConversationStreaming", () => {
 		expect(getLastInteractionSnapshot(interactionSnapshots)).toEqual(new Map());
 	});
 
-	it("delivers the deferred-tool answer over the live stream RPC and never starts a new stream", async () => {
-		// AskUserQuestion now pauses inside the sidecar's `canUseTool`
-		// callback on the same live `query()`. Submitting answers is just
-		// a `respondToUserInput` RPC — no new `startAgentMessageStream`
-		// (and definitely no `resumeOnly`/empty-prompt resume — see
-		// issue #397).
+	it("uses the Helmor session id when stopping a resumed deferred stream", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, _onEvent: (event: unknown) => void) => {
+				return undefined;
+			},
+		);
+
+		const buildSendRequestExtras = vi.fn(() => ({
+			kanbanWorkspaceId: "goal-workspace-1",
+			goalTitle: "Launch Goal",
+		}));
 		const { Wrapper } = createWrapper();
 		const { result } = renderHook(
 			() =>
@@ -315,24 +314,52 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					buildSendRequestExtras,
 				}),
 			{ wrapper: Wrapper },
 		);
 
 		await act(async () => {
-			await result.current.handleUserInputResponse(
-				createAskUserQuestionInput(),
-				"submit",
-				{ content: { questions: [], answers: { Q: "A" } } },
+			await result.current.handleDeferredToolResponse(
+				createDeferredTool(),
+				"allow",
 			);
 		});
 
-		expect(apiMocks.respondToUserInput).toHaveBeenCalledWith(
-			"tool-1",
-			"submit",
-			{ questions: [], answers: { Q: "A" } },
+		expect(buildSendRequestExtras).toHaveBeenCalledWith({
+			workspaceId: "workspace-1",
+			sessionId: "session-1",
+			prompt: "",
+			model: expect.objectContaining({
+				id: "opus-1m",
+				provider: "claude",
+			}),
+		});
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kanbanWorkspaceId: "goal-workspace-1",
+				goalTitle: "Launch Goal",
+				provider: "claude",
+				modelId: "opus-1m",
+				resumeOnly: true,
+				sessionId: "provider-session-1",
+				helmorSessionId: "session-1",
+			}),
+			expect.any(Function),
 		);
-		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+		act(() => {
+			result.current.handleStopStream();
+		});
+
+		expect(apiMocks.stopAgentStream).toHaveBeenCalledWith(
+			"session-1",
+			"claude",
+		);
+		expect(apiMocks.stopAgentStream).not.toHaveBeenCalledWith(
+			"provider-session-1",
+			"claude",
+		);
 	});
 
 	it("sets hasPlanReview when planCaptured event is received", async () => {
@@ -372,6 +399,79 @@ describe("useConversationStreaming", () => {
 		});
 
 		expect(result.current.hasPlanReview).toBe(true);
+	});
+
+	it("shows assistant progress immediately before the first stream event", async () => {
+		const streamCallbacks: Array<(event: unknown) => void> = [];
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				streamCallbacks.push(onEvent);
+			},
+		);
+
+		const { Wrapper, queryClient } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "continue on codex",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		const initial = queryClient.getQueryData<ThreadMessageLike[]>(
+			sessionThreadCacheKey("session-1"),
+		);
+		expect(initial).toHaveLength(2);
+		expect(initial?.[0]?.role).toBe("user");
+		expect(initial?.[1]?.role).toBe("assistant");
+		expect(initial?.[1]?.streaming).toBe(true);
+		expect(initial?.[1]?.content).toEqual([
+			expect.objectContaining({ type: "text", text: "Working…" }),
+		]);
+
+		act(() => {
+			streamCallbacks[0]?.({
+				kind: "streamingPartial",
+				message: {
+					role: "assistant",
+					id: "assistant-1",
+					content: [{ type: "text", text: "Real output" }],
+					streaming: true,
+				},
+			});
+		});
+		await act(async () => {
+			await new Promise((resolve) => window.requestAnimationFrame(resolve));
+		});
+
+		const updated = queryClient.getQueryData<ThreadMessageLike[]>(
+			sessionThreadCacheKey("session-1"),
+		);
+		expect(updated).toHaveLength(2);
+		expect(updated?.[1]?.id).toBe("assistant-1");
+		expect(updated?.[1]?.content).toEqual([
+			expect.objectContaining({ type: "text", text: "Real output" }),
+		]);
 	});
 
 	it("clears hasPlanReview when a new message is submitted", async () => {
@@ -499,74 +599,6 @@ describe("useConversationStreaming", () => {
 			}),
 		);
 		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
-	});
-
-	it("scopes the local sending flag to its own context key so siblings stay idle", async () => {
-		const streamCallbacks: Array<(event: unknown) => void> = [];
-		apiMocks.startAgentMessageStream.mockImplementation(
-			async (_payload: unknown, onEvent: (event: unknown) => void) => {
-				streamCallbacks.push(onEvent);
-			},
-		);
-
-		const { Wrapper } = createWrapper();
-		const { result } = renderHook(
-			() => ({
-				running: useConversationStreaming({
-					composerContextKey: "session:session-1",
-					displayedSelectedModelId: MODEL.id,
-					displayedSessionId: "session-1",
-					displayedWorkspaceId: "workspace-1",
-					selectionPending: false,
-					followUpBehavior: "steer",
-					submitQueue: noopSubmitQueue,
-				}),
-				emptySibling: useConversationStreaming({
-					composerContextKey: "start:repo:repo-1",
-					displayedSelectedModelId: MODEL.id,
-					displayedSessionId: null,
-					displayedWorkspaceId: null,
-					selectionPending: false,
-					followUpBehavior: "steer",
-					submitQueue: noopSubmitQueue,
-				}),
-			}),
-			{ wrapper: Wrapper },
-		);
-
-		await act(async () => {
-			await result.current.running.handleComposerSubmit({
-				prompt: "kick things off",
-				imagePaths: [],
-				filePaths: [],
-				customTags: [],
-				model: MODEL,
-				workingDirectory: "/tmp/helmor",
-				effortLevel: "medium",
-				permissionMode: "default",
-				fastMode: false,
-			});
-		});
-
-		expect(result.current.running.isSending).toBe(true);
-		expect(result.current.running.busySessionIds.has("session-1")).toBe(true);
-		expect(result.current.emptySibling.isSending).toBe(false);
-		expect(result.current.emptySibling.busySessionIds.size).toBe(0);
-
-		act(() => {
-			streamCallbacks[0]({
-				kind: "done",
-				provider: MODEL.provider,
-				modelId: MODEL.id,
-				resolvedModel: MODEL.cliModel,
-				sessionId: "provider-session-1",
-				workingDirectory: "/tmp/helmor",
-				persisted: true,
-			});
-		});
-
-		expect(result.current.running.isSending).toBe(false);
-		expect(result.current.running.busySessionIds.size).toBe(0);
 	});
 
 	it("sends the repo general preference via promptPrefix on the first prompt only", async () => {
@@ -871,31 +903,32 @@ describe("useConversationStreaming", () => {
 
 		act(() => {
 			streamCallbacks[0]({
-				kind: "userInputRequest",
+				kind: "elicitationRequest",
 				provider: "claude",
 				modelId: "",
 				resolvedModel: "opus-1m",
 				sessionId: "provider-session-1",
 				workingDirectory: "/tmp/helmor",
-				userInputId: "elicitation-1",
-				source: "design-server",
+				elicitationId: "elicitation-1",
+				serverName: "design-server",
 				message: "Need structured input",
-				payload: {
-					kind: "form",
-					schema: {
-						type: "object",
-						properties: { name: { type: "string", title: "Name" } },
-						required: ["name"],
+				mode: "form",
+				requestedSchema: {
+					type: "object",
+					properties: {
+						name: { type: "string", title: "Name" },
 					},
+					required: ["name"],
 				},
 			});
 		});
 
-		expect(result.current.pendingUserInput).toEqual(
+		expect(result.current.pendingDeferredTool).toBeNull();
+		expect(result.current.pendingElicitation).toEqual(
 			expect.objectContaining({
-				userInputId: "elicitation-1",
+				elicitationId: "elicitation-1",
 				modelId: MODEL.id,
-				source: "design-server",
+				serverName: "design-server",
 			}),
 		);
 		expect(getLastInteractionSnapshot(interactionSnapshots)).toEqual(
@@ -1453,19 +1486,19 @@ describe("useConversationStreaming", () => {
 		);
 
 		await act(async () => {
-			await result.current.handleUserInputResponse(
-				createFormUserInput(),
-				"submit",
-				{ content: { name: "Helmor" } },
+			await result.current.handleElicitationResponse(
+				createPendingElicitation(),
+				"accept",
+				{ name: "Helmor" },
 			);
 		});
 
-		expect(apiMocks.respondToUserInput).toHaveBeenCalledWith(
+		expect(apiMocks.respondToElicitationRequest).toHaveBeenCalledWith(
 			"elicitation-1",
-			"submit",
+			"accept",
 			{ name: "Helmor" },
 		);
-		expect(result.current.pendingUserInput).toBeNull();
+		expect(result.current.pendingElicitation).toBeNull();
 		expect(result.current.isSending).toBe(true);
 	});
 

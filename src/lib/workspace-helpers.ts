@@ -31,6 +31,8 @@ export function createOptimisticCreatingWorkspaceDetail(
 		defaultBranch: null,
 		rootPath: null,
 		directoryName: row.directoryName ?? row.id,
+		workspaceKind: row.workspaceKind ?? "code",
+		goalWorkspaceId: row.goalWorkspaceId ?? null,
 		state: "initializing",
 		hasUnread: false,
 		workspaceUnread: 0,
@@ -43,7 +45,6 @@ export function createOptimisticCreatingWorkspaceDetail(
 		branch: row.branch ?? null,
 		initializationParentBranch: null,
 		intendedTargetBranch: null,
-		mode: row.mode ?? "worktree",
 		pinnedAt: row.pinnedAt ?? null,
 		prTitle: null,
 		archiveCommit: null,
@@ -362,7 +363,6 @@ export function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
 		repoIconSrc: summary.repoIconSrc ?? null,
 		repoInitials: summary.repoInitials ?? null,
 		state: summary.state,
-		mode: summary.mode ?? "worktree",
 		hasUnread: summary.hasUnread,
 		workspaceUnread: summary.workspaceUnread,
 		unreadSessionCount: summary.unreadSessionCount,
@@ -390,21 +390,18 @@ export function resolveSessionSelectedModelId({
 	modelSelections,
 	modelSections,
 	settingsDefaultModelId,
-	contextKey,
 }: {
 	session: Pick<
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	> | null;
-	modelSelections: Partial<Record<string, string>>;
+	modelSelections: Record<string, string>;
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
-	contextKey?: string | null;
 }): string | null {
-	let selectedModelId = contextKey ? modelSelections[contextKey] : undefined;
-	if (!selectedModelId && session) {
-		selectedModelId = modelSelections[getComposerContextKey(null, session.id)];
-	}
+	const selectedModelId = session
+		? (modelSelections[getComposerContextKey(null, session.id)] ?? null)
+		: null;
 	return (
 		selectedModelId ??
 		inferDefaultModelId(session, modelSections, settingsDefaultModelId)
@@ -421,7 +418,7 @@ export function resolveSessionDisplayProvider({
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	>;
-	modelSelections: Partial<Record<string, string>>;
+	modelSelections: Record<string, string>;
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
 }): AgentProvider | null {
@@ -444,9 +441,6 @@ export function resolveSessionDisplayProvider({
 	if (session.agentType === "claude") {
 		return "claude";
 	}
-	if (session.agentType === "cursor") {
-		return "cursor";
-	}
 	return null;
 }
 
@@ -465,11 +459,12 @@ export function rowToWorkspaceSummary(
 		id: row.id,
 		title: row.title,
 		directoryName: row.directoryName ?? "",
+		workspaceKind: row.workspaceKind ?? "code",
+		goalWorkspaceId: row.goalWorkspaceId ?? null,
 		repoName: row.repoName ?? "",
 		repoIconSrc: row.repoIconSrc ?? null,
 		repoInitials: row.repoInitials ?? null,
 		state: row.state ?? "archived",
-		mode: row.mode ?? "worktree",
 		hasUnread: row.hasUnread ?? false,
 		workspaceUnread: row.workspaceUnread ?? 0,
 		unreadSessionCount: row.unreadSessionCount ?? 0,
@@ -529,13 +524,12 @@ export function inferDefaultModelId(
 ): string | null {
 	const allOptions = modelSections.flatMap((section) => section.options);
 
-	// If the session row carries an explicit model — either from history
-	// (streaming finalizer) or from a saveForLater pre-config — respect it.
-	// Fresh sessions are created with `model = NULL` so this safely falls
-	// through to the user's current settings default below.
-	const sessionModel = session?.model ?? null;
-	if (sessionModel && findModelOption(modelSections, sessionModel)) {
-		return sessionModel;
+	// Existing session with history → respect whatever model it used
+	if (!isNewSession(session)) {
+		const sessionModel = session?.model ?? null;
+		if (sessionModel && findModelOption(modelSections, sessionModel)) {
+			return sessionModel;
+		}
 	}
 
 	// New session or no valid session model → user setting is the only source.

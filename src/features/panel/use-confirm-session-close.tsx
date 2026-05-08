@@ -25,7 +25,7 @@ export type SessionCloseRequest = {
 };
 
 type UseConfirmSessionCloseOptions = {
-	busySessionIds?: Set<string>;
+	sendingSessionIds?: Set<string>;
 	onSelectSession?: (sessionId: string) => void;
 	onSessionHidden?: (sessionId: string, workspaceId: string) => void;
 	pushToast: PushWorkspaceToast;
@@ -42,7 +42,7 @@ type UseConfirmSessionCloseReturn = {
 // (tab × button, Cmd+W, etc.) calls `requestClose` with the target
 // session's full context.
 export function useConfirmSessionClose({
-	busySessionIds,
+	sendingSessionIds,
 	onSelectSession,
 	onSessionHidden,
 	pushToast,
@@ -70,13 +70,15 @@ export function useConfirmSessionClose({
 
 	const requestClose = useCallback(
 		async (request: SessionCloseRequest) => {
-			if (shouldConfirmRunningSessionClose(request.session, busySessionIds)) {
+			if (
+				shouldConfirmRunningSessionClose(request.session, sendingSessionIds)
+			) {
 				setPending(request);
 				return;
 			}
 			await performClose(request);
 		},
-		[busySessionIds, performClose],
+		[performClose, sendingSessionIds],
 	);
 
 	const handleConfirm = useCallback(async () => {
@@ -110,9 +112,7 @@ export function useConfirmSessionClose({
 			return "Claude";
 		}
 		const provider = pending.provider ?? pending.session.agentType;
-		if (provider === "codex") return "Codex";
-		if (provider === "cursor") return "Cursor";
-		return "Claude";
+		return provider === "codex" ? "Codex" : "Claude";
 	}, [pending]);
 
 	const dialogNode = (

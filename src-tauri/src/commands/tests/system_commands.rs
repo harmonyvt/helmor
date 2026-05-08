@@ -3,7 +3,10 @@
 //! These establish the published contract (JSON shape) the frontend depends on.
 //! Editor-catalog tests live next to the catalog in `commands::editors`.
 
-use crate::commands::system_commands::{CliInstallState, CliStatus, DataInfo};
+use crate::{
+    commands::system_commands::{CliInstallState, CliStatus, DataInfo},
+    data_dir::DataDirPreference,
+};
 
 #[test]
 fn cli_status_serializes_camel_case() {
@@ -39,12 +42,23 @@ fn cli_status_missing_install_path_is_null() {
 fn data_info_serializes_camel_case() {
     let info = DataInfo {
         data_mode: "development".into(),
+        default_data_mode: "development".into(),
         data_dir: "/tmp/helmor".into(),
         db_path: "/tmp/helmor/helmor.db".into(),
+        data_dir_preference: DataDirPreference::Automatic,
+        data_dir_preference_path: "/tmp/bootstrap-settings.json".into(),
+        data_dir_locked_by_env: false,
     };
     let value = serde_json::to_value(&info).unwrap();
     assert_eq!(value["dataMode"], "development");
+    assert_eq!(value["defaultDataMode"], "development");
     assert_eq!(value["dataDir"], "/tmp/helmor");
     assert_eq!(value["dbPath"], "/tmp/helmor/helmor.db");
+    assert_eq!(value["dataDirPreference"], "automatic");
+    assert_eq!(
+        value["dataDirPreferencePath"],
+        "/tmp/bootstrap-settings.json"
+    );
+    assert_eq!(value["dataDirLockedByEnv"], false);
     assert!(value.get("data_mode").is_none());
 }

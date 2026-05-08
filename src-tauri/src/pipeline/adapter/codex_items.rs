@@ -14,7 +14,8 @@
 use serde_json::Value;
 
 use super::blocks::parse_codex_todolist_items;
-use crate::pipeline::codex_collab::{build_collab_result_text, collab_synthetic_tool_name};
+use crate::pipeline::file_change::file_change_result_text;
+use crate::pipeline::pi_tools::{canonical_pi_tool_name, mcp_result_text, normalize_pi_tool_args};
 use crate::pipeline::types::{
     ExtendedMessagePart, ImageSource, IntermediateMessage, MessagePart, MessageRole, MessageStatus,
     NoticeSeverity, PlanAllowedPrompt, ThreadMessageLike,
@@ -61,7 +62,7 @@ pub(super) fn render_item_completed(
         Some("plan") => render_plan(msg, item, result),
         Some("context_compaction") => render_context_compaction(msg, item, result),
         Some("image_generation") => render_image_generation(msg, item, result),
-        Some("collab_agent_tool_call") => render_collab_agent_tool_call(msg, item, result),
+        Some("generic_card") => render_generic_card(msg, item, result),
         _ => {}
     }
 }
@@ -169,7 +170,7 @@ fn render_reasoning(msg: &IntermediateMessage, item: &Value, result: &mut Vec<Th
                     id: format!("{}:blk:0", msg.id),
                     text: text.to_string(),
                     streaming: None,
-                    duration_ms: None,
+                    duration_ms: item.get("duration_ms").and_then(Value::as_u64),
                 })],
                 status: Some(MessageStatus {
                     status_type: "complete".to_string(),
@@ -194,11 +195,7 @@ fn render_file_change(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("completed");
-    let result_text = match status {
-        "completed" => "Patch applied".to_string(),
-        "failed" => "Patch failed".to_string(),
-        other => format!("Patch {other}"),
-    };
+    let result_text = file_change_result_text(item, status);
     let failed = status == "failed";
     let args = serde_json::json!({"changes": changes});
     let args_text = serde_json::to_string(&args).unwrap_or_default();
@@ -280,24 +277,14 @@ fn render_mcp_tool_call(
 ) {
     let server = item.get("server").and_then(Value::as_str).unwrap_or("");
     let tool = item.get("tool").and_then(Value::as_str).unwrap_or("");
-    let arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
+    let raw_arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
+    let arguments = normalize_pi_tool_args(server, tool, raw_arguments);
     let status = item
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("completed");
     let failed = status == "failed";
-    let result_text = if failed {
-        let m = item
-            .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or("MCP tool failed");
-        format!("Error: {m}")
-    } else {
-        item.get("result")
-            .and_then(|r| serde_json::to_string(r).ok())
-            .unwrap_or_else(|| "OK".to_string())
-    };
+    let result_text = mcp_result_text(server, tool, item, failed);
     let args_text = serde_json::to_string(&arguments).unwrap_or_default();
     result.push(ThreadMessageLike {
         role: MessageRole::Assistant,
@@ -305,7 +292,7 @@ fn render_mcp_tool_call(
         created_at: Some(msg.created_at.clone()),
         content: vec![ExtendedMessagePart::Basic(MessagePart::ToolCall {
             tool_call_id: format!("codex-mcp-{}", msg.id),
-            tool_name: format!("mcp__{server}__{tool}"),
+            tool_name: canonical_pi_tool_name(server, tool),
             args: arguments,
             args_text,
             result: Some(Value::String(result_text)),
@@ -336,52 +323,6 @@ fn render_plan(msg: &IntermediateMessage, item: &Value, result: &mut Vec<ThreadM
             plan: Some(text.to_string()),
             plan_file_path: None,
             allowed_prompts: Vec::<PlanAllowedPrompt>::new(),
-        })],
-        status: Some(MessageStatus {
-            status_type: "complete".to_string(),
-            reason: Some("stop".to_string()),
-        }),
-        streaming: None,
-    });
-}
-
-/// Render a `collabAgentToolCall` item (5 tool variants: spawnAgent /
-/// sendInput / resumeAgent / wait / closeAgent). Mirrors the live-stream
-/// shape produced by the accumulator's `handle_collab_agent_tool_call`
-/// so historical reload reuses the same `subagent_*` toolName the
-/// frontend already knows how to render.
-fn render_collab_agent_tool_call(
-    msg: &IntermediateMessage,
-    item: &Value,
-    result: &mut Vec<ThreadMessageLike>,
-) {
-    let tool = item.get("tool").and_then(Value::as_str).unwrap_or("");
-    let tool_name = collab_synthetic_tool_name(tool);
-    let status = item.get("status").and_then(Value::as_str).unwrap_or("");
-    let failed = status == "failed";
-
-    let mut args = item.clone();
-    if let Some(obj) = args.as_object_mut() {
-        obj.remove("type");
-        obj.remove("id");
-    }
-    let args_text = serde_json::to_string(&args).unwrap_or_default();
-
-    let result_text = build_collab_result_text(tool, status, item);
-
-    result.push(ThreadMessageLike {
-        role: MessageRole::Assistant,
-        id: Some(msg.id.clone()),
-        created_at: Some(msg.created_at.clone()),
-        content: vec![ExtendedMessagePart::Basic(MessagePart::ToolCall {
-            tool_call_id: format!("codex-collab-{}", msg.id),
-            tool_name: tool_name.to_string(),
-            args,
-            args_text,
-            result: Some(Value::String(result_text)),
-            is_error: if failed { Some(true) } else { None },
-            streaming_status: None,
-            children: Vec::new(),
         })],
         status: Some(MessageStatus {
             status_type: "complete".to_string(),
@@ -436,6 +377,72 @@ fn render_image_generation(
             id: format!("{}:blk:0", msg.id),
             source,
             media_type,
+        })],
+        status: Some(MessageStatus {
+            status_type: "complete".to_string(),
+            reason: Some("stop".to_string()),
+        }),
+        streaming: None,
+    });
+}
+
+fn render_generic_card(
+    msg: &IntermediateMessage,
+    item: &Value,
+    result: &mut Vec<ThreadMessageLike>,
+) {
+    let title = item
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("Provider event")
+        .to_string();
+    let subtitle = item
+        .get("subtitle")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let body = item
+        .get("body")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let severity =
+        item.get("severity")
+            .and_then(Value::as_str)
+            .and_then(|severity| match severity {
+                "error" => Some(NoticeSeverity::Error),
+                "warning" => Some(NoticeSeverity::Warning),
+                "info" => Some(NoticeSeverity::Info),
+                _ => None,
+            });
+    let status = item
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let provider = item
+        .get("provider")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let details = item
+        .get("details")
+        .cloned()
+        .filter(|value| !value.is_null());
+
+    result.push(ThreadMessageLike {
+        role: MessageRole::Assistant,
+        id: Some(msg.id.clone()),
+        created_at: Some(msg.created_at.clone()),
+        content: vec![ExtendedMessagePart::Basic(MessagePart::GenericCard {
+            id: format!("{}:blk:0", msg.id),
+            title,
+            subtitle,
+            body,
+            severity,
+            status,
+            provider,
+            details,
         })],
         status: Some(MessageStatus {
             status_type: "complete".to_string(),

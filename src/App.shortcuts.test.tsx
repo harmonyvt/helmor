@@ -22,14 +22,12 @@ const apiMocks = vi.hoisted(() => ({
 	loadSessionThreadMessages: vi.fn(),
 	getSessionContextUsage: vi.fn(),
 	getCodexRateLimits: vi.fn(),
-	getClaudeRateLimits: vi.fn(),
 	loadRepoScripts: vi.fn(),
-	listRepositories: vi.fn(),
-	listSessionDrafts: vi.fn(),
 	getWorkspaceForge: vi.fn(),
 	refreshWorkspaceChangeRequest: vi.fn(),
 	loadWorkspaceForgeActionStatus: vi.fn(),
 	stopAgentStream: vi.fn(),
+	getWorkspacePrComments: vi.fn(),
 	requestQuit: vi.fn(),
 }));
 
@@ -88,15 +86,13 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		getSessionContextUsage: apiMocks.getSessionContextUsage,
 		getCodexRateLimits: apiMocks.getCodexRateLimits,
-		getClaudeRateLimits: apiMocks.getClaudeRateLimits,
 		loadRepoScripts: apiMocks.loadRepoScripts,
-		listRepositories: apiMocks.listRepositories,
-		listSessionDrafts: apiMocks.listSessionDrafts,
 		getWorkspaceForge: apiMocks.getWorkspaceForge,
 		refreshWorkspaceChangeRequest: apiMocks.refreshWorkspaceChangeRequest,
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
 		requestQuit: apiMocks.requestQuit,
 		stopAgentStream: apiMocks.stopAgentStream,
+		getWorkspacePrComments: apiMocks.getWorkspacePrComments,
 	};
 });
 
@@ -261,7 +257,6 @@ function createWorkspaceDetail(
 		branch: archived ? "archive/main" : "main",
 		initializationParentBranch: "main",
 		intendedTargetBranch: "main",
-		mode: "worktree",
 		pinnedAt: null,
 		prTitle: null,
 		archiveCommit: null,
@@ -327,6 +322,16 @@ const EMPTY_REPO_SCRIPTS = {
 	archiveFromProject: false,
 	autoRunSetup: true,
 };
+
+function createDeferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
+}
 
 function getSessionTab(title: string) {
 	const tab = screen.getByText(title).closest('[role="tab"]');
@@ -429,14 +434,12 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.getSessionContextUsage.mockReset();
 		apiMocks.getCodexRateLimits.mockReset();
-		apiMocks.getClaudeRateLimits.mockReset();
 		apiMocks.loadRepoScripts.mockReset();
-		apiMocks.listRepositories.mockReset();
-		apiMocks.listSessionDrafts.mockReset();
 		apiMocks.getWorkspaceForge.mockReset();
 		apiMocks.refreshWorkspaceChangeRequest.mockReset();
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
 		apiMocks.stopAgentStream.mockReset();
+		apiMocks.getWorkspacePrComments.mockReset();
 		eventApiMocks.listen.mockClear();
 		eventApiMocks.handlers.clear();
 		apiMocks.createSession.mockImplementation(async (workspaceId: string) => {
@@ -560,22 +563,17 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.getSessionContextUsage.mockResolvedValue(null);
 		apiMocks.getCodexRateLimits.mockResolvedValue(null);
-		apiMocks.getClaudeRateLimits.mockResolvedValue(null);
 		apiMocks.loadRepoScripts.mockResolvedValue(EMPTY_REPO_SCRIPTS);
-		apiMocks.listRepositories.mockResolvedValue([
-			{
-				id: "repo-1",
-				name: "helmor",
-				defaultBranch: "main",
-				repoInitials: "H",
-			},
-		]);
-		apiMocks.listSessionDrafts.mockResolvedValue([]);
 		apiMocks.getWorkspaceForge.mockResolvedValue(UNKNOWN_FORGE_DETECTION);
 		apiMocks.refreshWorkspaceChangeRequest.mockResolvedValue(null);
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
 			UNAVAILABLE_FORGE_ACTION_STATUS,
 		);
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			comments: [],
+			prNumber: null,
+			prUrl: null,
+		});
 		apiMocks.stopAgentStream.mockResolvedValue(undefined);
 	});
 
@@ -658,7 +656,7 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
-	it("opens the workspace start composer on Command+N", async () => {
+	it("opens the new workspace picker on Command+N", async () => {
 		await renderAppReady();
 
 		fireEvent.keyDown(window, {
@@ -667,30 +665,7 @@ describe("App global navigation shortcuts", () => {
 			metaKey: true,
 		});
 
-		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
-		expect(
-			screen.getByRole("button", { name: "New Workspace" }),
-		).toBeDisabled();
-	});
-
-	it("focuses the start composer on Command+L", async () => {
-		const user = userEvent.setup({ pointerEventsCheck: 0 });
-		await renderAppReady();
-
-		await user.click(screen.getByRole("button", { name: "New workspace" }));
-		const input = await screen.findByLabelText("Workspace input");
-		input.blur();
-		expect(input).not.toHaveFocus();
-
-		fireEvent.keyDown(window, {
-			key: "l",
-			code: "KeyL",
-			metaKey: true,
-		});
-
-		await waitFor(() => {
-			expect(input).toHaveFocus();
-		});
+		await screen.findByRole("dialog");
 	});
 
 	it("opens the add repository menu on Command+Shift+N", async () => {
@@ -704,19 +679,6 @@ describe("App global navigation shortcuts", () => {
 		});
 
 		await screen.findByRole("menuitem", { name: /Open project/i });
-	});
-
-	it("toggles the context panel on Option+Command+C", async () => {
-		await renderAppReady();
-
-		fireEvent.keyDown(window, {
-			key: "c",
-			code: "KeyC",
-			metaKey: true,
-			altKey: true,
-		});
-
-		await screen.findByRole("heading", { name: "Contexts" });
 	});
 
 	it("does not wrap session navigation on Option+Command+Left from the first session", async () => {
@@ -742,6 +704,53 @@ describe("App global navigation shortcuts", () => {
 			expectSelectedWorkspace("Review workspace");
 			expectSelectedSession("Review session 1");
 		});
+	});
+
+	it("does not wait for thread history before selecting a workspace", async () => {
+		const reviewMessages = createDeferred<[]>();
+		apiMocks.loadSessionThreadMessages.mockImplementation(
+			async (sessionId: string) => {
+				if (sessionId === "session-review-1") {
+					return reviewMessages.promise;
+				}
+				return [];
+			},
+		);
+
+		await renderAppReady();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "Review workspace" }),
+		);
+
+		await waitFor(() => {
+			expectSelectedWorkspace("Review workspace");
+			expectSelectedSession("Review session 1");
+		});
+		expect(apiMocks.loadSessionThreadMessages).toHaveBeenCalledWith(
+			"session-review-1",
+		);
+
+		reviewMessages.resolve([]);
+	});
+
+	it("background workspace warmup does not read thread history", async () => {
+		await renderAppReady();
+
+		await waitFor(
+			() => {
+				expect(apiMocks.loadWorkspaceDetail).toHaveBeenCalledWith(
+					WORKSPACE_IDS.progress,
+				);
+				expect(apiMocks.loadWorkspaceSessions).toHaveBeenCalledWith(
+					WORKSPACE_IDS.progress,
+				);
+			},
+			{ timeout: 3000 },
+		);
+		expect(apiMocks.loadSessionThreadMessages).not.toHaveBeenCalledWith(
+			"session-progress-1",
+		);
 	});
 
 	it("does not wrap workspace navigation on Option+Command+Up from the first workspace", async () => {
@@ -818,8 +827,32 @@ describe("App global navigation shortcuts", () => {
 			expectSelectedSession("Done session 2");
 		});
 
-		await user.click(screen.getByRole("button", { name: "New workspace" }));
-		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
+		const newWorkspaceButton = screen.getByRole("button", {
+			name: "New workspace",
+		});
+		await user.click(newWorkspaceButton);
+		await screen.findByRole("dialog");
+		const repositoryPicker = await screen.findByRole("listbox", {
+			name: "Suggestions",
+		});
+		// Picker focus is moved on the rAF after `onOpenAutoFocus`. Under load
+		// from prior tests the rAF can land after the synchronous assertion,
+		// so wait for it.
+		await waitFor(() => {
+			expect(repositoryPicker).toHaveFocus();
+		});
+
+		fireEvent.keyDown(repositoryPicker, {
+			key: "ArrowDown",
+			code: "ArrowDown",
+			metaKey: true,
+			altKey: true,
+		});
+
+		await waitFor(() => {
+			expectSelectedWorkspace("Review workspace");
+			expectSelectedSession("Review session 1");
+		});
 	});
 
 	it("only responds to the exact Option shortcut combination", async () => {

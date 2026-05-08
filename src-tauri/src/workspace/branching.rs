@@ -216,7 +216,7 @@ fn try_realign_local_branch(
         return Ok(None);
     };
 
-    let workspace_dir = helpers::workspace_path(record)?;
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     if !workspace_dir.is_dir() {
         return Ok(None);
     }
@@ -261,7 +261,7 @@ pub fn refresh_remote_and_realign(
     if !record.state.is_operational() {
         return Ok(false);
     }
-    let workspace_dir = helpers::workspace_path(&record)?;
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     if !workspace_dir.is_dir() {
         return Ok(false);
     }
@@ -326,8 +326,7 @@ pub enum SyncWorkspaceTargetOutcome {
     Updated,
     AlreadyUpToDate,
     Conflict,
-    /// Merge succeeded but restoring the user's stashed work hit conflicts.
-    StashPopConflict,
+    DirtyWorktree,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -380,7 +379,8 @@ pub fn prefetch_remote_refs(
         if !record.state.is_operational() {
             return Ok(PrefetchRemoteRefsResponse { fetched: false });
         }
-        let workspace_dir = helpers::workspace_path(&record)?;
+        let workspace_dir =
+            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
         if !workspace_dir.is_dir() {
             return Ok(PrefetchRemoteRefsResponse { fetched: false });
         }
@@ -417,7 +417,7 @@ pub fn sync_workspace_with_target_branch(
         .remote
         .clone()
         .unwrap_or_else(|| "origin".to_string());
-    let workspace_dir = helpers::workspace_path(&record)?;
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     if !workspace_dir.is_dir() {
         bail_coded!(
             ErrorCode::WorkspaceBroken,
@@ -427,7 +427,6 @@ pub fn sync_workspace_with_target_branch(
 
     let current_status =
         git_ops::workspace_action_status(&workspace_dir, Some(&remote), Some(&target_branch))?;
-    // Pre-existing in-progress merge — let the user/agent resolve before we touch it.
     if current_status.conflict_count > 0 {
         return Ok(SyncWorkspaceTargetResponse {
             outcome: SyncWorkspaceTargetOutcome::Conflict,
@@ -435,11 +434,19 @@ pub fn sync_workspace_with_target_branch(
             conflicted_files: Vec::new(),
         });
     }
-    let dirty = current_status.uncommitted_count > 0;
+    if current_status.uncommitted_count > 0 {
+        return Ok(SyncWorkspaceTargetResponse {
+            outcome: SyncWorkspaceTargetOutcome::DirtyWorktree,
+            target_branch,
+            conflicted_files: Vec::new(),
+        });
+    }
 
     git_ops::fetch_remote_branch(&workspace_dir, &remote, &target_branch)?;
-    let target_remote_ref = format!("refs/remotes/{remote}/{target_branch}");
-    let behind_count = git_ops::commits_behind(&workspace_dir, &target_remote_ref)?;
+    let behind_count = git_ops::commits_behind(
+        &workspace_dir,
+        &format!("refs/remotes/{remote}/{target_branch}"),
+    )?;
     if behind_count == 0 {
         return Ok(SyncWorkspaceTargetResponse {
             outcome: SyncWorkspaceTargetOutcome::AlreadyUpToDate,
@@ -448,11 +455,10 @@ pub fn sync_workspace_with_target_branch(
         });
     }
 
-    // Preflight in a temp worktree against HEAD only — dirty work isn't
-    // visible there, so a clean preflight doesn't guarantee a clean stash
-    // pop. We still gate on it to catch HEAD-vs-target conflicts cheaply
-    // before touching the user's worktree.
-    let preflight = git_ops::preflight_merge_ref(&workspace_dir, &target_remote_ref)?;
+    let preflight = git_ops::preflight_merge_ref(
+        &workspace_dir,
+        &format!("refs/remotes/{remote}/{target_branch}"),
+    )?;
     if !preflight.conflicted_files.is_empty() {
         return Ok(SyncWorkspaceTargetResponse {
             outcome: SyncWorkspaceTargetOutcome::Conflict,
@@ -461,67 +467,33 @@ pub fn sync_workspace_with_target_branch(
         });
     }
 
-    let stash_message = format!("helmor-sync-{workspace_id}");
-    let stashed = if dirty {
-        git_ops::stash_push_include_untracked(&workspace_dir, &stash_message)?
-    } else {
-        false
-    };
-
-    if let Err(error) = git_ops::merge_ref_no_edit(&workspace_dir, &target_remote_ref) {
-        let merge_status =
-            git_ops::workspace_action_status(&workspace_dir, Some(&remote), Some(&target_branch))?;
-        let merge_conflict = merge_status.conflict_count > 0;
-        if merge_conflict {
-            let _ = git_ops::abort_merge(&workspace_dir);
-        }
-        if stashed {
-            // Best-effort restore of the user's work. If this somehow fails
-            // the stash entry is preserved on the stack for manual recovery.
-            match git_ops::stash_pop(&workspace_dir) {
-                Ok(git_ops::StashPopOutcome::Clean) => {}
-                Ok(git_ops::StashPopOutcome::Conflict) => {
-                    tracing::warn!(
-                        workspace_id,
-                        "stash pop hit conflicts on merge-error path; worktree has unmerged paths"
-                    );
-                }
-                Err(pop_error) => {
-                    tracing::warn!(
-                        workspace_id,
-                        "stash pop failed on merge-error path; stash preserved for manual recovery: {pop_error:#}"
-                    );
-                }
-            }
-        }
-        if merge_conflict {
-            return Ok(SyncWorkspaceTargetResponse {
-                outcome: SyncWorkspaceTargetOutcome::Conflict,
-                target_branch,
-                conflicted_files: Vec::new(),
-            });
-        }
-        return Err(error);
-    }
-
-    if stashed {
-        match git_ops::stash_pop(&workspace_dir)? {
-            git_ops::StashPopOutcome::Clean => {}
-            git_ops::StashPopOutcome::Conflict => {
-                return Ok(SyncWorkspaceTargetResponse {
-                    outcome: SyncWorkspaceTargetOutcome::StashPopConflict,
+    match git_ops::merge_ref_no_edit(
+        &workspace_dir,
+        &format!("refs/remotes/{remote}/{target_branch}"),
+    ) {
+        Ok(()) => Ok(SyncWorkspaceTargetResponse {
+            outcome: SyncWorkspaceTargetOutcome::Updated,
+            target_branch,
+            conflicted_files: Vec::new(),
+        }),
+        Err(error) => {
+            let merge_status = git_ops::workspace_action_status(
+                &workspace_dir,
+                Some(&remote),
+                Some(&target_branch),
+            )?;
+            if merge_status.conflict_count > 0 {
+                let _ = git_ops::abort_merge(&workspace_dir);
+                Ok(SyncWorkspaceTargetResponse {
+                    outcome: SyncWorkspaceTargetOutcome::Conflict,
                     target_branch,
                     conflicted_files: Vec::new(),
-                });
+                })
+            } else {
+                Err(error)
             }
         }
     }
-
-    Ok(SyncWorkspaceTargetResponse {
-        outcome: SyncWorkspaceTargetOutcome::Updated,
-        target_branch,
-        conflicted_files: Vec::new(),
-    })
 }
 
 pub fn push_workspace_to_remote(workspace_id: &str) -> Result<PushWorkspaceToRemoteResponse> {
@@ -539,7 +511,7 @@ pub fn push_workspace_to_remote(workspace_id: &str) -> Result<PushWorkspaceToRem
         .remote
         .clone()
         .unwrap_or_else(|| "origin".to_string());
-    let workspace_dir = helpers::workspace_path(&record)?;
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     if !workspace_dir.is_dir() {
         bail_coded!(
             ErrorCode::WorkspaceBroken,
@@ -584,7 +556,7 @@ pub fn continue_workspace_from_target_branch(
     let repo_root = helpers::non_empty(&record.root_path)
         .map(PathBuf::from)
         .with_context(|| format!("Workspace {workspace_id} is missing repo root_path"))?;
-    let workspace_dir = helpers::workspace_path(&record)?;
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     if !workspace_dir.is_dir() {
         bail_coded!(
             ErrorCode::WorkspaceBroken,

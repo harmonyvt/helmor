@@ -24,20 +24,23 @@ pub struct BuildSendMessageParamsInput<'a> {
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
+    /// Goal-only Pi context/tool fields. Omitted for normal conversations.
+    pub kanban_workspace_id: Option<&'a str>,
+    pub kanban_snapshot: Option<&'a str>,
+    pub goal_title: Option<&'a str>,
+    pub goal_description: Option<&'a str>,
 }
 
 /// Build the `sendMessage` request params that the sidecar receives.
 ///
-/// `additionalDirectories` and `sourceRepoPath` are omitted when absent
-/// so the sidecar payload stays tight and existing snapshot fixtures
-/// for untouched sessions don't churn.
+/// `additionalDirectories` is omitted when empty so the sidecar payload
+/// stays tight and existing snapshot fixtures for untouched sessions
+/// don't churn.
 pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Value {
     let additional_directories = lookup_workspace_linked_directories(input.helmor_session_id);
-    let source_repo_path = lookup_workspace_repo_root_path(input.helmor_session_id);
 
     let mut params = serde_json::json!({
         "sessionId": input.sidecar_session_id,
-        "helmorSessionId": input.helmor_session_id,
         "prompt": input.prompt,
         "model": input.cli_model,
         "cwd": input.cwd,
@@ -53,11 +56,6 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
                 "additionalDirectories".to_string(),
                 Value::from(additional_directories),
             );
-        }
-    }
-    if let Some(path) = source_repo_path {
-        if let Some(obj) = params.as_object_mut() {
-            obj.insert("sourceRepoPath".to_string(), Value::from(path));
         }
     }
     if !input.images.is_empty() {
@@ -76,7 +74,20 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
             );
         }
     }
+    insert_optional_string(&mut params, "kanbanWorkspaceId", input.kanban_workspace_id);
+    insert_optional_string(&mut params, "kanbanSnapshot", input.kanban_snapshot);
+    insert_optional_string(&mut params, "goalTitle", input.goal_title);
+    insert_optional_string(&mut params, "goalDescription", input.goal_description);
     params
+}
+
+fn insert_optional_string(params: &mut Value, key: &str, value: Option<&str>) {
+    let Some(value) = value else {
+        return;
+    };
+    if let Some(obj) = params.as_object_mut() {
+        obj.insert(key.to_string(), Value::String(value.to_string()));
+    }
 }
 
 /// Load the workspace's `/add-dir` list via the helmor session id. Returns
@@ -120,46 +131,6 @@ pub fn lookup_workspace_linked_directories(helmor_session_id: Option<&str>) -> V
         }
     };
     crate::workspaces::parse_linked_directory_paths(raw.as_deref())
-}
-
-/// Resolve the source repo root path for a helmor session. Sidecar uses
-/// it to read project-scope MCP servers from `~/.claude.json` (the
-/// worktree cwd never matches the user's registered project key, so
-/// without this hint Claude sees only user-scope MCPs).
-pub fn lookup_workspace_repo_root_path(helmor_session_id: Option<&str>) -> Option<String> {
-    let hsid = helmor_session_id?;
-    let conn = match crate::models::db::read_conn() {
-        Ok(c) => c,
-        Err(err) => {
-            tracing::warn!(
-                helmor_session_id = %hsid,
-                error = %err,
-                "Failed to open DB for repo root_path lookup; falling back to None",
-            );
-            return None;
-        }
-    };
-    match conn.query_row(
-        r#"SELECT r.root_path
-           FROM sessions s
-           JOIN workspaces w ON w.id = s.workspace_id
-           JOIN repos r ON r.id = w.repository_id
-           WHERE s.id = ?1"#,
-        [hsid],
-        |row| row.get::<_, Option<String>>(0),
-    ) {
-        Ok(Some(path)) if !path.is_empty() => Some(path),
-        Ok(_) => None,
-        Err(rusqlite::Error::QueryReturnedNoRows) => None,
-        Err(err) => {
-            tracing::warn!(
-                helmor_session_id = %hsid,
-                error = %err,
-                "repo root_path query failed; falling back to None",
-            );
-            None
-        }
-    }
 }
 
 #[cfg(test)]

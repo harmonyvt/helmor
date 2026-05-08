@@ -213,28 +213,26 @@ pub enum MessagePart {
     /// Inline file reference from the composer's @-mention picker.
     #[serde(rename = "file-mention", rename_all = "camelCase")]
     FileMention { id: String, path: String },
-    /// Stable parent-thread anchor for a Helmor-native delegated child
-    /// session. The frontend uses this to render the child timeline inline.
-    #[serde(rename = "delegation-anchor", rename_all = "camelCase")]
-    DelegationAnchor {
+
+    /// Provider-specific structured event that Helmor does not yet have a
+    /// bespoke renderer for. Used first by Pi extensions so output remains
+    /// visible and persisted while a richer UI bridge evolves.
+    #[serde(rename = "generic-card", rename_all = "camelCase")]
+    GenericCard {
         id: String,
-        delegation_id: String,
-        parent_session_id: String,
-        child_session_id: String,
         title: String,
-        provider: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        model_id: Option<String>,
-        status: String,
-        output_schema: Value,
+        subtitle: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        structured_result: Option<Value>,
+        body: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        severity: Option<NoticeSeverity>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        started_at: Option<String>,
+        status: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        completed_at: Option<String>,
+        provider: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<Value>,
     },
 }
 
@@ -251,7 +249,7 @@ impl MessagePart {
             | Self::Image { id, .. }
             | Self::PromptSuggestion { id, .. }
             | Self::FileMention { id, .. }
-            | Self::DelegationAnchor { id, .. } => id,
+            | Self::GenericCard { id, .. } => id,
             Self::ToolCall { tool_call_id, .. } => tool_call_id,
             Self::PlanReview { tool_use_id, .. } => tool_use_id,
         }
@@ -367,7 +365,6 @@ impl CollapsedGroupPart {
 /// have `{"type":"collapsed-group",...}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-#[allow(clippy::large_enum_variant)]
 pub enum ExtendedMessagePart {
     Basic(MessagePart),
     CollapsedGroup(CollapsedGroupPart),

@@ -4,9 +4,11 @@ import {
 	ChevronRight,
 	Folder,
 	FolderPlus,
+	GitPullRequest,
 	Globe,
 	LoaderCircle,
 	Plus,
+	Target,
 } from "lucide-react";
 import {
 	memo,
@@ -32,20 +34,48 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import type { WorkspaceGroup, WorkspaceRow, WorkspaceStatus } from "@/lib/api";
+import type {
+	RepositoryCreateOption,
+	WorkspaceCreationSource,
+	WorkspaceGroup,
+	WorkspaceRow,
+	WorkspaceStatus,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
+import {
+	buildGoalViewVirtualItems,
+	GOAL_ARCHIVED_KEY,
+	GOAL_UNGROUPED_KEY,
+	type GoalVirtualItem,
+	GoalVirtualItemRenderer,
+	getGoalItemHeight,
+	getGoalItemKey,
+	goalProjectSectionKey,
+	goalSectionKey,
+} from "./goal-layout";
+import type { SidebarLayoutMode } from "./hooks/use-controller";
+import { useWorkspacePrFlash } from "./hooks/use-workspace-pr-flash";
 import {
 	createInitialSectionOpenState,
 	readStoredSectionOpenState,
 	writeStoredSectionOpenState,
 } from "./open-state";
+import {
+	buildPrViewVirtualItems,
+	getPrItemHeight,
+	getPrItemKey,
+	type PrVirtualItem,
+	PrVirtualItemRenderer,
+} from "./pr-layout";
 import { WorkspaceRowItem } from "./row-item";
 import {
 	ARCHIVED_SECTION_ID,
 	findSelectedSectionId,
 	GroupIcon,
 } from "./shared";
+import type { GoalProjection, ProjectGroup } from "./sidebar-projection";
+import { WorkspaceCreateDialog } from "./workspace-create-dialog";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -83,13 +113,15 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	groups,
 	archivedRows,
+	availableRepositories,
 	addingRepository,
 	selectedWorkspaceId,
-	busyWorkspaceIds,
+	sendingWorkspaceIds,
 	interactionRequiredWorkspaceIds,
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
 	creatingWorkspaceRepoId,
+	isPolling,
 	onAddRepository,
 	onOpenCloneDialog,
 	isCloneDialogOpen,
@@ -98,28 +130,36 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSubmitClone,
 	onSelectWorkspace,
 	onPrefetchWorkspace,
-	onOpenNewWorkspace,
+	onCreateWorkspace,
+	onCreateGoalWorkspace,
 	onArchiveWorkspace,
-	onMoveLocalToWorktree,
 	onMarkWorkspaceUnread,
 	onRestoreWorkspace,
 	onDeleteWorkspace,
 	onOpenInFinder,
 	onTogglePin,
 	onSetWorkspaceStatus,
+	onAssignWorkspaceToGoal,
 	archivingWorkspaceIds,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
+	layoutMode,
+	onSetLayoutMode,
+	projectGroups,
+	goalProjection,
 }: {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
+	availableRepositories?: RepositoryCreateOption[];
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
-	busyWorkspaceIds?: Set<string>;
+	sendingWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
 	creatingWorkspaceRepoId?: string | null;
+	/** When true, renders the polling shimmer hairline below the header. */
+	isPolling?: boolean;
 	onAddRepository?: () => void;
 	onOpenCloneDialog?: () => void;
 	isCloneDialogOpen?: boolean;
@@ -131,25 +171,53 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}) => Promise<void>;
 	onSelectWorkspace?: (workspaceId: string) => void;
 	onPrefetchWorkspace?: (workspaceId: string) => void;
-	onOpenNewWorkspace?: () => void;
+	onCreateWorkspace?: (
+		repoId: string,
+		source?: WorkspaceCreationSource,
+	) => Promise<void> | void;
+	onCreateGoalWorkspace?: (
+		repoId: string,
+		title: string,
+		description: string,
+		sourceBranch?: string | null,
+	) => Promise<void> | void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
-	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
 	onDeleteWorkspace?: (workspaceId: string) => void;
 	onOpenInFinder?: (workspaceId: string) => void;
 	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
+	onAssignWorkspaceToGoal?: (
+		workspaceId: string,
+		goalWorkspaceId: string,
+		status: WorkspaceStatus,
+	) => void;
 	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
+	layoutMode?: SidebarLayoutMode;
+	onSetLayoutMode?: (mode: SidebarLayoutMode) => void;
+	projectGroups?: ProjectGroup[];
+	goalProjection?: GoalProjection | null;
 }) {
+	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
+	const flashingIds = useWorkspacePrFlash();
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const [sectionOpenState, setSectionOpenState] = useState(() => ({
 		...createInitialSectionOpenState(groups),
 		...readStoredSectionOpenState(),
 	}));
+
+	// ── Goal drag state ───────────────────────────────────────────────
+	const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(
+		null,
+	);
+	const [hoveredGoalId, setHoveredGoalId] = useState<string | null>(null);
+	const [dragOverLane, setDragOverLane] = useState<WorkspaceStatus | null>(
+		null,
+	);
 
 	useEffect(() => {
 		setSectionOpenState((current) => {
@@ -170,6 +238,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				changed = true;
 			}
 
+			const archivedGoalsValue = current[GOAL_ARCHIVED_KEY] ?? false;
+			next[GOAL_ARCHIVED_KEY] = archivedGoalsValue;
+			if (current[GOAL_ARCHIVED_KEY] !== archivedGoalsValue) {
+				changed = true;
+			}
+
 			if (Object.keys(current).length !== Object.keys(next).length) {
 				changed = true;
 			}
@@ -182,13 +256,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		writeStoredSectionOpenState(sectionOpenState);
 	}, [sectionOpenState]);
 
+	const isPrMode = layoutMode === "pr";
+	const isGoalMode = layoutMode === "goal";
+
 	// Auto-expand the group containing the selected workspace, but ONLY when
 	// the selection actually changes — not on every groups refetch (window
 	// focus, invalidation, status change). Without this guard, collapsed
 	// groups reopen whenever their data refreshes.
 	const lastAutoExpandedIdRef = useRef<string | null>(null);
+
+	// Status layout auto-expand
 	useEffect(() => {
 		if (
+			isGoalMode ||
+			isPrMode ||
 			!selectedWorkspaceId ||
 			selectedWorkspaceId === lastAutoExpandedIdRef.current
 		) {
@@ -211,9 +292,87 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				? current
 				: { ...current, [selectedSectionId]: true },
 		);
-	}, [archivedRows, groups, selectedWorkspaceId]);
+	}, [archivedRows, groups, isGoalMode, isPrMode, selectedWorkspaceId]);
 
-	// ── Flatten groups into virtual items ──────────────────────────────
+	// Goal layout auto-expand
+	useEffect(() => {
+		if (
+			!isGoalMode ||
+			!goalProjection ||
+			!selectedWorkspaceId ||
+			selectedWorkspaceId === lastAutoExpandedIdRef.current
+		) {
+			return;
+		}
+
+		let goalSectionKeyToOpen: string | null = null;
+		let projectSectionKeyToOpen: string | null = null;
+
+		outer: for (const projectGroup of goalProjection.projectGroups) {
+			for (const group of projectGroup.goalGroups) {
+				if (group.goalWorkspaceId === selectedWorkspaceId) {
+					// The goal workspace itself is selected — just expand the project
+					projectSectionKeyToOpen = goalProjectSectionKey(
+						projectGroup.repoName,
+					);
+					break outer;
+				}
+				if (group.childRows.some((r) => r.id === selectedWorkspaceId)) {
+					goalSectionKeyToOpen = goalSectionKey(group.goalWorkspaceId);
+					projectSectionKeyToOpen = goalProjectSectionKey(
+						projectGroup.repoName,
+					);
+					break outer;
+				}
+			}
+		}
+
+		if (
+			!goalSectionKeyToOpen &&
+			!projectSectionKeyToOpen &&
+			goalProjection.ungroupedRows.some((r) => r.id === selectedWorkspaceId)
+		) {
+			goalSectionKeyToOpen = GOAL_UNGROUPED_KEY;
+		}
+
+		if (!goalSectionKeyToOpen && !projectSectionKeyToOpen) return;
+
+		lastAutoExpandedIdRef.current = selectedWorkspaceId;
+		setSectionOpenState((current) => {
+			let next = current;
+			if (projectSectionKeyToOpen && !current[projectSectionKeyToOpen]) {
+				next = { ...next, [projectSectionKeyToOpen]: true };
+			}
+			if (goalSectionKeyToOpen && !current[goalSectionKeyToOpen]) {
+				next = { ...next, [goalSectionKeyToOpen]: true };
+			}
+			return next;
+		});
+	}, [goalProjection, isGoalMode, selectedWorkspaceId]);
+
+	// ── PR-first layout virtual items ─────────────────────────────────
+	const prFlatItems = useMemo<PrVirtualItem[]>(() => {
+		if (!isPrMode || !projectGroups?.length) return [];
+		return buildPrViewVirtualItems(projectGroups, sectionOpenState);
+	}, [isPrMode, projectGroups, sectionOpenState]);
+
+	// ── Goal layout virtual items ──────────────────────────────────────
+	const goalFlatItems = useMemo<GoalVirtualItem[]>(() => {
+		if (!isGoalMode || !goalProjection) return [];
+		return buildGoalViewVirtualItems(
+			goalProjection,
+			sectionOpenState,
+			draggedWorkspaceId != null ? hoveredGoalId : null,
+		);
+	}, [
+		isGoalMode,
+		goalProjection,
+		sectionOpenState,
+		draggedWorkspaceId,
+		hoveredGoalId,
+	]);
+
+	// ── Status layout virtual items ────────────────────────────────────
 	const flatItems = useMemo(() => {
 		const items: VirtualItem[] = [];
 		const visibleGroups = groups.filter(
@@ -290,10 +449,22 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}, [groups, archivedRows, sectionOpenState]);
 
 	// ── Virtualizer ───────────────────────────────────────────────────
+	const activeItems = isPrMode
+		? prFlatItems
+		: isGoalMode
+			? goalFlatItems
+			: flatItems;
+
 	const virtualizer = useVirtualizer({
-		count: flatItems.length,
+		count: activeItems.length,
 		getScrollElement: () => scrollContainerRef.current,
 		estimateSize: (index) => {
+			if (isPrMode) {
+				return getPrItemHeight(prFlatItems[index]);
+			}
+			if (isGoalMode) {
+				return getGoalItemHeight(goalFlatItems[index]);
+			}
 			const item = flatItems[index];
 			switch (item.kind) {
 				case "group-header":
@@ -307,6 +478,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			}
 		},
 		getItemKey: (index) => {
+			if (isPrMode) {
+				return getPrItemKey(prFlatItems[index], index);
+			}
+			if (isGoalMode) {
+				return getGoalItemKey(goalFlatItems[index], index);
+			}
 			const item = flatItems[index];
 			switch (item.kind) {
 				case "group-header":
@@ -326,24 +503,53 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	useLayoutEffect(() => {
 		if (!selectedWorkspaceId) return;
 
-		const targetIndex = flatItems.findIndex(
-			(item) => item.kind === "row" && item.row.id === selectedWorkspaceId,
-		);
+		const targetIndex = isPrMode
+			? prFlatItems.findIndex(
+					(item) =>
+						item.kind === "pr-row" &&
+						item.stacked.row.id === selectedWorkspaceId,
+				)
+			: isGoalMode
+				? goalFlatItems.findIndex(
+						(item) =>
+							(item.kind === "goal-header" &&
+								item.goalGroup.goalWorkspaceId === selectedWorkspaceId) ||
+							(item.kind === "goal-child" &&
+								item.row.id === selectedWorkspaceId) ||
+							(item.kind === "ungrouped-row" &&
+								item.row.id === selectedWorkspaceId) ||
+							(item.kind === "archived-goal-row" &&
+								item.row.id === selectedWorkspaceId),
+					)
+				: flatItems.findIndex(
+						(item) =>
+							item.kind === "row" && item.row.id === selectedWorkspaceId,
+					);
 		if (targetIndex === -1) return;
 
 		virtualizer.scrollToIndex(targetIndex, { align: "auto" });
-	}, [selectedWorkspaceId, sectionOpenState, flatItems, virtualizer]);
+	}, [
+		selectedWorkspaceId,
+		sectionOpenState,
+		flatItems,
+		prFlatItems,
+		goalFlatItems,
+		isPrMode,
+		isGoalMode,
+		virtualizer,
+	]);
 
 	const workspaceActionsBusy = Boolean(
 		addingRepository || markingUnreadWorkspaceId || restoringWorkspaceId,
 	);
 	const createBusy = Boolean(creatingWorkspaceRepoId);
 	const addRepositoryBusy = Boolean(addingRepository);
+	const repositories = availableRepositories ?? [];
 
 	useEffect(() => {
 		const handleOpenNewWorkspace = () => {
 			if (addRepositoryBusy || createBusy || workspaceActionsBusy) return;
-			onOpenNewWorkspace?.();
+			setIsCreateDialogOpen(true);
 		};
 
 		window.addEventListener(
@@ -355,7 +561,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				"helmor:open-new-workspace",
 				handleOpenNewWorkspace,
 			);
-	}, [addRepositoryBusy, createBusy, onOpenNewWorkspace, workspaceActionsBusy]);
+	}, [addRepositoryBusy, createBusy, workspaceActionsBusy]);
 
 	useEffect(() => {
 		const handleOpenAddRepository = () => {
@@ -381,6 +587,38 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			[groupId]: !current[groupId],
 		}));
 	}, []);
+
+	// ── Goal drag handlers ────────────────────────────────────────────
+	const handleDragStartWorkspace = useCallback((workspaceId: string) => {
+		setDraggedWorkspaceId(workspaceId);
+	}, []);
+
+	const handleDragEndWorkspace = useCallback(() => {
+		setDraggedWorkspaceId(null);
+		setHoveredGoalId(null);
+		setDragOverLane(null);
+	}, []);
+
+	const handleDragEnterGoal = useCallback((goalId: string) => {
+		setHoveredGoalId(goalId);
+	}, []);
+
+	const handleDragOverLane = useCallback((lane: WorkspaceStatus | null) => {
+		setDragOverLane(lane);
+	}, []);
+
+	const handleDropIntoLane = useCallback(
+		(goalId: string, lane: WorkspaceStatus) => {
+			const id = draggedWorkspaceId;
+			if (id) {
+				onAssignWorkspaceToGoal?.(id, goalId, lane);
+			}
+			setDraggedWorkspaceId(null);
+			setHoveredGoalId(null);
+			setDragOverLane(null);
+		},
+		[draggedWorkspaceId, onAssignWorkspaceToGoal],
+	);
 
 	// ── Render a single virtual item ──────────────────────────────────
 	const renderItem = useCallback(
@@ -448,14 +686,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					<WorkspaceRowItem
 						row={item.row}
 						selected={selectedWorkspaceId === item.row.id}
-						isSending={busyWorkspaceIds?.has(item.row.id)}
+						isSending={sendingWorkspaceIds?.has(item.row.id)}
 						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 							item.row.id,
 						)}
+						isFlashing={flashingIds.has(item.row.id)}
 						onSelect={onSelectWorkspace}
 						onPrefetch={onPrefetchWorkspace}
 						onArchiveWorkspace={onArchiveWorkspace}
-						onMoveLocalToWorktree={onMoveLocalToWorktree}
 						onMarkWorkspaceUnread={onMarkWorkspaceUnread}
 						onOpenInFinder={onOpenInFinder}
 						onTogglePin={onTogglePin}
@@ -480,12 +718,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			sectionOpenState,
 			toggleSection,
 			selectedWorkspaceId,
-			busyWorkspaceIds,
+			sendingWorkspaceIds,
 			interactionRequiredWorkspaceIds,
+			flashingIds,
 			onSelectWorkspace,
 			onPrefetchWorkspace,
 			onArchiveWorkspace,
-			onMoveLocalToWorktree,
 			onMarkWorkspaceUnread,
 			onRestoreWorkspace,
 			onDeleteWorkspace,
@@ -519,12 +757,68 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				<div data-tauri-drag-region className="h-full flex-1" />
 			</div>
 
-			<div className="mt-1 flex items-center justify-between px-3">
+			<div className="flex items-center justify-between px-3">
 				<h2 className="text-[14px] font-medium tracking-[-0.01em] text-muted-foreground">
 					Workspaces
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								type="button"
+								aria-label={
+									isGoalMode ? "Switch to status view" : "Switch to goal view"
+								}
+								variant="ghost"
+								size="icon-xs"
+								onClick={() =>
+									onSetLayoutMode?.(isGoalMode ? "status" : "goal")
+								}
+								className={cn(
+									"text-muted-foreground",
+									isGoalMode && "bg-accent text-foreground",
+								)}
+							>
+								<Target className="size-4" strokeWidth={1.9} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="top"
+							sideOffset={4}
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+						>
+							<span>{isGoalMode ? "Status view" : "Goal view"}</span>
+						</TooltipContent>
+					</Tooltip>
+
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								type="button"
+								aria-label={
+									isPrMode ? "Switch to status view" : "Switch to PR view"
+								}
+								variant="ghost"
+								size="icon-xs"
+								onClick={() => onSetLayoutMode?.(isPrMode ? "status" : "pr")}
+								className={cn(
+									"text-muted-foreground",
+									isPrMode && "bg-accent text-foreground",
+								)}
+							>
+								<GitPullRequest className="size-4" strokeWidth={2} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="top"
+							sideOffset={4}
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+						>
+							<span>{isPrMode ? "Status view" : "PR view"}</span>
+						</TooltipContent>
+					</Tooltip>
+
 					<DropdownMenu
 						open={isAddRepositoryMenuOpen}
 						onOpenChange={setIsAddRepositoryMenuOpen}
@@ -575,6 +869,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						<DropdownMenuContent align="end" className="min-w-40">
 							<DropdownMenuItem
 								onSelect={() => {
+									setIsCreateDialogOpen(false);
 									onAddRepository?.();
 								}}
 							>
@@ -583,6 +878,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								onSelect={() => {
+									setIsCreateDialogOpen(false);
 									onOpenCloneDialog?.();
 								}}
 							>
@@ -597,6 +893,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							<Button
 								type="button"
 								aria-label="New workspace"
+								aria-expanded={isCreateDialogOpen}
+								aria-haspopup="dialog"
 								variant="ghost"
 								size="icon-xs"
 								disabled={
@@ -607,7 +905,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										return;
 									}
 
-									onOpenNewWorkspace?.();
+									setIsCreateDialogOpen(true);
 								}}
 							>
 								{createBusy ? (
@@ -637,6 +935,38 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				</div>
 			</div>
 
+			<WorkspaceCreateDialog
+				open={isCreateDialogOpen}
+				onOpenChange={setIsCreateDialogOpen}
+				repositories={repositories}
+				creating={createBusy}
+				onCreateWorkspace={(repoId, source) => {
+					if (source) {
+						return onCreateWorkspace?.(repoId, source);
+					}
+					return onCreateWorkspace?.(repoId);
+				}}
+				onCreateGoalWorkspace={(repoId, title, description, sourceBranch) =>
+					onCreateGoalWorkspace?.(repoId, title, description, sourceBranch)
+				}
+			/>
+
+			{/*
+			 * Polling shimmer — a 1px hairline that sweeps left→right while the
+			 * workspace list is fetching in the background. Stays in layout at all
+			 * times (no height shift) and fades via opacity so the transition is
+			 * smooth even for sub-100ms local fetches. aria-hidden keeps it out of
+			 * the accessibility tree.
+			 */}
+			<div className="mx-3 mt-1 h-px overflow-hidden" aria-hidden="true">
+				<div
+					className={cn(
+						"workspace-poll-bar h-full w-full transition-opacity duration-200 ease-out motion-safe:transition-opacity",
+						isPolling ? "opacity-100" : "opacity-0",
+					)}
+				/>
+			</div>
+
 			{/* Virtualized workspace list */}
 			<div
 				ref={scrollContainerRef}
@@ -662,7 +992,66 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								transform: `translateY(${vItem.start}px)`,
 							}}
 						>
-							{renderItem(flatItems[vItem.index])}
+							{isPrMode ? (
+								<PrVirtualItemRenderer
+									item={prFlatItems[vItem.index]}
+									selectedWorkspaceId={selectedWorkspaceId}
+									sendingWorkspaceIds={sendingWorkspaceIds}
+									interactionRequiredWorkspaceIds={
+										interactionRequiredWorkspaceIds
+									}
+									flashingIds={flashingIds}
+									actions={{
+										onSelect: onSelectWorkspace,
+										onPrefetch: onPrefetchWorkspace,
+										onArchiveWorkspace,
+										onMarkWorkspaceUnread,
+										onOpenInFinder,
+										onTogglePin,
+										onSetWorkspaceStatus,
+										archivingWorkspaceIds,
+										markingUnreadWorkspaceId,
+										restoringWorkspaceId,
+									}}
+									onToggleSection={toggleSection}
+								/>
+							) : isGoalMode ? (
+								<GoalVirtualItemRenderer
+									item={goalFlatItems[vItem.index]}
+									selectedWorkspaceId={selectedWorkspaceId}
+									sendingWorkspaceIds={sendingWorkspaceIds}
+									interactionRequiredWorkspaceIds={
+										interactionRequiredWorkspaceIds
+									}
+									flashingIds={flashingIds}
+									actions={{
+										onSelect: onSelectWorkspace,
+										onPrefetch: onPrefetchWorkspace,
+										onArchiveWorkspace,
+										onRestoreWorkspace,
+										onDeleteWorkspace,
+										onMarkWorkspaceUnread,
+										onOpenInFinder,
+										onTogglePin,
+										onSetWorkspaceStatus,
+										onAssignWorkspaceToGoal,
+										onDragStartWorkspace: handleDragStartWorkspace,
+										onDragEndWorkspace: handleDragEndWorkspace,
+										archivingWorkspaceIds,
+										markingUnreadWorkspaceId,
+										restoringWorkspaceId,
+									}}
+									onToggleSection={toggleSection}
+									draggedWorkspaceId={draggedWorkspaceId}
+									hoveredGoalId={hoveredGoalId}
+									dragOverLane={dragOverLane}
+									onDragEnterGoal={handleDragEnterGoal}
+									onDragOverLane={handleDragOverLane}
+									onDropIntoLane={handleDropIntoLane}
+								/>
+							) : (
+								renderItem(flatItems[vItem.index])
+							)}
 						</div>
 					))}
 				</div>

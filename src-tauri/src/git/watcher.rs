@@ -20,7 +20,7 @@ use crate::{
     git_ops,
     models::db,
     ui_sync,
-    workspace_state::{self, WorkspaceMode, WorkspaceState},
+    workspace_state::{self, WorkspaceState},
 };
 
 // -- Events --
@@ -83,23 +83,6 @@ struct WatchableWorkspace {
     state: WorkspaceState,
     remote: Option<String>,
     target_branch: Option<String>,
-    mode: WorkspaceMode,
-    root_path: Option<String>,
-}
-
-impl WatchableWorkspace {
-    fn workspace_path(&self) -> Result<std::path::PathBuf> {
-        match self.mode {
-            WorkspaceMode::Worktree => {
-                crate::data_dir::workspace_dir(&self.repo_name, &self.directory_name)
-            }
-            WorkspaceMode::Local => self
-                .root_path
-                .as_deref()
-                .map(std::path::PathBuf::from)
-                .with_context(|| format!("Local workspace {} is missing repo root_path", self.id)),
-        }
-    }
 }
 
 // -- Manager (Tauri-managed state) --
@@ -333,7 +316,7 @@ fn start_watcher<R: Runtime>(
     app: &AppHandle<R>,
     ws: &WatchableWorkspace,
 ) -> Result<WorkspaceWatcher> {
-    let workspace_dir = ws.workspace_path()?;
+    let workspace_dir = crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name)?;
     if !workspace_dir.is_dir() {
         bail!("Workspace directory missing: {}", workspace_dir.display());
     }
@@ -345,11 +328,6 @@ fn start_watcher<R: Runtime>(
     let db_branch = ws.branch.clone();
     let app_handle = app.clone();
     let gitdir_for_callback = gitdir.clone();
-    // Local workspaces treat `branch` as a fixed label (set at creation
-    // and never auto-updated). Skip the head-change → DB-write side
-    // effect for them; we still emit refs-changed events for UI
-    // invalidation.
-    let track_branch_changes = ws.mode != WorkspaceMode::Local;
 
     // Shared state for the callback: last-known branch
     let last_branch = std::sync::Arc::new(Mutex::new(db_branch));
@@ -397,7 +375,7 @@ fn start_watcher<R: Runtime>(
                 }
             }
 
-            if head_changed && track_branch_changes {
+            if head_changed {
                 handle_head_change(
                     &app_handle,
                     &workspace_id,
@@ -480,7 +458,7 @@ fn build_desired_fetch_targets(workspaces: &[&WatchableWorkspace]) -> HashMap<Fe
             if desired.contains_key(&key) {
                 continue;
             }
-            if let Ok(dir) = ws.workspace_path() {
+            if let Ok(dir) = crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name) {
                 if dir.is_dir() {
                     desired.insert(key, dir);
                 }
@@ -574,15 +552,14 @@ fn lookup_fetch_target(workspace_id: &str) -> Result<(PathBuf, String, String, S
     let connection = db::read_conn()?;
     let sql = format!(
         "SELECT r.name, w.directory_name, r.remote,
-                COALESCE(w.intended_target_branch, r.default_branch), r.id,
-                COALESCE(w.mode, 'worktree'), r.root_path
+                COALESCE(w.intended_target_branch, r.default_branch), r.id
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id
          WHERE w.id = ?1 AND w.state {}",
         workspace_state::OPERATIONAL_FILTER,
     );
     let mut stmt = connection.prepare(&sql)?;
-    let (repo_name, dir_name, remote, branch, repo_id, mode, root_path) = stmt
+    let (repo_name, dir_name, remote, branch, repo_id) = stmt
         .query_row(rusqlite::params![workspace_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -590,20 +567,13 @@ fn lookup_fetch_target(workspace_id: &str) -> Result<(PathBuf, String, String, S
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, WorkspaceMode>(5)?,
-                row.get::<_, Option<String>>(6)?,
             ))
         })
         .context("Workspace not found or archived")?;
 
     let remote = remote.context("No remote configured")?;
     let branch = branch.context("No target branch configured")?;
-    let workspace_dir = match mode {
-        WorkspaceMode::Worktree => crate::data_dir::workspace_dir(&repo_name, &dir_name)?,
-        WorkspaceMode::Local => root_path
-            .map(PathBuf::from)
-            .context("Local workspace is missing repo root_path")?,
-    };
+    let workspace_dir = crate::data_dir::workspace_dir(&repo_name, &dir_name)?;
     Ok((workspace_dir, remote, branch, repo_id))
 }
 
@@ -714,8 +684,7 @@ fn load_watchable_workspaces() -> Result<Vec<WatchableWorkspace>> {
     let connection = db::read_conn()?;
     let mut stmt = connection.prepare(
         "SELECT w.id, r.name, w.directory_name, w.branch, w.state,
-                r.remote, COALESCE(w.intended_target_branch, r.default_branch), r.id,
-                COALESCE(w.mode, 'worktree'), r.root_path
+                r.remote, COALESCE(w.intended_target_branch, r.default_branch), r.id
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id",
     )?;
@@ -729,8 +698,6 @@ fn load_watchable_workspaces() -> Result<Vec<WatchableWorkspace>> {
             remote: row.get(5)?,
             target_branch: row.get(6)?,
             repo_id: row.get(7)?,
-            mode: row.get(8)?,
-            root_path: row.get(9)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
