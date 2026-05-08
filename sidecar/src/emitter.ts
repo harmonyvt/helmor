@@ -69,7 +69,8 @@ export type SlashCommandEntry = {
 	readonly name: string;
 	readonly description: string;
 	readonly argumentHint: string | undefined;
-	readonly source: "builtin" | "skill";
+	readonly source: "builtin" | "extension" | "prompt" | "skill";
+	readonly sourceInfo?: Record<string, unknown>;
 };
 
 export type SlashCommandsListedEvent = {
@@ -152,6 +153,7 @@ export type ModelsListedEvent = {
 		readonly id: string;
 		readonly label: string;
 		readonly cliModel: string;
+		readonly providerKey?: string;
 		readonly effortLevels?: readonly string[];
 		readonly supportsFastMode?: boolean;
 		/** Cursor only — raw `parameters[]` from `Cursor.models.list`. */
@@ -196,6 +198,23 @@ export type CodexGoalUpdatedEvent = {
 	readonly goal: string | null;
 };
 
+export type KanbanToolCallEvent = {
+	readonly id: string;
+	readonly type: "kanban_tool_call";
+	readonly toolCallId: string;
+	readonly tool: string;
+	readonly workspaceId: string;
+	readonly args: unknown;
+};
+
+export type PiUiRequestEvent = {
+	readonly id: string;
+	readonly type: "pi_ui_request";
+	readonly interactionId: string;
+	readonly kind: "select" | "confirm" | "input";
+	readonly payload: Record<string, unknown>;
+};
+
 export type SidecarControlEvent =
 	| ReadyEvent
 	| EndEvent
@@ -214,7 +233,9 @@ export type SidecarControlEvent =
 	| ModelsListedEvent
 	| ContextUsageUpdatedEvent
 	| ContextUsageResultEvent
-	| CodexGoalUpdatedEvent;
+	| CodexGoalUpdatedEvent
+	| KanbanToolCallEvent
+	| PiUiRequestEvent;
 
 /**
  * Typed emitter for the sidecar's stdout protocol.
@@ -276,6 +297,7 @@ export interface SidecarEmitter {
 			id: string;
 			label: string;
 			cliModel: string;
+			providerKey?: string;
 			effortLevels?: readonly string[];
 			supportsFastMode?: boolean;
 			cursorParameters?: ReadonlyArray<{
@@ -298,6 +320,19 @@ export interface SidecarEmitter {
 		requestId: string,
 		sessionId: string,
 		goal: string | null,
+	): void;
+	kanbanToolCall(
+		requestId: string,
+		toolCallId: string,
+		tool: string,
+		workspaceId: string,
+		args: unknown,
+	): void;
+	piUiRequest(
+		requestId: string,
+		interactionId: string,
+		kind: "select" | "confirm" | "input",
+		payload: Record<string, unknown>,
 	): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
@@ -393,6 +428,23 @@ export function createSidecarEmitter(
 				type: "codexGoalUpdated",
 				sessionId,
 				goal,
+			}),
+		kanbanToolCall: (requestId, toolCallId, tool, workspaceId, args) =>
+			write({
+				id: requestId,
+				type: "kanban_tool_call",
+				toolCallId,
+				tool,
+				workspaceId,
+				args,
+			}),
+		piUiRequest: (requestId, interactionId, kind, payload) =>
+			write({
+				id: requestId,
+				type: "pi_ui_request",
+				interactionId,
+				kind,
+				payload,
 			}),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),

@@ -16,6 +16,8 @@ import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
+import { resolvePiUiInteraction } from "./pi-extension-host.js";
+import { PiSessionManager } from "./pi-session-manager.js";
 import {
 	errorMessage,
 	optionalObject,
@@ -43,10 +45,12 @@ import {
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
 const cursorManager = new CursorSessionManager();
+const piManager = new PiSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
 	cursor: cursorManager,
+	pi: piManager,
 };
 
 // `parentGone` flips to true only when stdin EOFs — that's the
@@ -630,7 +634,8 @@ for await (const line of rl) {
 							: { action: "cancel" };
 				const claimed =
 					claudeManager.resolveUserInput(userInputId, resolution) ||
-					codexManager.resolveUserInput(userInputId, resolution);
+					codexManager.resolveUserInput(userInputId, resolution) ||
+					piManager.resolveUserInput(userInputId, resolution);
 				if (!claimed) {
 					// No live waiter — the parked promise was lost (sidecar
 					// restart, session ended, or duplicate submit). Surface
@@ -642,6 +647,21 @@ for await (const line of rl) {
 					});
 					emitter.error(id, `No active waiter for userInputId=${userInputId}`);
 				}
+				break;
+			}
+			case "kanbanToolResult": {
+				const toolCallId = requireString(params, "toolCallId");
+				const result = params.result ?? null;
+				const isError = params.isError === true;
+				logger.debug(`[${id}] kanbanToolResult`, { toolCallId, isError });
+				piManager.resolveKanbanToolCall(toolCallId, result, isError);
+				break;
+			}
+			case "piUiResponse": {
+				const interactionId = requireString(params, "interactionId");
+				const result = params.result ?? null;
+				logger.debug(`[${id}] piUiResponse`, { interactionId });
+				resolvePiUiInteraction(interactionId, result);
 				break;
 			}
 			case "ping":

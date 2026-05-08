@@ -14,6 +14,8 @@ use serde_json::Value;
 
 use super::StreamAccumulator;
 use crate::pipeline::codex_collab::{build_collab_result_text, collab_synthetic_tool_name};
+use crate::pipeline::file_change::file_change_result_text;
+use crate::pipeline::pi_tools::{canonical_pi_tool_name, mcp_result_text, normalize_pi_tool_args};
 use crate::pipeline::types::{CollectedTurn, MessageRole};
 
 // ---------------------------------------------------------------------------
@@ -480,11 +482,7 @@ fn handle_file_change(
     );
 
     if let Some(s) = status {
-        let result_text = match s {
-            "completed" => "Patch applied".to_string(),
-            "failed" => "Patch failed".to_string(),
-            other => format!("Patch {other}"),
-        };
+        let result_text = file_change_result_text(item, s);
         let synthetic_result = serde_json::json!({
             "type": "user",
             "message": {
@@ -651,12 +649,16 @@ fn handle_mcp_tool_call(
 ) {
     let server = item.get("server").and_then(Value::as_str).unwrap_or("");
     let tool = item.get("tool").and_then(Value::as_str).unwrap_or("");
-    let arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
+    let arguments = normalize_pi_tool_args(
+        server,
+        tool,
+        item.get("arguments").cloned().unwrap_or(Value::Null),
+    );
     let status = item.get("status").and_then(Value::as_str);
     let synthetic_id = item_id
         .map(|id| format!("codex-mcp-{id}"))
         .unwrap_or_else(|| format!("codex-mcp-{}", acc.line_count));
-    let tool_name = format!("mcp__{server}__{tool}");
+    let tool_name = canonical_pi_tool_name(server, tool);
 
     let mut tool_use = serde_json::json!({
         "type": "tool_use",
@@ -687,18 +689,7 @@ fn handle_mcp_tool_call(
     );
 
     if matches!(status, Some("completed") | Some("failed")) {
-        let result_text = if status == Some("failed") {
-            let msg = item
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("MCP tool failed");
-            format!("Error: {msg}")
-        } else {
-            item.get("result")
-                .and_then(|r| serde_json::to_string(r).ok())
-                .unwrap_or_else(|| "OK".to_string())
-        };
+        let result_text = mcp_result_text(server, tool, item, status == Some("failed"));
         let synthetic_result = serde_json::json!({
             "type": "user",
             "message": {

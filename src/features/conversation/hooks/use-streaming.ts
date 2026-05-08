@@ -16,6 +16,8 @@ import {
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
 import type {
 	AgentModelOption,
+	AgentSendRequest,
+	AgentStreamEvent,
 	CodexGoalState,
 	ThreadMessageLike,
 } from "@/lib/api";
@@ -146,6 +148,15 @@ type UseConversationStreamingArgs = {
 	) => void;
 	onSessionCompleted?: (sessionId: string, workspaceId: string) => void;
 	onSessionAborted?: (sessionId: string, workspaceId: string) => void;
+	buildSendRequestExtras?: () => Partial<
+		Pick<
+			AgentSendRequest,
+			"kanbanWorkspaceId" | "kanbanSnapshot" | "goalTitle" | "goalDescription"
+		>
+	>;
+	onKanbanToolCall?: (
+		event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
+	) => void | Promise<void>;
 };
 
 export function useConversationStreaming({
@@ -160,6 +171,8 @@ export function useConversationStreaming({
 	onInteractionSessionsChange,
 	onSessionCompleted,
 	onSessionAborted,
+	buildSendRequestExtras,
+	onKanbanToolCall,
 }: UseConversationStreamingArgs) {
 	const queryClient = useQueryClient();
 	const pushToast = useWorkspaceToast();
@@ -1063,6 +1076,8 @@ export function useConversationStreaming({
 					}
 				};
 
+				const sendRequestExtras = buildSendRequestExtras?.() ?? {};
+
 				await startAgentMessageStream(
 					{
 						provider: model.provider,
@@ -1078,8 +1093,18 @@ export function useConversationStreaming({
 						userMessageId,
 						files: filePaths,
 						images: imagePaths,
+						...sendRequestExtras,
 					},
 					(event) => {
+						if (event.kind === "kanbanToolCall") {
+							void onKanbanToolCall?.(event);
+							return;
+						}
+
+						if (event.kind === "piUiRequest") {
+							return;
+						}
+
 						if (event.kind === "update") {
 							baseMessages = event.messages;
 							pendingPartial = null;
@@ -1289,6 +1314,8 @@ export function useConversationStreaming({
 			planReviewByContext,
 			followUpBehavior,
 			submitQueue,
+			buildSendRequestExtras,
+			onKanbanToolCall,
 		],
 	);
 

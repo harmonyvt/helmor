@@ -24,6 +24,10 @@ pub struct BuildSendMessageParamsInput<'a> {
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
+    pub kanban_workspace_id: Option<&'a str>,
+    pub kanban_snapshot: Option<&'a str>,
+    pub goal_title: Option<&'a str>,
+    pub goal_description: Option<&'a str>,
 }
 
 /// Build the `sendMessage` request params that the sidecar receives.
@@ -34,6 +38,15 @@ pub struct BuildSendMessageParamsInput<'a> {
 pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Value {
     let additional_directories = lookup_workspace_linked_directories(input.helmor_session_id);
     let source_repo_path = lookup_workspace_repo_root_path(input.helmor_session_id);
+    let pi_goal_context = input
+        .kanban_workspace_id
+        .map(|goal_workspace_id| PiGoalContext {
+            goal_workspace_id: goal_workspace_id.to_string(),
+            kanban_snapshot: input.kanban_snapshot.map(str::to_string),
+            goal_title: input.goal_title.map(str::to_string),
+            goal_description: input.goal_description.map(str::to_string),
+        })
+        .or_else(|| lookup_pi_goal_context(input.provider, input.helmor_session_id));
 
     let mut params = serde_json::json!({
         "sessionId": input.sidecar_session_id,
@@ -76,7 +89,34 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
             );
         }
     }
+    if let Some(context) = pi_goal_context {
+        insert_optional_string(
+            &mut params,
+            "kanbanWorkspaceId",
+            Some(context.goal_workspace_id.as_str()),
+        );
+        insert_optional_string(
+            &mut params,
+            "kanbanSnapshot",
+            context.kanban_snapshot.as_deref(),
+        );
+        insert_optional_string(&mut params, "goalTitle", context.goal_title.as_deref());
+        insert_optional_string(
+            &mut params,
+            "goalDescription",
+            context.goal_description.as_deref(),
+        );
+    }
     params
+}
+
+fn insert_optional_string(params: &mut Value, key: &str, value: Option<&str>) {
+    let Some(value) = value else {
+        return;
+    };
+    if let Some(obj) = params.as_object_mut() {
+        obj.insert(key.to_string(), Value::String(value.to_string()));
+    }
 }
 
 /// Load the workspace's `/add-dir` list via the helmor session id. Returns
@@ -160,6 +200,98 @@ pub fn lookup_workspace_repo_root_path(helmor_session_id: Option<&str>) -> Optio
             None
         }
     }
+}
+
+struct PiGoalContext {
+    goal_workspace_id: String,
+    kanban_snapshot: Option<String>,
+    goal_title: Option<String>,
+    goal_description: Option<String>,
+}
+
+fn lookup_pi_goal_context(
+    provider: &str,
+    helmor_session_id: Option<&str>,
+) -> Option<PiGoalContext> {
+    if provider != "pi" {
+        return None;
+    }
+    let hsid = helmor_session_id?;
+    let conn = match crate::models::db::read_conn() {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::warn!(
+                helmor_session_id = %hsid,
+                error = %err,
+                "Failed to open DB for Pi goal context lookup",
+            );
+            return None;
+        }
+    };
+    let row = conn
+        .query_row(
+            r#"
+            SELECT
+              w.id,
+              COALESCE(w.workspace_kind, 'code'),
+              w.goal_workspace_id,
+              w.goal_title,
+              w.goal_description
+            FROM sessions s
+            JOIN workspaces w ON w.id = s.workspace_id
+            WHERE s.id = ?1
+            "#,
+            [hsid],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .ok()?;
+
+    let (workspace_id, workspace_kind, linked_goal_id, title, description) = row;
+    let (goal_workspace_id, goal_title, goal_description) = if workspace_kind == "goal" {
+        (workspace_id, title, description)
+    } else {
+        let goal_id = linked_goal_id?;
+        let meta = conn
+            .query_row(
+                "SELECT goal_title, goal_description FROM workspaces WHERE id = ?1",
+                [goal_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )
+            .unwrap_or((None, None));
+        (goal_id, meta.0, meta.1)
+    };
+
+    let kanban_snapshot = match crate::workspaces::list_goal_child_workspaces(&goal_workspace_id) {
+        Ok(cards) => serde_json::to_string(&cards).ok(),
+        Err(err) => {
+            tracing::warn!(
+                goal_workspace_id,
+                error = %format!("{err:#}"),
+                "Failed to build Pi kanban snapshot",
+            );
+            None
+        }
+    };
+
+    Some(PiGoalContext {
+        goal_workspace_id,
+        kanban_snapshot,
+        goal_title,
+        goal_description,
+    })
 }
 
 #[cfg(test)]

@@ -153,7 +153,9 @@ pub fn ensure_schema(connection: &Connection) -> Result<()> {
     connection
         .execute_batch(SCHEMA_SQL)
         .context("Failed to initialize database schema")?;
-    run_migrations(connection).context("Failed to run database migrations")
+    run_migrations(connection).context("Failed to run database migrations")?;
+    ensure_post_migration_objects(connection)
+        .context("Failed to initialize post-migration database schema")
 }
 
 /// Incremental migrations for schema changes to existing databases.
@@ -495,6 +497,33 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add pr_url column")?;
     }
 
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "workspace_kind")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN workspace_kind TEXT DEFAULT 'code'")
+            .context("Failed to add workspace_kind column")?;
+    }
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "goal_workspace_id")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_workspace_id TEXT")
+            .context("Failed to add goal_workspace_id column")?;
+    }
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "goal_title") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_title TEXT")
+            .context("Failed to add goal_title column")?;
+    }
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "goal_description")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_description TEXT")
+            .context("Failed to add goal_description column")?;
+    }
+
     let had_workspace_status =
         has_table(connection, "workspaces") && has_column(connection, "workspaces", "status");
     if has_table(connection, "workspaces") && !had_workspace_status {
@@ -566,6 +595,29 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Objects that depend on columns introduced by migrations. Keep these out of
+/// `SCHEMA_SQL`: `CREATE INDEX IF NOT EXISTS` still fails when an existing
+/// table lacks the indexed column, which prevents the migration from running.
+fn ensure_post_migration_objects(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+		r#"
+CREATE INDEX IF NOT EXISTS idx_goal_cards_workspace_order ON goal_cards(goal_workspace_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_goal_cards_child_workspace ON goal_cards(child_workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspaces_goal_workspace ON workspaces(goal_workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_browser_tabs_workspace_order ON workspace_browser_tabs(workspace_id, display_order);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_browser_tabs_one_active ON workspace_browser_tabs(workspace_id) WHERE active = 1;
+
+CREATE TRIGGER IF NOT EXISTS update_workspace_browser_tabs_updated_at
+    AFTER UPDATE ON workspace_browser_tabs
+    BEGIN
+        UPDATE workspace_browser_tabs SET updated_at = datetime('now')
+        WHERE id = NEW.id;
+    END;
+"#,
+	)?;
+    Ok(())
+}
+
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS repos (
     id TEXT PRIMARY KEY,
@@ -627,6 +679,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
     pr_title TEXT,
     pr_sync_state TEXT DEFAULT 'none',
     pr_url TEXT,
+    workspace_kind TEXT DEFAULT 'code',
+    goal_workspace_id TEXT,
+    goal_title TEXT,
+    goal_description TEXT,
     archive_commit TEXT,
     linked_directory_paths TEXT,
     mode TEXT DEFAULT 'worktree',
@@ -680,6 +736,32 @@ CREATE TABLE IF NOT EXISTS session_delegations (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     started_at TEXT,
     completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS goal_cards (
+    id TEXT PRIMARY KEY,
+    goal_workspace_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    lane TEXT NOT NULL DEFAULT 'backlog',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    assigned_provider TEXT,
+    assigned_model_id TEXT,
+    assigned_effort_level TEXT,
+    child_workspace_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS workspace_browser_tabs (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Indexes
@@ -799,6 +881,62 @@ mod tests {
         ensure_schema(&connection).unwrap();
         // Call again — should not error
         ensure_schema(&connection).unwrap();
+    }
+
+    #[test]
+    fn ensure_schema_migrates_existing_workspace_table_before_goal_indexes() {
+        let (connection, _dir) = open_test_db();
+        connection
+            .execute_batch(
+                r#"
+				CREATE TABLE repos (
+					id TEXT PRIMARY KEY,
+					name TEXT,
+					default_branch TEXT,
+					root_path TEXT,
+					created_at TEXT NOT NULL DEFAULT (datetime('now')),
+					updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+				);
+				CREATE TABLE workspaces (
+					id TEXT PRIMARY KEY,
+					repository_id TEXT,
+					directory_name TEXT,
+					active_session_id TEXT,
+					branch TEXT,
+					state TEXT DEFAULT 'active',
+					status TEXT DEFAULT 'in-progress',
+					unread INTEGER DEFAULT 0,
+					initialization_parent_branch TEXT,
+					pinned_at TEXT,
+					intended_target_branch TEXT,
+					pr_title TEXT,
+					pr_sync_state TEXT DEFAULT 'none',
+					pr_url TEXT,
+					archive_commit TEXT,
+					linked_directory_paths TEXT,
+					created_at TEXT NOT NULL DEFAULT (datetime('now')),
+					updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+				);
+				"#,
+            )
+            .unwrap();
+
+        ensure_schema(&connection).unwrap();
+        ensure_schema(&connection).unwrap();
+
+        assert!(column_exists(&connection, "workspaces", "workspace_kind"));
+        assert!(column_exists(
+            &connection,
+            "workspaces",
+            "goal_workspace_id"
+        ));
+        assert!(column_exists(&connection, "workspaces", "goal_title"));
+        assert!(column_exists(&connection, "workspaces", "goal_description"));
+        assert!(index_exists(&connection, "idx_workspaces_goal_workspace"));
+        assert!(index_exists(
+            &connection,
+            "idx_workspace_browser_tabs_one_active"
+        ));
     }
 
     #[test]

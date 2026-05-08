@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod browser_profile;
 pub mod cli;
 pub(crate) mod commands;
 pub mod data_dir;
@@ -6,6 +7,7 @@ pub mod error;
 pub mod forge;
 pub mod git;
 pub mod global_hotkey;
+pub mod goal_orchestration;
 pub mod image_store;
 mod import;
 pub mod logging;
@@ -20,6 +22,8 @@ pub mod sidecar;
 mod system_limits;
 pub mod ui_sync;
 pub mod updater;
+pub mod web;
+pub mod web_daemon;
 pub mod workspace;
 
 #[cfg(test)]
@@ -35,6 +39,7 @@ pub use models::sessions;
 pub use models::settings;
 pub use workspace::files as editor_files;
 pub use workspace::helpers;
+pub use workspace::kind as workspace_kind;
 pub use workspace::pr_sync as workspace_pr_sync;
 pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
@@ -71,6 +76,7 @@ pub fn run() {
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
+        .manage(web_daemon::WebDaemonManager::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .setup(|app| {
@@ -211,6 +217,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
+            agents::check_pi_models,
             agents::list_cursor_models,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
@@ -218,6 +225,8 @@ pub fn run() {
             agents::steer_agent_stream,
             agents::respond_to_permission_request,
             agents::respond_to_user_input,
+            agents::send_kanban_tool_result,
+            agents::respond_to_pi_ui,
             agents::generate_session_title,
             agents::list_slash_commands,
             agents::prewarm_slash_commands_for_workspace,
@@ -235,6 +244,11 @@ pub fn run() {
             commands::settings_commands::get_codex_rate_limits,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
+            web_daemon::get_web_daemon_status,
+            web_daemon::start_web_daemon,
+            web_daemon::stop_web_daemon,
+            web_daemon::delete_web_daemon,
+            web_daemon::cleanup_web_daemon,
             commands::system_commands::get_agent_login_status,
             commands::system_commands::get_helmor_skills_status,
             commands::system_commands::install_cli,
@@ -268,7 +282,18 @@ pub fn run() {
             commands::forge_commands::get_workspace_forge_check_insert_text,
             commands::forge_commands::merge_workspace_change_request,
             commands::forge_commands::close_workspace_change_request,
+            commands::goal_commands::prepare_goal_workspace,
+            commands::goal_commands::finalize_goal_workspace,
+            commands::goal_commands::list_goal_cards,
+            commands::goal_commands::upsert_goal_card,
+            commands::goal_commands::link_goal_card_workspace,
+            commands::goal_commands::create_goal_child_workspace,
+            commands::goal_commands::create_goal_child_workspace_and_start,
+            commands::goal_commands::set_goal_child_workspace_status,
+            commands::goal_commands::assign_workspace_to_goal,
             commands::workspace_commands::get_workspace,
+            commands::workspace_commands::list_goal_child_workspaces,
+            commands::workspace_commands::update_goal_workspace_meta,
             commands::repository_commands::add_repository_from_local_path,
             commands::repository_commands::clone_repository_from_url,
             commands::workspace_commands::list_archived_workspaces,
@@ -293,6 +318,24 @@ pub fn run() {
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
+            commands::browser_commands::list_workspace_browser_tabs,
+            commands::browser_commands::create_browser_tab,
+            commands::browser_commands::select_browser_tab,
+            commands::browser_commands::navigate_browser_tab,
+            commands::browser_commands::update_browser_tab_title,
+            commands::browser_commands::close_browser_tab,
+            commands::browser_commands::get_workspace_browser_profile,
+            commands::browser_commands::get_browser_tab_profile,
+            commands::browser_commands::create_browser_webview,
+            commands::browser_commands::browser_go_back,
+            commands::browser_commands::browser_go_forward,
+            commands::browser_commands::open_browser_devtools,
+            commands::browser_commands::browser_snapshot,
+            commands::browser_commands::browser_screenshot,
+            commands::browser_commands::browser_click,
+            commands::browser_commands::browser_type,
+            commands::browser_commands::browser_key,
+            commands::browser_commands::browser_scroll,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,

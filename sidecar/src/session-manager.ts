@@ -7,7 +7,7 @@
 
 import type { SidecarEmitter } from "./emitter.js";
 
-export type Provider = "claude" | "codex" | "cursor";
+export type Provider = "claude" | "codex" | "cursor" | "pi";
 
 export interface SendMessageParams {
 	readonly sessionId: string;
@@ -46,6 +46,10 @@ export interface SendMessageParams {
 	 * attachments".
 	 */
 	readonly images: readonly string[];
+	readonly kanbanWorkspaceId?: string | null;
+	readonly kanbanSnapshot?: string | null;
+	readonly goalTitle?: string | null;
+	readonly goalDescription?: string | null;
 }
 
 export interface ListSlashCommandsParams {
@@ -84,7 +88,8 @@ export interface SlashCommandInfo {
 	readonly name: string;
 	readonly description: string;
 	readonly argumentHint: string | undefined;
-	readonly source: "builtin" | "skill";
+	readonly source: "builtin" | "extension" | "prompt" | "skill";
+	readonly sourceInfo?: Record<string, unknown>;
 }
 
 /**
@@ -115,6 +120,7 @@ export interface ProviderModelInfo {
 	readonly id: string;
 	readonly label: string;
 	readonly cliModel: string;
+	readonly providerKey?: string;
 	readonly effortLevels?: readonly string[];
 	readonly supportsFastMode?: boolean;
 	/** Cursor-only — raw `parameters[]` from `ModelListItem`. */

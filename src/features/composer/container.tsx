@@ -133,6 +133,7 @@ type WorkspaceComposerContainerProps = {
 	onPermissionResponse?: PermissionPanelProps["onResponse"];
 	hasPlanReview?: boolean;
 	modelSelections: Record<string, string>;
+	modelFilter?: (model: AgentModelOption) => boolean;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
 	fastModes: Record<string, boolean>;
@@ -229,6 +230,7 @@ export const WorkspaceComposerContainer = memo(
 		onPermissionResponse = noopPermissionResponse,
 		hasPlanReview = false,
 		modelSelections,
+		modelFilter,
 		effortLevels = {},
 		permissionModes = {},
 		fastModes = {},
@@ -410,7 +412,17 @@ export const WorkspaceComposerContainer = memo(
 			],
 		);
 
-		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
+		const unfilteredModelSections =
+			modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
+		const modelSections = useMemo(() => {
+			if (!modelFilter) return unfilteredModelSections;
+			return unfilteredModelSections
+				.map((section) => ({
+					...section,
+					options: section.options.filter(modelFilter),
+				}))
+				.filter((section) => section.options.length > 0);
+		}, [modelFilter, unfilteredModelSections]);
 		const modelsLoading =
 			modelSectionsQuery.isLoading &&
 			modelSections.every((s) => s.options.length === 0);

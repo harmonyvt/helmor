@@ -90,6 +90,15 @@ pub fn avatar_cache_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Returns the browser profile directory inside the data dir.
+pub fn browser_profiles_dir() -> Result<PathBuf> {
+    let dir = data_dir()?.join("browser-profiles");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).context("Failed to create browser profiles directory")?;
+    }
+    Ok(dir)
+}
+
 /// Returns the Conductor source database path for import.
 /// This is the real Conductor database on the local machine.
 pub fn conductor_source_db_path() -> Option<PathBuf> {
@@ -163,6 +172,7 @@ pub fn ensure_directory_structure() -> Result<()> {
     logs_dir()?;
     run_dir()?;
     generated_images_dir()?;
+    browser_profiles_dir()?;
     Ok(())
 }
 

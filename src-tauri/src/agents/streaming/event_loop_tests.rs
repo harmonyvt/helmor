@@ -68,6 +68,15 @@ enum EmittedEvent {
         permission_mode: Option<String>,
         payload_kind: String,
     },
+    KanbanToolCall {
+        tool_call_id: String,
+        tool: String,
+        workspace_id: String,
+    },
+    PiUiRequest {
+        interaction_id: String,
+        ui_kind: String,
+    },
     PlanCaptured,
     Done {
         persisted: bool,
@@ -155,6 +164,24 @@ fn convert_action(action: Action) -> Result<EmittedEvent, String> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
+            },
+            AgentStreamEvent::KanbanToolCall {
+                tool_call_id,
+                tool,
+                workspace_id,
+                ..
+            } => EmittedEvent::KanbanToolCall {
+                tool_call_id,
+                tool,
+                workspace_id,
+            },
+            AgentStreamEvent::PiUiRequest {
+                interaction_id,
+                ui_kind,
+                ..
+            } => EmittedEvent::PiUiRequest {
+                interaction_id,
+                ui_kind,
             },
             AgentStreamEvent::PlanCaptured {} => EmittedEvent::PlanCaptured,
             AgentStreamEvent::Done { persisted, .. } => EmittedEvent::Done { persisted },
@@ -256,6 +283,12 @@ fn dispatch_one(
             }
             session.handle_user_input_request(raw, &resolved_model, final_messages)
         }
+        "kanban_tool_call" => Ok(vec![Action::EmitToFrontend(
+            super::bridges::bridge_kanban_tool_call_event(raw),
+        )]),
+        "pi_ui_request" => Ok(vec![Action::EmitToFrontend(
+            super::bridges::bridge_pi_ui_request_event(raw),
+        )]),
         "contextUsageUpdated" => session.handle_context_usage_updated(raw),
         "planCaptured" => {
             // Mirror mod.rs: flush + finish + build plan_message, then

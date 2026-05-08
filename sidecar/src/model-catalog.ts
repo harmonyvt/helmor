@@ -99,6 +99,7 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			effortLevels: CURSOR_REASONING_LEVELS,
 		},
 	],
+	pi: [],
 };
 
 export function listProviderModels(provider: Provider): ProviderModelInfo[] {

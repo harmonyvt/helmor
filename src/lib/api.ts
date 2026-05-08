@@ -16,6 +16,8 @@ export type GroupTone =
  * Kept as a string literal union so existing `ws.state === "archived"` checks
  * keep working without runtime changes.
  */
+export type WorkspaceKind = "code" | "goal";
+
 export type WorkspaceState =
 	| "initializing"
 	| "setup_pending"
@@ -64,6 +66,8 @@ export type WorkspaceRow = {
 	title: string;
 	avatar?: string;
 	directoryName?: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	repoName?: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
@@ -85,9 +89,11 @@ export type WorkspaceRow = {
 	primarySessionId?: string | null;
 	primarySessionTitle?: string | null;
 	primarySessionAgentType?: string | null;
+	prNumber?: number | null;
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
+	intendedTargetBranch?: string | null;
 	pinnedAt?: string | null;
 	sessionCount?: number;
 	messageCount?: number;
@@ -108,14 +114,46 @@ export type WorkspaceGroup = {
 	rows: WorkspaceRow[];
 };
 
+export type DataDirPreference = "automatic" | "production" | "development";
+
 export type DataInfo = {
 	dataMode: string;
+	defaultDataMode: "production" | "development";
+	dataDir: string;
+	/** Back-compat alias used by the existing Dev Tools panel. */
 	dataRoot: string;
 	dbPath: string;
-	archiveRoot: string;
+	archiveRoot?: string;
+	dataDirPreference: DataDirPreference;
+	dataDirPreferencePath: string;
+	dataDirLockedByEnv: boolean;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor";
+export type WebDaemonStatus = {
+	state: "running" | "stopped";
+	pid: number | null;
+	url: string;
+	openUrl: string;
+	reachableUrls: string[];
+	host: string;
+	listenHost: string;
+	port: number;
+	dataDir: string;
+	frontendDir: string;
+	frontendExists: boolean;
+	identity: string;
+	command: string;
+	startedAtMs: number | null;
+	lastError: string | null;
+};
+
+export type WebDaemonStartConfig = {
+	host?: string | null;
+	port?: number | null;
+	frontendDir?: string | null;
+};
+
+export type AgentProvider = "claude" | "codex" | "cursor" | "pi";
 
 export type AgentModelOption = {
 	id: string;
@@ -137,6 +175,19 @@ export type AgentModelSection = {
 	options: AgentModelOption[];
 };
 
+export type PiModelProviderSummary = {
+	key: string;
+	label: string;
+	modelCount: number;
+};
+
+export type PiModelCheckResponse = {
+	status: AgentModelSectionStatus;
+	providers: PiModelProviderSummary[];
+	models: AgentModelOption[];
+	error?: string | null;
+};
+
 export type AgentSendRequest = {
 	provider: AgentProvider;
 	modelId: string;
@@ -146,6 +197,7 @@ export type AgentSendRequest = {
 	 *  content keeps `prompt` only — the prefix never enters the DB or
 	 *  the chat bubble. */
 	promptPrefix?: string | null;
+	resumeOnly?: boolean | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
@@ -160,6 +212,14 @@ export type AgentSendRequest = {
 	 *  matching `@<path>` substrings out as image attachments without
 	 *  re-parsing the text — paths may contain whitespace. */
 	images?: string[] | null;
+	/**
+	 * When set, the Pi agent registers Kanban custom tools so it can manage
+	 * child workspaces for a goal workspace.
+	 */
+	kanbanWorkspaceId?: string | null;
+	kanbanSnapshot?: string | null;
+	goalTitle?: string | null;
+	goalDescription?: string | null;
 };
 
 export type WorkspaceSummary = {
@@ -169,6 +229,8 @@ export type WorkspaceSummary = {
 	repoName: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	state: WorkspaceState;
 	mode?: WorkspaceMode;
 	hasUnread: boolean;
@@ -216,6 +278,61 @@ export type RepositoryCreateOption = {
 
 export type AddRepositoryDefaults = {
 	lastCloneDirectory?: string | null;
+};
+
+export type GithubCliStatus =
+	| {
+			status: "ready";
+			host: string;
+			login: string;
+			version: string;
+			message: string;
+	  }
+	| {
+			status: "unauthenticated";
+			host: string;
+			version?: string | null;
+			message: string;
+	  }
+	| { status: "unavailable"; host: string; message: string }
+	| {
+			status: "error";
+			host: string;
+			version?: string | null;
+			message: string;
+	  };
+
+export type GithubCliUser = {
+	login: string;
+	id: number;
+	name?: string | null;
+	avatarUrl?: string | null;
+	email?: string | null;
+};
+
+export type GithubRepositorySummary = {
+	id: number;
+	name: string;
+	fullName: string;
+	ownerLogin: string;
+	private: boolean;
+	defaultBranch?: string | null;
+	htmlUrl: string;
+	updatedAt?: string | null;
+	pushedAt?: string | null;
+};
+
+export type GithubPullRequestSummary = {
+	number: number;
+	title: string;
+	body: string;
+	url: string;
+	state: string;
+	isMerged: boolean;
+	headBranch: string;
+	baseBranch: string;
+	additions: number;
+	deletions: number;
 };
 
 /** A single gh / glab account with display profile attached. Listed
@@ -288,6 +405,8 @@ export type WorkspaceDetail = {
 	defaultBranch?: string | null;
 	rootPath?: string | null;
 	directoryName: string;
+	workspaceKind?: WorkspaceKind;
+	goalWorkspaceId?: string | null;
 	state: WorkspaceState;
 	hasUnread: boolean;
 	workspaceUnread: number;
@@ -312,6 +431,10 @@ export type WorkspaceDetail = {
 	/** gh/glab account login bound to the parent repo. NULL means no
 	 * account is bound — UI shows the "Connect" prompt. */
 	forgeLogin?: string | null;
+	/** User-editable title for goal workspaces. Null if never set. */
+	goalTitle?: string | null;
+	/** User-editable description for goal workspaces. Null if never set. */
+	goalDescription?: string | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -389,6 +512,13 @@ export type PrepareWorkspaceResponse = {
 	directoryName: string;
 	branch: string;
 	defaultBranch: string;
+	intendedTargetBranch?: string;
+	status?: WorkspaceStatus;
+	sourceStartBranch?: string | null;
+	prNumber?: number | null;
+	prTitle?: string | null;
+	prSyncState?: PrSyncState;
+	prUrl?: string | null;
 	state: WorkspaceState;
 	repoScripts: RepoScripts;
 	/** CWD the agent CLI must run in. Local mode: filled with `repo.root_path`
@@ -403,6 +533,113 @@ export type FinalizeWorkspaceResponse = {
 	/** CWD the agent CLI must run in. Always populated when finalize succeeds. */
 	workingDirectory: string;
 };
+
+export type PrepareGoalWorkspaceRequest = {
+	repoId: string;
+	title: string;
+	description: string;
+	targetBranch?: string | null;
+	sourceBranch?: string | null;
+};
+
+export type PrepareGoalWorkspaceResponse = {
+	workspaceId: string;
+	initialSessionId: string;
+	repoId: string;
+	repoName: string;
+	directoryName: string;
+	branch: string;
+	defaultBranch: string;
+	intendedTargetBranch: string;
+	sourceStartBranch?: string | null;
+	title: string;
+	description: string;
+	state: WorkspaceState;
+	repoScripts: RepoScripts;
+};
+
+export type FinalizeGoalWorkspaceResponse = {
+	workspaceId: string;
+	finalState: WorkspaceState;
+	prTitle: string;
+	prUrl?: string | null;
+	prSyncState: PrSyncState;
+};
+
+export type GoalCard = {
+	id: string;
+	goalWorkspaceId: string;
+	title: string;
+	description?: string | null;
+	lane: WorkspaceStatus;
+	sortOrder: number;
+	assignedProvider?: AgentProvider | string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	childWorkspaceId?: string | null;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type UpsertGoalCardInput = {
+	id?: string | null;
+	goalWorkspaceId: string;
+	title: string;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	sortOrder?: number | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	childWorkspaceId?: string | null;
+};
+
+export type GoalChildWorkspaceRequest = {
+	goalWorkspaceId: string;
+	goalCardId?: string | null;
+	title?: string | null;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	targetBranch?: string | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+};
+
+export type GoalChildWorkspaceCreateRequest = {
+	goalWorkspace: string;
+	title: string;
+	description?: string | null;
+	lane?: WorkspaceStatus | null;
+	targetBranch?: string | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	prompt?: string | null;
+	permissionMode?: string | null;
+	finalize?: boolean | null;
+};
+
+export type GoalChildWorkspaceCreateResult = {
+	workspaceId: string;
+	directoryName: string;
+	directory?: string | null;
+	branch: string;
+	sessionId: string;
+	state: WorkspaceState;
+	status: WorkspaceStatus;
+	intendedTargetBranch: string;
+	promptQueued: boolean;
+	agentStarted: boolean;
+	pendingSendId?: string | null;
+	provider?: string | null;
+	model?: string | null;
+};
+
+export type WorkspaceCreationSource =
+	| { type: "defaultBranch" }
+	| { type: "remoteBranch"; branch: string }
+	| { type: "githubPullRequest"; number: number };
 
 export type MarkWorkspaceReadResponse = undefined;
 
@@ -482,6 +719,69 @@ export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load workspace groups."),
+		);
+	}
+}
+
+export async function loadGithubCliStatus(): Promise<GithubCliStatus> {
+	try {
+		return await invoke<GithubCliStatus>("get_github_cli_status");
+	} catch (error) {
+		return {
+			status: "error",
+			host: "github.com",
+			message: describeInvokeError(error, "Unable to load GitHub CLI state."),
+		};
+	}
+}
+
+export async function loadGithubCliUser(): Promise<GithubCliUser | null> {
+	try {
+		return await invoke<GithubCliUser | null>("get_github_cli_user");
+	} catch {
+		return null;
+	}
+}
+
+export async function listGithubAccessibleRepositories(): Promise<
+	GithubRepositorySummary[]
+> {
+	try {
+		return await invoke<GithubRepositorySummary[]>(
+			"list_github_accessible_repositories",
+		);
+	} catch {
+		return [];
+	}
+}
+
+export async function listGithubPullRequestsForRepo(
+	repoId: string,
+): Promise<GithubPullRequestSummary[]> {
+	try {
+		return await invoke<GithubPullRequestSummary[]>(
+			"list_github_pull_requests_for_repo",
+			{ repoId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load GitHub pull requests."),
+		);
+	}
+}
+
+export async function resolveGithubPullRequestForRepo(
+	repoId: string,
+	input: string,
+): Promise<GithubPullRequestSummary> {
+	try {
+		return await invoke<GithubPullRequestSummary>(
+			"resolve_github_pull_request_for_repo",
+			{ repoId, input },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to resolve GitHub pull request."),
 		);
 	}
 }
@@ -666,12 +966,71 @@ export async function resizeForgeCliAuthTerminal(
 	});
 }
 
+type DataInfoWire = Partial<DataInfo> & {
+	dataMode: string;
+	dbPath: string;
+	dataDir?: string;
+	dataRoot?: string;
+};
+
+function normalizeDataInfo(info: DataInfoWire): DataInfo {
+	const dataDir = info.dataDir ?? info.dataRoot ?? "";
+	const defaultDataMode =
+		info.defaultDataMode ??
+		(info.dataMode === "production" ? "production" : "development");
+	return {
+		dataMode: info.dataMode,
+		defaultDataMode,
+		dataDir,
+		dataRoot: info.dataRoot ?? dataDir,
+		dbPath: info.dbPath,
+		archiveRoot: info.archiveRoot,
+		dataDirPreference: info.dataDirPreference ?? "automatic",
+		dataDirPreferencePath: info.dataDirPreferencePath ?? "",
+		dataDirLockedByEnv: info.dataDirLockedByEnv ?? false,
+	};
+}
+
 export async function loadDataInfo(): Promise<DataInfo | null> {
 	try {
-		return await invoke<DataInfo>("get_data_info");
+		return normalizeDataInfo(await invoke<DataInfoWire>("get_data_info"));
 	} catch {
 		return null;
 	}
+}
+
+export async function setDataDirPreference(
+	preference: DataDirPreference,
+): Promise<void> {
+	await invoke("set_data_dir_preference", { preference });
+}
+
+export async function getWebDaemonStatus(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("get_web_daemon_status");
+}
+
+export async function startWebDaemon(
+	config?: WebDaemonStartConfig,
+): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("start_web_daemon", {
+		config: config ?? null,
+	});
+}
+
+export async function stopWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("stop_web_daemon");
+}
+
+export async function deleteWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("delete_web_daemon");
+}
+
+export async function cleanupWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("cleanup_web_daemon");
+}
+
+export async function restartApp(force = false): Promise<void> {
+	await invoke("restart_app", { force });
 }
 
 export type CliStatus = {
@@ -917,6 +1276,14 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 		return await invoke<AgentModelSection[]>("list_agent_model_sections");
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load agent models."));
+	}
+}
+
+export async function checkPiModels(): Promise<PiModelCheckResponse> {
+	try {
+		return await invoke<PiModelCheckResponse>("check_pi_models");
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to check Pi models."));
 	}
 }
 
@@ -1219,6 +1586,29 @@ export async function loadWorkspaceDetail(
 	}
 }
 
+/**
+ * Update the user-editable goal title and/or description for a goal workspace.
+ * The backend broadcasts a `WorkspaceChanged` event so the frontend cache is
+ * automatically invalidated.
+ */
+export async function updateGoalWorkspaceMeta(
+	workspaceId: string,
+	goalTitle: string | null,
+	goalDescription: string | null,
+): Promise<void> {
+	try {
+		await invoke("update_goal_workspace_meta", {
+			workspaceId,
+			goalTitle,
+			goalDescription,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to update goal workspace metadata."),
+		);
+	}
+}
+
 export async function listRemoteBranches(opts: {
 	workspaceId?: string;
 	repoId?: string;
@@ -1423,11 +1813,19 @@ export type UiMutationEvent =
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
 	| { type: "workspaceChangeRequestChanged"; workspaceId: string }
+	| { type: "workspaceBrowserTabsChanged"; workspaceId: string }
+	| { type: "goalCardsChanged"; workspaceId: string }
+	| {
+			type: "goalChildWorkspacesChanged";
+			goalWorkspaceId: string;
+			childWorkspaceId?: string | null;
+	  }
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
 	| {
 			type: "pendingCliSendQueued";
+			pendingSendId?: string;
 			workspaceId: string;
 			sessionId: string;
 			prompt: string;
@@ -1839,6 +2237,26 @@ export type ForgeActionStatus = {
 	message?: string | null;
 };
 
+/// A single comment from a PR — either the root of an inline review thread
+/// or a general issue-style comment on the PR.
+export type PrComment = {
+	id: string;
+	author: string;
+	body: string;
+	url: string;
+	/** File path for inline review thread comments; absent for general comments. */
+	filePath?: string | null;
+	/** True when the parent review thread has been marked resolved on GitHub. */
+	isThreadResolved: boolean;
+	createdAt: string;
+};
+
+export type PrCommentData = {
+	comments: PrComment[];
+	prNumber?: number | null;
+	prUrl?: string | null;
+};
+
 export async function refreshWorkspaceChangeRequest(
 	workspaceId: string,
 ): Promise<ChangeRequestInfo | null> {
@@ -1925,6 +2343,50 @@ export async function getWorkspaceForgeCheckInsertText(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load check details."),
+		);
+	}
+}
+
+export async function getWorkspaceForgeDeploymentInsertText(
+	workspaceId: string,
+	itemId: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("get_workspace_forge_deployment_insert_text", {
+			workspaceId,
+			itemId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load deployment details."),
+		);
+	}
+}
+
+export async function getWorkspacePrComments(
+	workspaceId: string,
+): Promise<PrCommentData> {
+	try {
+		return await invoke<PrCommentData>("get_workspace_pr_comments", {
+			workspaceId,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load PR comments."));
+	}
+}
+
+export async function getWorkspacePrCommentInsertText(
+	workspaceId: string,
+	commentId: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("get_workspace_pr_comment_insert_text", {
+			workspaceId,
+			commentId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load PR comment details."),
 		);
 	}
 }
@@ -2131,6 +2593,99 @@ export async function completeWorkspaceSetup(
 	return invoke("complete_workspace_setup", { workspaceId });
 }
 
+export async function prepareGoalWorkspace(
+	request: PrepareGoalWorkspaceRequest,
+): Promise<PrepareGoalWorkspaceResponse> {
+	return invoke<PrepareGoalWorkspaceResponse>("prepare_goal_workspace", {
+		request,
+	});
+}
+
+export async function finalizeGoalWorkspace(
+	workspaceId: string,
+	description: string,
+	sourceStartBranch?: string | null,
+): Promise<FinalizeGoalWorkspaceResponse> {
+	return invoke<FinalizeGoalWorkspaceResponse>("finalize_goal_workspace", {
+		workspaceId,
+		description,
+		sourceStartBranch: sourceStartBranch ?? null,
+	});
+}
+
+export async function listGoalCards(workspaceId: string): Promise<GoalCard[]> {
+	return invoke<GoalCard[]>("list_goal_cards", { workspaceId });
+}
+
+export async function upsertGoalCard(
+	input: UpsertGoalCardInput,
+): Promise<GoalCard> {
+	return invoke<GoalCard>("upsert_goal_card", { input });
+}
+
+export async function linkGoalCardWorkspace(
+	goalCardId: string,
+	workspaceId: string,
+): Promise<GoalCard> {
+	return invoke<GoalCard>("link_goal_card_workspace", {
+		goalCardId,
+		workspaceId,
+	});
+}
+
+export async function createGoalChildWorkspace(
+	request: GoalChildWorkspaceRequest,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("create_goal_child_workspace", {
+		request,
+	});
+}
+
+export async function createGoalChildWorkspaceAndStart(
+	request: GoalChildWorkspaceCreateRequest,
+): Promise<GoalChildWorkspaceCreateResult> {
+	return invoke<GoalChildWorkspaceCreateResult>(
+		"create_goal_child_workspace_and_start",
+		{ request },
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Goals AI panel — Pi Kanban bridge
+// ---------------------------------------------------------------------------
+
+/**
+ * Send the result of a Pi Kanban custom tool call back to the sidecar.
+ * Called after the frontend has executed the corresponding Tauri IPC action
+ * in response to a `kanban_tool_call` pipeline event.
+ */
+export async function sendKanbanToolResult(
+	toolCallId: string,
+	result: unknown,
+	isError = false,
+): Promise<void> {
+	return invoke("send_kanban_tool_result", {
+		toolCallId,
+		result: result ?? null,
+		isError,
+	});
+}
+
+/**
+ * Respond to a Pi extension interactive UI request (select / confirm / input).
+ * Called after the user interacts with the shared conversation UI rendered in
+ * response to a `pi_ui_request` event from a Pi extension.
+ */
+export async function respondToPiUi(
+	interactionId: string,
+	result: unknown,
+): Promise<void> {
+	return invoke("respond_to_pi_ui", {
+		interactionId,
+		result: result ?? null,
+	});
+}
+
 export async function addRepositoryFromLocalPath(
 	folderPath: string,
 ): Promise<AddRepositoryResponse> {
@@ -2183,6 +2738,34 @@ export async function setWorkspaceStatus(
 	status: WorkspaceStatus,
 ): Promise<void> {
 	return invoke<void>("set_workspace_status", { workspaceId, status });
+}
+
+export async function setGoalChildWorkspaceStatus(
+	goalWorkspaceId: string,
+	childWorkspaceId: string,
+	status: WorkspaceStatus,
+): Promise<void> {
+	return invoke<void>("set_goal_child_workspace_status", {
+		request: { goalWorkspaceId, childWorkspaceId, status },
+	});
+}
+
+export async function assignWorkspaceToGoal(
+	workspaceId: string,
+	goalWorkspaceId: string,
+	status: WorkspaceStatus,
+): Promise<void> {
+	return invoke<void>("assign_workspace_to_goal", {
+		request: { workspaceId, goalWorkspaceId, status },
+	});
+}
+
+export async function listGoalChildWorkspaces(
+	goalWorkspaceId: string,
+): Promise<WorkspaceDetail[]> {
+	return invoke<WorkspaceDetail[]>("list_goal_child_workspaces", {
+		goalWorkspaceId,
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -2330,6 +2913,17 @@ export type PlanReviewPart = {
 	planFilePath?: string | null;
 	allowedPrompts?: PlanReviewAllowedPrompt[];
 };
+export type GenericCardPart = {
+	type: "generic-card";
+	id: string;
+	title: string;
+	subtitle?: string | null;
+	body?: string | null;
+	severity?: NoticeSeverity | null;
+	status?: string | null;
+	provider?: string | null;
+	details?: unknown;
+};
 export type DelegationAnchorPart = {
 	type: "delegation-anchor";
 	id: string;
@@ -2356,6 +2950,7 @@ export type MessagePart =
 	| PromptSuggestionPart
 	| FileMentionPart
 	| PlanReviewPart
+	| GenericCardPart
 	| DelegationAnchorPart;
 
 export type CollapsedGroupPart = {
@@ -2454,6 +3049,19 @@ export type AgentStreamEvent =
 			payload: Record<string, unknown>;
 	  }
 	| { kind: "planCaptured" }
+	| {
+			kind: "kanbanToolCall";
+			toolCallId: string;
+			tool: string;
+			workspaceId: string;
+			args: Record<string, unknown>;
+	  }
+	| {
+			kind: "piUiRequest";
+			interactionId: string;
+			uiKind: "select" | "confirm" | "input";
+			payload: Record<string, unknown>;
+	  }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
@@ -2889,6 +3497,7 @@ export async function loadHiddenSessions(
 // ---- Repository scripts ----
 
 export type RunScriptMode = "concurrent" | "non-concurrent";
+export type RepoScriptType = "setup" | "run" | "archive";
 
 export type RepoScripts = {
 	setupScript?: string | null;
@@ -2994,7 +3603,7 @@ export async function updateRepoPreferences(
 
 export async function executeRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: RepoScriptType,
 	onEvent: (event: ScriptEvent) => void,
 	workspaceId?: string | null,
 ): Promise<void> {
@@ -3010,7 +3619,7 @@ export async function executeRepoScript(
 
 export async function stopRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: RepoScriptType,
 	workspaceId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("stop_repo_script", {
@@ -3031,7 +3640,7 @@ export async function stopRepoScript(
  */
 export async function writeRepoScriptStdin(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: RepoScriptType,
 	workspaceId: string | null,
 	data: string,
 ): Promise<boolean> {
@@ -3049,7 +3658,7 @@ export async function writeRepoScriptStdin(
  */
 export async function resizeRepoScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: RepoScriptType,
 	workspaceId: string | null,
 	cols: number,
 	rows: number,
@@ -3130,6 +3739,173 @@ export async function resizeTerminal(
 		instanceId,
 		cols,
 		rows,
+	});
+}
+
+export type BrowserTabRecord = {
+	id: string;
+	workspaceId: string;
+	url: string;
+	title: string | null;
+	displayOrder: number;
+	active: boolean;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type BrowserRuntimeActionResponse = {
+	tabId: string;
+	action: string;
+	implemented: boolean;
+	message: string;
+};
+
+export type BrowserProfileOptions = {
+	workspaceId: string;
+	tabId?: string;
+	dataDirectory: string;
+	dataStoreIdentifier: number[];
+};
+
+export type BrowserWebviewBounds = {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+};
+
+export async function listWorkspaceBrowserTabs(
+	workspaceId: string,
+): Promise<BrowserTabRecord[]> {
+	return invoke<BrowserTabRecord[]>("list_workspace_browser_tabs", {
+		workspaceId,
+	});
+}
+
+export async function createBrowserTab(
+	workspaceId: string,
+	initialUrl?: string | null,
+): Promise<BrowserTabRecord> {
+	return invoke<BrowserTabRecord>("create_browser_tab", {
+		workspaceId,
+		initialUrl: initialUrl ?? null,
+	});
+}
+
+export async function selectBrowserTab(
+	tabId: string,
+): Promise<BrowserTabRecord> {
+	return invoke<BrowserTabRecord>("select_browser_tab", { tabId });
+}
+
+export async function navigateBrowserTab(
+	tabId: string,
+	url: string,
+): Promise<BrowserTabRecord> {
+	return invoke<BrowserTabRecord>("navigate_browser_tab", { tabId, url });
+}
+
+export async function updateBrowserTabTitle(
+	tabId: string,
+	title: string | null,
+): Promise<BrowserTabRecord | null> {
+	return invoke<BrowserTabRecord | null>("update_browser_tab_title", {
+		tabId,
+		title,
+	});
+}
+
+export async function closeBrowserTab(
+	tabId: string,
+): Promise<BrowserTabRecord | null> {
+	return invoke<BrowserTabRecord | null>("close_browser_tab", { tabId });
+}
+
+export async function getWorkspaceBrowserProfile(
+	workspaceId: string,
+): Promise<BrowserProfileOptions> {
+	return invoke<BrowserProfileOptions>("get_workspace_browser_profile", {
+		workspaceId,
+	});
+}
+
+export async function getBrowserTabProfile(
+	tabId: string,
+): Promise<BrowserProfileOptions> {
+	return invoke<BrowserProfileOptions>("get_browser_tab_profile", { tabId });
+}
+
+export async function createBrowserWebviewHost(
+	label: string,
+	url: string,
+	bounds: BrowserWebviewBounds,
+	profile: BrowserProfileOptions,
+	userAgent: string,
+): Promise<void> {
+	return invoke<void>("create_browser_webview", {
+		label,
+		url,
+		bounds,
+		profile,
+		userAgent,
+	});
+}
+
+export async function browserGoBack(tabId: string): Promise<void> {
+	return invoke<void>("browser_go_back", { tabId });
+}
+
+export async function browserGoForward(tabId: string): Promise<void> {
+	return invoke<void>("browser_go_forward", { tabId });
+}
+
+export async function openBrowserDevtools(tabId: string): Promise<void> {
+	return invoke<void>("open_browser_devtools", { tabId });
+}
+
+export async function browserSnapshot(
+	tabId: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_snapshot", { tabId });
+}
+
+export async function browserScreenshot(
+	tabId: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_screenshot", { tabId });
+}
+
+export async function browserClick(
+	tabId: string,
+	x: number,
+	y: number,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_click", { tabId, x, y });
+}
+
+export async function browserType(
+	tabId: string,
+	text: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_type", { tabId, text });
+}
+
+export async function browserKey(
+	tabId: string,
+	key: string,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_key", { tabId, key });
+}
+
+export async function browserScroll(
+	tabId: string,
+	deltaX: number,
+	deltaY: number,
+): Promise<BrowserRuntimeActionResponse> {
+	return invoke<BrowserRuntimeActionResponse>("browser_scroll", {
+		tabId,
+		deltaX,
+		deltaY,
 	});
 }
 

@@ -88,6 +88,51 @@ pub fn bridge_user_input_request_event(
     }
 }
 
+/// Pure constructor for a Pi Kanban tool-call bridge event.
+pub fn bridge_kanban_tool_call_event(raw: &Value) -> AgentStreamEvent {
+    AgentStreamEvent::KanbanToolCall {
+        tool_call_id: raw
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        tool: raw
+            .get("tool")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        workspace_id: raw
+            .get("workspaceId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        args: raw
+            .get("args")
+            .cloned()
+            .unwrap_or(Value::Object(Default::default())),
+    }
+}
+
+/// Pure constructor for a Pi extension UI request bridge event.
+pub fn bridge_pi_ui_request_event(raw: &Value) -> AgentStreamEvent {
+    AgentStreamEvent::PiUiRequest {
+        interaction_id: raw
+            .get("interactionId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        ui_kind: raw
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        payload: raw
+            .get("payload")
+            .cloned()
+            .unwrap_or(Value::Object(Default::default())),
+    }
+}
+
 /// True for sidecar `error` events that are explicitly marked as retry
 /// progress notices rather than terminal failures. Newer sidecars suppress
 /// Codex app-server `willRetry=true` notifications before they reach Rust, but

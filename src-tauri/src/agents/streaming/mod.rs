@@ -138,6 +138,10 @@ pub(super) fn stream_via_sidecar(
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
         images: &images_for_wire,
+        kanban_workspace_id: request.kanban_workspace_id.as_deref(),
+        kanban_snapshot: request.kanban_snapshot.as_deref(),
+        goal_title: request.goal_title.as_deref(),
+        goal_description: request.goal_description.as_deref(),
     });
 
     // Surface the `/add-dir` decision in logs — we often debug linked-
@@ -935,6 +939,18 @@ pub(super) fn stream_via_sidecar(
                                 "userInputRequest transition rejected",
                             );
                         }
+                    }
+                }
+                "kanban_tool_call" => {
+                    let event = bridges::bridge_kanban_tool_call_event(&event.raw);
+                    if let Err(err) = on_event.send(event) {
+                        tracing::warn!(rid = %rid, "Failed to forward kanban tool call: {err}");
+                    }
+                }
+                "pi_ui_request" => {
+                    let event = bridges::bridge_pi_ui_request_event(&event.raw);
+                    if let Err(err) = on_event.send(event) {
+                        tracing::warn!(rid = %rid, "Failed to forward Pi UI request: {err}");
                     }
                 }
                 "permissionModeChanged" => {

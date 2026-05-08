@@ -12,7 +12,13 @@
 	],
 	"scripts": {
 		"changeset": "changeset",
+		"setup:envs": "bun scripts/setup-envs.ts",
 		"dev": "bun run dev:prepare && tauri dev",
+		"dev:preview": "bun scripts/dev-preview.ts",
+		"worktree:cleanup": "bun scripts/worktree-cleanup.ts",
+		"archive:clean": "bun run clean:cache --include-global-caches",
+		"clean": "bun run clean:cache",
+		"clean:cache": "bun scripts/clean-cache.ts",
 		"dev:prepare": "cd sidecar && bun run dev:prepare",
 		"dev:analyze": "bun run dev:prepare && VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
@@ -46,7 +52,11 @@
 		"release:verify": "node scripts/verify-release-config.mjs",
 		"release:version": "changeset version && bun run release:sync-versions",
 		"storybook": "storybook dev -p 6006",
-		"build-storybook": "storybook build"
+		"build-storybook": "storybook build",
+		"dev:web": "bun scripts/dev-web.ts",
+		"dev:web:preview": "bun scripts/dev-web.ts --preview",
+		"build:web": "VITE_HELMOR_WEB=1 tsc && VITE_HELMOR_WEB=1 vite build",
+		"web": "cd src-tauri && cargo run --bin helmor-web -- --frontend-dir ../dist-web"
 	},
 	"dependencies": {
 		"@chenglou/pretext": "0.0.4",

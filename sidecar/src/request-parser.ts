@@ -74,7 +74,12 @@ export function optionalObject(
 }
 
 export function parseProvider(value: unknown): Provider {
-	if (value === "claude" || value === "codex" || value === "cursor")
+	if (
+		value === "claude" ||
+		value === "codex" ||
+		value === "cursor" ||
+		value === "pi"
+	)
 		return value;
 	throw new Error(`unknown provider: ${String(value)}`);
 }
@@ -103,6 +108,10 @@ export function parseSendMessageParams(
 		// "field absent" vs "no images" — both mean `[]`. The structured
 		// list is the single source of truth (see `parseImageRefs`).
 		images: parseOptionalStringArray(params, "images") ?? [],
+		kanbanWorkspaceId: optionalString(params, "kanbanWorkspaceId"),
+		kanbanSnapshot: optionalString(params, "kanbanSnapshot"),
+		goalTitle: optionalString(params, "goalTitle"),
+		goalDescription: optionalString(params, "goalDescription"),
 	};
 }
 

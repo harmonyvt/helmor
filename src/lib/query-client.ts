@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
 	type ActionKind,
 	type AgentProvider,
+	type BrowserTabRecord,
 	type ChangeRequestInfo,
 	DEFAULT_WORKSPACE_GROUPS,
 	type DetectedEditor,
@@ -21,8 +22,11 @@ import {
 	listActiveStreams,
 	listForgeAccounts,
 	listGithubLabels,
+	listGoalCards,
+	listGoalChildWorkspaces,
 	listRepositories,
 	listSlashCommands,
+	listWorkspaceBrowserTabs,
 	listWorkspaceCandidateDirectories,
 	listWorkspaceChangesWithContent,
 	listWorkspaceFiles,
@@ -57,6 +61,9 @@ export const helmorQueryKeys = {
 	agentModelSections: ["agentModelSections"] as const,
 	workspaceDetail: (workspaceId: string) =>
 		["workspaceDetail", workspaceId] as const,
+	goalCards: (workspaceId: string) => ["goalCards", workspaceId] as const,
+	goalChildWorkspaces: (goalWorkspaceId: string) =>
+		["goalChildWorkspaces", goalWorkspaceId] as const,
 	workspaceSessions: (workspaceId: string) =>
 		["workspaceSessions", workspaceId] as const,
 	sessionContextUsage: (sessionId: string) =>
@@ -86,6 +93,8 @@ export const helmorQueryKeys = {
 		["workspaceChangeRequest", workspaceId] as const,
 	workspaceForge: (workspaceId: string) =>
 		["workspaceForge", workspaceId] as const,
+	workspaceBrowserTabs: (workspaceId: string) =>
+		["workspaceBrowserTabs", workspaceId] as const,
 	forgeAccounts: (gitlabHosts: string[]) =>
 		["forgeAccounts", ...gitlabHosts] as const,
 	forgeAccountsAll: ["forgeAccounts"] as const,
@@ -316,6 +325,16 @@ export function repositoriesQueryOptions() {
 	});
 }
 
+export function workspaceBrowserTabsQueryOptions(workspaceId: string) {
+	return queryOptions<BrowserTabRecord[]>({
+		queryKey: helmorQueryKeys.workspaceBrowserTabs(workspaceId),
+		queryFn: () => listWorkspaceBrowserTabs(workspaceId),
+		initialData: [],
+		initialDataUpdatedAt: 0,
+		staleTime: 0,
+	});
+}
+
 /** Snapshot of in-flight agent streams (source of truth = Rust
  *  `ActiveStreams`). Drives abort-button visibility + busy badges; the
  *  ui-sync bridge invalidates this on `activeStreamsChanged`. NOT
@@ -366,6 +385,24 @@ export function workspaceDetailQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 		queryFn: () => loadWorkspaceDetail(workspaceId),
+		staleTime: 0,
+	});
+}
+
+export function goalCardsQueryOptions(workspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.goalCards(workspaceId),
+		queryFn: () => listGoalCards(workspaceId),
+		initialData: [],
+		staleTime: 0,
+	});
+}
+
+export function goalChildWorkspacesQueryOptions(goalWorkspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.goalChildWorkspaces(goalWorkspaceId),
+		queryFn: () => listGoalChildWorkspaces(goalWorkspaceId),
+		initialData: [] as import("./api").WorkspaceDetail[],
 		staleTime: 0,
 	});
 }

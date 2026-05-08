@@ -790,6 +790,8 @@ mod tests {
             default_branch: Some("main".to_string()),
             root_path,
             directory_name: "cebu".to_string(),
+            workspace_kind: crate::workspace_kind::WorkspaceKind::Code,
+            goal_workspace_id: None,
             state: crate::workspace_state::WorkspaceState::Ready,
             has_unread: false,
             workspace_unread: 0,
@@ -819,6 +821,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             last_user_message_at: None,
+            goal_title: None,
+            goal_description: None,
         }
     }
 

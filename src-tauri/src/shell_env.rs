@@ -46,6 +46,15 @@ mod unix {
         "ANDROID_HOME",
         "VOLTA_HOME",
         "FNM_DIR",
+        // Provider credentials/config used by bundled agent CLIs. These are
+        // commonly exported from ~/.zprofile, but Finder/Spotlight-launched
+        // apps do not inherit them unless we copy them explicitly.
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_OAUTH_TOKEN",
+        "AZURE_OPENAI_API_KEY",
+        "OPENAI_API_KEY",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
         // Homebrew — some formulas look at this rather than relying on
         // PATH alone.
         "HOMEBREW_PREFIX",
@@ -297,6 +306,23 @@ mod unix {
                 std::env::var("HELMOR_TEST_EXISTING_ENV").as_deref(),
                 Ok("/tmp/existing.sock")
             );
+        }
+
+        #[test]
+        fn provider_environment_variables_are_preserved() {
+            for var in [
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_OAUTH_TOKEN",
+                "AZURE_OPENAI_API_KEY",
+                "OPENAI_API_KEY",
+                "CLAUDE_CONFIG_DIR",
+                "CODEX_HOME",
+            ] {
+                assert!(
+                    VARS_TO_MERGE.contains(&var),
+                    "{var} should be copied from the login shell"
+                );
+            }
         }
     }
 }

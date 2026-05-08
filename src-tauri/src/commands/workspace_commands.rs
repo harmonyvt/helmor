@@ -1,7 +1,11 @@
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    db, git_watcher, workspace_state::WorkspaceState, workspace_status::WorkspaceStatus, workspaces,
+    db, git_watcher, models,
+    ui_sync::{self, UiMutationEvent},
+    workspace_state::WorkspaceState,
+    workspace_status::WorkspaceStatus,
+    workspaces,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -191,6 +195,34 @@ pub async fn get_workspace(workspace_id: String) -> CmdResult<workspaces::Worksp
 }
 
 #[tauri::command]
+pub async fn list_goal_child_workspaces(
+    goal_workspace_id: String,
+) -> CmdResult<Vec<workspaces::WorkspaceDetail>> {
+    run_blocking(move || workspaces::list_goal_child_workspaces(&goal_workspace_id)).await
+}
+
+/// Update the user-editable goal title and description for a goal workspace.
+#[tauri::command]
+pub async fn update_goal_workspace_meta(
+    app: AppHandle,
+    workspace_id: String,
+    goal_title: Option<String>,
+    goal_description: Option<String>,
+) -> CmdResult<()> {
+    let wid = workspace_id.clone();
+    run_blocking(move || {
+        models::workspaces::update_goal_workspace_meta(
+            &wid,
+            goal_title.as_deref(),
+            goal_description.as_deref(),
+        )
+    })
+    .await?;
+    ui_sync::publish(&app, UiMutationEvent::WorkspaceChanged { workspace_id });
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn mark_workspace_unread(workspace_id: String) -> CmdResult<()> {
     run_blocking(move || workspaces::mark_workspace_unread(&workspace_id)).await
 }
@@ -206,8 +238,15 @@ pub async fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn set_workspace_status(workspace_id: String, status: WorkspaceStatus) -> CmdResult<()> {
-    run_blocking(move || workspaces::set_workspace_status(&workspace_id, status)).await
+pub async fn set_workspace_status(
+    app: AppHandle,
+    workspace_id: String,
+    status: WorkspaceStatus,
+) -> CmdResult<()> {
+    let id = workspace_id.clone();
+    run_blocking(move || workspaces::set_workspace_status(&id, status)).await?;
+    ui_sync::publish(&app, UiMutationEvent::WorkspaceChanged { workspace_id });
+    Ok(())
 }
 
 /// `/add-dir` feature: list the extra directories the user has linked to
@@ -398,7 +437,56 @@ pub async fn permanently_delete_workspace(app: AppHandle, workspace_id: String) 
     let _lock = ws_lock.lock().await;
     let manager = app.state::<git_watcher::GitWatcherManager>();
     manager.unwatch(&workspace_id);
+    let deleted_workspace_id = workspace_id.clone();
+    let tab_ids = run_blocking({
+        let workspace_id = workspace_id.clone();
+        move || {
+            crate::models::browser_tabs::list_workspace_browser_tabs(&workspace_id)
+                .map(|tabs| tabs.into_iter().map(|tab| tab.id).collect::<Vec<_>>())
+        }
+    })
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(
+            workspace_id = %deleted_workspace_id,
+            error = ?error,
+            "Failed to list browser tabs before workspace deletion"
+        );
+        Vec::new()
+    });
     run_blocking(move || workspaces::permanently_delete_workspace(&workspace_id)).await?;
+    remove_workspace_browser_data_stores(&app, &deleted_workspace_id, &tab_ids).await;
     git_watcher::notify_workspace_changed(&app);
     Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+async fn remove_workspace_browser_data_stores(
+    app: &AppHandle,
+    workspace_id: &str,
+    tab_ids: &[String],
+) {
+    for tab_id in tab_ids {
+        let Ok(identifier) = crate::browser_profile::browser_tab_data_store_identifier(tab_id)
+        else {
+            continue;
+        };
+        if let Err(error) = app.remove_data_store(identifier).await {
+            tracing::warn!(workspace_id, tab_id, error = %format!("{error:#}"), "Failed to remove browser tab data store");
+        }
+    }
+
+    if let Ok(identifier) = crate::browser_profile::workspace_data_store_identifier(workspace_id) {
+        if let Err(error) = app.remove_data_store(identifier).await {
+            tracing::warn!(workspace_id, error = %format!("{error:#}"), "Failed to remove legacy workspace browser data store");
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+async fn remove_workspace_browser_data_stores(
+    _app: &AppHandle,
+    _workspace_id: &str,
+    _tab_ids: &[String],
+) {
 }

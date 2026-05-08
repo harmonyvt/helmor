@@ -3,6 +3,7 @@ use rusqlite::Row;
 
 use crate::{
     repos,
+    workspace_kind::WorkspaceKind,
     workspace_pr_sync::PrSyncState,
     workspace_state::{WorkspaceMode, WorkspaceState},
     workspace_status::WorkspaceStatus,
@@ -19,6 +20,8 @@ pub struct WorkspaceRecord {
     pub default_branch: Option<String>,
     pub root_path: Option<String>,
     pub directory_name: String,
+    pub workspace_kind: WorkspaceKind,
+    pub goal_workspace_id: Option<String>,
     pub state: WorkspaceState,
     pub has_unread: bool,
     pub workspace_unread: i64,
@@ -57,6 +60,11 @@ pub struct WorkspaceRecord {
     /// Most recent `last_user_message_at` across all sessions in the
     /// workspace. `None` for workspaces with no user messages yet.
     pub last_user_message_at: Option<String>,
+    /// User-editable goal title (goal workspaces only). `None` means use the
+    /// derived display title (PR title -> session title -> directory name).
+    pub goal_title: Option<String>,
+    /// User-editable goal description (goal workspaces only).
+    pub goal_description: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -129,6 +137,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       r.default_branch,
       r.root_path,
       w.directory_name,
+      COALESCE(w.workspace_kind, 'code') AS workspace_kind,
+      w.goal_workspace_id,
       w.state,
       CASE
         WHEN COALESCE(w.unread, 0) > 0 OR COALESCE(wss.unread_session_count, 0) > 0 THEN 1
@@ -160,7 +170,9 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       r.forge_login,
       w.created_at,
       w.updated_at,
-      wss.last_user_message_at
+      wss.last_user_message_at,
+      w.goal_title,
+      w.goal_description
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -193,6 +205,35 @@ pub fn load_workspace_record_by_id(workspace_id: &str) -> Result<Option<Workspac
     }
 }
 
+pub(crate) fn load_goal_workspace_record(goal_workspace_id: &str) -> Result<WorkspaceRecord> {
+    let record = load_workspace_record_by_id(goal_workspace_id)?
+        .with_context(|| format!("Goal workspace not found: {goal_workspace_id}"))?;
+    if record.workspace_kind != WorkspaceKind::Goal {
+        bail!("Workspace is not a Goal: {goal_workspace_id}");
+    }
+    Ok(record)
+}
+
+/// Return all child workspaces linked to a goal workspace, sorted oldest-first
+/// so the Kanban board cards appear in a stable creation order.
+pub fn load_goal_child_workspace_records(goal_workspace_id: &str) -> Result<Vec<WorkspaceRecord>> {
+    let _goal = load_goal_workspace_record(goal_workspace_id)?;
+    let connection = db::read_conn()?;
+    let sql = format!(
+        "{WORKSPACE_RECORD_SQL} \
+         WHERE w.goal_workspace_id = ?1 \
+         AND COALESCE(w.workspace_kind, 'code') = 'code' \
+         AND w.state != ?2 \
+         ORDER BY datetime(w.created_at) ASC, w.id ASC"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(
+        rusqlite::params![goal_workspace_id, WorkspaceState::Archived],
+        workspace_record_from_row,
+    )?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
 pub fn load_archived_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     let connection = db::read_conn()?;
     let mut statement = connection
@@ -209,6 +250,18 @@ pub fn load_archived_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     let rows = statement.query_map([WorkspaceState::Archived], workspace_record_from_row)?;
 
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+pub(crate) struct InitializingWorkspaceMetadata<'a> {
+    pub(crate) initialization_parent_branch: &'a str,
+    pub(crate) intended_target_branch: &'a str,
+    pub(crate) workspace_kind: WorkspaceKind,
+    pub(crate) goal_workspace_id: Option<&'a str>,
+    pub(crate) status: WorkspaceStatus,
+    pub(crate) pr_title: Option<&'a str>,
+    pub(crate) pr_sync_state: PrSyncState,
+    pub(crate) pr_url: Option<&'a str>,
+    pub(crate) timestamp: &'a str,
 }
 
 pub(crate) fn insert_initializing_workspace_and_session(
@@ -232,6 +285,25 @@ pub(crate) fn insert_initializing_workspace_and_session(
     )
 }
 
+pub(crate) fn insert_initializing_workspace_and_session_with_metadata(
+    repository: &repos::RepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    directory_name: &str,
+    branch: &str,
+    metadata: InitializingWorkspaceMetadata<'_>,
+) -> Result<()> {
+    insert_initializing_workspace_and_session_with_metadata_inner(
+        repository,
+        workspace_id,
+        session_id,
+        directory_name,
+        branch,
+        metadata,
+        WorkspaceMode::Worktree,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     repository: &repos::RepositoryRecord,
@@ -242,6 +314,36 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     default_branch: &str,
     mode: WorkspaceMode,
     timestamp: &str,
+) -> Result<()> {
+    insert_initializing_workspace_and_session_with_metadata_inner(
+        repository,
+        workspace_id,
+        session_id,
+        directory_name,
+        branch,
+        InitializingWorkspaceMetadata {
+            initialization_parent_branch: default_branch,
+            intended_target_branch: default_branch,
+            workspace_kind: WorkspaceKind::Code,
+            goal_workspace_id: None,
+            status: WorkspaceStatus::InProgress,
+            pr_title: None,
+            pr_sync_state: PrSyncState::None,
+            pr_url: None,
+            timestamp,
+        },
+        mode,
+    )
+}
+
+fn insert_initializing_workspace_and_session_with_metadata_inner(
+    repository: &repos::RepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    directory_name: &str,
+    branch: &str,
+    metadata: InitializingWorkspaceMetadata<'_>,
+    mode: WorkspaceMode,
 ) -> Result<()> {
     let mut connection = db::write_conn()?;
     let transaction = connection
@@ -258,27 +360,38 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
               active_session_id,
               branch,
               state,
+              workspace_kind,
+              goal_workspace_id,
               initialization_parent_branch,
               intended_target_branch,
               mode,
               status,
+              pr_title,
+              pr_sync_state,
+              pr_url,
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'in-progress', 0, ?10, ?10)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16, ?16)
             "#,
-            (
+            rusqlite::params![
                 workspace_id,
                 repository.id.as_str(),
                 directory_name,
                 session_id,
                 branch,
                 WorkspaceState::Initializing,
-                default_branch,
-                default_branch,
+                metadata.workspace_kind,
+                metadata.goal_workspace_id,
+                metadata.initialization_parent_branch,
+                metadata.intended_target_branch,
                 mode,
-                timestamp,
-            ),
+                metadata.status,
+                metadata.pr_title,
+                metadata.pr_sync_state,
+                metadata.pr_url,
+                metadata.timestamp,
+            ],
         )
         .context("Failed to insert initializing workspace")?;
 
@@ -298,7 +411,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
               is_hidden
             ) VALUES (?1, ?2, 'Untitled', 'idle', 'default', 0, 0, ?3, ?3, 0)
             "#,
-            (session_id, workspace_id, timestamp),
+            (session_id, workspace_id, metadata.timestamp),
         )
         .context("Failed to insert initial session")?;
 
@@ -390,6 +503,12 @@ pub(crate) fn delete_workspace_and_session_rows(workspace_id: &str) -> Result<()
             [workspace_id],
         )
         .context("Failed to delete create-flow sessions")?;
+    transaction
+        .execute(
+            "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete create-flow browser tabs")?;
     transaction
         .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
         .context("Failed to delete create-flow workspace")?;
@@ -516,34 +635,117 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         default_branch: row.get(4)?,
         root_path: row.get(5)?,
         directory_name: row.get(6)?,
-        state: row.get(7)?,
-        has_unread: row.get::<_, i64>(8)? != 0,
-        workspace_unread: row.get(9)?,
-        unread_session_count: row.get(10)?,
-        status: row.get(11)?,
-        branch: row.get(12)?,
-        initialization_parent_branch: row.get(13)?,
-        intended_target_branch: row.get(14)?,
-        mode: row.get(15)?,
-        pinned_at: row.get(16)?,
-        active_session_id: row.get(17)?,
-        active_session_title: row.get(18)?,
-        active_session_agent_type: row.get(19)?,
-        active_session_status: row.get(20)?,
-        primary_session_id: row.get(21)?,
-        primary_session_title: row.get(22)?,
-        primary_session_agent_type: row.get(23)?,
-        pr_title: row.get(24)?,
-        pr_sync_state: row.get(25)?,
-        pr_url: row.get(26)?,
-        archive_commit: row.get(27)?,
-        session_count: row.get(28)?,
-        message_count: row.get(29)?,
-        remote: row.get(30)?,
-        forge_provider: row.get(31)?,
-        forge_login: row.get(32)?,
-        created_at: row.get(33)?,
-        updated_at: row.get(34)?,
-        last_user_message_at: row.get(35)?,
+        workspace_kind: row.get(7)?,
+        goal_workspace_id: row.get(8)?,
+        state: row.get(9)?,
+        has_unread: row.get::<_, i64>(10)? != 0,
+        workspace_unread: row.get(11)?,
+        unread_session_count: row.get(12)?,
+        status: row.get(13)?,
+        branch: row.get(14)?,
+        initialization_parent_branch: row.get(15)?,
+        intended_target_branch: row.get(16)?,
+        mode: row.get(17)?,
+        pinned_at: row.get(18)?,
+        active_session_id: row.get(19)?,
+        active_session_title: row.get(20)?,
+        active_session_agent_type: row.get(21)?,
+        active_session_status: row.get(22)?,
+        primary_session_id: row.get(23)?,
+        primary_session_title: row.get(24)?,
+        primary_session_agent_type: row.get(25)?,
+        pr_title: row.get(26)?,
+        pr_sync_state: row.get(27)?,
+        pr_url: row.get(28)?,
+        archive_commit: row.get(29)?,
+        session_count: row.get(30)?,
+        message_count: row.get(31)?,
+        remote: row.get(32)?,
+        forge_provider: row.get(33)?,
+        forge_login: row.get(34)?,
+        created_at: row.get(35)?,
+        updated_at: row.get(36)?,
+        last_user_message_at: row.get(37)?,
+        goal_title: row.get(38)?,
+        goal_description: row.get(39)?,
     })
+}
+
+/// Update the user-editable goal title and description for a workspace.
+pub(crate) fn update_goal_workspace_meta(
+    workspace_id: &str,
+    goal_title: Option<&str>,
+    goal_description: Option<&str>,
+) -> Result<()> {
+    let _goal = load_goal_workspace_record(workspace_id)?;
+    let ts = chrono::Utc::now().to_rfc3339();
+    let connection = db::write_conn()?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET goal_title = ?2, goal_description = ?3, updated_at = ?4 WHERE id = ?1",
+            (workspace_id, goal_title, goal_description, &ts),
+        )
+        .context("Failed to update goal workspace meta")?;
+    if updated_rows == 0 {
+        bail!("Goal workspace meta update affected 0 rows for {workspace_id}");
+    }
+    Ok(())
+}
+
+pub(crate) fn set_goal_child_workspace_status(
+    goal_workspace_id: &str,
+    child_workspace_id: &str,
+    status: WorkspaceStatus,
+) -> Result<()> {
+    let _goal = load_goal_workspace_record(goal_workspace_id)?;
+    let child = load_workspace_record_by_id(child_workspace_id)?
+        .with_context(|| format!("Goal child workspace not found: {child_workspace_id}"))?;
+    if child.workspace_kind != WorkspaceKind::Code
+        || child.goal_workspace_id.as_deref() != Some(goal_workspace_id)
+    {
+        bail!(
+            "Workspace {child_workspace_id} is not a child of Goal workspace {goal_workspace_id}"
+        );
+    }
+
+    let connection = db::write_conn()?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET status = ?3, updated_at = datetime('now') WHERE id = ?1 AND goal_workspace_id = ?2",
+            rusqlite::params![child_workspace_id, goal_workspace_id, status],
+        )
+        .context("Failed to set goal child workspace status")?;
+    if updated_rows != 1 {
+        bail!(
+            "Goal child status update affected {updated_rows} rows for workspace {child_workspace_id}"
+        );
+    }
+    Ok(())
+}
+
+/// Assign any code workspace to a goal (or move it between goals) and set its
+/// lane status in one atomic write.
+pub(crate) fn assign_workspace_to_goal(
+    workspace_id: &str,
+    goal_workspace_id: &str,
+    status: WorkspaceStatus,
+) -> Result<()> {
+    let _goal = load_goal_workspace_record(goal_workspace_id)?;
+    let workspace = load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+    if workspace.workspace_kind != WorkspaceKind::Code {
+        bail!("Cannot assign a goal workspace as a child of another goal");
+    }
+
+    let connection = db::write_conn()?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET goal_workspace_id = ?2, status = ?3, updated_at = datetime('now') WHERE id = ?1",
+            rusqlite::params![workspace_id, goal_workspace_id, status],
+        )
+        .context("Failed to assign workspace to goal")?;
+    if updated_rows != 1 {
+        bail!("assign_workspace_to_goal affected {updated_rows} rows for {workspace_id}");
+    }
+    Ok(())
 }

@@ -106,6 +106,10 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         claude_base_url: None,
         claude_auth_token: None,
         images: &[],
+        kanban_workspace_id: None,
+        kanban_snapshot: None,
+        goal_title: None,
+        goal_description: None,
     }
 }
 

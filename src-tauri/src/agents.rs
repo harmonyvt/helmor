@@ -14,6 +14,7 @@ pub(crate) mod claude_project_files;
 mod custom_providers;
 pub mod delegation;
 mod persistence;
+mod pi_models;
 mod queries;
 mod slash_commands;
 pub(crate) mod streaming;
@@ -135,6 +136,25 @@ pub enum AgentStreamEvent {
         message: String,
         payload: Value,
     },
+    /// A Pi Kanban custom tool was invoked by the AI. The frontend executes
+    /// the matching IPC action and responds via `send_kanban_tool_result`.
+    KanbanToolCall {
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        tool: String,
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+        args: Value,
+    },
+    /// A Pi extension called `ctx.ui.select/confirm/input`. The frontend
+    /// renders the interaction and responds via `respond_to_pi_ui`.
+    PiUiRequest {
+        #[serde(rename = "interactionId")]
+        interaction_id: String,
+        #[serde(rename = "uiKind")]
+        ui_kind: String,
+        payload: Value,
+    },
     /// A plan was captured from ExitPlanMode. The plan content is already
     /// in the thread messages as a PlanReview card; this event just tells
     /// the frontend to show the Implement / Request Changes buttons.
@@ -181,6 +201,18 @@ pub struct AgentSendRequest {
     /// round-trip without regex re-extraction.
     #[serde(default)]
     pub images: Option<Vec<String>>,
+    /// Goal workspace id. When present for Pi, the sidecar registers the
+    /// goal-board Kanban/thread tools and writes the board context file.
+    #[serde(default)]
+    pub kanban_workspace_id: Option<String>,
+    /// JSON-serialized snapshot of the current goal board.
+    #[serde(default)]
+    pub kanban_snapshot: Option<String>,
+    /// Optional goal metadata injected into Pi's goal-board context.
+    #[serde(default)]
+    pub goal_title: Option<String>,
+    #[serde(default)]
+    pub goal_description: Option<String>,
 }
 
 #[cfg(test)]
@@ -197,6 +229,13 @@ pub(crate) struct ExchangeContext {
 #[tauri::command]
 pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
     Ok(queries::fetch_agent_model_sections())
+}
+
+#[tauri::command]
+pub fn check_pi_models(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+) -> CmdResult<pi_models::PiModelCheckResponse> {
+    Ok(pi_models::check(&sidecar))
 }
 
 #[tauri::command]
@@ -489,6 +528,48 @@ pub async fn respond_to_user_input(
     sidecar
         .send(&req)
         .map_err(|e| anyhow::anyhow!("Failed to send user-input response: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn send_kanban_tool_result(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    tool_call_id: String,
+    result: Value,
+    is_error: bool,
+) -> CmdResult<()> {
+    let req = crate::sidecar::SidecarRequest {
+        id: Uuid::new_v4().to_string(),
+        method: "kanbanToolResult".to_string(),
+        params: serde_json::json!({
+            "toolCallId": tool_call_id,
+            "result": result,
+            "isError": is_error,
+        }),
+    };
+    sidecar
+        .send(&req)
+        .map_err(|e| anyhow::anyhow!("Failed to send kanban tool result: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn respond_to_pi_ui(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    interaction_id: String,
+    result: Value,
+) -> CmdResult<()> {
+    let req = crate::sidecar::SidecarRequest {
+        id: Uuid::new_v4().to_string(),
+        method: "piUiResponse".to_string(),
+        params: serde_json::json!({
+            "interactionId": interaction_id,
+            "result": result,
+        }),
+    };
+    sidecar
+        .send(&req)
+        .map_err(|e| anyhow::anyhow!("Failed to send Pi UI response: {e}"))?;
     Ok(())
 }
 

@@ -1,11 +1,13 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
 	fireEvent,
-	render,
+	render as rtlRender,
 	screen,
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
@@ -27,6 +29,23 @@ const workspaceGroups: WorkspaceGroup[] = [
 		rows: [workspaceRow],
 	},
 ];
+
+function render(ui: ReactElement) {
+	const queryClient = new QueryClient({
+		defaultOptions: {
+			queries: { retry: false },
+			mutations: { retry: false },
+		},
+	});
+
+	function Wrapper({ children }: { children: ReactNode }) {
+		return (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+	}
+
+	return rtlRender(ui, { wrapper: Wrapper });
+}
 
 afterEach(() => {
 	cleanup();

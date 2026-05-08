@@ -134,6 +134,11 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.workspaceForgeActionStatus(event.workspaceId),
 			});
 			return;
+		case "workspaceBrowserTabsChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceBrowserTabs(event.workspaceId),
+			});
+			return;
 		case "repositoryListChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.repositories,

@@ -68,6 +68,8 @@ export type WorkspaceRowItemProps = {
 	row: WorkspaceRow;
 	selected: boolean;
 	isSending?: boolean;
+	isFlashing?: boolean;
+	showPrNumber?: boolean;
 	isInteractionRequired?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
@@ -85,6 +87,14 @@ export type WorkspaceRowItemProps = {
 	restoringWorkspaceId?: string | null;
 	workspaceActionsDisabled?: boolean;
 };
+
+function extractPrNumber(prUrl?: string | null): number | null {
+	if (!prUrl) return null;
+	const match = prUrl.match(/(?:\/pull\/|\/merge_requests\/)(\d+)/);
+	if (!match?.[1]) return null;
+	const parsed = Number.parseInt(match[1], 10);
+	return Number.isFinite(parsed) ? parsed : null;
+}
 
 /**
  * Subscribes to this workspace's `run`-script status via the module-level
@@ -111,6 +121,8 @@ export const WorkspaceRowItem = memo(
 		row,
 		selected,
 		isSending,
+		isFlashing = false,
+		showPrNumber = false,
 		isInteractionRequired,
 		rowRef,
 		onSelect,
@@ -208,6 +220,9 @@ export const WorkspaceRowItem = memo(
 				: row.branch
 					? humanizeBranch(row.branch)
 					: row.title;
+		const prNumber = showPrNumber
+			? (row.prNumber ?? extractPrNumber(row.prUrl))
+			: null;
 
 		const rowBody = (
 			<div
@@ -237,6 +252,7 @@ export const WorkspaceRowItem = memo(
 					rowVariants({ active: selected }),
 					"w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
 					!selected && row.state === "archived" && "opacity-50",
+					isFlashing && "ring-1 ring-primary/45",
 				)}
 			>
 				<div className="flex min-w-0 flex-1 items-center gap-2">
@@ -287,6 +303,11 @@ export const WorkspaceRowItem = memo(
 						>
 							<HyperText text={displayTitle} className="inline" />
 						</span>
+						{prNumber !== null ? (
+							<span className="shrink-0 rounded bg-muted px-1 py-0 text-[10px] font-medium leading-4 text-muted-foreground">
+								#{prNumber}
+							</span>
+						) : null}
 					</div>
 				</div>
 
@@ -482,6 +503,8 @@ export const WorkspaceRowItem = memo(
 			previous.row === next.row &&
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
+			previous.isFlashing === next.isFlashing &&
+			previous.showPrNumber === next.showPrNumber &&
 			previous.isInteractionRequired === next.isInteractionRequired &&
 			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&

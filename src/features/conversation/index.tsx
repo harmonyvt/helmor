@@ -12,7 +12,12 @@ import type { UserInputResponseHandler } from "@/features/composer/user-input";
 import { WorkspacePanelContainer } from "@/features/panel/container";
 import { FileLinkProvider } from "@/features/panel/message-components/file-link-context";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
-import type { ChangeRequestInfo } from "@/lib/api";
+import type {
+	AgentModelOption,
+	AgentSendRequest,
+	AgentStreamEvent,
+	ChangeRequestInfo,
+} from "@/lib/api";
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
 import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
@@ -120,6 +125,17 @@ type WorkspaceConversationContainerProps = {
 	workspaceRootPath?: string | null;
 	onOpenFileReference?: (path: string, line?: number, column?: number) => void;
 	composerOnly?: boolean;
+	compact?: boolean;
+	modelFilter?: (model: AgentModelOption) => boolean;
+	buildSendRequestExtras?: () => Partial<
+		Pick<
+			AgentSendRequest,
+			"kanbanWorkspaceId" | "kanbanSnapshot" | "goalTitle" | "goalDescription"
+		>
+	>;
+	onKanbanToolCall?: (
+		event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
+	) => void | Promise<void>;
 	composerWrapperClassName?: string;
 	/** Override placeholder text for the composer's editor. */
 	composerPlaceholder?: string;
@@ -185,6 +201,10 @@ export const WorkspaceConversationContainer = memo(
 		workspaceRootPath,
 		onOpenFileReference,
 		composerOnly = false,
+		compact: _compact = false,
+		modelFilter,
+		buildSendRequestExtras,
+		onKanbanToolCall,
 		composerWrapperClassName,
 		composerPlaceholder,
 		composerForceAvailable = false,
@@ -253,6 +273,8 @@ export const WorkspaceConversationContainer = memo(
 			onInteractionSessionsChange,
 			onSessionCompleted,
 			onSessionAborted,
+			buildSendRequestExtras,
+			onKanbanToolCall,
 		});
 
 		const queueItems = displayedSessionId
@@ -547,6 +569,7 @@ export const WorkspaceConversationContainer = memo(
 						effortLevels={composerEffortLevels}
 						permissionModes={composerPermissionModes}
 						fastModes={composerFastModes}
+						modelFilter={modelFilter}
 						activeFastPreludes={activeFastPreludes}
 						onSelectModel={handleSelectModel}
 						onSelectEffort={handleSelectEffort}

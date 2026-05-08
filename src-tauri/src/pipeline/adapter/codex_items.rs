@@ -15,6 +15,8 @@ use serde_json::Value;
 
 use super::blocks::parse_codex_todolist_items;
 use crate::pipeline::codex_collab::{build_collab_result_text, collab_synthetic_tool_name};
+use crate::pipeline::file_change::file_change_result_text;
+use crate::pipeline::pi_tools::{canonical_pi_tool_name, mcp_result_text, normalize_pi_tool_args};
 use crate::pipeline::types::{
     ExtendedMessagePart, ImageSource, IntermediateMessage, MessagePart, MessageRole, MessageStatus,
     NoticeSeverity, PlanAllowedPrompt, ThreadMessageLike,
@@ -194,11 +196,7 @@ fn render_file_change(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("completed");
-    let result_text = match status {
-        "completed" => "Patch applied".to_string(),
-        "failed" => "Patch failed".to_string(),
-        other => format!("Patch {other}"),
-    };
+    let result_text = file_change_result_text(item, status);
     let failed = status == "failed";
     let args = serde_json::json!({"changes": changes});
     let args_text = serde_json::to_string(&args).unwrap_or_default();
@@ -280,24 +278,17 @@ fn render_mcp_tool_call(
 ) {
     let server = item.get("server").and_then(Value::as_str).unwrap_or("");
     let tool = item.get("tool").and_then(Value::as_str).unwrap_or("");
-    let arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
+    let arguments = normalize_pi_tool_args(
+        server,
+        tool,
+        item.get("arguments").cloned().unwrap_or(Value::Null),
+    );
     let status = item
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("completed");
     let failed = status == "failed";
-    let result_text = if failed {
-        let m = item
-            .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or("MCP tool failed");
-        format!("Error: {m}")
-    } else {
-        item.get("result")
-            .and_then(|r| serde_json::to_string(r).ok())
-            .unwrap_or_else(|| "OK".to_string())
-    };
+    let result_text = mcp_result_text(server, tool, item, failed);
     let args_text = serde_json::to_string(&arguments).unwrap_or_default();
     result.push(ThreadMessageLike {
         role: MessageRole::Assistant,
@@ -305,7 +296,7 @@ fn render_mcp_tool_call(
         created_at: Some(msg.created_at.clone()),
         content: vec![ExtendedMessagePart::Basic(MessagePart::ToolCall {
             tool_call_id: format!("codex-mcp-{}", msg.id),
-            tool_name: format!("mcp__{server}__{tool}"),
+            tool_name: canonical_pi_tool_name(server, tool),
             args: arguments,
             args_text,
             result: Some(Value::String(result_text)),

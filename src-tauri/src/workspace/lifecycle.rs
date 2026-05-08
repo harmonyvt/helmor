@@ -14,7 +14,9 @@ use crate::{
     git_ops, helpers,
     models::workspaces as workspace_models,
     repos,
+    workspace_pr_sync::PrSyncState,
     workspace_state::{WorkspaceMode, WorkspaceState},
+    workspace_status::WorkspaceStatus,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +73,13 @@ pub struct PrepareWorkspaceResponse {
     pub directory_name: String,
     pub branch: String,
     pub default_branch: String,
+    pub intended_target_branch: String,
+    pub status: WorkspaceStatus,
+    pub source_start_branch: Option<String>,
+    pub pr_number: Option<i64>,
+    pub pr_title: Option<String>,
+    pub pr_sync_state: PrSyncState,
+    pub pr_url: Option<String>,
     pub state: WorkspaceState,
     /// DB-level repo scripts. After Phase 2 (worktree creation) the frontend
     /// may refetch to pick up any `helmor.json` overrides copied into the
@@ -101,6 +110,15 @@ pub struct FinalizeWorkspaceResponse {
     /// the freshly-materialised worktree path. The frontend writes this
     /// onto the pending submit payload before flipping `finalized=true`.
     pub working_directory: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FinalizeWorkspaceOptions {
+    pub start_branch: Option<String>,
+    pub fetch_start_branch: Option<bool>,
+    /// Move an existing git worktree into Helmor's workspace directory
+    /// instead of materializing a new one.
+    pub migrate_from_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,7 +230,14 @@ pub fn prepare_workspace_from_repo_impl(
         directory_name,
         branch,
         // Field name is legacy; value is the effective base branch.
-        default_branch: base_branch,
+        default_branch: base_branch.clone(),
+        intended_target_branch: base_branch,
+        status: WorkspaceStatus::InProgress,
+        source_start_branch: None,
+        pr_number: None,
+        pr_title: None,
+        pr_sync_state: PrSyncState::None,
+        pr_url: None,
         state: WorkspaceState::Initializing,
         repo_scripts,
         // Worktree dir doesn't exist yet — finalize fills this in.
@@ -319,7 +344,14 @@ pub fn prepare_local_workspace_impl(
         repo_name: repository.name,
         directory_name,
         branch: target_branch.clone(),
-        default_branch: target_branch,
+        default_branch: target_branch.clone(),
+        intended_target_branch: target_branch,
+        status: WorkspaceStatus::InProgress,
+        source_start_branch: None,
+        pr_number: None,
+        pr_title: None,
+        pr_sync_state: PrSyncState::None,
+        pr_url: None,
         state: WorkspaceState::Ready,
         repo_scripts,
         // Local mode operates directly on the repo root — already on disk,
@@ -336,6 +368,16 @@ pub fn prepare_local_workspace_impl(
 /// caller can surface the error without leaving a broken workspace
 /// lingering.
 pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeWorkspaceResponse> {
+    finalize_workspace_from_repo_with_options_impl(
+        workspace_id,
+        FinalizeWorkspaceOptions::default(),
+    )
+}
+
+pub fn finalize_workspace_from_repo_with_options_impl(
+    workspace_id: &str,
+    options: FinalizeWorkspaceOptions,
+) -> Result<FinalizeWorkspaceResponse> {
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
@@ -381,8 +423,13 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         .unwrap_or_else(|| "origin".to_string());
     // start_ref source: init_parent (Phase 1's stored pick), with
     // repo default as fallback for legacy rows.
-    let base_branch = helpers::non_empty(&record.initialization_parent_branch)
+    let base_branch = options
+        .start_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+        .or_else(|| helpers::non_empty(&record.initialization_parent_branch).map(ToOwned::to_owned))
         .or_else(|| {
             record
                 .default_branch
@@ -406,18 +453,32 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         }
 
         git_ops::ensure_git_repository(&repo_root)?;
-        let start_ref = git_ops::default_branch_ref(&remote, &base_branch);
-        git_ops::verify_commitish_exists(
-            &repo_root,
-            &start_ref,
-            &format!("Base branch is missing in source repo: {base_branch}"),
-        )?;
-        match git_ops::create_worktree_from_start_point(
-            &repo_root,
-            &workspace_dir,
-            &branch,
-            &start_ref,
-        ) {
+        let create_result = if let Some(existing_path) = options
+            .migrate_from_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            move_existing_worktree(&repo_root, Path::new(existing_path), &workspace_dir)
+        } else {
+            if options.fetch_start_branch.unwrap_or(false) {
+                fetch_remote_branch(&repo_root, &remote, &base_branch)?;
+            }
+            let start_ref = git_ops::default_branch_ref(&remote, &base_branch);
+            git_ops::verify_commitish_exists(
+                &repo_root,
+                &start_ref,
+                &format!("Base branch is missing in source repo: {base_branch}"),
+            )?;
+            git_ops::create_worktree_from_start_point(
+                &repo_root,
+                &workspace_dir,
+                &branch,
+                &start_ref,
+            )
+            .map(|_| ())
+        };
+        match create_result {
             Ok(_) => {
                 created_worktree = true;
             }
@@ -466,6 +527,53 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
             Err(error)
         }
     }
+}
+
+fn fetch_remote_branch(repo_root: &Path, remote: &str, branch: &str) -> Result<()> {
+    let repo_root_arg = repo_root.display().to_string();
+    let refspec = format!("refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    git_ops::run_git_with_timeout(
+        [
+            "-C",
+            repo_root_arg.as_str(),
+            "fetch",
+            remote,
+            refspec.as_str(),
+        ],
+        None,
+        git_ops::GIT_NETWORK_TIMEOUT,
+    )
+    .map(|_| ())
+    .with_context(|| format!("Failed to fetch {remote}/{branch}"))
+}
+
+fn move_existing_worktree(
+    repo_root: &Path,
+    existing_dir: &Path,
+    workspace_dir: &Path,
+) -> Result<()> {
+    let repo_root_arg = repo_root.display().to_string();
+    let existing_arg = existing_dir.display().to_string();
+    let workspace_arg = workspace_dir.display().to_string();
+    git_ops::run_git(
+        [
+            "-C",
+            repo_root_arg.as_str(),
+            "worktree",
+            "move",
+            existing_arg.as_str(),
+            workspace_arg.as_str(),
+        ],
+        None,
+    )
+    .map(|_| ())
+    .with_context(|| {
+        format!(
+            "Failed to move worktree from {} to {}",
+            existing_dir.display(),
+            workspace_dir.display()
+        )
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
