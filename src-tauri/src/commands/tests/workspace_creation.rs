@@ -654,7 +654,7 @@ fn create_workspace_from_github_pr_allows_existing_local_head_branch() {
 }
 
 #[test]
-fn prepare_goal_workspace_from_existing_pr_branch_uses_pr_metadata() {
+fn prepare_goal_workspace_from_existing_pr_branch_copies_pr_metadata_to_new_goal_branch() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -684,9 +684,14 @@ fn prepare_goal_workspace_from_existing_pr_branch_uses_pr_metadata() {
     })
     .unwrap();
 
-    assert_eq!(prepared.branch, branch);
+    assert_ne!(prepared.branch, branch);
+    assert!(
+        prepared.branch.starts_with("helmor/goal/review-this"),
+        "unexpected goal branch: {}",
+        prepared.branch
+    );
     assert_eq!(prepared.source_start_branch.as_deref(), Some(branch));
-    assert_eq!(prepared.intended_target_branch, "develop");
+    assert_eq!(prepared.intended_target_branch, branch);
     assert_eq!(prepared.title, "Review this");
     assert_eq!(prepared.description, "Review details");
 
@@ -694,7 +699,7 @@ fn prepare_goal_workspace_from_existing_pr_branch_uses_pr_metadata() {
     let (status, pr_title, pr_url, pr_sync_state, goal_title, goal_description): (
         String,
         String,
-        String,
+        Option<String>,
         String,
         String,
         String,
@@ -718,10 +723,10 @@ fn prepare_goal_workspace_from_existing_pr_branch_uses_pr_metadata() {
             },
         )
         .unwrap();
-    assert_eq!(status, "review");
+    assert_eq!(status, "backlog");
     assert_eq!(pr_title, "Review this");
-    assert_eq!(pr_url, "https://github.com/octocat/hello-world/pull/42");
-    assert_eq!(pr_sync_state, "open");
+    assert_eq!(pr_url, None);
+    assert_eq!(pr_sync_state, "none");
     assert_eq!(goal_title, "Review this");
     assert_eq!(goal_description, "Review details");
 }
