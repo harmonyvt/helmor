@@ -720,7 +720,7 @@ fn finalize_pr_workspace_fetches_remote_head_when_local_branch_is_missing() {
 }
 
 #[test]
-fn create_workspace_from_repo_uses_v2_suffix_after_star_list_is_exhausted() {
+fn create_workspace_from_repo_uses_numeric_suffix_after_name_list_is_exhausted() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -733,13 +733,13 @@ fn create_workspace_from_repo_uses_v2_suffix_after_star_list_is_exhausted() {
     let response = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
 
     assert!(
-        response.directory_name.ends_with("-v2"),
-        "Expected -v2 suffix, got: {}",
+        response.directory_name.ends_with("-1"),
+        "Expected -1 suffix, got: {}",
         response.directory_name
     );
     assert!(
-        response.branch.starts_with("testuser/") && response.branch.ends_with("-v2"),
-        "Expected testuser/*-v2 branch, got: {}",
+        response.branch.starts_with("testuser/") && response.branch.ends_with("-1"),
+        "Expected testuser/*-1 branch, got: {}",
         response.branch
     );
 }
