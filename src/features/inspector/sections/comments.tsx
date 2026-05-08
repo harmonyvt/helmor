@@ -1,10 +1,11 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowUpRightIcon, FileIcon, LoaderCircleIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { Suspense, useCallback, useState } from "react";
 import {
 	AppendContextButton,
 	type AppendContextPayloadResult,
 } from "@/components/append-context-button";
+import { LazyStreamdown } from "@/components/streamdown-loader";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ShimmerText } from "@/components/ui/shimmer-text";
@@ -213,18 +214,7 @@ function CommentEntry({
 					)}
 
 					{/* Body */}
-					<p
-						className={cn(
-							"mt-2 break-words text-[12.5px] leading-relaxed whitespace-pre-wrap",
-							isResolved ? "text-muted-foreground" : "text-foreground/90",
-						)}
-					>
-						{comment.body.trim() || (
-							<span className="italic text-muted-foreground/60">
-								No comment body
-							</span>
-						)}
-					</p>
+					<CommentBody body={comment.body} isResolved={isResolved} />
 				</div>
 
 				{/* Right: actions — revealed on hover */}
@@ -251,6 +241,42 @@ function CommentEntry({
 					</Button>
 				</div>
 			</div>
+		</div>
+	);
+}
+
+function CommentBody({
+	body,
+	isResolved,
+}: {
+	body: string;
+	isResolved: boolean;
+}) {
+	const trimmedBody = body.trim();
+	const textClassName = cn(
+		"mt-2 break-words text-[12.5px] leading-relaxed",
+		isResolved ? "text-muted-foreground" : "text-foreground/90",
+	);
+
+	if (!trimmedBody) {
+		return (
+			<p className={cn(textClassName, "italic text-muted-foreground/60")}>
+				No comment body
+			</p>
+		);
+	}
+
+	return (
+		<div className={cn("conversation-markdown max-w-none", textClassName)}>
+			<Suspense
+				fallback={
+					<p className="whitespace-pre-wrap break-words">{trimmedBody}</p>
+				}
+			>
+				<LazyStreamdown className="conversation-streamdown" mode="static">
+					{trimmedBody}
+				</LazyStreamdown>
+			</Suspense>
 		</div>
 	);
 }
