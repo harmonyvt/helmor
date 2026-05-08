@@ -138,4 +138,70 @@ describe("WorkspaceCreateDialog", () => {
 			"feature/goal-pr",
 		);
 	});
+
+	it("lets a Goal select a pull request and reverse-fill its branch", async () => {
+		const user = userEvent.setup();
+		const onCreateGoalWorkspace = vi.fn().mockResolvedValue(undefined);
+		apiMocks.listRemoteBranches.mockResolvedValue(["main"]);
+		apiMocks.listGithubPullRequestsForRepo.mockResolvedValue([
+			{
+				number: 43,
+				title: "Reverse Lookup Goal",
+				body: "Reverse PR body",
+				url: "https://github.com/octocat/hello-world/pull/43",
+				state: "OPEN",
+				isMerged: false,
+				headBranch: "feature/reverse-goal",
+				baseBranch: "develop",
+				additions: 3,
+				deletions: 1,
+			},
+		]);
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspaceCreateDialog
+					open
+					onOpenChange={vi.fn()}
+					repositories={repositories}
+					creating={false}
+					onCreateWorkspace={vi.fn()}
+					onCreateGoalWorkspace={onCreateGoalWorkspace}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(screen.getByRole("tab", { name: "Goal" }));
+		await waitFor(() => {
+			expect(
+				screen.getByRole("option", { name: /Reverse Lookup Goal/ }),
+			).toBeInTheDocument();
+		});
+		await user.selectOptions(
+			screen.getByRole("combobox", { name: "Pull request" }),
+			"43",
+		);
+
+		expect(screen.getByRole("combobox", { name: "Branch" })).toHaveValue(
+			"feature/reverse-goal",
+		);
+		expect(screen.getByLabelText("Goal title")).toHaveValue(
+			"Reverse Lookup Goal",
+		);
+		expect(screen.getByLabelText("Goal description")).toHaveValue(
+			"Reverse PR body",
+		);
+		expect(
+			screen.getByText(/Using PR #43: https:\/\/github.com\/octocat/),
+		).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Create Goal" }));
+
+		expect(onCreateGoalWorkspace).toHaveBeenCalledWith(
+			"repo-1",
+			"Reverse Lookup Goal",
+			"Reverse PR body",
+			"feature/reverse-goal",
+		);
+	});
 });
