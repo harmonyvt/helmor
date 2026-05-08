@@ -210,6 +210,60 @@ fn permanently_delete_archived_workspace_removes_db_rows_and_context() {
 }
 
 #[test]
+fn permanently_delete_goal_workspace_removes_cards_and_unlinks_children() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new();
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+
+    connection
+        .execute(
+            "UPDATE workspaces SET workspace_kind = 'goal' WHERE id = ?1",
+            [&harness.workspace_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            r#"INSERT INTO workspaces (
+                id, repository_id, directory_name, state, status, branch,
+                workspace_kind, goal_workspace_id
+            ) VALUES (
+                'workspace-goal-child', 'repo-1', 'goal-child', 'ready',
+                'in-progress', 'feature/goal-child', 'code', ?1
+            )"#,
+            [&harness.workspace_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            r#"INSERT INTO goal_cards (
+                id, goal_workspace_id, title, lane, sort_order, child_workspace_id
+            ) VALUES ('goal-card-1', ?1, 'Child work', 'backlog', 0, 'workspace-goal-child')"#,
+            [&harness.workspace_id],
+        )
+        .unwrap();
+    drop(connection);
+
+    workspaces::permanently_delete_workspace(&harness.workspace_id).unwrap();
+
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    let card_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM goal_cards", [], |row| row.get(0))
+        .unwrap();
+    let child_goal_id: Option<String> = connection
+        .query_row(
+            "SELECT goal_workspace_id FROM workspaces WHERE id = 'workspace-goal-child'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(card_count, 0);
+    assert_eq!(child_goal_id, None);
+}
+
+#[test]
 fn permanently_delete_workspace_surfaces_sql_errors() {
     let _guard = TEST_LOCK
         .lock()
