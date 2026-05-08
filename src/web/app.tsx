@@ -12,7 +12,6 @@ import { SendingSessionsProvider } from "@/lib/sending-sessions-context";
 import {
 	type AppSettings,
 	DEFAULT_SETTINGS,
-	loadSettings,
 	SettingsContext,
 	THEME_STORAGE_KEY,
 	type ThemeMode,
@@ -35,9 +34,6 @@ function WebAppInner() {
 	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
 		() => initialRoute.sessionId,
 	);
-	const routeHadInitialTarget = Boolean(
-		initialRoute.workspaceId || initialRoute.sessionId,
-	);
 	const groupsQuery = useQuery(workspaceGroupsQueryOptions());
 	const archivedQuery = useQuery(archivedWorkspacesQueryOptions());
 	const sessionsQuery = useQuery({
@@ -55,27 +51,6 @@ function WebAppInner() {
 		window.addEventListener("popstate", handlePopState);
 		return () => window.removeEventListener("popstate", handlePopState);
 	}, []);
-
-	useEffect(() => {
-		if (routeHadInitialTarget) return;
-		let cancelled = false;
-
-		void loadSettings().then((settings) => {
-			if (cancelled || selectedWorkspaceId) return;
-			if (!settings.lastWorkspaceId) return;
-			setSelectedWorkspaceId(settings.lastWorkspaceId);
-			setSelectedSessionId(settings.lastSessionId);
-			replaceHelmorWebRoute({
-				workspaceId: settings.lastWorkspaceId,
-				sessionId: settings.lastSessionId,
-				view: "conversation",
-			});
-		});
-
-		return () => {
-			cancelled = true;
-		};
-	}, [routeHadInitialTarget, selectedWorkspaceId]);
 
 	useEffect(() => {
 		if (!selectedWorkspaceId) return;
