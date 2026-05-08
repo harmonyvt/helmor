@@ -1002,6 +1002,24 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
             [workspace_id],
         )
         .context("Failed to delete workspace browser tabs")?;
+    transaction
+        .execute(
+            "DELETE FROM goal_cards WHERE goal_workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete goal cards")?;
+    transaction
+        .execute(
+            "UPDATE goal_cards SET child_workspace_id = NULL, updated_at = datetime('now') WHERE child_workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to unlink goal card workspace")?;
+    transaction
+        .execute(
+            "UPDATE workspaces SET goal_workspace_id = NULL, updated_at = datetime('now') WHERE goal_workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to unlink goal child workspaces")?;
     let deleted_rows = transaction
         .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
         .context("Failed to delete workspace row")?;

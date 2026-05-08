@@ -6,6 +6,7 @@ import {
 	Folder,
 	FolderOpen,
 	Layers,
+	Trash2,
 } from "lucide-react";
 import { memo, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -205,6 +206,7 @@ export type GoalRowActions = Pick<
 	| "onSelect"
 	| "onPrefetch"
 	| "onArchiveWorkspace"
+	| "onDeleteWorkspace"
 	| "onMarkWorkspaceUnread"
 	| "onOpenInFinder"
 	| "onTogglePin"
@@ -284,6 +286,7 @@ function GoalFolderHeader({
 	isOpen,
 	selected,
 	indent,
+	actions,
 	onSelect,
 	onToggle,
 }: {
@@ -291,83 +294,152 @@ function GoalFolderHeader({
 	isOpen: boolean;
 	selected: boolean;
 	indent?: number;
+	actions: GoalRowActions;
 	onSelect?: (id: string) => void;
 	onToggle: () => void;
 }) {
 	const hasChildren = goalGroup.childRows.length > 0;
 	const FolderIcon = isOpen && hasChildren ? FolderOpen : Folder;
+	const workspaceIds = [
+		...goalGroup.childRows.map((row) => row.id),
+		goalGroup.goalWorkspaceId,
+	];
+	const isBusy = workspaceIds.some(
+		(workspaceId) =>
+			(actions.archivingWorkspaceIds?.has(workspaceId) ?? false) ||
+			actions.markingUnreadWorkspaceId === workspaceId ||
+			actions.restoringWorkspaceId === workspaceId,
+	);
+	const workspaceActionsDisabled = Boolean(
+		actions.markingUnreadWorkspaceId || actions.restoringWorkspaceId,
+	);
+	const workspaceCount = workspaceIds.length;
+	const archiveLabel = hasChildren
+		? `Archive goal and ${goalGroup.childRows.length} workspace${goalGroup.childRows.length === 1 ? "" : "s"}`
+		: "Archive goal";
+	const deleteLabel = hasChildren
+		? `Delete goal and ${goalGroup.childRows.length} workspace${goalGroup.childRows.length === 1 ? "" : "s"}`
+		: "Delete goal";
+
+	const archiveGoalWorkspaces = () => {
+		for (const workspaceId of workspaceIds) {
+			actions.onArchiveWorkspace?.(workspaceId);
+		}
+	};
+
+	const deleteGoalWorkspaces = () => {
+		if (typeof window !== "undefined") {
+			const confirmed = window.confirm(
+				`Permanently delete ${workspaceCount} workspace${workspaceCount === 1 ? "" : "s"} for “${goalGroup.goalTitle}”? This cannot be undone.`,
+			);
+			if (!confirmed) return;
+		}
+
+		for (const workspaceId of workspaceIds) {
+			actions.onDeleteWorkspace?.(workspaceId);
+		}
+	};
 
 	return (
-		<div
-			style={indent ? { paddingLeft: `${indent}px` } : undefined}
-			className={cn(
-				// Subtle background lift when expanded so the header reads as
-				// a section container rather than a plain row.
-				"group/folder flex items-center gap-0.5 rounded-md px-1 transition-colors",
-				isOpen && hasChildren && "bg-muted/30",
-			)}
-		>
-			{/* Expand/collapse chevron */}
-			<button
-				type="button"
-				onClick={onToggle}
-				tabIndex={hasChildren ? 0 : -1}
-				className={cn(
-					"flex size-5 shrink-0 items-center justify-center rounded transition-colors",
-					hasChildren
-						? "cursor-pointer text-muted-foreground/50 hover:text-foreground"
-						: "pointer-events-none opacity-0",
-				)}
-				aria-label={isOpen ? "Collapse" : "Expand"}
-			>
-				<ChevronRight
-					className={cn("size-3 transition-transform", isOpen && "rotate-90")}
-					strokeWidth={2.2}
-				/>
-			</button>
-
-			{/* Folder label — clicking toggles expand/collapse */}
-			<button
-				type="button"
-				onClick={onToggle}
-				className={cn(
-					"flex min-w-0 flex-1 cursor-pointer select-none items-center gap-1.5 rounded-md px-1.5 py-1 text-[12.5px] font-semibold leading-tight tracking-[-0.01em] transition-colors",
-					selected
-						? "workspace-row-selected text-foreground"
-						: "text-foreground/75 hover:text-foreground",
-				)}
-			>
-				<FolderIcon
+		<ContextMenu>
+			<ContextMenuTrigger asChild>
+				<div
+					style={indent ? { paddingLeft: `${indent}px` } : undefined}
 					className={cn(
-						"size-[13px] shrink-0 transition-colors",
-						selected ? "text-foreground/80" : "text-muted-foreground/70",
+						// Subtle background lift when expanded so the header reads as
+						// a section container rather than a plain row.
+						"group/folder flex items-center gap-0.5 rounded-md px-1 transition-colors",
+						isOpen && hasChildren && "bg-muted/30",
 					)}
-					strokeWidth={1.7}
-				/>
-				<span className="truncate">{goalGroup.goalTitle}</span>
-			</button>
-
-			{/* Navigate to goal workspace — hover-reveal on the right */}
-			<button
-				type="button"
-				onClick={() => onSelect?.(goalGroup.goalWorkspaceId)}
-				className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/30 opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover/folder:opacity-100"
-				aria-label="Open goal workspace"
-				title="Open goal workspace"
-			>
-				<ArrowRight className="size-3" strokeWidth={2.2} />
-			</button>
-
-			{/* Child count badge */}
-			{hasChildren ? (
-				<Badge
-					variant="secondary"
-					className="mr-0.5 h-4 min-w-[16px] shrink-0 justify-center rounded-full px-1 text-[9.5px] leading-none"
 				>
-					{goalGroup.childRows.length}
-				</Badge>
-			) : null}
-		</div>
+					{/* Expand/collapse chevron */}
+					<button
+						type="button"
+						onClick={onToggle}
+						tabIndex={hasChildren ? 0 : -1}
+						className={cn(
+							"flex size-5 shrink-0 items-center justify-center rounded transition-colors",
+							hasChildren
+								? "cursor-pointer text-muted-foreground/50 hover:text-foreground"
+								: "pointer-events-none opacity-0",
+						)}
+						aria-label={isOpen ? "Collapse" : "Expand"}
+					>
+						<ChevronRight
+							className={cn(
+								"size-3 transition-transform",
+								isOpen && "rotate-90",
+							)}
+							strokeWidth={2.2}
+						/>
+					</button>
+
+					{/* Folder label — clicking toggles expand/collapse */}
+					<button
+						type="button"
+						onClick={onToggle}
+						className={cn(
+							"flex min-w-0 flex-1 cursor-pointer select-none items-center gap-1.5 rounded-md px-1.5 py-1 text-[12.5px] font-semibold leading-tight tracking-[-0.01em] transition-colors",
+							selected
+								? "workspace-row-selected text-foreground"
+								: "text-foreground/75 hover:text-foreground",
+						)}
+					>
+						<FolderIcon
+							className={cn(
+								"size-[13px] shrink-0 transition-colors",
+								selected ? "text-foreground/80" : "text-muted-foreground/70",
+							)}
+							strokeWidth={1.7}
+						/>
+						<span className="truncate">{goalGroup.goalTitle}</span>
+					</button>
+
+					{/* Navigate to goal workspace — hover-reveal on the right */}
+					<button
+						type="button"
+						onClick={() => onSelect?.(goalGroup.goalWorkspaceId)}
+						className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/30 opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover/folder:opacity-100"
+						aria-label="Open goal workspace"
+						title="Open goal workspace"
+					>
+						<ArrowRight className="size-3" strokeWidth={2.2} />
+					</button>
+
+					{/* Child count badge */}
+					{hasChildren ? (
+						<Badge
+							variant="secondary"
+							className="mr-0.5 h-4 min-w-[16px] shrink-0 justify-center rounded-full px-1 text-[9.5px] leading-none"
+						>
+							{goalGroup.childRows.length}
+						</Badge>
+					) : null}
+				</div>
+			</ContextMenuTrigger>
+			<ContextMenuContent className="min-w-56">
+				<ContextMenuItem
+					disabled={
+						isBusy || workspaceActionsDisabled || !actions.onArchiveWorkspace
+					}
+					onClick={archiveGoalWorkspaces}
+				>
+					<Archive className="size-4 shrink-0" strokeWidth={1.6} />
+					<span>{archiveLabel}</span>
+				</ContextMenuItem>
+				<ContextMenuSeparator />
+				<ContextMenuItem
+					disabled={
+						isBusy || workspaceActionsDisabled || !actions.onDeleteWorkspace
+					}
+					onClick={deleteGoalWorkspaces}
+					className="text-destructive focus:text-destructive"
+				>
+					<Trash2 className="size-4 shrink-0" strokeWidth={1.6} />
+					<span>{deleteLabel}</span>
+				</ContextMenuItem>
+			</ContextMenuContent>
+		</ContextMenu>
 	);
 }
 
@@ -588,6 +660,7 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 				isOpen={item.isOpen}
 				indent={item.indent}
 				selected={selectedWorkspaceId === item.goalGroup.goalWorkspaceId}
+				actions={actions}
 				onSelect={actions.onSelect}
 				onToggle={handleGoalToggle}
 			/>

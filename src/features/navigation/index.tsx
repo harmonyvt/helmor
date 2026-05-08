@@ -942,6 +942,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										onSelect: onSelectWorkspace,
 										onPrefetch: onPrefetchWorkspace,
 										onArchiveWorkspace,
+										onDeleteWorkspace,
 										onMarkWorkspaceUnread,
 										onOpenInFinder,
 										onTogglePin,

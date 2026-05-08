@@ -94,6 +94,7 @@ type UseWorkspacesSidebarControllerArgs = {
 };
 
 const WORKSPACE_GROUPS_INITIAL_DATA = workspaceGroupsQueryOptions().initialData;
+const EMPTY_PENDING_CREATIONS = new Map<string, PendingCreationEntry>();
 
 export function useWorkspacesSidebarController({
 	selectedWorkspaceId,
@@ -191,31 +192,20 @@ export function useWorkspacesSidebarController({
 		[projectedSidebar.archivedRows],
 	);
 
-	const pendingCreationsForPr = useMemo(
-		() =>
-			new Map(
-				Array.from(pendingCreations.entries()).map(([id, pc]) => [
-					id,
-					pc.entry,
-				]),
-			),
-		[pendingCreations],
-	);
-
 	const projectGroups = useMemo<ProjectGroup[]>(
 		() =>
 			layoutMode === "pr"
-				? projectSidebarListsByPr(baseGroups, pendingCreationsForPr)
+				? projectSidebarListsByPr(groups, EMPTY_PENDING_CREATIONS)
 				: [],
-		[layoutMode, baseGroups, pendingCreationsForPr],
+		[layoutMode, groups],
 	);
 
 	const goalProjection = useMemo<GoalProjection | null>(
 		() =>
 			layoutMode === "goal"
-				? projectSidebarListsByGoal(baseGroups, pendingCreationsForPr)
+				? projectSidebarListsByGoal(groups, EMPTY_PENDING_CREATIONS)
 				: null,
-		[layoutMode, baseGroups, pendingCreationsForPr],
+		[layoutMode, groups],
 	);
 
 	const updateArchivingWorkspaceId = useCallback(
