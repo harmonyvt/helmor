@@ -21,7 +21,8 @@ import {
 	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import type { WorkspaceRow } from "@/lib/api";
+import { GOAL_LANES } from "@/features/goals/board-model";
+import type { WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { WorkspaceAvatar } from "./avatar";
 import { WorkspaceRowItem, type WorkspaceRowItemProps } from "./row-item";
@@ -56,6 +57,14 @@ export type GoalVirtualItem =
 			isLast: boolean;
 			indent: number;
 	  }
+	| {
+			kind: "goal-lane-drop";
+			lane: WorkspaceStatus;
+			laneLabel: string;
+			laneColor: string;
+			goalWorkspaceId: string;
+			indent: number;
+	  }
 	| { kind: "ungrouped-header"; count: number; isOpen: boolean }
 	| { kind: "ungrouped-row"; row: WorkspaceRow }
 	| { kind: "archived-goals-header"; count: number; isOpen: boolean }
@@ -66,6 +75,7 @@ export type GoalVirtualItem =
 export const GOAL_PROJECT_HEADER_HEIGHT = 34;
 export const GOAL_HEADER_HEIGHT = 32;
 export const GOAL_CHILD_HEIGHT = 30;
+export const GOAL_LANE_DROP_HEIGHT = 30;
 export const GOAL_UNGROUPED_HEADER_HEIGHT = 34;
 export const GOAL_ROW_HEIGHT = 32;
 export const GOAL_GROUP_GAP = 10;
@@ -91,6 +101,8 @@ export function getGoalItemHeight(item: GoalVirtualItem): number {
 			return GOAL_HEADER_HEIGHT;
 		case "goal-child":
 			return GOAL_CHILD_HEIGHT;
+		case "goal-lane-drop":
+			return GOAL_LANE_DROP_HEIGHT;
 		case "ungrouped-header":
 			return GOAL_UNGROUPED_HEADER_HEIGHT;
 		case "ungrouped-row":
@@ -114,6 +126,8 @@ export function getGoalItemKey(item: GoalVirtualItem, index: number): string {
 			return `goal-header:${item.goalGroup.goalWorkspaceId}`;
 		case "goal-child":
 			return `goal-child:${item.goalWorkspaceId}:${item.row.id}`;
+		case "goal-lane-drop":
+			return `goal-lane-drop:${item.goalWorkspaceId}:${item.lane}`;
 		case "ungrouped-header":
 			return "ungrouped-header";
 		case "ungrouped-row":
@@ -136,6 +150,8 @@ export function getGoalItemKey(item: GoalVirtualItem, index: number): string {
 export function buildGoalViewVirtualItems(
 	projection: GoalProjection,
 	sectionOpenState: Record<string, boolean>,
+	/** When set, this goal is force-expanded and lane drop targets are injected. */
+	dragExpandedGoalId: string | null = null,
 ): GoalVirtualItem[] {
 	const items: GoalVirtualItem[] = [];
 
@@ -164,14 +180,31 @@ export function buildGoalViewVirtualItems(
 				}
 
 				const sectionKey = goalSectionKey(goal.goalWorkspaceId);
+				const isDragExpanded = dragExpandedGoalId === goal.goalWorkspaceId;
 				const hasChildren = goal.childRows.length > 0;
-				const isOpen = hasChildren
-					? (sectionOpenState[sectionKey] ?? true)
-					: false;
+				// Force-open if this goal is being hovered during a drag
+				const isOpen = isDragExpanded
+					? true
+					: hasChildren
+						? (sectionOpenState[sectionKey] ?? true)
+						: false;
 
 				items.push({ kind: "goal-header", goalGroup: goal, isOpen, indent: 8 });
 
 				if (isOpen) {
+					// Inject lane drop targets first when this goal is drag-expanded
+					if (isDragExpanded) {
+						for (const lane of GOAL_LANES) {
+							items.push({
+								kind: "goal-lane-drop",
+								lane: lane.id,
+								laneLabel: lane.label,
+								laneColor: lane.color,
+								goalWorkspaceId: goal.goalWorkspaceId,
+								indent: 8,
+							});
+						}
+					}
 					for (let ci = 0; ci < goal.childRows.length; ci++) {
 						items.push({
 							kind: "goal-child",
@@ -245,7 +278,15 @@ export type GoalRowActions = Pick<
 	| "archivingWorkspaceIds"
 	| "markingUnreadWorkspaceId"
 	| "restoringWorkspaceId"
->;
+> & {
+	onAssignWorkspaceToGoal?: (
+		workspaceId: string,
+		goalWorkspaceId: string,
+		status: WorkspaceStatus,
+	) => void;
+	onDragStartWorkspace?: (workspaceId: string) => void;
+	onDragEndWorkspace?: () => void;
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -318,19 +359,26 @@ function GoalFolderHeader({
 	selected,
 	indent,
 	actions,
+	isDragTarget,
 	onSelect,
 	onToggle,
+	onDragEnter,
+	onDragLeave,
 }: {
 	goalGroup: GoalGroup;
 	isOpen: boolean;
 	selected: boolean;
 	indent?: number;
 	actions: GoalRowActions;
+	isDragTarget?: boolean;
 	onSelect?: (id: string) => void;
 	onToggle: () => void;
+	onDragEnter?: (e: React.DragEvent) => void;
+	onDragLeave?: (e: React.DragEvent) => void;
 }) {
 	const hasChildren = goalGroup.childRows.length > 0;
-	const FolderIcon = isOpen && hasChildren ? FolderOpen : Folder;
+	const FolderIcon =
+		isOpen && (hasChildren || isDragTarget) ? FolderOpen : Folder;
 	const workspaceIds = [
 		...goalGroup.childRows.map((row) => row.id),
 		goalGroup.goalWorkspaceId,
@@ -377,13 +425,14 @@ function GoalFolderHeader({
 				<div
 					style={indent ? { paddingLeft: `${indent}px` } : undefined}
 					className={cn(
-						// Subtle background lift when expanded so the header reads as
-						// a section container rather than a plain row.
 						"group/folder flex items-center gap-0.5 rounded-md px-1 transition-colors",
-						isOpen && hasChildren && "bg-muted/30",
+						isOpen && (hasChildren || isDragTarget) && "bg-muted/30",
+						isDragTarget && "ring-1 ring-ring/40",
 					)}
+					onDragEnter={onDragEnter}
+					onDragLeave={onDragLeave}
+					onDragOver={(e) => e.preventDefault()}
 				>
-					{/* Expand/collapse chevron */}
 					<button
 						type="button"
 						onClick={onToggle}
@@ -405,7 +454,6 @@ function GoalFolderHeader({
 						/>
 					</button>
 
-					{/* Folder label — clicking toggles expand/collapse */}
 					<button
 						type="button"
 						onClick={onToggle}
@@ -426,7 +474,6 @@ function GoalFolderHeader({
 						<span className="truncate">{goalGroup.goalTitle}</span>
 					</button>
 
-					{/* Navigate to goal workspace — hover-reveal on the right */}
 					<button
 						type="button"
 						onClick={() => onSelect?.(goalGroup.goalWorkspaceId)}
@@ -437,7 +484,6 @@ function GoalFolderHeader({
 						<ArrowRight className="size-3" strokeWidth={2.2} />
 					</button>
 
-					{/* Child count badge */}
 					{hasChildren ? (
 						<Badge
 							variant="secondary"
@@ -471,6 +517,78 @@ function GoalFolderHeader({
 				</ContextMenuItem>
 			</ContextMenuContent>
 		</ContextMenu>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// GoalLaneDropTarget
+// ---------------------------------------------------------------------------
+
+function GoalLaneDropTarget({
+	lane,
+	laneLabel,
+	laneColor,
+	goalWorkspaceId,
+	indent,
+	isDragOver,
+	onDragOver,
+	onDragLeave,
+	onDrop,
+}: {
+	lane: WorkspaceStatus;
+	laneLabel: string;
+	laneColor: string;
+	goalWorkspaceId: string;
+	indent?: number;
+	isDragOver: boolean;
+	onDragOver: (lane: WorkspaceStatus) => void;
+	onDragLeave: () => void;
+	onDrop: (goalId: string, lane: WorkspaceStatus) => void;
+}) {
+	return (
+		<div
+			style={indent ? { paddingLeft: `${indent + 20}px` } : undefined}
+			className={cn(
+				"flex h-[30px] cursor-default select-none items-center gap-2 rounded-md px-2 transition-colors duration-100",
+				isDragOver ? "bg-accent/60 ring-1 ring-ring/50" : "hover:bg-accent/30",
+			)}
+			onDragOver={(e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				onDragOver(lane);
+			}}
+			onDragLeave={(e) => {
+				if (
+					!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)
+				) {
+					onDragLeave();
+				}
+			}}
+			onDrop={(e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				onDrop(goalWorkspaceId, lane);
+			}}
+		>
+			<span
+				className="size-2 shrink-0 rounded-full"
+				style={{ backgroundColor: laneColor }}
+				aria-hidden="true"
+			/>
+			<span
+				className={cn(
+					"text-[11.5px] font-medium leading-none transition-colors",
+					isDragOver ? "text-foreground" : "text-muted-foreground",
+				)}
+			>
+				{laneLabel}
+			</span>
+			{isDragOver && (
+				<span className="ml-auto text-[10px] text-muted-foreground">
+					Drop here
+				</span>
+			)}
+		</div>
 	);
 }
 
@@ -511,9 +629,17 @@ function GoalChildRow({
 			role="button"
 			tabIndex={0}
 			aria-label={displayTitle}
+			draggable
 			data-workspace-row-id={row.id}
 			onClick={() => actions.onSelect?.(row.id)}
 			onMouseEnter={() => actions.onPrefetch?.(row.id)}
+			onDragStart={(e) => {
+				e.dataTransfer.effectAllowed = "move";
+				actions.onDragStartWorkspace?.(row.id);
+			}}
+			onDragEnd={() => {
+				actions.onDragEndWorkspace?.();
+			}}
 			onKeyDown={(e) => {
 				if (e.key === "Enter" || e.key === " ") {
 					e.preventDefault();
@@ -645,6 +771,12 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 	flashingIds,
 	actions,
 	onToggleSection,
+	draggedWorkspaceId,
+	hoveredGoalId,
+	dragOverLane,
+	onDragEnterGoal,
+	onDragOverLane,
+	onDropIntoLane,
 }: {
 	item: GoalVirtualItem;
 	selectedWorkspaceId?: string | null;
@@ -653,6 +785,12 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 	flashingIds?: Set<string>;
 	actions: GoalRowActions;
 	onToggleSection: (key: string) => void;
+	draggedWorkspaceId?: string | null;
+	hoveredGoalId?: string | null;
+	dragOverLane?: WorkspaceStatus | null;
+	onDragEnterGoal?: (goalId: string) => void;
+	onDragOverLane?: (lane: WorkspaceStatus | null) => void;
+	onDropIntoLane?: (goalId: string, lane: WorkspaceStatus) => void;
 }) {
 	const handleProjectToggle = useCallback(() => {
 		if (item.kind === "project-header") {
@@ -689,6 +827,9 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 	}
 
 	if (item.kind === "goal-header") {
+		const isDragTarget =
+			draggedWorkspaceId != null &&
+			hoveredGoalId === item.goalGroup.goalWorkspaceId;
 		return (
 			<GoalFolderHeader
 				goalGroup={item.goalGroup}
@@ -696,8 +837,44 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 				indent={item.indent}
 				selected={selectedWorkspaceId === item.goalGroup.goalWorkspaceId}
 				actions={actions}
+				isDragTarget={isDragTarget}
 				onSelect={actions.onSelect}
 				onToggle={handleGoalToggle}
+				onDragEnter={(e) => {
+					if (draggedWorkspaceId != null) {
+						e.preventDefault();
+						onDragEnterGoal?.(item.goalGroup.goalWorkspaceId);
+					}
+				}}
+				onDragLeave={(e) => {
+					// Only clear when leaving the folder header entirely —
+					// not when entering a child element inside it.
+					if (
+						!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)
+					) {
+						// Don't clear hoveredGoalId on folder leave — the user may be
+						// moving the cursor down into the lane drop targets. The
+						// onDragLeaveGoal is only called when leaving the lane targets.
+					}
+				}}
+			/>
+		);
+	}
+
+	if (item.kind === "goal-lane-drop") {
+		const isDragOver =
+			dragOverLane === item.lane && hoveredGoalId === item.goalWorkspaceId;
+		return (
+			<GoalLaneDropTarget
+				lane={item.lane}
+				laneLabel={item.laneLabel}
+				laneColor={item.laneColor}
+				goalWorkspaceId={item.goalWorkspaceId}
+				indent={item.indent}
+				isDragOver={isDragOver}
+				onDragOver={(lane) => onDragOverLane?.(lane)}
+				onDragLeave={() => onDragOverLane?.(null)}
+				onDrop={(goalId, lane) => onDropIntoLane?.(goalId, lane)}
 			/>
 		);
 	}
@@ -817,9 +994,19 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 		);
 	}
 
-	// kind === "ungrouped-row"
+	// kind === "ungrouped-row" — wrap in a draggable div
 	return (
-		<div className="pl-2">
+		<div
+			className="pl-2"
+			draggable
+			onDragStart={(e) => {
+				e.dataTransfer.effectAllowed = "move";
+				actions.onDragStartWorkspace?.(item.row.id);
+			}}
+			onDragEnd={() => {
+				actions.onDragEndWorkspace?.();
+			}}
+		>
 			<WorkspaceRowItem
 				row={item.row}
 				selected={selectedWorkspaceId === item.row.id}

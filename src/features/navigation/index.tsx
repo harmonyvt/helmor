@@ -138,6 +138,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onOpenInFinder,
 	onTogglePin,
 	onSetWorkspaceStatus,
+	onAssignWorkspaceToGoal,
 	archivingWorkspaceIds,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
@@ -184,6 +185,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onOpenInFinder?: (workspaceId: string) => void;
 	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
+	onAssignWorkspaceToGoal?: (
+		workspaceId: string,
+		goalWorkspaceId: string,
+		status: WorkspaceStatus,
+	) => void;
 	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
@@ -200,6 +206,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		...createInitialSectionOpenState(groups),
 		...readStoredSectionOpenState(),
 	}));
+
+	// ── Goal drag state ───────────────────────────────────────────────
+	const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(
+		null,
+	);
+	const [hoveredGoalId, setHoveredGoalId] = useState<string | null>(null);
+	const [dragOverLane, setDragOverLane] = useState<WorkspaceStatus | null>(
+		null,
+	);
 
 	useEffect(() => {
 		setSectionOpenState((current) => {
@@ -341,8 +356,18 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	// ── Goal layout virtual items ──────────────────────────────────────
 	const goalFlatItems = useMemo<GoalVirtualItem[]>(() => {
 		if (!isGoalMode || !goalProjection) return [];
-		return buildGoalViewVirtualItems(goalProjection, sectionOpenState);
-	}, [isGoalMode, goalProjection, sectionOpenState]);
+		return buildGoalViewVirtualItems(
+			goalProjection,
+			sectionOpenState,
+			draggedWorkspaceId != null ? hoveredGoalId : null,
+		);
+	}, [
+		isGoalMode,
+		goalProjection,
+		sectionOpenState,
+		draggedWorkspaceId,
+		hoveredGoalId,
+	]);
 
 	// ── Status layout virtual items ────────────────────────────────────
 	const flatItems = useMemo(() => {
@@ -559,6 +584,38 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			[groupId]: !current[groupId],
 		}));
 	}, []);
+
+	// ── Goal drag handlers ────────────────────────────────────────────
+	const handleDragStartWorkspace = useCallback((workspaceId: string) => {
+		setDraggedWorkspaceId(workspaceId);
+	}, []);
+
+	const handleDragEndWorkspace = useCallback(() => {
+		setDraggedWorkspaceId(null);
+		setHoveredGoalId(null);
+		setDragOverLane(null);
+	}, []);
+
+	const handleDragEnterGoal = useCallback((goalId: string) => {
+		setHoveredGoalId(goalId);
+	}, []);
+
+	const handleDragOverLane = useCallback((lane: WorkspaceStatus | null) => {
+		setDragOverLane(lane);
+	}, []);
+
+	const handleDropIntoLane = useCallback(
+		(goalId: string, lane: WorkspaceStatus) => {
+			const id = draggedWorkspaceId;
+			if (id) {
+				onAssignWorkspaceToGoal?.(id, goalId, lane);
+			}
+			setDraggedWorkspaceId(null);
+			setHoveredGoalId(null);
+			setDragOverLane(null);
+		},
+		[draggedWorkspaceId, onAssignWorkspaceToGoal],
+	);
 
 	// ── Render a single virtual item ──────────────────────────────────
 	const renderItem = useCallback(
@@ -958,11 +1015,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										onOpenInFinder,
 										onTogglePin,
 										onSetWorkspaceStatus,
+										onAssignWorkspaceToGoal,
+										onDragStartWorkspace: handleDragStartWorkspace,
+										onDragEndWorkspace: handleDragEndWorkspace,
 										archivingWorkspaceIds,
 										markingUnreadWorkspaceId,
 										restoringWorkspaceId,
 									}}
 									onToggleSection={toggleSection}
+									draggedWorkspaceId={draggedWorkspaceId}
+									hoveredGoalId={hoveredGoalId}
+									dragOverLane={dragOverLane}
+									onDragEnterGoal={handleDragEnterGoal}
+									onDragOverLane={handleDragOverLane}
+									onDropIntoLane={handleDropIntoLane}
 								/>
 							) : (
 								renderItem(flatItems[vItem.index])

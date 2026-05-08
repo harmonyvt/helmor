@@ -48,6 +48,7 @@ export const WorkspacesSidebarContainer = memo(
 			goalProjection,
 			handleAddRepository,
 			handleArchiveWorkspace,
+			handleAssignWorkspaceToGoal,
 			handleCloneFromUrl,
 			handleCreateWorkspaceFromRepo,
 			handleCreateGoalWorkspace,
@@ -113,6 +114,13 @@ export const WorkspacesSidebarContainer = memo(
 				}}
 				onSetWorkspaceStatus={(workspaceId, status) => {
 					void handleSetWorkspaceStatus(workspaceId, status);
+				}}
+				onAssignWorkspaceToGoal={(workspaceId, goalWorkspaceId, status) => {
+					void handleAssignWorkspaceToGoal(
+						workspaceId,
+						goalWorkspaceId,
+						status,
+					);
 				}}
 			/>
 		);

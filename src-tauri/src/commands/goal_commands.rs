@@ -133,3 +133,15 @@ pub async fn set_goal_child_workspace_status(
     publish_goal_child_workspace_changes(&app, goal_workspace_id, Some(child_workspace_id));
     Ok(())
 }
+
+#[tauri::command]
+pub async fn assign_workspace_to_goal(
+    app: AppHandle,
+    request: workspaces::AssignWorkspaceToGoalRequest,
+) -> CmdResult<()> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
+    let workspace_id = request.workspace_id.clone();
+    run_blocking(move || workspaces::assign_workspace_to_goal(request)).await?;
+    publish_goal_child_workspace_changes(&app, goal_workspace_id, Some(workspace_id));
+    Ok(())
+}

@@ -76,6 +76,14 @@ pub struct GoalChildWorkspaceStatusRequest {
     pub status: WorkspaceStatus,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssignWorkspaceToGoalRequest {
+    pub workspace_id: String,
+    pub goal_workspace_id: String,
+    pub status: WorkspaceStatus,
+}
+
 pub use goal_models::{GoalCard, UpsertGoalCardInput};
 
 pub fn prepare_goal_workspace(
@@ -559,6 +567,14 @@ pub fn set_goal_child_workspace_status(request: GoalChildWorkspaceStatusRequest)
     workspace_models::set_goal_child_workspace_status(
         &request.goal_workspace_id,
         &request.child_workspace_id,
+        request.status,
+    )
+}
+
+pub fn assign_workspace_to_goal(request: AssignWorkspaceToGoalRequest) -> Result<()> {
+    workspace_models::assign_workspace_to_goal(
+        &request.workspace_id,
+        &request.goal_workspace_id,
         request.status,
     )
 }
