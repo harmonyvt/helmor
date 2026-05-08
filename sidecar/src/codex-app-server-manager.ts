@@ -166,6 +166,8 @@ function dispatchGoalCommand(
  *  synthetic heartbeats while Codex owns its retry loop. */
 const RETRY_SUPPRESSION_MS = 30_000;
 const RETRY_NOTICE_DEDUPE_MS = 1_000;
+const MISSING_ITEM_COMPACTION_TIMEOUT_MS = 60_000;
+const MISSING_ITEM_THREAD_RECOVERY_TIMEOUT_MS = 20_000;
 
 const HELMOR_CLIENT_INFO = {
 	clientInfo: {
@@ -191,6 +193,57 @@ function isRecoverableResumeError(err: unknown): boolean {
 			? err.message.toLowerCase()
 			: String(err).toLowerCase();
 	return RECOVERABLE_RESUME_SNIPPETS.some((s) => msg.includes(s));
+}
+
+function codexErrorMessage(params: unknown): string {
+	const errObj = deepGet(params, "error");
+	const nested =
+		typeof errObj === "object" && errObj !== null
+			? (errObj as Record<string, unknown>).message
+			: undefined;
+	return typeof nested === "string" ? nested : "Unknown Codex error";
+}
+
+export function isMissingCodexResponseItemError(message: string): boolean {
+	const parsed = parseProviderErrorMessage(message);
+	if (parsed) {
+		const nestedMessage = stringField(parsed, "message");
+		return (
+			stringField(parsed, "type") === "invalid_request_error" &&
+			stringField(parsed, "param") === "input" &&
+			isMissingResponseItemMessage(nestedMessage)
+		);
+	}
+
+	return isMissingResponseItemMessage(message);
+}
+
+function parseProviderErrorMessage(
+	message: string,
+): Record<string, unknown> | null {
+	try {
+		const parsed = JSON.parse(message) as unknown;
+		if (!parsed || typeof parsed !== "object") return null;
+		const error = (parsed as Record<string, unknown>).error;
+		return error && typeof error === "object"
+			? (error as Record<string, unknown>)
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+function stringField(
+	object: Record<string, unknown>,
+	field: string,
+): string | null {
+	const value = object[field];
+	return typeof value === "string" ? value : null;
+}
+
+function isMissingResponseItemMessage(message: string | null): boolean {
+	if (!message) return false;
+	return /Item with id ['"]rs_[A-Za-z0-9_-]+['"] not found\.?/.test(message);
 }
 
 function reconnectSuffix(message: string): string | null {
@@ -609,8 +662,12 @@ export class CodexAppServerManager implements SessionManager {
 		// synthetic user passthrough on the correct request id / emitter.
 		ctx.activeRequestId = requestId;
 		ctx.activeEmitter = emitter;
+		let recoveryCompactionTimeout: ReturnType<typeof setTimeout> | null = null;
 
 		return new Promise<void>((resolve, reject) => {
+			let missingItemRecoveryAttempts = 0;
+			let recoveryCompactionResolve: (() => void) | null = null;
+
 			ctx.turnResolve = resolve;
 			ctx.turnReject = (err) => {
 				aborted = true;
@@ -619,6 +676,183 @@ export class CodexAppServerManager implements SessionManager {
 
 			const emit = (event: object) => {
 				emitter.passthrough(requestId, event);
+			};
+
+			const finishWithError = (msg: string) => {
+				emitter.error(requestId, msg);
+				ctx.activeTurnId = null;
+				ctx.turnResolve?.();
+				ctx.turnResolve = null;
+				ctx.turnReject = null;
+			};
+
+			const waitForRecoveryCompaction = () =>
+				new Promise<void>((compactionResolve, compactionReject) => {
+					recoveryCompactionResolve = () => {
+						if (recoveryCompactionTimeout) {
+							clearTimeout(recoveryCompactionTimeout);
+							recoveryCompactionTimeout = null;
+						}
+						recoveryCompactionResolve = null;
+						compactionResolve();
+					};
+					recoveryCompactionTimeout = setTimeout(() => {
+						recoveryCompactionResolve = null;
+						recoveryCompactionTimeout = null;
+						compactionReject(
+							new Error("Timed out waiting for Codex context compaction"),
+						);
+					}, MISSING_ITEM_COMPACTION_TIMEOUT_MS);
+				});
+
+			const forkThreadForRecovery = async () => {
+				if (!ctx.providerThreadId) {
+					throw new Error("Cannot fork a Codex thread without a thread id");
+				}
+				const response = await ctx.server.sendRequest<Record<string, unknown>>(
+					"thread/fork",
+					buildThreadRecoveryParams(
+						ctx.providerThreadId,
+						workDir,
+						permissionMode,
+						model,
+						effectiveFastMode,
+					),
+					MISSING_ITEM_THREAD_RECOVERY_TIMEOUT_MS,
+				);
+				const threadId = deepGet(response, "thread", "id");
+				if (typeof threadId !== "string" || !threadId) {
+					throw new Error("thread/fork did not return a thread id");
+				}
+				ctx.providerThreadId = threadId;
+			};
+
+			const compactThreadForRecovery = async () => {
+				if (!ctx.providerThreadId) {
+					throw new Error("Cannot compact a Codex thread without a thread id");
+				}
+				const compacted = waitForRecoveryCompaction();
+				await ctx.server.sendRequest(
+					"thread/compact/start",
+					{ threadId: ctx.providerThreadId },
+					MISSING_ITEM_THREAD_RECOVERY_TIMEOUT_MS,
+				);
+				await compacted;
+			};
+
+			const startFreshThreadForRecovery = async () => {
+				const response = await ctx.server.sendRequest<Record<string, unknown>>(
+					"thread/start",
+					buildThreadStartParams(
+						workDir,
+						permissionMode,
+						model,
+						effectiveFastMode,
+					),
+					MISSING_ITEM_THREAD_RECOVERY_TIMEOUT_MS,
+				);
+				const threadId = deepGet(response, "thread", "id");
+				if (typeof threadId !== "string" || !threadId) {
+					throw new Error("thread/start did not return a thread id");
+				}
+				ctx.providerThreadId = threadId;
+				turnStartParams.threadId = threadId;
+			};
+
+			const startTurn = (label: string) => {
+				if (!ctx.providerThreadId) {
+					reject(new Error("Cannot start a Codex turn without a thread id"));
+					return;
+				}
+				turnStartParams.threadId = ctx.providerThreadId;
+				ctx.server
+					.sendRequest("turn/start", turnStartParams)
+					.then((response) => {
+						const turnId = deepGet(response, "turn", "id");
+						if (typeof turnId === "string") {
+							ctx.activeTurnId = turnId;
+						}
+					})
+					.catch((err) => {
+						logger.error(`${label} failed`, errorDetails(err));
+						reject(err);
+					});
+			};
+
+			const recoverMissingResponseItem = async (originalMessage: string) => {
+				const recoveryAttempt = missingItemRecoveryAttempts++;
+				ctx.activeTurnId = null;
+				emitMissingResponseItemRecoveryNotice(ctx, requestId);
+
+				try {
+					if (recoveryAttempt === 0) {
+						try {
+							await forkThreadForRecovery();
+							logger.info(
+								"Codex missing response item recovered via thread fork",
+								{
+									requestId,
+									sessionId,
+									threadId: ctx.providerThreadId,
+								},
+							);
+						} catch (forkError) {
+							logger.info(
+								"Codex missing response item fork recovery failed; trying compaction",
+								errorDetails(forkError),
+							);
+							try {
+								await compactThreadForRecovery();
+								logger.info(
+									"Codex missing response item recovered via compaction",
+									{
+										requestId,
+										sessionId,
+										threadId: ctx.providerThreadId,
+									},
+								);
+							} catch (compactError) {
+								logger.info(
+									"Codex missing response item compaction recovery failed; starting fresh thread",
+									errorDetails(compactError),
+								);
+								await startFreshThreadForRecovery();
+								logger.info(
+									"Codex missing response item recovered via fresh thread fallback",
+									{
+										requestId,
+										sessionId,
+										threadId: ctx.providerThreadId,
+									},
+								);
+							}
+						}
+						startTurn("turn/start retry after context recovery");
+						return;
+					}
+
+					await startFreshThreadForRecovery();
+					logger.info(
+						"Codex missing response item recovered via fresh thread",
+						{
+							requestId,
+							sessionId,
+							threadId: ctx.providerThreadId,
+						},
+					);
+					startTurn("turn/start retry after fresh thread recovery");
+				} catch (err) {
+					if (recoveryCompactionTimeout) {
+						clearTimeout(recoveryCompactionTimeout);
+						recoveryCompactionTimeout = null;
+					}
+					recoveryCompactionResolve = null;
+					logger.error(
+						"Codex missing response item recovery failed",
+						errorDetails(err),
+					);
+					finishWithError(originalMessage);
+				}
 			};
 
 			const handleNotification = async (n: JsonRpcNotification) => {
@@ -636,25 +870,28 @@ export class CodexAppServerManager implements SessionManager {
 				// Codex sends errors as {method:"error", params:{error:{message:"..."}}}
 				// Extract the nested message and emit a proper error event.
 				if (n.method === "error") {
-					const errObj = deepGet(n.params, "error");
-					const nested =
-						typeof errObj === "object" && errObj !== null
-							? (errObj as Record<string, unknown>).message
-							: undefined;
-					const msg =
-						typeof nested === "string" ? nested : "Unknown Codex error";
+					const msg = codexErrorMessage(n.params);
 					// App-server protocol marks retryable stream errors with
 					// params.willRetry=true. Older builds omit the structured bit,
 					// so only suppress their explicit reconnect progress messages.
 					// A recent stderr reconnect line is liveness context, not proof
 					// that an arbitrary later error is retryable.
+					if (
+						!isCompactCommand &&
+						missingItemRecoveryAttempts < 2 &&
+						ctx.providerThreadId &&
+						isMissingCodexResponseItemError(msg)
+					) {
+						void recoverMissingResponseItem(msg);
+						return;
+					}
 					const willRetry = deepGet(n.params, "willRetry");
 					const lastRetry = ctx.lastRetryAt ?? 0;
 					const suppressForProtocolRetry = willRetry === true;
 					const suppressForLegacyRetryWindow =
 						typeof willRetry !== "boolean" &&
-						Date.now() - lastRetry < RETRY_SUPPRESSION_MS &&
-						isLegacyReconnectNotice(msg);
+						isLegacyReconnectNotice(msg) &&
+						(lastRetry === 0 || Date.now() - lastRetry < RETRY_SUPPRESSION_MS);
 					if (suppressForProtocolRetry || suppressForLegacyRetryWindow) {
 						emitRetryNotice(ctx, requestId, msg);
 						logger.info(
@@ -668,11 +905,7 @@ export class CodexAppServerManager implements SessionManager {
 						);
 						return;
 					}
-					emitter.error(requestId, msg);
-					ctx.activeTurnId = null;
-					ctx.turnResolve?.();
-					ctx.turnResolve = null;
-					ctx.turnReject = null;
+					finishWithError(msg);
 					return;
 				}
 
@@ -792,6 +1025,10 @@ export class CodexAppServerManager implements SessionManager {
 				}
 
 				if (n.method === "thread/compacted") {
+					if (recoveryCompactionResolve) {
+						recoveryCompactionResolve();
+						return;
+					}
 					ctx.activeTurnId = null;
 					ctx.turnResolve?.();
 					ctx.turnResolve = null;
@@ -1003,6 +1240,9 @@ export class CodexAppServerManager implements SessionManager {
 					reject(err);
 				});
 		}).finally(() => {
+			if (recoveryCompactionTimeout) {
+				clearTimeout(recoveryCompactionTimeout);
+			}
 			if (aborted) {
 				emitter.aborted(requestId, "user_requested");
 			} else {
@@ -1659,6 +1899,47 @@ function emitRetryNotice(
 		retry_delay_ms: 0,
 		error: message,
 	});
+}
+
+function emitMissingResponseItemRecoveryNotice(
+	ctx: AppServerContext,
+	requestId: string,
+): void {
+	ctx.activeEmitter?.passthrough(requestId, {
+		type: "system",
+		subtype: "codex_missing_response_item_recovery",
+	});
+}
+
+function buildThreadStartParams(
+	cwd: string,
+	permissionMode: string | undefined,
+	model: string | undefined,
+	fastMode: boolean,
+): Record<string, unknown> {
+	const params: Record<string, unknown> = {
+		cwd,
+		approvalPolicy:
+			toCodexApprovalPolicy(permissionMode) ?? BYPASS_GRANULAR_POLICY,
+		sandbox:
+			permissionMode === "plan" ? "workspace-write" : "danger-full-access",
+	};
+	if (model) params.model = model;
+	if (fastMode) params.serviceTier = "fast";
+	return params;
+}
+
+function buildThreadRecoveryParams(
+	threadId: string,
+	cwd: string,
+	permissionMode: string | undefined,
+	model: string | undefined,
+	fastMode: boolean,
+): Record<string, unknown> {
+	return {
+		threadId,
+		...buildThreadStartParams(cwd, permissionMode, model, fastMode),
+	};
 }
 
 function flattenNotification(
