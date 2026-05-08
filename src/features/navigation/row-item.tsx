@@ -270,7 +270,12 @@ export const WorkspaceRowItem = memo(
 							</ShinyFlash>
 						</span>
 					</div>
-					<div className="shrink-0 flex items-center gap-1 group-hover/row:opacity-0 transition-opacity">
+					<div
+						className={cn(
+							"shrink-0 flex items-center gap-1 group-hover/row:opacity-0 transition-opacity",
+							isBusy && "opacity-0",
+						)}
+					>
 						<GroupIcon tone={statusTone} />
 						{prNumber !== null && (
 							<span className="rounded px-1 py-0 text-[10px] tabular-nums font-medium text-foreground/40">
@@ -284,7 +289,7 @@ export const WorkspaceRowItem = memo(
 					<span
 						className={cn(
 							"pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 pr-2.5",
-							"opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100",
+							"opacity-0 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100",
 							isBusy && "pointer-events-auto opacity-100",
 						)}
 					>
