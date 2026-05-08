@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import {
 	act,
 	cleanup,
@@ -7,6 +8,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
+import { createHelmorQueryClient } from "@/lib/query-client";
+import { renderWithProviders } from "@/test/render-with-providers";
 import { MemoConversationMessage } from "./message-components";
 import { serializeMessageForClipboard } from "./message-components/copy-message";
 import { AssistantToolCall } from "./message-components/tool-call";
@@ -463,5 +466,97 @@ describe("ChatUserMessage with spaces in attachment paths", () => {
 			screen.getAllByText(/CleanShot 2026-04-29 at 08\.24\.35@2x\.jpg/),
 		).toHaveLength(1);
 		expect(screen.queryByText(/Support\/CleanShot\/CleanShot/)).toBeNull();
+	});
+});
+describe("delegation anchors", () => {
+	it("renders nested delegated messages and opens the child session", async () => {
+		const message: ThreadMessageLike = {
+			id: "parent-message-1",
+			role: "assistant",
+			createdAt: "2026-05-08T00:00:00.000Z",
+			content: [
+				{
+					type: "delegation-anchor",
+					id: "parent-message-1:delegation",
+					delegationId: "delegation-1",
+					parentSessionId: "parent-session",
+					childSessionId: "child-session",
+					title: "Inspect parser",
+					provider: "codex",
+					modelId: "gpt-5.4",
+					status: "succeeded",
+					outputSchema: { type: "object" },
+					structuredResult: { summary: "ok" },
+				},
+			],
+		};
+		const childMessages: ThreadMessageLike[] = [
+			{
+				id: "child-message-1",
+				role: "assistant",
+				createdAt: "2026-05-08T00:00:01.000Z",
+				content: [{ type: "text", id: "child-text-1", text: "Child summary" }],
+			},
+		];
+		const onFocusChild = vi.fn();
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			["sessionMessages", "child-session", "thread"],
+			childMessages,
+		);
+		renderWithProviders(
+			<MemoConversationMessage
+				message={message}
+				sessionId="parent-session"
+				itemIndex={0}
+				onFocusChild={onFocusChild}
+			/>,
+			{ queryClient },
+		);
+
+		expect(screen.getByText("Inspect parser")).toBeInTheDocument();
+		expect(screen.getByText("Child summary")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: /open/i }));
+		expect(onFocusChild).toHaveBeenCalledWith(
+			"child-session",
+			"parent-session",
+		);
+	});
+
+	it("renders an error when the delegated thread cannot load", async () => {
+		vi.mocked(invoke).mockRejectedValueOnce(new Error("load failed"));
+		const message: ThreadMessageLike = {
+			id: "parent-message-2",
+			role: "assistant",
+			createdAt: "2026-05-08T00:00:00.000Z",
+			content: [
+				{
+					type: "delegation-anchor",
+					id: "parent-message-2:delegation",
+					delegationId: "delegation-2",
+					parentSessionId: "parent-session",
+					childSessionId: "missing-child-session",
+					title: "Inspect failure",
+					provider: "codex",
+					status: "running",
+					outputSchema: {},
+				},
+			],
+		};
+
+		renderWithProviders(
+			<MemoConversationMessage
+				message={message}
+				sessionId="parent-session"
+				itemIndex={0}
+			/>,
+		);
+
+		expect(
+			await screen.findByText("Failed to load delegated thread."),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByText("Waiting for delegated thread…"),
+		).not.toBeInTheDocument();
 	});
 });

@@ -12,6 +12,7 @@ mod builtin_claude_providers;
 mod catalog;
 pub(crate) mod claude_project_files;
 mod custom_providers;
+pub mod delegation;
 mod persistence;
 mod queries;
 mod slash_commands;
@@ -20,6 +21,7 @@ mod support;
 
 pub use self::action_kind::ActionKind;
 pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
+pub use self::delegation::{DelegateAgentRequest, DelegateAgentResponse};
 pub use self::queries::{
     fetch_agent_model_sections, fetch_live_context_usage, GenerateSessionTitleRequest,
     GenerateSessionTitleResponse, GetLiveContextUsageRequest, ListSlashCommandsRequest,

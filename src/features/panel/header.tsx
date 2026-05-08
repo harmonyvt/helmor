@@ -1,7 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	AlertCircle,
+	ArrowLeft,
 	ArrowRight,
+	Bot,
 	Check,
 	ChevronDown,
 	Clock3,
@@ -86,6 +88,7 @@ type WorkspacePanelHeaderProps = {
 	changeRequest?: ChangeRequestInfo | null;
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
+	activeSessionParentId?: string | null;
 	sessionDisplayProviders?: Record<string, AgentProvider>;
 	sending: boolean;
 	busySessionIds?: Set<string>;
@@ -111,6 +114,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	changeRequest = null,
 	sessions,
 	selectedSessionId,
+	activeSessionParentId = null,
 	sessionDisplayProviders,
 	sending,
 	busySessionIds,
@@ -179,6 +183,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const [branchCopied, setBranchCopied] = useState(false);
 	const tabsScrollRef = useRef<HTMLDivElement>(null);
 	const [hasRightOverflow, setHasRightOverflow] = useState(false);
+	const selectedSession =
+		sessions.find((s) => s.id === selectedSessionId) ?? null;
+	const selectedSessionParentId =
+		selectedSession?.parentSessionId ?? activeSessionParentId ?? null;
 
 	const updateOverflow = useCallback(() => {
 		const el = tabsScrollRef.current;
@@ -625,6 +633,16 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				) : null}
 			</div>
 
+			{selectedSessionParentId ? (
+				<button
+					type="button"
+					onClick={() => onSelectSession?.(selectedSessionParentId)}
+					className="flex cursor-pointer items-center gap-1 px-3 pb-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+				>
+					<ArrowLeft className="size-3" strokeWidth={2} />
+					Back to parent
+				</button>
+			) : null}
 			<div className="flex items-center px-4 pb-1">
 				<div className="group/tabs-scroll relative min-w-0 flex-1">
 					{hasRightOverflow && (
@@ -738,6 +756,12 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														{/* Content wrapper: text fades out on the right when hovered so
 														    the action icons can sit on the tab's own background. */}
 														<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
+															{session.parentSessionId ? (
+																<Bot
+																	className="size-3 shrink-0 text-muted-foreground/60"
+																	strokeWidth={1.8}
+																/>
+															) : null}
 															<SessionProviderIcon
 																agentType={
 																	sessionDisplayProviders?.[session.id] ??

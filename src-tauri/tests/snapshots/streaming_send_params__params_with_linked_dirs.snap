@@ -8,6 +8,7 @@ additionalDirectories:
 cwd: /abs/workspace
 effortLevel: high
 fastMode: false
+helmorSessionId: s-2
 model: claude-opus-4
 permissionMode: bypassPermissions
 prompt: hello

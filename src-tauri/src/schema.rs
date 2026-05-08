@@ -665,9 +665,29 @@ CREATE TABLE IF NOT EXISTS session_messages (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS session_delegations (
+    id TEXT PRIMARY KEY,
+    parent_session_id TEXT NOT NULL,
+    child_session_id TEXT NOT NULL,
+    parent_message_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model_id TEXT,
+    title TEXT NOT NULL DEFAULT 'Delegated task',
+    status TEXT NOT NULL DEFAULT 'pending',
+    output_schema TEXT NOT NULL DEFAULT '{}',
+    structured_result TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_session_delegations_parent ON session_delegations(parent_session_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_child ON session_delegations(child_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_parent_message ON session_delegations(parent_message_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
@@ -723,7 +743,54 @@ mod tests {
         assert!(tables.contains(&"workspaces".to_string()));
         assert!(tables.contains(&"sessions".to_string()));
         assert!(tables.contains(&"session_messages".to_string()));
+        assert!(tables.contains(&"session_delegations".to_string()));
         assert!(tables.contains(&"settings".to_string()));
+    }
+
+    #[test]
+    fn ensure_schema_creates_session_delegations_shape() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+
+        let columns: Vec<String> = connection
+            .prepare("SELECT name FROM pragma_table_info('session_delegations') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+
+        assert_eq!(
+            columns,
+            vec![
+                "id",
+                "parent_session_id",
+                "child_session_id",
+                "parent_message_id",
+                "provider",
+                "model_id",
+                "title",
+                "status",
+                "output_schema",
+                "structured_result",
+                "error",
+                "created_at",
+                "started_at",
+                "completed_at",
+            ]
+        );
+
+        let indexes: Vec<String> = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'session_delegations' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+
+        assert!(indexes.contains(&"idx_session_delegations_parent".to_string()));
+        assert!(indexes.contains(&"idx_session_delegations_child".to_string()));
+        assert!(indexes.contains(&"idx_session_delegations_parent_message".to_string()));
     }
 
     #[test]

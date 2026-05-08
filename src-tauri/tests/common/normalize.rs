@@ -93,6 +93,17 @@ pub enum NormPart {
     FileMention {
         path: String,
     },
+    DelegationAnchor {
+        delegation_id: String,
+        parent_session_id: String,
+        child_session_id: String,
+        title: String,
+        provider: String,
+        model_id: Option<String>,
+        status: String,
+        has_structured_result: bool,
+        has_error: bool,
+    },
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -246,6 +257,25 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 .collect(),
         },
         MessagePart::FileMention { path, .. } => NormPart::FileMention { path: path.clone() },
+        MessagePart::DelegationAnchor {
+            title,
+            provider,
+            model_id,
+            status,
+            structured_result,
+            error,
+            ..
+        } => NormPart::DelegationAnchor {
+            delegation_id: "<redacted-delegation-id>".to_string(),
+            parent_session_id: "<redacted-parent-session-id>".to_string(),
+            child_session_id: "<redacted-child-session-id>".to_string(),
+            title: truncate(title),
+            provider: provider.clone(),
+            model_id: model_id.clone(),
+            status: status.clone(),
+            has_structured_result: structured_result.is_some(),
+            has_error: error.is_some(),
+        },
     }
 }
 

@@ -53,6 +53,8 @@ type WorkspacePanelProps = {
 	newSessionShortcut?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
+	onFocusChildSession?: (sessionId: string) => void;
+	activeSessionParentId?: string | null;
 };
 
 export const WorkspacePanel = memo(function WorkspacePanel({
@@ -84,6 +86,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	newSessionShortcut,
 	missingScriptTypes = [],
 	onInitializeScript,
+	onFocusChildSession,
+	activeSessionParentId,
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionId) ?? null;
@@ -131,6 +135,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					busySessionIds={busySessionIds}
 					interactionRequiredSessionIds={interactionRequiredSessionIds}
 					loadingWorkspace={loadingWorkspace}
+					activeSessionParentId={activeSessionParentId}
 					contextPreviewCard={contextPreviewCard}
 					contextPreviewActive={contextPreviewActive}
 					headerActions={headerActions}
@@ -157,6 +162,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 							pane={activePane}
 							missingScriptTypes={missingScriptTypes}
 							onInitializeScript={onInitializeScript}
+							onFocusChildSession={onFocusChildSession}
 						/>
 					) : loadingWorkspace || loadingSession ? (
 						<ConversationColdPlaceholder />

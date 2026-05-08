@@ -18,9 +18,11 @@ import {
 	CursorSubagentToolCall,
 	isCursorSubagentToolName,
 } from "./cursor-subagent-tool";
+import { DelegationAnchor } from "./delegation-anchor";
 import type { RenderedMessage, StreamdownMode } from "./shared";
 import {
 	isCollapsedGroupPart,
+	isDelegationAnchorPart,
 	isImagePart,
 	isPlanReviewPart,
 	isReasoningPart,
@@ -183,9 +185,11 @@ function groupConsecutiveSubagentSpawns(
 export function ChatAssistantMessage({
 	message,
 	streaming,
+	onFocusChild,
 }: {
 	message: RenderedMessage;
 	streaming: boolean;
+	onFocusChild?: (sessionId: string, parentSessionId?: string | null) => void;
 }) {
 	const parts = message.content as ExtendedMessagePart[];
 	const { settings } = useSettings();
@@ -279,6 +283,15 @@ export function ChatAssistantMessage({
 				}
 				if (isPlanReviewPart(part)) {
 					return <PlanReviewCard key={key} part={part} />;
+				}
+				if (isDelegationAnchorPart(part)) {
+					return (
+						<DelegationAnchor
+							key={key}
+							part={part}
+							onFocusChild={onFocusChild}
+						/>
+					);
 				}
 				return null;
 			})}

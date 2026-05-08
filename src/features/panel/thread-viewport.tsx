@@ -66,11 +66,16 @@ export function ActiveThreadViewport({
 	pane,
 	missingScriptTypes = [],
 	onInitializeScript,
+	onFocusChildSession,
 }: {
 	hasSession: boolean;
 	pane: PresentedSessionPane;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
+	onFocusChildSession?: (
+		sessionId: string,
+		parentSessionId?: string | null,
+	) => void;
 }) {
 	const stackRef = useRef<HTMLDivElement | null>(null);
 	const [widthBucket, setWidthBucket] = useState(0);
@@ -121,6 +126,7 @@ export function ActiveThreadViewport({
 					paneWidth={paneWidth}
 					sessionId={pane.sessionId}
 					sending={pane.sending}
+					onFocusChildSession={onFocusChildSession}
 				/>
 			</div>
 		</div>
@@ -136,6 +142,7 @@ function ChatThread({
 	paneWidth,
 	sessionId,
 	sending,
+	onFocusChildSession,
 }: {
 	layoutCacheKey: string;
 	messages: ThreadMessageLike[];
@@ -145,6 +152,10 @@ function ChatThread({
 	paneWidth: number;
 	sessionId: string;
 	sending: boolean;
+	onFocusChildSession?: (
+		sessionId: string,
+		parentSessionId?: string | null,
+	) => void;
 }) {
 	const threadMessages = messages;
 	const { settings } = useSettings();
@@ -223,10 +234,11 @@ function ChatThread({
 					previousAssistantMessage={previousAssistantMessage}
 					sessionId={sessionId}
 					itemIndex={index}
+					onFocusChild={onFocusChildSession}
 				/>
 			);
 		},
-		[sessionId, threadMessages],
+		[onFocusChildSession, sessionId, threadMessages],
 	);
 
 	return (

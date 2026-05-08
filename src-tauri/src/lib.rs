@@ -308,6 +308,7 @@ pub fn run() {
             commands::session_commands::list_session_drafts,
             commands::session_commands::set_session_draft,
             commands::session_commands::get_live_context_usage,
+            commands::agent_commands::delegate_agent,
             commands::session_commands::mark_session_read,
             commands::session_commands::mark_session_unread,
             commands::workspace_commands::list_remote_branches,

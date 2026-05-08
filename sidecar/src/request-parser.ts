@@ -84,6 +84,7 @@ export function parseSendMessageParams(
 ): SendMessageParams {
 	return {
 		sessionId: requireString(params, "sessionId"),
+		helmorSessionId: optionalString(params, "helmorSessionId"),
 		prompt: requireString(params, "prompt"),
 		model: optionalString(params, "model"),
 		cwd: optionalString(params, "cwd"),

@@ -58,6 +58,17 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
 			});
 			return;
+		case "sessionMessagesChanged":
+			void queryClient.invalidateQueries({
+				queryKey: [
+					...helmorQueryKeys.sessionMessages(event.sessionId),
+					"thread",
+				],
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
+			});
+			return;
 		case "contextUsageChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.sessionContextUsage(event.sessionId),

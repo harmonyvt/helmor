@@ -267,7 +267,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 		if (
 			displayedSessionId &&
-			sessions.some((session) => session.id === displayedSessionId)
+			(sessions.some((session) => session.id === displayedSessionId) ||
+				selectedSessionId === displayedSessionId)
 		) {
 			return displayedSessionId;
 		}
@@ -283,6 +284,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		displayedSessionId,
 		displayedWorkspaceId,
 		rememberedSessionId,
+		selectedSessionId,
 		sessions,
 		workspace?.activeSessionId,
 	]);
@@ -524,9 +526,20 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// stable handler through it.
 	const onSelectSessionRef = useRef(onSelectSession);
 	onSelectSessionRef.current = onSelectSession;
+	const childParentSessionIdsRef = useRef<Record<string, string>>({});
 	const handleSelectSession = useCallback((sessionId: string) => {
 		onSelectSessionRef.current(sessionId);
 	}, []);
+	const handleFocusChildSession = useCallback(
+		(sessionId: string, parentSessionId?: string | null) => {
+			if (parentSessionId) {
+				childParentSessionIdsRef.current[sessionId] = parentSessionId;
+			}
+			onResolveDisplayedSession(sessionId);
+			onSelectSessionRef.current(sessionId);
+		},
+		[onResolveDisplayedSession],
+	);
 	const handleSessionsChanged = useCallback(() => {
 		void invalidateSessionQueries();
 	}, [invalidateSessionQueries]);
@@ -537,6 +550,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionIdForPanel) ??
 		null;
+	const activeSessionParentId = selectedSessionIdForPanel
+		? (selectedSession?.parentSessionId ??
+			childParentSessionIdsRef.current[selectedSessionIdForPanel] ??
+			null)
+		: null;
 	const missingScriptTypes = useMemo<WorkspaceScriptType[]>(() => {
 		if (!selectedSession) {
 			return [];
@@ -578,6 +596,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			workspace={workspace}
 			sessions={sessions}
 			selectedSessionId={selectedSessionIdForPanel}
+			activeSessionParentId={activeSessionParentId}
 			sessionDisplayProviders={sessionDisplayProviders}
 			sessionPanes={sessionPanes}
 			loadingWorkspace={loadingWorkspace}
@@ -602,6 +621,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			newSessionShortcut={getShortcut(settings.shortcuts, "session.new")}
 			missingScriptTypes={missingScriptTypes}
 			onInitializeScript={handleInitializeScript}
+			onFocusChildSession={handleFocusChildSession}
 			changeRequest={workspaceChangeRequest}
 		/>
 	);

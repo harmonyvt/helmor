@@ -31,6 +31,10 @@ pub struct WorkspaceSessionSummary {
     /// uses this to drive post-stream verifiers and the auto-close behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_kind: Option<ActionKind>,
+    pub parent_session_id: Option<String>,
+    pub parent_message_id: Option<String>,
+    pub delegation_status: Option<String>,
+    pub child_count: i64,
     pub active: bool,
 }
 
@@ -60,9 +64,20 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
               s.updated_at,
               s.last_user_message_at,
               s.is_hidden,
-              s.action_kind
+              s.action_kind,
+              child.parent_session_id,
+              child.parent_message_id,
+              child.status AS delegation_status,
+              COALESCE(child_counts.child_count, 0) AS child_count
             FROM sessions s
+            LEFT JOIN session_delegations child ON child.child_session_id = s.id
+            LEFT JOIN (
+              SELECT parent_session_id, COUNT(*) AS child_count
+              FROM session_delegations
+              GROUP BY parent_session_id
+            ) child_counts ON child_counts.parent_session_id = s.id
             WHERE s.workspace_id = ?1 AND COALESCE(s.is_hidden, 0) = 0
+              AND child.child_session_id IS NULL
             ORDER BY
               datetime(s.created_at) ASC
             "#,
@@ -89,6 +104,10 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
             last_user_message_at: row.get(13)?,
             is_hidden: row.get::<_, i64>(14)? != 0,
             action_kind: row.get(15)?,
+            parent_session_id: row.get(16)?,
+            parent_message_id: row.get(17)?,
+            delegation_status: row.get(18)?,
+            child_count: row.get(19)?,
         })
     })?;
 
@@ -125,9 +144,12 @@ fn adjacent_visible_session_id(
 ) -> Result<Option<String>> {
     let mut statement = transaction.prepare(
         r#"
-            SELECT id FROM sessions
-            WHERE workspace_id = ?1 AND COALESCE(is_hidden, 0) = 0
-            ORDER BY datetime(created_at) ASC
+            SELECT s.id FROM sessions s
+            LEFT JOIN session_delegations child ON child.child_session_id = s.id
+            WHERE s.workspace_id = ?1
+              AND COALESCE(s.is_hidden, 0) = 0
+              AND child.child_session_id IS NULL
+            ORDER BY datetime(s.created_at) ASC
             "#,
     )?;
     let visible_session_ids = statement
@@ -713,15 +735,7 @@ pub fn delete_session(session_id: &str) -> Result<()> {
         _ => None,
     };
 
-    transaction
-        .execute(
-            "DELETE FROM session_messages WHERE session_id = ?1",
-            [session_id],
-        )
-        .context("Failed to delete messages")?;
-    transaction
-        .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
-        .context("Failed to delete session")?;
+    delete_session_tree_in_transaction(&transaction, session_id)?;
 
     // If this was active, persist the same right-then-left tab fallback as the UI.
     if let Some(ws_id) = &workspace_id {
@@ -739,6 +753,34 @@ pub fn delete_session(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+fn delete_session_tree_in_transaction(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+) -> Result<()> {
+    for child_session_id in
+        super::delegations::child_session_ids_for_parent(transaction, session_id)?
+    {
+        delete_session_tree_in_transaction(transaction, &child_session_id)?;
+    }
+
+    transaction
+        .execute(
+            "DELETE FROM session_delegations WHERE parent_session_id = ?1 OR child_session_id = ?1",
+            [session_id],
+        )
+        .context("Failed to delete delegation metadata")?;
+    transaction
+        .execute(
+            "DELETE FROM session_messages WHERE session_id = ?1",
+            [session_id],
+        )
+        .context("Failed to delete messages")?;
+    transaction
+        .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
+        .context("Failed to delete session")?;
+    Ok(())
+}
+
 pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>> {
     let connection = db::read_conn()?;
     let mut statement = connection
@@ -748,8 +790,17 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
               s.id, s.workspace_id, s.title, s.agent_type, s.status, s.model,
               s.permission_mode, s.provider_session_id, s.effort_level,
               s.unread_count, s.fast_mode, s.created_at, s.updated_at,
-              s.last_user_message_at, s.is_hidden, s.action_kind
+              s.last_user_message_at, s.is_hidden, s.action_kind,
+              child.parent_session_id, child.parent_message_id,
+              child.status AS delegation_status,
+              COALESCE(child_counts.child_count, 0) AS child_count
             FROM sessions s
+            LEFT JOIN session_delegations child ON child.child_session_id = s.id
+            LEFT JOIN (
+              SELECT parent_session_id, COUNT(*) AS child_count
+              FROM session_delegations
+              GROUP BY parent_session_id
+            ) child_counts ON child_counts.parent_session_id = s.id
             WHERE s.workspace_id = ?1 AND s.is_hidden = 1
             ORDER BY datetime(s.created_at) ASC
             "#,
@@ -777,6 +828,10 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
                 last_user_message_at: row.get(13)?,
                 is_hidden: row.get::<_, i64>(14)? != 0,
                 action_kind: row.get(15)?,
+                parent_session_id: row.get(16)?,
+                parent_message_id: row.get(17)?,
+                delegation_status: row.get(18)?,
+                child_count: row.get(19)?,
             })
         })
         .context("Failed to query hidden sessions")?;
@@ -1285,5 +1340,67 @@ mod tests {
         .unwrap();
         let meta = read_session_context_usage(&conn, "s1").unwrap();
         assert_eq!(meta, None);
+    }
+    #[test]
+    fn workspace_session_list_hides_delegated_children_and_counts_them() {
+        let _env = crate::testkit::TestEnv::new("delegated-root-list");
+        let conn = crate::models::db::write_conn().unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('repo-root-list', 'repo', '/tmp')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('workspace-root-list', 'repo-root-list', 'repo', 'active', 'in-progress')", []).unwrap();
+        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('parent-root-list', 'workspace-root-list', 'idle', 'Parent', 'claude')", []).unwrap();
+        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('child-root-list', 'workspace-root-list', 'idle', 'Child', 'codex')", []).unwrap();
+        conn.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('anchor-root-list', 'parent-root-list', 'assistant', '{}')", []).unwrap();
+        conn.execute("INSERT INTO session_delegations (id, parent_session_id, child_session_id, parent_message_id, provider, model_id, title, status, output_schema) VALUES ('delegation-root-list', 'parent-root-list', 'child-root-list', 'anchor-root-list', 'codex', 'gpt-5.4', 'Child', 'running', '{}')", []).unwrap();
+        drop(conn);
+
+        let sessions = list_workspace_sessions("workspace-root-list").unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "parent-root-list");
+        assert_eq!(sessions[0].child_count, 1);
+        assert_eq!(sessions[0].parent_session_id, None);
+        assert_eq!(sessions[0].delegation_status, None);
+    }
+
+    #[test]
+    fn deleting_parent_session_removes_delegated_child_tree() {
+        let _env = crate::testkit::TestEnv::new("delegated-delete-cascade");
+        let conn = crate::models::db::write_conn().unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('repo-cascade', 'repo', '/tmp')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO workspaces (id, repository_id, directory_name, state, status, active_session_id) VALUES ('workspace-cascade', 'repo-cascade', 'repo', 'active', 'in-progress', 'parent-cascade')", []).unwrap();
+        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('parent-cascade', 'workspace-cascade', 'idle', 'Parent', 'claude')", []).unwrap();
+        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('child-cascade', 'workspace-cascade', 'idle', 'Child', 'codex')", []).unwrap();
+        conn.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('anchor-cascade', 'parent-cascade', 'assistant', '{}')", []).unwrap();
+        conn.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('child-message-cascade', 'child-cascade', 'assistant', '{}')", []).unwrap();
+        conn.execute("INSERT INTO session_delegations (id, parent_session_id, child_session_id, parent_message_id, provider, model_id, title, status, output_schema) VALUES ('delegation-cascade', 'parent-cascade', 'child-cascade', 'anchor-cascade', 'codex', 'gpt-5.4', 'Child', 'running', '{}')", []).unwrap();
+        drop(conn);
+
+        delete_session("parent-cascade").unwrap();
+        let conn = crate::models::db::read_conn().unwrap();
+        let session_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id IN ('parent-cascade', 'child-cascade')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let message_count: i64 = conn.query_row("SELECT COUNT(*) FROM session_messages WHERE id IN ('anchor-cascade', 'child-message-cascade')", [], |row| row.get(0)).unwrap();
+        let delegation_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_delegations WHERE id = 'delegation-cascade'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(session_count, 0);
+        assert_eq!(message_count, 0);
+        assert_eq!(delegation_count, 0);
     }
 }

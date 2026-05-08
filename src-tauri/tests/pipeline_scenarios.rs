@@ -1605,3 +1605,27 @@ fn codex_collab_close_agent() {
     )];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
+
+#[test]
+fn asst_delegation_anchor_historical() {
+    let parsed = json!({
+        "type": "delegation_anchor",
+        "delegationId": "delegation-1",
+        "parentSessionId": "parent-1",
+        "childSessionId": "child-1",
+        "title": "Inspect parser",
+        "provider": "codex",
+        "modelId": "gpt-5.4",
+        "status": "succeeded",
+        "outputSchema": { "type": "object", "properties": { "summary": { "type": "string" } } },
+        "structuredResult": { "summary": "ok" },
+        "startedAt": "2026-05-08T00:00:00Z",
+        "completedAt": "2026-05-08T00:00:05Z"
+    });
+    let msgs = vec![make_record(
+        "delegation-anchor-message",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
