@@ -36,7 +36,7 @@ function prAccentColor(
 		case "merged":
 			return "var(--workspace-pr-merged-accent)";
 		case "closed":
-			return "var(--workspace-pr-closed-accent)";
+			return "var(--workspace-sidebar-status-canceled)";
 		default:
 			return null;
 	}
@@ -109,13 +109,12 @@ export function WorkspaceRow({
 			<div
 				className={cn(
 					"relative flex min-h-[52px] w-full cursor-pointer items-center gap-3 px-4",
-					"hover:bg-accent/50",
+					"bg-sidebar hover:bg-accent/50",
 					selected && "bg-accent",
 				)}
 				style={{
 					transform: `translateX(${swipeX}px)`,
 					transition: swipeX === 0 ? "transform 200ms ease-out" : "none",
-					backgroundColor: selected ? undefined : undefined,
 				}}
 				onPointerDown={handlePointerDown}
 				onPointerMove={handlePointerMove}
