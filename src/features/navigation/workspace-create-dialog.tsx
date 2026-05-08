@@ -79,6 +79,9 @@ export function WorkspaceCreateDialog({
 	const [goalRepoId, setGoalRepoId] = useState("");
 	const [goalBranches, setGoalBranches] = useState<string[]>([]);
 	const [goalBranch, setGoalBranch] = useState("");
+	const [selectedGoalPrNumber, setSelectedGoalPrNumber] = useState<
+		number | null
+	>(null);
 	const [goalPullRequests, setGoalPullRequests] = useState<
 		GithubPullRequestSummary[]
 	>([]);
@@ -194,6 +197,7 @@ export function WorkspaceCreateDialog({
 	useEffect(() => {
 		setGoalBranches([]);
 		setGoalBranch("");
+		setSelectedGoalPrNumber(null);
 		setGoalPullRequests([]);
 		setGoalError(null);
 		if (!open || !goalRepoId) {
@@ -250,12 +254,36 @@ export function WorkspaceCreateDialog({
 
 	useEffect(() => {
 		const pr = goalPullRequests.find((item) => item.headBranch === goalBranch);
-		if (!pr) {
-			return;
-		}
+		setSelectedGoalPrNumber(pr?.number ?? null);
+		if (!pr) return;
 		setGoalTitle(pr.title);
 		setGoalDescription(pr.body);
 	}, [goalBranch, goalPullRequests]);
+
+	const goalBranchOptions = Array.from(
+		new Set([
+			...goalBranches,
+			...goalPullRequests
+				.map((pr) => pr.headBranch)
+				.filter((branch) => branch.trim().length > 0),
+		]),
+	).sort((left, right) => left.localeCompare(right));
+
+	const selectedGoalPr = goalPullRequests.find(
+		(pr) => pr.number === selectedGoalPrNumber,
+	);
+
+	const handleSelectGoalPr = useCallback(
+		(prNumber: number) => {
+			const pr = goalPullRequests.find((item) => item.number === prNumber);
+			if (!pr) return;
+			setSelectedGoalPrNumber(pr.number);
+			setGoalBranch(pr.headBranch);
+			setGoalTitle(pr.title);
+			setGoalDescription(pr.body);
+		},
+		[goalPullRequests],
+	);
 
 	// Derived busy flag — true while either the async handshake (Phase 1 /
 	// GitHub API) is in-flight from this dialog OR the parent controller has a
@@ -520,7 +548,7 @@ export function WorkspaceCreateDialog({
 									className="h-8 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60"
 								>
 									<option value="">Create a new Goal branch</option>
-									{goalBranches.map((branch) => {
+									{goalBranchOptions.map((branch) => {
 										const pr = goalPullRequests.find(
 											(item) => item.headBranch === branch,
 										);
@@ -535,6 +563,48 @@ export function WorkspaceCreateDialog({
 									Pick an existing branch to make the Goal workspace use it. If
 									it has an open PR, the PR title and body fill in
 									automatically.
+								</p>
+							</div>
+							<div className="flex flex-col gap-1">
+								<Label
+									htmlFor="workspace-create-goal-pr"
+									className="text-[12px] font-medium tracking-[-0.01em]"
+								>
+									Pull request
+								</Label>
+								<select
+									id="workspace-create-goal-pr"
+									value={selectedGoalPrNumber?.toString() ?? ""}
+									onChange={(event) => {
+										const value = event.target.value;
+										if (!value) {
+											setSelectedGoalPrNumber(null);
+											setGoalBranch("");
+											return;
+										}
+										handleSelectGoalPr(Number(value));
+									}}
+									disabled={
+										busy || goalLoading || goalPullRequests.length === 0
+									}
+									className="h-8 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60"
+								>
+									<option value="">
+										{goalPullRequests.length === 0
+											? "No open pull requests"
+											: "Select by pull request"}
+									</option>
+									{goalPullRequests.map((pr) => (
+										<option key={pr.number} value={pr.number.toString()}>
+											#{pr.number} {pr.title} — {pr.headBranch} →{" "}
+											{pr.baseBranch}
+										</option>
+									))}
+								</select>
+								<p className="text-[11px] text-app-muted-foreground">
+									{selectedGoalPr
+										? `Using PR #${selectedGoalPr.number}: ${selectedGoalPr.url}`
+										: "Select a PR to reverse-fill its branch and Goal details."}
 								</p>
 							</div>
 							<div className="flex flex-col gap-1">
