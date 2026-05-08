@@ -35,8 +35,6 @@ import {
 	getWorkspaceForgeCheckInsertText,
 	getWorkspaceForgeDeploymentInsertText,
 	loadRepoPreferences,
-	type PrComment,
-	type PrCommentData,
 	type RepoPreferences,
 	type SyncWorkspaceTargetResponse,
 	syncWorkspaceWithTargetBranch,
@@ -48,7 +46,6 @@ import {
 	workspaceForgeActionStatusQueryOptions,
 	workspaceForgeQueryOptions,
 	workspaceGitActionStatusQueryOptions,
-	workspacePrCommentsQueryOptions,
 } from "@/lib/query-client";
 // `workspaceForgeQueryOptions` is still used here to drive `changeRequestName`
 // for the review/PR rows (MR vs PR wording). Forge onboarding lives in
@@ -59,7 +56,6 @@ import {
 	INSPECTOR_SECTION_HEADER_CLASS,
 	INSPECTOR_SECTION_TITLE_CLASS,
 } from "../layout";
-import { buildPrCommentInsertText } from "../pr-comments";
 
 interface GitStatusItem {
 	label: string;
@@ -127,9 +123,6 @@ type ActionsSectionProps = {
 	commitButtonMode?: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
 	changeRequest: ChangeRequestInfo | null;
-	/** Called when the user clicks "Review all" in the Comments section.
-	 *  Receives all current PR comments so the parent can build the prompt. */
-	onReviewAllComments?: (comments: PrComment[]) => void | Promise<void>;
 	onOpenBrowserMode?: () => void;
 };
 
@@ -172,7 +165,6 @@ export function ActionsSection({
 	commitButtonMode,
 	commitButtonState,
 	changeRequest,
-	onReviewAllComments,
 	onOpenBrowserMode,
 }: ActionsSectionProps) {
 	const queryClient = useQueryClient();
@@ -192,16 +184,6 @@ export function ActionsSection({
 		...workspaceForgeActionStatusQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null && !isArchived,
 	});
-	const prCommentsQuery = useQuery({
-		...workspacePrCommentsQueryOptions(workspaceId ?? "__none__"),
-		enabled: workspaceId !== null && !isArchived,
-	});
-	const EMPTY_PR_COMMENT_DATA: PrCommentData = {
-		comments: [],
-		prNumber: null,
-		prUrl: null,
-	};
-	const prCommentData = prCommentsQuery.data ?? EMPTY_PR_COMMENT_DATA;
 	const gitStatus = gitStatusQuery.data ?? EMPTY_GIT_ACTION_STATUS;
 	const forgeStatus = forgeStatusQuery.data ?? EMPTY_FORGE_ACTION_STATUS;
 	const changeRequestName = forgeQuery.data?.labels.changeRequestName ?? "PR";
@@ -339,44 +321,6 @@ export function ActionsSection({
 		[workspaceId],
 	);
 
-	const handleInsertComment = useCallback(
-		(comment: PrComment) => {
-			if (!workspaceId) {
-				return;
-			}
-			const submitText = buildPrCommentInsertText(comment);
-			const label = comment.filePath
-				? `Comment on ${comment.filePath}`
-				: `Comment by @${comment.author}`;
-			return {
-				target: { workspaceId },
-				label,
-				submitText,
-				key: `pr-comment:${comment.id}`,
-				preview: buildComposerPreviewPayload({
-					title: comment.filePath
-						? `PR Comment – ${comment.filePath}`
-						: `PR Comment by @${comment.author}`,
-					content: submitText,
-					preferredKind: "code",
-				}),
-			};
-		},
-		[workspaceId],
-	);
-
-	const [reviewAllLoading, setReviewAllLoading] = useState(false);
-
-	const handleReviewAll = useCallback(async () => {
-		if (!onReviewAllComments || reviewAllLoading) return;
-		setReviewAllLoading(true);
-		try {
-			await onReviewAllComments(prCommentData.comments);
-		} finally {
-			setReviewAllLoading(false);
-		}
-	}, [onReviewAllComments, prCommentData.comments, reviewAllLoading]);
-
 	return (
 		<section
 			ref={sectionRef}
@@ -489,56 +433,6 @@ export function ActionsSection({
 								<span className="truncate">{item.label}</span>
 							</div>
 						))}
-					</>
-				)}
-
-				{(prCommentData.comments.length > 0 || prCommentsQuery.isFetching) && (
-					<>
-						<div className="flex items-center justify-between px-2.5 pb-1 pt-2.5">
-							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
-								Comments
-							</span>
-							{prCommentData.comments.some((c) => !c.isThreadResolved) && (
-								<button
-									type="button"
-									onClick={() => void handleReviewAll()}
-									disabled={reviewAllLoading}
-									className="cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
-									aria-label="Review all PR comments"
-									aria-busy={reviewAllLoading || undefined}
-								>
-									{reviewAllLoading ? (
-										<span className="inline-flex items-center gap-1">
-											<LoaderCircleIcon
-												className="size-3 animate-spin"
-												strokeWidth={2}
-											/>
-											<ShimmerText>Reviewing…</ShimmerText>
-										</span>
-									) : (
-										"Review all"
-									)}
-								</button>
-							)}
-						</div>
-						{prCommentsQuery.isFetching &&
-						prCommentData.comments.length === 0 ? (
-							<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground">
-								<LoaderCircleIcon
-									className="size-3 animate-spin opacity-50"
-									strokeWidth={2}
-								/>
-								<span className="text-[10.5px]">Loading comments…</span>
-							</div>
-						) : (
-							prCommentData.comments.map((comment) => (
-								<CommentRow
-									key={comment.id}
-									comment={comment}
-									onInsertToComposer={handleInsertComment}
-								/>
-							))
-						)}
 					</>
 				)}
 
@@ -870,82 +764,6 @@ function ActionStatusRow({
 				)}
 			</div>
 		</div>
-	);
-}
-
-function CommentRow({
-	comment,
-	onInsertToComposer,
-}: {
-	comment: PrComment;
-	onInsertToComposer: (
-		comment: PrComment,
-	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
-}) {
-	const actionButtonClassName =
-		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5";
-	const appendActionButtonClassName =
-		"size-4 rounded-sm text-muted-foreground opacity-0 pointer-events-none group-hover/comment-row:opacity-55 group-hover/comment-row:pointer-events-auto group-focus-within/comment-row:opacity-55 group-focus-within/comment-row:pointer-events-auto hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3";
-
-	const label = comment.filePath
-		? `${comment.filePath} – @${comment.author}`
-		: `@${comment.author}`;
-	const statusKind: ActionStatusKind = comment.isThreadResolved
-		? "success"
-		: "pending";
-
-	const bodyPreview =
-		comment.body.length > 220
-			? `${comment.body.slice(0, 220).trimEnd()}…`
-			: comment.body;
-
-	return (
-		<Tooltip delayDuration={400}>
-			<TooltipTrigger asChild>
-				<div className="group/comment-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
-					<div className="flex min-w-0 flex-1 items-center gap-1.5">
-						<StatusIcon status={statusKind} />
-						<span className="min-w-0 truncate whitespace-nowrap text-primary">
-							{label}
-						</span>
-					</div>
-					<div className="flex shrink-0 items-center justify-end gap-0">
-						<AppendContextButton
-							subjectLabel={label}
-							getPayload={() => onInsertToComposer(comment)}
-							errorTitle="Couldn't insert comment"
-							className={appendActionButtonClassName}
-						/>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon-xs"
-							aria-label={`Open comment by @${comment.author}`}
-							onClick={() => {
-								void openUrl(comment.url);
-							}}
-							className={cn("shrink-0", actionButtonClassName)}
-						>
-							<ArrowUpRightIcon strokeWidth={1.8} />
-						</Button>
-					</div>
-				</div>
-			</TooltipTrigger>
-			<TooltipContent
-				side="left"
-				className="flex-col items-start gap-1 py-2 leading-snug"
-			>
-				<span className="font-semibold">
-					@{comment.author}
-					{comment.filePath && (
-						<span className="ml-1 font-normal opacity-70">
-							· {comment.filePath.split("/").pop()}
-						</span>
-					)}
-				</span>
-				<span className="whitespace-pre-wrap opacity-90">{bodyPreview}</span>
-			</TooltipContent>
-		</Tooltip>
 	);
 }
 

@@ -2305,6 +2305,16 @@ export async function setGoalChildWorkspaceStatus(
 	});
 }
 
+export async function assignWorkspaceToGoal(
+	workspaceId: string,
+	goalWorkspaceId: string,
+	status: WorkspaceStatus,
+): Promise<void> {
+	return invoke<void>("assign_workspace_to_goal", {
+		request: { workspaceId, goalWorkspaceId, status },
+	});
+}
+
 export async function listGoalChildWorkspaces(
 	goalWorkspaceId: string,
 ): Promise<WorkspaceDetail[]> {

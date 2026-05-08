@@ -5,6 +5,7 @@ import { closeAllTerminalsForWorkspace } from "@/features/inspector/terminal-sto
 import {
 	type AddRepositoryResponse,
 	addRepositoryFromLocalPath,
+	assignWorkspaceToGoal,
 	cloneRepositoryFromUrl,
 	finalizeGoalWorkspace,
 	finalizeWorkspaceFromRepo,
@@ -703,6 +704,24 @@ export function useWorkspacesSidebarController({
 			} catch (error) {
 				pushWorkspaceToast(
 					describeUnknownError(error, "Unable to set status."),
+				);
+			}
+		},
+		[flushSidebarLists, pushWorkspaceToast],
+	);
+
+	const handleAssignWorkspaceToGoal = useCallback(
+		async (
+			workspaceId: string,
+			goalWorkspaceId: string,
+			status: WorkspaceStatus,
+		) => {
+			try {
+				await assignWorkspaceToGoal(workspaceId, goalWorkspaceId, status);
+				flushSidebarLists();
+			} catch (error) {
+				pushWorkspaceToast(
+					describeUnknownError(error, "Unable to assign workspace to goal."),
 				);
 			}
 		},
@@ -1688,6 +1707,7 @@ export function useWorkspacesSidebarController({
 		goalProjection,
 		handleAddRepository,
 		handleArchiveWorkspace,
+		handleAssignWorkspaceToGoal,
 		handleCloneFromUrl,
 		handleCreateWorkspaceFromRepo,
 		handleCreateGoalWorkspace,

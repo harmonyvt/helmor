@@ -978,10 +978,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			</ComposerInsertProvider>,
 		);
 
-		await screen.findByText("src/problem.ts – @reviewer");
+		await user.click(await screen.findByRole("tab", { name: /Comments/ }));
+		await screen.findByText("Please fix this path.");
 		await user.click(
 			screen.getByRole("button", {
-				name: "Append src/problem.ts – @reviewer to composer",
+				name: "Append Comment on src/problem.ts to composer",
 			}),
 		);
 
@@ -1020,6 +1021,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 
 		renderInspector({ onQueuePendingPromptForSession, onSelectSession });
 
+		await user.click(await screen.findByRole("tab", { name: /Comments/ }));
 		await user.click(
 			await screen.findByRole("button", { name: "Review all PR comments" }),
 		);

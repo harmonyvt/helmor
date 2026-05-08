@@ -1,10 +1,11 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
 import { ArchiveTab } from "@/features/inspector/sections/archive";
+import { CommentsTab } from "@/features/inspector/sections/comments";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import {
 	type ShortcutHandler,
@@ -14,11 +15,15 @@ import {
 	type ChangeRequestInfo,
 	createSession,
 	type PrComment,
+	type PrCommentData,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import type { DiffOpenOptions } from "@/lib/editor-session";
-import { helmorQueryKeys } from "@/lib/query-client";
+import {
+	helmorQueryKeys,
+	workspacePrCommentsQueryOptions,
+} from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
@@ -123,6 +128,25 @@ export function WorkspaceInspectorSidebar({
 		repoId: repoId ?? null,
 	});
 	const queryClient = useQueryClient();
+
+	// PR comments — fetched at sidebar level so the Comments tab badge and
+	// the CommentsTab body both share the same query instance.
+	const isArchived = workspaceState === "archived";
+	const prCommentsQuery = useQuery({
+		...workspacePrCommentsQueryOptions(workspaceId ?? "__none__"),
+		enabled: workspaceId !== null && !isArchived,
+	});
+	const EMPTY_PR_COMMENT_DATA: PrCommentData = {
+		comments: [],
+		prNumber: null,
+		prUrl: null,
+	};
+	const prCommentData = prCommentsQuery.data ?? EMPTY_PR_COMMENT_DATA;
+	const showCommentsTab =
+		prCommentData.comments.length > 0 || prCommentsQuery.isFetching;
+	const hasUnresolvedComments = prCommentData.comments.some(
+		(c: { isThreadResolved: boolean }) => !c.isThreadResolved,
+	);
 
 	// Fire setup auto-run / auto-complete at the sidebar level so it runs even
 	// when the Setup tab isn't mounted (tabsOpen=false).
@@ -385,12 +409,19 @@ export function WorkspaceInspectorSidebar({
 	});
 
 	// Reset to "setup" when the active tab is a terminal id that no longer
-	// matches any current instance. Read the terminal store synchronously too:
-	// on workspace switches the persisted tab id may restore before this
-	// component's subscribed terminal list has received its first snapshot.
+	// matches any current instance, or when the Comments tab disappears
+	// (e.g. PR was merged / comments cleared). Read the terminal store
+	// synchronously too: on workspace switches the persisted tab id may
+	// restore before this component's subscribed terminal list has received
+	// its first snapshot.
 	useEffect(() => {
 		if (activeTab === "setup" || activeTab === "run" || activeTab === "archive")
 			return;
+		if (activeTab === "comments") {
+			if (showCommentsTab) return;
+			setActiveTab("setup");
+			return;
+		}
 		if (terminalInstances.some((t) => t.id === activeTab)) return;
 		if (
 			workspaceId &&
@@ -399,7 +430,13 @@ export function WorkspaceInspectorSidebar({
 			return;
 		}
 		setActiveTab("setup");
-	}, [activeTab, terminalInstances, workspaceId, setActiveTab]);
+	}, [
+		activeTab,
+		terminalInstances,
+		workspaceId,
+		setActiveTab,
+		showCommentsTab,
+	]);
 
 	// Only allow hover-to-zoom when the active tab has real terminal output.
 	// "idle" = script configured but never run; "no-script" = nothing to run.
@@ -463,7 +500,6 @@ export function WorkspaceInspectorSidebar({
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
-				onReviewAllComments={handleReviewAllComments}
 				onOpenBrowserMode={onOpenBrowserMode}
 			/>
 
@@ -489,6 +525,8 @@ export function WorkspaceInspectorSidebar({
 				onCloseTerminal={handleCloseTerminal}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
+				showCommentsTab={showCommentsTab}
+				hasUnresolvedComments={hasUnresolvedComments}
 			>
 				<SetupTab
 					repoId={repoId ?? null}
@@ -512,6 +550,13 @@ export function WorkspaceInspectorSidebar({
 					archiveScript={repoScripts?.archiveScript ?? null}
 					isActive={activeTab === "archive"}
 					onOpenSettings={handleOpenSettings}
+				/>
+				<CommentsTab
+					workspaceId={workspaceId ?? null}
+					prCommentData={prCommentData}
+					isFetching={prCommentsQuery.isFetching}
+					isActive={activeTab === "comments"}
+					onReviewAllComments={handleReviewAllComments}
 				/>
 				{terminalInstances.map((instance) => (
 					<TerminalInstancePanel

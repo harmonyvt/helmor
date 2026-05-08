@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
 	createWorkspaceFromRepo: vi.fn(),
 	prepareWorkspaceFromRepo: vi.fn(),
 	finalizeWorkspaceFromRepo: vi.fn(),
+	getWorkspacePrComments: vi.fn(),
 }));
 
 const createRuntime = vi.hoisted(() => ({
@@ -44,6 +45,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 		createWorkspaceFromRepo: apiMocks.createWorkspaceFromRepo,
 		prepareWorkspaceFromRepo: apiMocks.prepareWorkspaceFromRepo,
 		finalizeWorkspaceFromRepo: apiMocks.finalizeWorkspaceFromRepo,
+		getWorkspacePrComments: apiMocks.getWorkspacePrComments,
 	};
 });
 
@@ -228,6 +230,12 @@ describe("App create workspace flow", () => {
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.prepareWorkspaceFromRepo.mockReset();
 		apiMocks.finalizeWorkspaceFromRepo.mockReset();
+		apiMocks.getWorkspacePrComments.mockReset();
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			comments: [],
+			prNumber: null,
+			prUrl: null,
+		});
 		apiMocks.prepareWorkspaceFromRepo.mockImplementation(async () => {
 			// Backend generates the ids now. Mirror by generating once per
 			// call and stashing for subsequent finalize + detail mocks.

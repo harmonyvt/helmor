@@ -621,3 +621,31 @@ pub(crate) fn set_goal_child_workspace_status(
     }
     Ok(())
 }
+
+/// Assign any code workspace to a goal (or move it between goals) and set its
+/// lane status in one atomic write. Works whether the workspace is currently
+/// ungrouped, already in this goal, or in a different goal.
+pub(crate) fn assign_workspace_to_goal(
+    workspace_id: &str,
+    goal_workspace_id: &str,
+    status: WorkspaceStatus,
+) -> Result<()> {
+    let _goal = load_goal_workspace_record(goal_workspace_id)?;
+    let workspace = load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+    if workspace.workspace_kind != WorkspaceKind::Code {
+        bail!("Cannot assign a goal workspace as a child of another goal");
+    }
+
+    let connection = db::write_conn()?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET goal_workspace_id = ?2, status = ?3, updated_at = datetime('now') WHERE id = ?1",
+            rusqlite::params![workspace_id, goal_workspace_id, status],
+        )
+        .context("Failed to assign workspace to goal")?;
+    if updated_rows != 1 {
+        bail!("assign_workspace_to_goal affected {updated_rows} rows for {workspace_id}");
+    }
+    Ok(())
+}

@@ -27,8 +27,9 @@ pub use super::branching::{
     UpdateIntendedTargetBranchInternal, UpdateIntendedTargetBranchResponse,
 };
 pub use super::goals::{
-    create_goal_child_workspace, finalize_goal_workspace, link_goal_card_workspace,
-    list_goal_cards, prepare_goal_workspace, set_goal_child_workspace_status, upsert_goal_card,
+    assign_workspace_to_goal, create_goal_child_workspace, finalize_goal_workspace,
+    link_goal_card_workspace, list_goal_cards, prepare_goal_workspace,
+    set_goal_child_workspace_status, upsert_goal_card, AssignWorkspaceToGoalRequest,
     FinalizeGoalWorkspaceResponse, GoalCard, GoalChildWorkspaceRequest,
     GoalChildWorkspaceStatusRequest, PrepareGoalWorkspaceRequest, PrepareGoalWorkspaceResponse,
     UpsertGoalCardInput,
