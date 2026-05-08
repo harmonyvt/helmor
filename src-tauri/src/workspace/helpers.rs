@@ -495,6 +495,39 @@ pub const WORKSPACE_NAMES: &[&str] = &[
     "whirlpool",
     "zubenelgenubi",
     "zubeneschamali",
+    "abyssinian",
+    "bengal",
+    "birman",
+    "bombay",
+    "british-shorthair",
+    "calico",
+    "chartreux",
+    "cornish-rex",
+    "devon-rex",
+    "himalayan",
+    "maine-coon",
+    "manx",
+    "munchkin",
+    "norwegian-forest",
+    "ocicat",
+    "persian",
+    "ragamuffin",
+    "ragdoll",
+    "russian-blue",
+    "savannah",
+    "scottish-fold",
+    "selkirk-rex",
+    "siamese",
+    "siberian",
+    "singapura",
+    "snowshoe",
+    "somali",
+    "sphynx",
+    "tabby",
+    "tonkinese",
+    "tortoiseshell",
+    "tuxedo",
+    "whiskers",
 ];
 
 pub fn branch_name_for_directory(
@@ -529,7 +562,7 @@ pub fn branch_name_for_directory(
 }
 
 /// Whether `branch` is still the auto-generated default derived from the
-/// workspace's celestial-body `directory_name`.
+/// workspace's `directory_name`.
 pub fn is_default_branch_name(
     branch: &str,
     directory_name: &str,
@@ -633,30 +666,37 @@ pub fn allocate_directory_name_with_conn(
         .map(|value| value.to_ascii_lowercase())
         .collect::<std::collections::HashSet<_>>();
 
-    // Collect available names (not yet used) and pick one randomly
-    let available: Vec<&&str> = WORKSPACE_NAMES
-        .iter()
-        .filter(|name| !used.contains(**name))
-        .collect();
-
-    if let Some(name) = available.choose(&mut rand::rng()) {
-        return Ok((**name).to_string());
-    }
-
-    // All names taken — append version suffix and pick randomly
-    for version in 2..=999 {
-        let versioned: Vec<String> = WORKSPACE_NAMES
-            .iter()
-            .map(|name| format!("{name}-v{version}"))
-            .filter(|candidate| !used.contains(candidate.as_str()))
-            .collect();
-
-        if let Some(name) = versioned.choose(&mut rand::rng()) {
-            return Ok(name.clone());
-        }
+    if let Some(name) = WORKSPACE_NAMES.choose(&mut rand::rng()) {
+        return next_available_workspace_name(name, &used);
     }
 
     bail!("Unable to allocate a workspace name")
+}
+
+fn next_available_workspace_name(
+    base_name: &str,
+    used: &std::collections::HashSet<String>,
+) -> Result<String> {
+    if !workspace_name_is_used(base_name, used) {
+        return Ok(base_name.to_string());
+    }
+
+    for suffix in 1..=999 {
+        let candidate = format!("{base_name}-{suffix}");
+        if !workspace_name_is_used(&candidate, used) {
+            return Ok(candidate);
+        }
+    }
+
+    bail!("Unable to allocate a workspace name for {base_name}")
+}
+
+fn workspace_name_is_used(candidate: &str, used: &std::collections::HashSet<String>) -> bool {
+    let normalized_candidate = candidate.to_ascii_lowercase();
+    used.contains(&normalized_candidate)
+        || used
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&normalized_candidate))
 }
 
 #[cfg(test)]
@@ -800,6 +840,13 @@ mod tests {
     }
 
     #[test]
+    fn workspace_names_include_cat_names() {
+        for name in ["calico", "maine-coon", "siamese", "tabby", "tuxedo"] {
+            assert!(WORKSPACE_NAMES.contains(&name));
+        }
+    }
+
+    #[test]
     fn allocate_picks_from_workspace_names() {
         let (conn, _dir) = test_db();
         let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
@@ -810,29 +857,20 @@ mod tests {
     }
 
     #[test]
-    fn allocate_avoids_used_names() {
-        let (conn, _dir) = test_db();
+    fn allocate_keeps_unused_base_name() {
+        let used = ["tabby-1".to_string()].into_iter().collect();
 
-        // Use all names except one
-        let reserved = WORKSPACE_NAMES.last().unwrap();
-        for name in &WORKSPACE_NAMES[..WORKSPACE_NAMES.len() - 1] {
-            conn.execute(
-                "INSERT INTO workspaces (id, repository_id, directory_name) VALUES (?1, 'r1', ?2)",
-                [&uuid::Uuid::new_v4().to_string(), &name.to_string()],
-            )
-            .unwrap();
-        }
-
-        // The only available name should be the reserved one
-        let allocated = allocate_directory_name_with_conn(&conn, "r1").unwrap();
-        assert_eq!(allocated, *reserved, "Should pick the only remaining name");
+        assert_eq!(
+            next_available_workspace_name("tabby", &used).unwrap(),
+            "tabby"
+        );
     }
 
     #[test]
-    fn allocate_uses_v2_suffix_when_all_taken() {
+    fn allocate_uses_numeric_suffix_when_random_base_is_taken() {
         let (conn, _dir) = test_db();
 
-        // Use all names
+        // Use all base names so any random pick must be de-duplicated.
         for name in WORKSPACE_NAMES {
             conn.execute(
                 "INSERT INTO workspaces (id, repository_id, directory_name) VALUES (?1, 'r1', ?2)",
@@ -843,14 +881,25 @@ mod tests {
 
         let allocated = allocate_directory_name_with_conn(&conn, "r1").unwrap();
         assert!(
-            allocated.ends_with("-v2"),
-            "Should have -v2 suffix when all names taken: {allocated}"
+            allocated.ends_with("-1"),
+            "Should have -1 suffix when all base names are taken: {allocated}"
         );
-        // The base name (before -v2) should be from the list
-        let base = allocated.strip_suffix("-v2").unwrap();
+        let base = allocated.strip_suffix("-1").unwrap();
         assert!(
             WORKSPACE_NAMES.contains(&base),
             "Base name should be from WORKSPACE_NAMES: {base}"
+        );
+    }
+
+    #[test]
+    fn allocate_uses_next_numeric_suffix_for_duplicate_base() {
+        let used = ["tabby".to_string(), "tabby-1".to_string()]
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            next_available_workspace_name("tabby", &used).unwrap(),
+            "tabby-2"
         );
     }
 
@@ -877,23 +926,12 @@ mod tests {
 
     #[test]
     fn allocate_is_case_insensitive() {
-        let (conn, _dir) = test_db();
+        let used = ["MERCURY".to_string()].into_iter().collect();
 
-        // Insert with uppercase — should still be recognized as used
-        conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('w1', 'r1', 'MERCURY')",
-            [],
-        )
-        .unwrap();
-
-        // Allocate many times — "mercury" should never be picked
-        for _ in 0..20 {
-            let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
-            assert_ne!(
-                name, "mercury",
-                "Should not pick 'mercury' when 'MERCURY' is already used"
-            );
-        }
+        assert_eq!(
+            next_available_workspace_name("mercury", &used).unwrap(),
+            "mercury-1"
+        );
     }
 
     #[test]
@@ -912,23 +950,14 @@ mod tests {
         )
         .unwrap();
 
-        // Use all names EXCEPT "mercury" in r1 — forces the only possible pick
-        for name in WORKSPACE_NAMES {
-            if *name == "mercury" {
-                continue;
-            }
-            conn.execute(
-                "INSERT INTO workspaces (id, repository_id, directory_name) VALUES (?1, 'r1', ?2)",
-                [&uuid::Uuid::new_v4().to_string(), &name.to_string()],
-            )
-            .unwrap();
+        let mut picks = std::collections::HashSet::new();
+        for _ in 0..20 {
+            picks.insert(allocate_directory_name_with_conn(&conn, "r1").unwrap());
         }
 
-        // r1's only available name is "mercury" — even though r2 uses it
-        let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
-        assert_eq!(
-            name, "mercury",
-            "Names are per-repo, so r1 can still use 'mercury'"
+        assert!(
+            picks.iter().any(|name| !name.ends_with("-1")),
+            "Names are per-repo, so r1 should not suffix names used only in r2: {picks:?}"
         );
     }
 }
