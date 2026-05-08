@@ -98,12 +98,14 @@ describe("getToolInfo — apply_patch", () => {
 		expect(info.files).toHaveLength(2);
 		expect(info.files![0]).toEqual({
 			name: "a.ts",
+			kind: "modify",
 			diffAdd: 2,
 			diffDel: 1,
 			rawDiff: "-removed\n+added1\n+added2",
 		});
 		expect(info.files![1]).toEqual({
 			name: "b.ts",
+			kind: "create",
 			diffAdd: 3,
 			diffDel: undefined,
 			rawDiff: "+new file line 1\n+new file line 2\n+new file line 3",

@@ -507,17 +507,14 @@ describe("App", () => {
 			/>,
 		);
 
-		// Walk up past the `HyperText`-injected `<span class="inline-block">` to
-		// the sidebar's own label span — that's where the font-weight classes
-		// live now that branch/title text goes through the scramble animation.
+		// The sidebar's own label span carries the font-weight classes while
+		// `HyperText` renders the text inside it.
 		const selectedReadLabel = screen
 			.getByText("Selected read")
-			.closest("span.truncate")
-			?.parentElement?.closest("span.truncate");
+			.closest("span.truncate");
 		const unreadLabel = screen
 			.getByText("Unselected unread")
-			.closest("span.truncate")
-			?.parentElement?.closest("span.truncate");
+			.closest("span.truncate");
 
 		expect(selectedReadLabel?.className).toContain("font-medium");
 		expect(selectedReadLabel?.className).not.toContain("font-semibold");
