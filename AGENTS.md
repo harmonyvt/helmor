@@ -132,7 +132,7 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 ## Key conventions
 
 - **Path alias**: `@/` maps to `src/`
-- **Code search**: Use `/cc` / `ccc search` first for semantic codebase and file discovery. Run `ccc index` when the index may be stale, and fall back to `rg` / `rg --files` for exact text or path lookups.
+- **Code search**: Prioritize CocoIndex (`/cc` / `ccc search`) for initial semantic codebase and file discovery. Run `ccc index` when the index may be stale, and fall back to `rg` / `rg --files` for exact text or path lookups.
 - **Styling**: Tailwind CSS v4 with oklch semantic color tokens (`bg-app-base`, `text-app-foreground`, etc.)
 - **UI**: shadcn/ui (base-nova), `lucide-react` icons. **No `@assistant-ui/react` or `react-virtuoso`** -- removed, do not re-introduce.
 - **Cursor**: Every clickable element MUST have `cursor-pointer`. This is already baked into base UI components (`Button`, `SidebarMenuButton`, `CommandItem`, `DropdownMenuItem`, `ContextMenuItem`, etc.). When adding custom clickable elements (e.g. `<div onClick>`), always include `cursor-pointer`.
