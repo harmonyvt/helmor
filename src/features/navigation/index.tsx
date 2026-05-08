@@ -45,6 +45,7 @@ import { cn } from "@/lib/utils";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
 import {
 	buildGoalViewVirtualItems,
+	GOAL_ARCHIVED_KEY,
 	GOAL_UNGROUPED_KEY,
 	type GoalVirtualItem,
 	GoalVirtualItemRenderer,
@@ -215,6 +216,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			const archivedValue = current[ARCHIVED_SECTION_ID] ?? false;
 			next[ARCHIVED_SECTION_ID] = archivedValue;
 			if (current[ARCHIVED_SECTION_ID] !== archivedValue) {
+				changed = true;
+			}
+
+			const archivedGoalsValue = current[GOAL_ARCHIVED_KEY] ?? false;
+			next[GOAL_ARCHIVED_KEY] = archivedGoalsValue;
+			if (current[GOAL_ARCHIVED_KEY] !== archivedGoalsValue) {
 				changed = true;
 			}
 
@@ -481,6 +488,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							(item.kind === "goal-child" &&
 								item.row.id === selectedWorkspaceId) ||
 							(item.kind === "ungrouped-row" &&
+								item.row.id === selectedWorkspaceId) ||
+							(item.kind === "archived-goal-row" &&
 								item.row.id === selectedWorkspaceId),
 					)
 				: flatItems.findIndex(
@@ -942,6 +951,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										onSelect: onSelectWorkspace,
 										onPrefetch: onPrefetchWorkspace,
 										onArchiveWorkspace,
+										onRestoreWorkspace,
 										onDeleteWorkspace,
 										onMarkWorkspaceUnread,
 										onOpenInFinder,

@@ -157,11 +157,13 @@ export type GoalProjectGroup = {
 export type GoalProjection = {
 	projectGroups: GoalProjectGroup[];
 	ungroupedRows: WorkspaceRow[];
+	archivedGoalRows: WorkspaceRow[];
 };
 
 export function projectSidebarListsByGoal(
 	baseGroups: WorkspaceGroup[],
 	pendingCreations: ReadonlyMap<string, PendingCreationEntry>,
+	baseArchivedSummaries: WorkspaceSummary[] = [],
 ): GoalProjection {
 	const hiddenIds = new Set<string>();
 	for (const [optimisticId, pending] of pendingCreations) {
@@ -278,7 +280,11 @@ export function projectSidebarListsByGoal(
 	// Sort repos alphabetically for stable ordering
 	projectGroups.sort((a, b) => a.repoName.localeCompare(b.repoName));
 
-	return { projectGroups, ungroupedRows };
+	const archivedGoalRows = baseArchivedSummaries
+		.filter((summary) => summary.workspaceKind === "goal")
+		.map(summaryToArchivedRow);
+
+	return { projectGroups, ungroupedRows, archivedGoalRows };
 }
 
 // ---- PR-first layout projection ----

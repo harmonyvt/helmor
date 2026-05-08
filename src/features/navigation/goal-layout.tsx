@@ -58,6 +58,8 @@ export type GoalVirtualItem =
 	  }
 	| { kind: "ungrouped-header"; count: number; isOpen: boolean }
 	| { kind: "ungrouped-row"; row: WorkspaceRow }
+	| { kind: "archived-goals-header"; count: number; isOpen: boolean }
+	| { kind: "archived-goal-row"; row: WorkspaceRow }
 	| { kind: "group-gap"; size: number }
 	| { kind: "bottom-padding" };
 
@@ -71,6 +73,7 @@ export const GOAL_PROJECT_GAP = 6;
 export const GOAL_BOTTOM_PADDING = 8;
 
 export const GOAL_UNGROUPED_KEY = "goal:__ungrouped__";
+export const GOAL_ARCHIVED_KEY = "goal:__archived__";
 
 export function goalProjectSectionKey(repoName: string): string {
 	return `goal-project:${repoName}`;
@@ -92,6 +95,10 @@ export function getGoalItemHeight(item: GoalVirtualItem): number {
 			return GOAL_UNGROUPED_HEADER_HEIGHT;
 		case "ungrouped-row":
 			return GOAL_ROW_HEIGHT;
+		case "archived-goals-header":
+			return GOAL_UNGROUPED_HEADER_HEIGHT;
+		case "archived-goal-row":
+			return GOAL_ROW_HEIGHT;
 		case "group-gap":
 			return item.size;
 		case "bottom-padding":
@@ -111,6 +118,10 @@ export function getGoalItemKey(item: GoalVirtualItem, index: number): string {
 			return "ungrouped-header";
 		case "ungrouped-row":
 			return `ungrouped-row:${item.row.id}`;
+		case "archived-goals-header":
+			return "archived-goals-header";
+		case "archived-goal-row":
+			return `archived-goal-row:${item.row.id}`;
 		case "group-gap":
 			return `gap:${index}`;
 		case "bottom-padding":
@@ -193,6 +204,25 @@ export function buildGoalViewVirtualItems(
 		}
 	}
 
+	// Archived goals section (collapsed by default)
+	if (projection.archivedGoalRows.length > 0) {
+		const hasContent = hasProjects || projection.ungroupedRows.length > 0;
+		if (hasContent) {
+			items.push({ kind: "group-gap", size: GOAL_GROUP_GAP });
+		}
+		const archivedOpen = sectionOpenState[GOAL_ARCHIVED_KEY] ?? false;
+		items.push({
+			kind: "archived-goals-header",
+			count: projection.archivedGoalRows.length,
+			isOpen: archivedOpen,
+		});
+		if (archivedOpen) {
+			for (const row of projection.archivedGoalRows) {
+				items.push({ kind: "archived-goal-row", row });
+			}
+		}
+	}
+
 	items.push({ kind: "bottom-padding" });
 	return items;
 }
@@ -206,6 +236,7 @@ export type GoalRowActions = Pick<
 	| "onSelect"
 	| "onPrefetch"
 	| "onArchiveWorkspace"
+	| "onRestoreWorkspace"
 	| "onDeleteWorkspace"
 	| "onMarkWorkspaceUnread"
 	| "onOpenInFinder"
@@ -639,6 +670,10 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 		onToggleSection(GOAL_UNGROUPED_KEY);
 	}, [onToggleSection]);
 
+	const handleArchivedToggle = useCallback(() => {
+		onToggleSection(GOAL_ARCHIVED_KEY);
+	}, [onToggleSection]);
+
 	if (item.kind === "group-gap" || item.kind === "bottom-padding") {
 		return null;
 	}
@@ -719,6 +754,66 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 					</span>
 				) : null}
 			</button>
+		);
+	}
+
+	if (item.kind === "archived-goals-header") {
+		return (
+			<button
+				type="button"
+				className="group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 disabled:cursor-default"
+				disabled={item.count === 0}
+				onClick={handleArchivedToggle}
+			>
+				<span className="flex items-center gap-2">
+					<Archive
+						className="size-[14px] shrink-0 text-muted-foreground"
+						strokeWidth={1.9}
+					/>
+					<span>Archived</span>
+				</span>
+				{item.count > 0 ? (
+					<span className="relative flex h-5 min-w-5 items-center justify-center">
+						<Badge
+							variant="secondary"
+							className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
+						>
+							{item.count}
+						</Badge>
+						<ChevronRight
+							className={cn(
+								"absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-all group-hover/trigger:opacity-100",
+								item.isOpen && "rotate-90",
+							)}
+							strokeWidth={2}
+						/>
+					</span>
+				) : null}
+			</button>
+		);
+	}
+
+	if (item.kind === "archived-goal-row") {
+		return (
+			<div className="pl-2">
+				<WorkspaceRowItem
+					row={item.row}
+					selected={selectedWorkspaceId === item.row.id}
+					isSending={false}
+					isInteractionRequired={false}
+					isFlashing={flashingIds?.has(item.row.id)}
+					workspaceActionsDisabled={Boolean(
+						actions.markingUnreadWorkspaceId || actions.restoringWorkspaceId,
+					)}
+					onSelect={actions.onSelect}
+					onPrefetch={actions.onPrefetch}
+					onRestoreWorkspace={actions.onRestoreWorkspace}
+					onDeleteWorkspace={actions.onDeleteWorkspace}
+					archivingWorkspaceIds={actions.archivingWorkspaceIds}
+					markingUnreadWorkspaceId={actions.markingUnreadWorkspaceId}
+					restoringWorkspaceId={actions.restoringWorkspaceId}
+				/>
+			</div>
 		);
 	}
 
