@@ -69,6 +69,7 @@ export function ActiveThreadViewport({
 	workspaceState,
 	missingScriptTypes = [],
 	onInitializeScript,
+	onFocusChildSession,
 }: {
 	hasSession: boolean;
 	pane: PresentedSessionPane;
@@ -77,6 +78,7 @@ export function ActiveThreadViewport({
 	workspaceState?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
+	onFocusChildSession?: (sessionId: string) => void;
 	compact?: boolean;
 }) {
 	const stackRef = useRef<HTMLDivElement | null>(null);
@@ -131,6 +133,7 @@ export function ActiveThreadViewport({
 					workspaceBranch={workspaceBranch}
 					workspacePrTitle={workspacePrTitle}
 					workspaceState={workspaceState}
+					onFocusChildSession={onFocusChildSession}
 				/>
 			</div>
 		</div>
@@ -149,6 +152,7 @@ function ChatThread({
 	workspaceBranch,
 	workspacePrTitle,
 	workspaceState,
+	onFocusChildSession,
 }: {
 	layoutCacheKey: string;
 	messages: ThreadMessageLike[];
@@ -161,6 +165,7 @@ function ChatThread({
 	workspaceBranch?: string | null;
 	workspacePrTitle?: string | null;
 	workspaceState?: string | null;
+	onFocusChildSession?: (sessionId: string) => void;
 }) {
 	const threadMessages = messages;
 	const { settings } = useSettings();
@@ -239,10 +244,11 @@ function ChatThread({
 					previousAssistantMessage={previousAssistantMessage}
 					sessionId={sessionId}
 					itemIndex={index}
+					onFocusChild={onFocusChildSession}
 				/>
 			);
 		},
-		[sessionId, threadMessages],
+		[onFocusChildSession, sessionId, threadMessages],
 	);
 
 	return (

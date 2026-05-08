@@ -14,6 +14,10 @@ pub enum UiMutationEvent {
     SessionListChanged {
         workspace_id: String,
     },
+    SessionMessagesChanged {
+        workspace_id: String,
+        session_id: String,
+    },
     ContextUsageChanged {
         session_id: String,
     },
@@ -87,6 +91,10 @@ mod tests {
             },
             UiMutationEvent::SessionListChanged {
                 workspace_id: "w".into(),
+            },
+            UiMutationEvent::SessionMessagesChanged {
+                workspace_id: "w".into(),
+                session_id: "s".into(),
             },
             UiMutationEvent::ContextUsageChanged {
                 session_id: "s".into(),

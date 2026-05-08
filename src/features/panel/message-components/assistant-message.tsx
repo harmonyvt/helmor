@@ -15,10 +15,12 @@ import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useCompactThread } from "../compact-thread-context";
 import { ImageBlock, PlanReviewCard, TodoList } from "./content-parts";
+import { DelegationAnchor } from "./delegation-anchor";
 import { GenericCard } from "./generic-card";
 import type { RenderedMessage, StreamdownMode } from "./shared";
 import {
 	isCollapsedGroupPart,
+	isDelegationAnchorPart,
 	isGenericCardPart,
 	isImagePart,
 	isPlanReviewPart,
@@ -145,9 +147,11 @@ function MessageStatusBadge({ reason }: { reason?: string }) {
 export function ChatAssistantMessage({
 	message,
 	streaming,
+	onFocusChild,
 }: {
 	message: RenderedMessage;
 	streaming: boolean;
+	onFocusChild?: (sessionId: string) => void;
 }) {
 	const parts = message.content as ExtendedMessagePart[];
 	const { settings } = useSettings();
@@ -213,6 +217,15 @@ export function ChatAssistantMessage({
 				}
 				if (isPlanReviewPart(part)) {
 					return <PlanReviewCard key={key} part={part} />;
+				}
+				if (isDelegationAnchorPart(part)) {
+					return (
+						<DelegationAnchor
+							key={key}
+							part={part}
+							onFocusChild={onFocusChild}
+						/>
+					);
 				}
 				if (isGenericCardPart(part)) {
 					return <GenericCard key={key} part={part} />;

@@ -102,6 +102,17 @@ pub enum NormPart {
         provider: Option<String>,
         has_details: bool,
     },
+    DelegationAnchor {
+        delegation_id: String,
+        parent_session_id: String,
+        child_session_id: String,
+        title: String,
+        provider: String,
+        model_id: Option<String>,
+        status: String,
+        has_structured_result: bool,
+        has_error: bool,
+    },
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -272,6 +283,28 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             status: status.clone(),
             provider: provider.clone(),
             has_details: details.is_some(),
+        },
+        MessagePart::DelegationAnchor {
+            delegation_id,
+            parent_session_id,
+            child_session_id,
+            title,
+            provider,
+            model_id,
+            status,
+            structured_result,
+            error,
+            ..
+        } => NormPart::DelegationAnchor {
+            delegation_id: delegation_id.clone(),
+            parent_session_id: parent_session_id.clone(),
+            child_session_id: child_session_id.clone(),
+            title: truncate(title),
+            provider: provider.clone(),
+            model_id: model_id.clone(),
+            status: status.clone(),
+            has_structured_result: structured_result.is_some(),
+            has_error: error.is_some(),
         },
     }
 }

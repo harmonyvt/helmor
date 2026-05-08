@@ -1,6 +1,5 @@
 ---
 source: tests/streaming_send_params.rs
-assertion_line: 139
 expression: "&params"
 ---
 claudeEnvironment:
@@ -9,6 +8,7 @@ claudeEnvironment:
 cwd: /abs/workspace
 effortLevel: high
 fastMode: false
+helmorSessionId: s-3
 model: claude-opus-4
 permissionMode: bypassPermissions
 prompt: hello

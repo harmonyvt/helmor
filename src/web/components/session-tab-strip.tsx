@@ -28,7 +28,8 @@ export function SessionTabStrip({
 	);
 
 	const visibleSessions = sessions.filter(
-		(s: WorkspaceSessionSummary) => !s.isHidden && !s.actionKind,
+		(s: WorkspaceSessionSummary) =>
+			!s.isHidden && !s.actionKind && !s.parentSessionId,
 	);
 
 	return (

@@ -148,6 +148,7 @@ fn part_type(part: &helmor_lib::pipeline::types::ExtendedMessagePart) -> &'stati
         ExtendedMessagePart::Basic(MessagePart::FileMention { .. }) => "file-mention",
         ExtendedMessagePart::Basic(MessagePart::PlanReview { .. }) => "plan-review",
         ExtendedMessagePart::Basic(MessagePart::GenericCard { .. }) => "generic-card",
+        ExtendedMessagePart::Basic(MessagePart::DelegationAnchor { .. }) => "delegation-anchor",
         ExtendedMessagePart::CollapsedGroup(_) => "collapsed-group",
     }
 }

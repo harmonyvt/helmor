@@ -50,6 +50,57 @@ use super::{
     AgentStreamEvent, CmdResult, ExchangeContext,
 };
 
+fn execute_delegation_tool_call(
+    app: AppHandle,
+    sidecar: &crate::sidecar::ManagedSidecar,
+    tool_call_id: &str,
+    parent_session_id: Option<&str>,
+    parent_provider: &str,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let parent_session_id = parent_session_id
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("delegate_agent requires a persisted Helmor parent session")
+        })?;
+    let mut payload = match args {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    payload.insert(
+        "parentSessionId".to_string(),
+        Value::String(parent_session_id.to_string()),
+    );
+    payload.insert(
+        "parentProvider".to_string(),
+        Value::String(parent_provider.to_string()),
+    );
+    let request: super::delegation::DelegateAgentRequest =
+        serde_json::from_value(Value::Object(payload)).map_err(|error| {
+            anyhow::anyhow!("Invalid delegate_agent arguments for {tool_call_id}: {error}")
+        })?;
+    let response = super::delegation::delegate_agent_blocking(app, sidecar, request)?;
+    Ok(serde_json::to_value(response)?)
+}
+
+fn send_pi_tool_result(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    tool_call_id: &str,
+    result: Value,
+    is_error: bool,
+) -> anyhow::Result<()> {
+    let request = crate::sidecar::SidecarRequest {
+        id: Uuid::new_v4().to_string(),
+        method: "kanbanToolResult".to_string(),
+        params: serde_json::json!({
+            "toolCallId": tool_call_id,
+            "result": result,
+            "isError": is_error,
+        }),
+    };
+    sidecar.send(&request)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn stream_via_sidecar(
     app: AppHandle,
@@ -992,14 +1043,41 @@ pub(super) fn stream_via_sidecar(
                         rid = %rid,
                         tool = %tool,
                         tool_call_id = %tool_call_id,
-                        "Kanban tool call",
+                        "Pi custom tool call",
                     );
-                    let _ = on_event.send(AgentStreamEvent::KanbanToolCall {
-                        tool_call_id,
-                        tool,
-                        workspace_id,
-                        args,
-                    });
+                    if tool == "delegate_agent" {
+                        let (tool_result, is_error) = match execute_delegation_tool_call(
+                            app.clone(),
+                            sidecar_state.inner(),
+                            &tool_call_id,
+                            hsid_copy.as_deref(),
+                            &provider,
+                            args,
+                        ) {
+                            Ok(value) => (value, false),
+                            Err(error) => (serde_json::json!({ "error": error.to_string() }), true),
+                        };
+                        if let Err(error) = send_pi_tool_result(
+                            sidecar_state.inner(),
+                            &tool_call_id,
+                            tool_result,
+                            is_error,
+                        ) {
+                            tracing::error!(
+                                rid = %rid,
+                                tool_call_id = %tool_call_id,
+                                error = ?error,
+                                "Failed to send delegate_agent tool result",
+                            );
+                        }
+                    } else {
+                        let _ = on_event.send(AgentStreamEvent::KanbanToolCall {
+                            tool_call_id,
+                            tool,
+                            workspace_id,
+                            args,
+                        });
+                    }
                 }
                 "pi_ui_request" => {
                     // Pi extension interactive UI request — forward to the

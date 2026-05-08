@@ -11,6 +11,7 @@ pub mod action_kind;
 mod builtin_claude_providers;
 mod catalog;
 mod custom_providers;
+pub mod delegation;
 mod persistence;
 mod pi_models;
 mod queries;
@@ -20,6 +21,7 @@ mod support;
 
 pub use self::action_kind::ActionKind;
 pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
+pub use self::delegation::{DelegateAgentRequest, DelegateAgentResponse};
 pub use self::queries::{
     fetch_agent_model_sections, fetch_live_context_usage, GenerateSessionTitleRequest,
     GenerateSessionTitleResponse, GetLiveContextUsageRequest, ListSlashCommandsRequest,

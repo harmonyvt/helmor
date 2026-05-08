@@ -24,6 +24,7 @@
 
 import type {
 	CollapsedGroupPart,
+	DelegationAnchorPart,
 	ExtendedMessagePart,
 	FileMentionPart,
 	GenericCardPart,
@@ -171,6 +172,25 @@ export function partStructurallyEqual(
 				a.status === gb.status &&
 				a.provider === gb.provider &&
 				JSON.stringify(a.details ?? null) === JSON.stringify(gb.details ?? null)
+			);
+		}
+		case "delegation-anchor": {
+			const db = b as DelegationAnchorPart;
+			return (
+				a.delegationId === db.delegationId &&
+				a.parentSessionId === db.parentSessionId &&
+				a.childSessionId === db.childSessionId &&
+				a.provider === db.provider &&
+				a.modelId === db.modelId &&
+				a.title === db.title &&
+				a.status === db.status &&
+				a.error === db.error &&
+				a.startedAt === db.startedAt &&
+				a.completedAt === db.completedAt &&
+				JSON.stringify(a.outputSchema ?? null) ===
+					JSON.stringify(db.outputSchema ?? null) &&
+				JSON.stringify(a.structuredResult ?? null) ===
+					JSON.stringify(db.structuredResult ?? null)
 			);
 		}
 		default: {

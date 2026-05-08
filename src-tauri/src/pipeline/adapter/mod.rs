@@ -118,6 +118,12 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
+        if msg_type == Some("delegation_anchor") {
+            result.push(convert_delegation_anchor_msg(msg, parsed));
+            i += 1;
+            continue;
+        }
+
         // Claude rate-limit notice. The SDK fires this on EVERY user
         // turn to report current 5h/24h utilization with `status =
         // "allowed"`, which is a usage gauge — we hide it because
@@ -634,6 +640,71 @@ fn convert_exit_plan_mode_msg(
             plan,
             plan_file_path,
             allowed_prompts,
+        })],
+        status: None,
+        streaming: None,
+    }
+}
+
+fn convert_delegation_anchor_msg(
+    msg: &IntermediateMessage,
+    parsed: Option<&Value>,
+) -> ThreadMessageLike {
+    let value = parsed.unwrap_or(&Value::Null);
+    ThreadMessageLike {
+        role: MessageRole::Assistant,
+        id: Some(msg.id.clone()),
+        created_at: Some(msg.created_at.clone()),
+        content: vec![ExtendedMessagePart::Basic(MessagePart::DelegationAnchor {
+            id: format!("{}:delegation", msg.id),
+            delegation_id: value
+                .get("delegationId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            parent_session_id: value
+                .get("parentSessionId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            child_session_id: value
+                .get("childSessionId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            title: value
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Delegated task")
+                .to_string(),
+            provider: value
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("agent")
+                .to_string(),
+            model_id: value
+                .get("modelId")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            status: value
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("pending")
+                .to_string(),
+            output_schema: value.get("outputSchema").cloned().unwrap_or(Value::Null),
+            structured_result: value.get("structuredResult").cloned(),
+            error: value
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            started_at: value
+                .get("startedAt")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            completed_at: value
+                .get("completedAt")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         })],
         status: None,
         streaming: None,
