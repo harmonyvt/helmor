@@ -691,7 +691,10 @@ fn convert_delegation_anchor_msg(
                 .and_then(Value::as_str)
                 .unwrap_or("pending")
                 .to_string(),
-            output_schema: value.get("outputSchema").cloned().unwrap_or(Value::Null),
+            output_schema: value
+                .get("outputSchema")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
             structured_result: value.get("structuredResult").cloned(),
             error: value
                 .get("error")

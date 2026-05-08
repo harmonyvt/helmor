@@ -78,7 +78,10 @@ export function ActiveThreadViewport({
 	workspaceState?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
-	onFocusChildSession?: (sessionId: string) => void;
+	onFocusChildSession?: (
+		sessionId: string,
+		parentSessionId?: string | null,
+	) => void;
 	compact?: boolean;
 }) {
 	const stackRef = useRef<HTMLDivElement | null>(null);
@@ -165,7 +168,10 @@ function ChatThread({
 	workspaceBranch?: string | null;
 	workspacePrTitle?: string | null;
 	workspaceState?: string | null;
-	onFocusChildSession?: (sessionId: string) => void;
+	onFocusChildSession?: (
+		sessionId: string,
+		parentSessionId?: string | null,
+	) => void;
 }) {
 	const threadMessages = messages;
 	const { settings } = useSettings();

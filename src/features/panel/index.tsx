@@ -49,6 +49,7 @@ type WorkspacePanelProps = {
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	onFocusChildSession?: (sessionId: string) => void;
+	activeSessionParentId?: string | null;
 	/** Renders a compact single-row header with no branch or session tabs. */
 	compact?: boolean;
 };
@@ -79,6 +80,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	missingScriptTypes = [],
 	onInitializeScript,
 	onFocusChildSession,
+	activeSessionParentId,
 	compact = false,
 }: WorkspacePanelProps) {
 	const selectedSession =
@@ -127,6 +129,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					sendingSessionIds={sendingSessionIds}
 					interactionRequiredSessionIds={interactionRequiredSessionIds}
 					loadingWorkspace={loadingWorkspace}
+					activeSessionParentId={activeSessionParentId}
 					headerActions={headerActions}
 					headerLeading={headerLeading}
 					onSelectSession={onSelectSession}

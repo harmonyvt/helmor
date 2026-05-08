@@ -7,9 +7,9 @@ expression: run_normalized(msgs)
   content_length: 1
   content:
     - type: delegation-anchor
-      delegation_id: delegation-1
-      parent_session_id: parent-1
-      child_session_id: child-1
+      delegation_id: "<redacted-delegation-id>"
+      parent_session_id: "<redacted-parent-session-id>"
+      child_session_id: "<redacted-child-session-id>"
       title: Inspect parser
       provider: codex
       model_id: gpt-5.4

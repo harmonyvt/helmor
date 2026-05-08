@@ -470,11 +470,15 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// stable handler through it.
 	const onSelectSessionRef = useRef(onSelectSession);
 	onSelectSessionRef.current = onSelectSession;
+	const childParentSessionIdsRef = useRef<Record<string, string>>({});
 	const handleSelectSession = useCallback((sessionId: string) => {
 		onSelectSessionRef.current(sessionId);
 	}, []);
 	const handleFocusChildSession = useCallback(
-		(sessionId: string) => {
+		(sessionId: string, parentSessionId?: string | null) => {
+			if (parentSessionId) {
+				childParentSessionIdsRef.current[sessionId] = parentSessionId;
+			}
 			onResolveDisplayedSession(sessionId);
 			onSelectSessionRef.current(sessionId);
 		},
@@ -490,6 +494,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionIdForPanel) ??
 		null;
+	const activeSessionParentId = selectedSessionIdForPanel
+		? (selectedSession?.parentSessionId ??
+			childParentSessionIdsRef.current[selectedSessionIdForPanel] ??
+			null)
+		: null;
 	const missingScriptTypes = useMemo<WorkspaceScriptType[]>(() => {
 		if (!selectedSession) {
 			return [];
@@ -531,6 +540,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			workspace={workspace}
 			sessions={sessions}
 			selectedSessionId={selectedSessionIdForPanel}
+			activeSessionParentId={activeSessionParentId}
 			sessionDisplayProviders={sessionDisplayProviders}
 			sessionPanes={sessionPanes}
 			loadingWorkspace={loadingWorkspace}

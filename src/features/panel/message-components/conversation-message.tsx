@@ -16,7 +16,7 @@ function ConversationMessage({
 	previousAssistantMessage?: RenderedMessage | null;
 	sessionId: string;
 	itemIndex: number;
-	onFocusChild?: (sessionId: string) => void;
+	onFocusChild?: (sessionId: string, parentSessionId?: string | null) => void;
 }) {
 	const messageKey = message.id ?? `${message.role}:${itemIndex}`;
 	useEffect(() => {

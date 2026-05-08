@@ -285,9 +285,6 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             has_details: details.is_some(),
         },
         MessagePart::DelegationAnchor {
-            delegation_id,
-            parent_session_id,
-            child_session_id,
             title,
             provider,
             model_id,
@@ -296,9 +293,9 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             error,
             ..
         } => NormPart::DelegationAnchor {
-            delegation_id: delegation_id.clone(),
-            parent_session_id: parent_session_id.clone(),
-            child_session_id: child_session_id.clone(),
+            delegation_id: "<redacted-delegation-id>".to_string(),
+            parent_session_id: "<redacted-parent-session-id>".to_string(),
+            child_session_id: "<redacted-child-session-id>".to_string(),
             title: truncate(title),
             provider: provider.clone(),
             model_id: model_id.clone(),

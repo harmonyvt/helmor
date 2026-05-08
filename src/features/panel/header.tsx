@@ -67,6 +67,7 @@ type WorkspacePanelHeaderProps = {
 	changeRequest?: ChangeRequestInfo | null;
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
+	activeSessionParentId?: string | null;
 	sessionDisplayProviders?: Record<string, AgentProvider>;
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
@@ -91,6 +92,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	changeRequest = null,
 	sessions,
 	selectedSessionId,
+	activeSessionParentId = null,
 	sessionDisplayProviders,
 	sending,
 	sendingSessionIds,
@@ -135,6 +137,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const [hasRightOverflow, setHasRightOverflow] = useState(false);
 	const selectedSession =
 		sessions.find((s) => s.id === selectedSessionId) ?? null;
+	const selectedSessionParentId =
+		selectedSession?.parentSessionId ?? activeSessionParentId ?? null;
 
 	const updateOverflow = useCallback(() => {
 		const el = tabsScrollRef.current;
@@ -675,10 +679,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				) : null}
 			</div>
 
-			{selectedSession?.parentSessionId ? (
+			{selectedSessionParentId ? (
 				<button
 					type="button"
-					onClick={() => onSelectSession?.(selectedSession.parentSessionId!)}
+					onClick={() => onSelectSession?.(selectedSessionParentId)}
 					className="flex cursor-pointer items-center gap-1 px-3 pb-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
 				>
 					<ArrowLeft className="size-3" strokeWidth={2} />
