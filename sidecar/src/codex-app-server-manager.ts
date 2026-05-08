@@ -507,15 +507,31 @@ export class CodexAppServerManager implements SessionManager {
 								"Codex missing response item fork recovery failed; trying compaction",
 								errorDetails(forkError),
 							);
-							await compactThreadForRecovery();
-							logger.info(
-								"Codex missing response item recovered via compaction",
-								{
-									requestId,
-									sessionId,
-									threadId: ctx.providerThreadId,
-								},
-							);
+							try {
+								await compactThreadForRecovery();
+								logger.info(
+									"Codex missing response item recovered via compaction",
+									{
+										requestId,
+										sessionId,
+										threadId: ctx.providerThreadId,
+									},
+								);
+							} catch (compactError) {
+								logger.info(
+									"Codex missing response item compaction recovery failed; starting fresh thread",
+									errorDetails(compactError),
+								);
+								await startFreshThreadForRecovery();
+								logger.info(
+									"Codex missing response item recovered via fresh thread fallback",
+									{
+										requestId,
+										sessionId,
+										threadId: ctx.providerThreadId,
+									},
+								);
+							}
 						}
 						startTurn("turn/start retry after context recovery");
 						return;
@@ -567,6 +583,15 @@ export class CodexAppServerManager implements SessionManager {
 					// so only suppress their explicit reconnect progress messages.
 					// A recent stderr reconnect line is liveness context, not proof
 					// that an arbitrary later error is retryable.
+					if (
+						!isCompactCommand &&
+						missingItemRecoveryAttempts < 2 &&
+						ctx.providerThreadId &&
+						isMissingCodexResponseItemError(msg)
+					) {
+						void recoverMissingResponseItem(msg);
+						return;
+					}
 					const willRetry = deepGet(n.params, "willRetry");
 					const lastRetry = ctx.lastRetryAt ?? 0;
 					const suppressForProtocolRetry = willRetry === true;
@@ -585,15 +610,6 @@ export class CodexAppServerManager implements SessionManager {
 								msSinceRetry: Date.now() - lastRetry,
 							},
 						);
-						return;
-					}
-					if (
-						!isCompactCommand &&
-						missingItemRecoveryAttempts < 2 &&
-						ctx.providerThreadId &&
-						isMissingCodexResponseItemError(msg)
-					) {
-						void recoverMissingResponseItem(msg);
 						return;
 					}
 					finishWithError(msg);
