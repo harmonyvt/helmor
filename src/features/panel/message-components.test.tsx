@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import {
 	act,
 	cleanup,
@@ -512,6 +513,46 @@ describe("delegation anchors", () => {
 		expect(screen.getByText("Inspect parser")).toBeInTheDocument();
 		expect(screen.getByText("Child summary")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: /open/i }));
-		expect(onFocusChild).toHaveBeenCalledWith("child-session");
+		expect(onFocusChild).toHaveBeenCalledWith(
+			"child-session",
+			"parent-session",
+		);
+	});
+
+	it("renders an error when the delegated thread cannot load", async () => {
+		vi.mocked(invoke).mockRejectedValueOnce(new Error("load failed"));
+		const message: ThreadMessageLike = {
+			id: "parent-message-2",
+			role: "assistant",
+			createdAt: "2026-05-08T00:00:00.000Z",
+			content: [
+				{
+					type: "delegation-anchor",
+					id: "parent-message-2:delegation",
+					delegationId: "delegation-2",
+					parentSessionId: "parent-session",
+					childSessionId: "missing-child-session",
+					title: "Inspect failure",
+					provider: "codex",
+					status: "running",
+					outputSchema: {},
+				},
+			],
+		};
+
+		renderWithProviders(
+			<MemoConversationMessage
+				message={message}
+				sessionId="parent-session"
+				itemIndex={0}
+			/>,
+		);
+
+		expect(
+			await screen.findByText("Failed to load delegated thread."),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByText("Waiting for delegated thread…"),
+		).not.toBeInTheDocument();
 	});
 });

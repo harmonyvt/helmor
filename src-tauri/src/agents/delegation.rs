@@ -51,15 +51,6 @@ pub struct DelegateAgentResponse {
     pub result: Value,
 }
 
-#[tauri::command]
-pub async fn delegate_agent(
-    app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    request: DelegateAgentRequest,
-) -> super::CmdResult<DelegateAgentResponse> {
-    delegate_agent_blocking(app, sidecar.inner(), request).map_err(Into::into)
-}
-
 pub(crate) fn delegate_agent_blocking(
     app: AppHandle,
     sidecar: &crate::sidecar::ManagedSidecar,

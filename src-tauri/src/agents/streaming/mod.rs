@@ -1063,12 +1063,46 @@ pub(super) fn stream_via_sidecar(
                             tool_result,
                             is_error,
                         ) {
+                            let user_message = format!(
+                                "Failed to complete delegate_agent tool call {tool_call_id}. The parent stream was stopped; you can retry the request."
+                            );
                             tracing::error!(
                                 rid = %rid,
                                 tool_call_id = %tool_call_id,
                                 error = ?error,
                                 "Failed to send delegate_agent tool result",
                             );
+                            let resolved_model = pipeline
+                                .as_ref()
+                                .map(|p| p.accumulator.resolved_model().to_string())
+                                .unwrap_or_else(|| model_copy.cli_model.to_string());
+                            let persisted = cleanup_abnormal_stream_exit(
+                                &rid,
+                                exchange_ctx.as_ref(),
+                                &resolved_model,
+                                &user_message,
+                                effort_copy.as_deref(),
+                                turn_session.ctx.permission_mode.as_deref(),
+                            );
+                            match turn_session.handle_abnormal_exit(
+                                state::AbnormalExit::SidecarDisconnected,
+                                user_message,
+                                persisted,
+                            ) {
+                                Ok(actions) => {
+                                    for action in actions {
+                                        actions::apply_action(action, &apply_ctx);
+                                    }
+                                }
+                                Err(err) => {
+                                    tracing::error!(
+                                        rid = %rid,
+                                        error = ?err,
+                                        "delegate_agent result failure transition rejected",
+                                    );
+                                }
+                            }
+                            break;
                         }
                     } else {
                         let _ = on_event.send(AgentStreamEvent::KanbanToolCall {

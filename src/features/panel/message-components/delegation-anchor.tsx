@@ -56,12 +56,12 @@ export function DelegationAnchor({
 	onFocusChild,
 }: {
 	part: DelegationAnchorPart;
-	onFocusChild?: (sessionId: string) => void;
+	onFocusChild?: (sessionId: string, parentSessionId?: string | null) => void;
 }) {
 	const query = useQuery(
 		sessionThreadMessagesQueryOptions(part.childSessionId),
 	);
-	const messages = query.data ?? [];
+	const messages = query.isError ? [] : (query.data ?? []);
 	const meta = statusMeta(part.status);
 	const StatusIcon = meta.icon;
 
@@ -109,14 +109,20 @@ export function DelegationAnchor({
 					variant="ghost"
 					size="xs"
 					className="cursor-pointer gap-1"
-					onClick={() => onFocusChild?.(part.childSessionId)}
+					onClick={() =>
+						onFocusChild?.(part.childSessionId, part.parentSessionId)
+					}
 				>
 					<ExternalLink className="size-3" strokeWidth={1.8} />
 					Open
 				</Button>
 			</div>
 			<div className="mt-3 space-y-2 border-l border-border/60 pl-3">
-				{messages.length === 0 ? (
+				{query.isError ? (
+					<div className="text-xs text-destructive">
+						Failed to load delegated thread.
+					</div>
+				) : messages.length === 0 ? (
 					<div className="flex items-center gap-1.5 text-xs text-muted-foreground">
 						<HelmorLogoAnimated size={12} className="opacity-70" />
 						Waiting for delegated thread…

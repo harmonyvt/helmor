@@ -151,7 +151,7 @@ export function ChatAssistantMessage({
 }: {
 	message: RenderedMessage;
 	streaming: boolean;
-	onFocusChild?: (sessionId: string) => void;
+	onFocusChild?: (sessionId: string, parentSessionId?: string | null) => void;
 }) {
 	const parts = message.content as ExtendedMessagePart[];
 	const { settings } = useSettings();

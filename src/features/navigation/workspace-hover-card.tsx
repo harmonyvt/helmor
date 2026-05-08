@@ -492,10 +492,12 @@ export function WorkspaceHoverCard({
 	isSending?: boolean;
 	children: React.ReactNode;
 }) {
+	const [isOpen, setIsOpen] = useState(false);
 	// Measured on open so the card's left edge snaps to the sidebar divider.
 	const [sideOffset, setSideOffset] = useState(HOVER_CARD_DEFAULT_SIDE_OFFSET);
 	const handleOpenChange = useCallback(
 		(open: boolean) => {
+			setIsOpen(open);
 			if (!open) return;
 			const rowEl = document.querySelector<HTMLElement>(
 				`[data-workspace-row-id="${row.id}"]`,
@@ -553,9 +555,10 @@ export function WorkspaceHoverCard({
 			: "Created";
 	const createdAt = relativeTime(row.createdAt);
 	const sessionCount = row.sessionCount ?? 0;
-	const { data: workspaceSessions } = useQuery(
-		workspaceSessionsQueryOptions(row.id, { staleTime: 5_000 }),
-	);
+	const { data: workspaceSessions } = useQuery({
+		...workspaceSessionsQueryOptions(row.id, { staleTime: 5_000 }),
+		enabled: isOpen,
+	});
 	const totalChildCount = (workspaceSessions ?? []).reduce(
 		(sum, s) => sum + (s.childCount ?? 0),
 		0,
