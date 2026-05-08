@@ -138,33 +138,19 @@ pub fn prepare_goal_workspace(
         .map(ToOwned::to_owned)
         .or(description)
         .context("Goal description is required")?;
-    let target_branch = existing_pr
-        .as_ref()
-        .map(|pr| pr.base_branch.trim())
+    let target_branch = request
+        .target_branch
+        .as_deref()
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            request
-                .target_branch
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        })
+        .or_else(|| source_branch.clone())
         .unwrap_or_else(|| default_branch.clone());
-    if existing_pr.is_none() {
-        if let Some(branch) = source_branch.as_deref() {
-            ensure_source_branch_available(&repo_root, branch)?;
-        }
-    }
     let directory_name = allocate_goal_directory_name(&request.repo_id, &title)?;
-    let branch = match source_branch.clone() {
-        Some(branch) => branch,
-        None => helpers::next_available_branch_name(
-            &repo_root,
-            &format!("helmor/goal/{}", slugify(&title)),
-        )?,
-    };
+    let branch = helpers::next_available_branch_name(
+        &repo_root,
+        &format!("helmor/goal/{}", slugify(&title)),
+    )?;
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let timestamp = db::current_timestamp()?;
@@ -180,18 +166,10 @@ pub fn prepare_goal_workspace(
             intended_target_branch: &target_branch,
             workspace_kind: WorkspaceKind::Goal,
             goal_workspace_id: None,
-            status: if existing_pr.is_some() {
-                WorkspaceStatus::Review
-            } else {
-                WorkspaceStatus::Backlog
-            },
+            status: WorkspaceStatus::Backlog,
             pr_title: Some(&title),
-            pr_sync_state: if existing_pr.is_some() {
-                PrSyncState::Open
-            } else {
-                PrSyncState::None
-            },
-            pr_url: existing_pr.as_ref().map(|pr| pr.url.as_str()),
+            pr_sync_state: PrSyncState::None,
+            pr_url: None,
             timestamp: &timestamp,
         },
     )?;
@@ -810,13 +788,6 @@ fn normalize_source_branch(branch: &str) -> Result<String> {
         bail!("Unsupported branch name: {branch}");
     }
     Ok(branch.to_string())
-}
-
-fn ensure_source_branch_available(repo_root: &Path, branch: &str) -> Result<()> {
-    if git_ops::verify_branch_exists(repo_root, branch).is_ok() {
-        bail!("Local branch already exists: {branch}");
-    }
-    Ok(())
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
