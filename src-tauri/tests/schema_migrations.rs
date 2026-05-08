@@ -16,6 +16,21 @@ fn repos_branch_prefix_columns(connection: &rusqlite::Connection) -> Vec<(String
         .unwrap()
 }
 
+fn repos_review_columns(connection: &rusqlite::Connection) -> Vec<(String, String)> {
+    let mut statement = connection
+        .prepare(
+            "SELECT name, type FROM pragma_table_info('repos')
+             WHERE name IN ('custom_prompt_review', 'custom_prompt_review_pr')
+             ORDER BY cid",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
 #[test]
 fn repos_branch_prefix_override_migration_is_idempotent() {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
@@ -42,55 +57,72 @@ fn repos_branch_prefix_override_migration_is_idempotent() {
     );
 }
 
-fn browser_tab_schema(connection: &rusqlite::Connection) -> serde_json::Value {
-    let columns = connection
-        .prepare(
-            "SELECT name, type, [notnull], dflt_value, pk
-             FROM pragma_table_info('workspace_browser_tabs')
-             ORDER BY cid",
-        )
-        .unwrap()
-        .query_map([], |row| {
-            Ok(serde_json::json!({
-                "name": row.get::<_, String>(0)?,
-                "type": row.get::<_, String>(1)?,
-                "notNull": row.get::<_, i64>(2)? != 0,
-                "default": row.get::<_, Option<String>>(3)?,
-                "primaryKey": row.get::<_, i64>(4)? != 0,
-            }))
-        })
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-
-    let indexes = connection
-        .prepare(
-            "SELECT name, sql
-             FROM sqlite_master
-             WHERE type = 'index' AND tbl_name = 'workspace_browser_tabs'
-             ORDER BY name",
-        )
-        .unwrap()
-        .query_map([], |row| {
-            Ok(serde_json::json!({
-                "name": row.get::<_, String>(0)?,
-                "sql": row.get::<_, Option<String>>(1)?,
-            }))
-        })
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-
-    serde_json::json!({ "columns": columns, "indexes": indexes })
-}
-
 #[test]
-fn workspace_browser_tabs_schema_is_snapshotted() {
+fn repos_review_migration_adds_column_when_missing() {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
+    // Bare repos table missing both the legacy and new review columns.
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE repos (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                default_branch TEXT,
+                root_path TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            "#,
+        )
+        .unwrap();
+
+    schema::ensure_schema(&connection).unwrap();
+    // Second call must be a no-op — the migration guard checks pragma_table_info
+    // before issuing ALTER TABLE.
     schema::ensure_schema(&connection).unwrap();
 
     assert_yaml_snapshot!(
-        "workspace_browser_tabs_schema",
-        browser_tab_schema(&connection)
+        "repos_review_migration_add",
+        repos_review_columns(&connection)
+    );
+}
+
+#[test]
+fn repos_review_migration_renames_legacy_column() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    // Old DB shape: legacy custom_prompt_review_pr is present, the new
+    // custom_prompt_review is not. The migration must rename so any user
+    // prompt persisted under the old column is preserved.
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE repos (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                default_branch TEXT,
+                root_path TEXT,
+                custom_prompt_review_pr TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO repos (id, name, custom_prompt_review_pr)
+            VALUES ('r1', 'demo', 'keep me');
+            "#,
+        )
+        .unwrap();
+
+    schema::ensure_schema(&connection).unwrap();
+    schema::ensure_schema(&connection).unwrap();
+
+    let preserved: Option<String> = connection
+        .query_row(
+            "SELECT custom_prompt_review FROM repos WHERE id = 'r1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(preserved.as_deref(), Some("keep me"));
+
+    assert_yaml_snapshot!(
+        "repos_review_migration_rename",
+        repos_review_columns(&connection)
     );
 }

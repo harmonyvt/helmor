@@ -19,7 +19,7 @@ export function DevToolsPanel() {
 
 	useEffect(() => {
 		void loadDataInfo().then((info) => {
-			if (info) setDataDir(info.dataDir);
+			if (info) setDataDir(info.dataRoot);
 		});
 	}, []);
 

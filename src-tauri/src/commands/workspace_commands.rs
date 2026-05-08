@@ -1,11 +1,7 @@
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    db, git_watcher, models,
-    ui_sync::{self, UiMutationEvent},
-    workspace_state::WorkspaceState,
-    workspace_status::WorkspaceStatus,
-    workspaces,
+    db, git_watcher, workspace_state::WorkspaceState, workspace_status::WorkspaceStatus, workspaces,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -29,25 +25,21 @@ fn notify_workspace_changed_in_background(app: AppHandle) {
 pub async fn prepare_workspace_from_repo(
     app: AppHandle,
     repo_id: String,
+    source_branch: Option<String>,
+    mode: Option<crate::workspace_state::WorkspaceMode>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
+    let mode = mode.unwrap_or_default();
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-        run_blocking(move || workspaces::prepare_workspace_from_repo_impl(&repo_id)).await?
-    };
-    notify_workspace_changed_in_background(app);
-    Ok(result)
-}
-
-#[tauri::command]
-pub async fn prepare_workspace_from_source(
-    app: AppHandle,
-    repo_id: String,
-    source: workspaces::WorkspaceCreationSource,
-) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
-    let result = {
-        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-        run_blocking(move || workspaces::prepare_workspace_from_source_impl(&repo_id, source))
-            .await?
+        run_blocking(move || match mode {
+            crate::workspace_state::WorkspaceMode::Worktree => {
+                workspaces::prepare_workspace_from_repo_impl(&repo_id, source_branch.as_deref())
+            }
+            crate::workspace_state::WorkspaceMode::Local => {
+                workspaces::prepare_local_workspace_impl(&repo_id, source_branch.as_deref())
+            }
+        })
+        .await?
     };
     notify_workspace_changed_in_background(app);
     Ok(result)
@@ -62,20 +54,96 @@ pub async fn prepare_workspace_from_source(
 pub async fn finalize_workspace_from_repo(
     app: AppHandle,
     workspace_id: String,
-    options: Option<workspaces::FinalizeWorkspaceOptions>,
 ) -> CmdResult<workspaces::FinalizeWorkspaceResponse> {
     let ws_lock = db::workspace_fs_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
     let result = {
         let workspace_id = workspace_id.clone();
-        let options = options.unwrap_or_default();
-        run_blocking(move || {
-            workspaces::finalize_workspace_from_repo_with_options_impl(&workspace_id, options)
-        })
-        .await?
+        run_blocking(move || workspaces::finalize_workspace_from_repo_impl(&workspace_id)).await?
     };
     notify_workspace_changed_in_background(app);
     Ok(result)
+}
+
+/// Move a local-mode workspace into a fresh worktree (relocation, not a
+/// clone — the workspace's mode flips Local → Worktree). Snapshots the
+/// local repo's current state (HEAD commit + tracked + untracked
+/// changes) into the new worktree dir on a fresh auto-named branch.
+/// The local repo itself is not modified.
+#[tauri::command]
+pub async fn move_local_workspace_to_worktree(
+    app: AppHandle,
+    workspace_id: String,
+) -> CmdResult<workspaces::MoveLocalToWorktreeResponse> {
+    let result = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || workspaces::move_local_workspace_to_worktree_impl(&workspace_id))
+            .await?
+    };
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
+/// Create a new local branch at the repo's current HEAD and switch to
+/// it. Used by the start page's "Create and checkout new branch..."
+/// picker action. `git checkout -b` doesn't require a clean working
+/// tree — files carry over to the new branch unchanged.
+#[tauri::command]
+pub async fn create_and_checkout_branch(repo_id: String, branch: String) -> CmdResult<()> {
+    run_blocking(move || -> anyhow::Result<()> {
+        use anyhow::Context;
+        let repo = crate::repos::load_repository_by_id(&repo_id)?
+            .with_context(|| format!("Repository not found: {repo_id}"))?;
+        let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+        crate::git_ops::ensure_git_repository(&repo_root)?;
+        crate::git_ops::create_and_checkout_branch(&repo_root, &branch)
+    })
+    .await
+}
+
+/// Current local repo HEAD branch name. Used by the start page as
+/// the local-mode picker's default selection (worktree mode uses the
+/// repo's stored default branch instead). Returns `None` if the repo
+/// is missing on disk or HEAD is detached — frontend then falls back
+/// to the stored default.
+#[tauri::command]
+pub async fn get_repo_current_branch(repo_id: String) -> CmdResult<Option<String>> {
+    run_blocking(move || -> anyhow::Result<Option<String>> {
+        let Some(repo) = crate::repos::load_repository_by_id(&repo_id)? else {
+            return Ok(None);
+        };
+        let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+        if !repo_root.is_dir() {
+            return Ok(None);
+        }
+        Ok(crate::git_ops::current_branch_name(&repo_root).ok())
+    })
+    .await
+}
+
+/// Merged local + remote branches, deduped (by name), sorted. Used by
+/// the local-mode start picker so users can pick from anything they
+/// already have on disk OR any branch published on `origin`. Returns
+/// an empty list if the repo path is missing — keeps the picker usable
+/// even after the repo was moved.
+#[tauri::command]
+pub async fn list_branches_for_local_picker(repo_id: String) -> CmdResult<Vec<String>> {
+    run_blocking(move || -> anyhow::Result<Vec<String>> {
+        let Some(repo) = crate::repos::load_repository_by_id(&repo_id)? else {
+            return Ok(Vec::new());
+        };
+        let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+        if !repo_root.is_dir() {
+            return Ok(Vec::new());
+        }
+        let remote = repo.remote.unwrap_or_else(|| "origin".to_string());
+
+        let mut seen = std::collections::BTreeSet::new();
+        seen.extend(crate::git_ops::list_local_branches(&repo_root).unwrap_or_default());
+        seen.extend(crate::git_ops::list_remote_branches(&repo_root, &remote).unwrap_or_default());
+        Ok(seen.into_iter().collect())
+    })
+    .await
 }
 
 /// Legacy combined flow (prepare + finalize in a single call). Retained
@@ -123,35 +191,6 @@ pub async fn get_workspace(workspace_id: String) -> CmdResult<workspaces::Worksp
 }
 
 #[tauri::command]
-pub async fn list_goal_child_workspaces(
-    goal_workspace_id: String,
-) -> CmdResult<Vec<workspaces::WorkspaceDetail>> {
-    run_blocking(move || workspaces::list_goal_child_workspaces(&goal_workspace_id)).await
-}
-
-/// Update the user-editable goal title and description for a goal workspace.
-/// Broadcasts `WorkspaceChanged` so the frontend invalidates its cache.
-#[tauri::command]
-pub async fn update_goal_workspace_meta(
-    app: AppHandle,
-    workspace_id: String,
-    goal_title: Option<String>,
-    goal_description: Option<String>,
-) -> CmdResult<()> {
-    let wid = workspace_id.clone();
-    run_blocking(move || {
-        models::workspaces::update_goal_workspace_meta(
-            &wid,
-            goal_title.as_deref(),
-            goal_description.as_deref(),
-        )
-    })
-    .await?;
-    ui_sync::publish(&app, UiMutationEvent::WorkspaceChanged { workspace_id });
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn mark_workspace_unread(workspace_id: String) -> CmdResult<()> {
     run_blocking(move || workspaces::mark_workspace_unread(&workspace_id)).await
 }
@@ -167,15 +206,8 @@ pub async fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn set_workspace_status(
-    app: AppHandle,
-    workspace_id: String,
-    status: WorkspaceStatus,
-) -> CmdResult<()> {
-    let id = workspace_id.clone();
-    run_blocking(move || workspaces::set_workspace_status(&id, status)).await?;
-    ui_sync::publish(&app, UiMutationEvent::WorkspaceChanged { workspace_id });
-    Ok(())
+pub async fn set_workspace_status(workspace_id: String, status: WorkspaceStatus) -> CmdResult<()> {
+    run_blocking(move || workspaces::set_workspace_status(&workspace_id, status)).await
 }
 
 /// `/add-dir` feature: list the extra directories the user has linked to
@@ -366,52 +398,7 @@ pub async fn permanently_delete_workspace(app: AppHandle, workspace_id: String) 
     let _lock = ws_lock.lock().await;
     let manager = app.state::<git_watcher::GitWatcherManager>();
     manager.unwatch(&workspace_id);
-    let deleted_workspace_id = workspace_id.clone();
-    let tab_ids = run_blocking({
-        let workspace_id = workspace_id.clone();
-        move || {
-            crate::service::list_workspace_browser_tabs(&workspace_id)
-                .map(|tabs| tabs.into_iter().map(|tab| tab.id).collect::<Vec<_>>())
-        }
-    })
-    .await
-    .unwrap_or_else(|error| {
-        tracing::warn!(workspace_id = %deleted_workspace_id, error = ?error, "Failed to list browser tabs before workspace deletion");
-        Vec::new()
-    });
     run_blocking(move || workspaces::permanently_delete_workspace(&workspace_id)).await?;
-    remove_workspace_browser_data_stores(&app, &deleted_workspace_id, &tab_ids).await;
     git_watcher::notify_workspace_changed(&app);
     Ok(())
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-async fn remove_workspace_browser_data_stores(
-    app: &AppHandle,
-    workspace_id: &str,
-    tab_ids: &[String],
-) {
-    for tab_id in tab_ids {
-        let Ok(identifier) = crate::browser_profile::browser_tab_data_store_identifier(tab_id)
-        else {
-            continue;
-        };
-        if let Err(error) = app.remove_data_store(identifier).await {
-            tracing::warn!(workspace_id, tab_id, error = %format!("{error:#}"), "Failed to remove browser tab data store");
-        }
-    }
-
-    if let Ok(identifier) = crate::browser_profile::workspace_data_store_identifier(workspace_id) {
-        if let Err(error) = app.remove_data_store(identifier).await {
-            tracing::warn!(workspace_id, error = %format!("{error:#}"), "Failed to remove legacy workspace browser data store");
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-async fn remove_workspace_browser_data_stores(
-    _app: &AppHandle,
-    _workspace_id: &str,
-    _tab_ids: &[String],
-) {
 }

@@ -64,20 +64,13 @@ export function resolveConversationRowHeight({
 export function ActiveThreadViewport({
 	hasSession,
 	pane,
-	workspaceBranch,
-	workspacePrTitle,
-	workspaceState,
 	missingScriptTypes = [],
 	onInitializeScript,
 }: {
 	hasSession: boolean;
 	pane: PresentedSessionPane;
-	workspaceBranch?: string | null;
-	workspacePrTitle?: string | null;
-	workspaceState?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
-	compact?: boolean;
 }) {
 	const stackRef = useRef<HTMLDivElement | null>(null);
 	const [widthBucket, setWidthBucket] = useState(0);
@@ -128,9 +121,6 @@ export function ActiveThreadViewport({
 					paneWidth={paneWidth}
 					sessionId={pane.sessionId}
 					sending={pane.sending}
-					workspaceBranch={workspaceBranch}
-					workspacePrTitle={workspacePrTitle}
-					workspaceState={workspaceState}
 				/>
 			</div>
 		</div>
@@ -146,9 +136,6 @@ function ChatThread({
 	paneWidth,
 	sessionId,
 	sending,
-	workspaceBranch,
-	workspacePrTitle,
-	workspaceState,
 }: {
 	layoutCacheKey: string;
 	messages: ThreadMessageLike[];
@@ -158,9 +145,6 @@ function ChatThread({
 	paneWidth: number;
 	sessionId: string;
 	sending: boolean;
-	workspaceBranch?: string | null;
-	workspacePrTitle?: string | null;
-	workspaceState?: string | null;
 }) {
 	const threadMessages = messages;
 	const { settings } = useSettings();
@@ -174,7 +158,7 @@ function ChatThread({
 	const { contentRef, scrollRef, scrollToBottom, stopScroll, isAtBottom } =
 		useStickToBottom({
 			initial: "instant",
-			resize: "instant",
+			resize: "smooth",
 		});
 	const handleScrollRef = useCallback(
 		(element: HTMLElement | null) => {
@@ -264,9 +248,6 @@ function ChatThread({
 				sendingStartTime={sendingStartTime}
 				stopScroll={stopScroll}
 				usePlainThread={usePlainThread}
-				workspaceBranch={workspaceBranch}
-				workspacePrTitle={workspacePrTitle}
-				workspaceState={workspaceState}
 			>
 				<Button
 					type="button"
@@ -303,9 +284,6 @@ function ConversationViewport({
 	sendingStartTime,
 	stopScroll,
 	usePlainThread,
-	workspaceBranch,
-	workspacePrTitle,
-	workspaceState,
 }: {
 	children?: ReactNode;
 	contentRef: React.RefCallback<HTMLElement>;
@@ -324,9 +302,6 @@ function ConversationViewport({
 	sendingStartTime: number;
 	stopScroll: () => void;
 	usePlainThread: boolean;
-	workspaceBranch?: string | null;
-	workspacePrTitle?: string | null;
-	workspaceState?: string | null;
 }) {
 	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
 
@@ -348,9 +323,6 @@ function ConversationViewport({
 		<div className="flex min-h-full flex-1 items-center justify-center px-8">
 			<EmptyState
 				hasSession={hasSession}
-				workspaceBranch={workspaceBranch}
-				workspacePrTitle={workspacePrTitle}
-				workspaceState={workspaceState}
 				missingScriptTypes={missingScriptTypes}
 				onInitializeScript={onInitializeScript}
 			/>
@@ -364,26 +336,24 @@ function ConversationViewport({
 				className="conversation-scroll-viewport h-full w-full overflow-x-hidden overflow-y-auto"
 			>
 				{usePlainThread ? (
-					<>
-						<div ref={contentRef} className="flex min-h-full flex-col">
-							{Header ? createElement(Header) : null}
-							{data.length === 0
-								? EmptyPlaceholder
-									? createElement(EmptyPlaceholder)
-									: null
-								: data.map((message, index) => (
-										<ConversationRowShell
-											key={message.id ?? `${message.role}:${index}`}
-										>
-											{itemContent(index, message)}
-										</ConversationRowShell>
-									))}
-							<ConversationBottomSpacer />
-						</div>
+					<div ref={contentRef} className="flex min-h-full flex-col">
+						{Header ? createElement(Header) : null}
+						{data.length === 0
+							? EmptyPlaceholder
+								? createElement(EmptyPlaceholder)
+								: null
+							: data.map((message, index) => (
+									<ConversationRowShell
+										key={message.id ?? `${message.role}:${index}`}
+									>
+										{itemContent(index, message)}
+									</ConversationRowShell>
+								))}
 						{showStreamingFooter ? (
 							<StreamingFooter startTime={sendingStartTime} />
 						) : null}
-					</>
+						<ConversationBottomSpacer />
+					</div>
 				) : (
 					<ProgressiveConversationViewport
 						contentRef={contentRef}

@@ -3,28 +3,31 @@ import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
-import { open as openFilePickerDialog } from "@tauri-apps/plugin-dialog";
-import type { LexicalEditor } from "lexical";
+import type { LexicalEditor, SerializedEditorState } from "lexical";
 import { $getRoot } from "lexical";
 import {
 	ArrowUp,
 	Check,
 	ChevronDown,
 	ClipboardList,
+	Clock3,
+	Layers,
 	MessageSquareMore,
-	Paperclip,
+	Plus,
 	Square,
 	Zap,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
+import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuGroup,
 	DropdownMenuItem,
 	DropdownMenuLabel,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ShimmerText } from "@/components/ui/shimmer-text";
@@ -33,15 +36,14 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import { humanizeBranch } from "@/features/navigation/shared";
 import { normalizeShortcutEvent } from "@/features/shortcuts/format";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type {
 	AgentModelSection,
 	CandidateDirectory,
-	PlanReviewPart,
 	SlashCommandEntry,
 } from "@/lib/api";
 import type {
@@ -54,11 +56,6 @@ import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
 import { ContextBar } from "./context-bar";
 import { ContextUsageRing } from "./context-usage-ring";
-import type {
-	DeferredToolResponseHandler,
-	DeferredToolResponseOptions,
-} from "./deferred-tool";
-import { DeferredToolPanel } from "./deferred-tool-panel";
 import { clearPersistedDraft } from "./draft-storage";
 import { $insertAddDirTrigger } from "./editor/add-dir/insert";
 import { AddDirTriggerNode } from "./editor/add-dir/trigger-node";
@@ -81,12 +78,14 @@ import { PasteImagePlugin } from "./editor/plugins/paste-image-plugin";
 import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
 import { $extractComposerContent } from "./editor/utils";
-import { $appendComposerInsertItems, $insertFilePaths } from "./editor-ops";
-import type { ElicitationResponseHandler } from "./elicitation";
-import { ElicitationPanel } from "./elicitation-panel";
+import { $appendComposerInsertItems } from "./editor-ops";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
-import { ModelPicker } from "./model-picker";
+import { GoalReplaceConfirm } from "./goal-replace-confirm";
+import { PermissionPanel, type PermissionPanelProps } from "./permission-panel";
+import type { StartSubmitMode } from "./start-submit-mode";
 import { UsageStatsIndicator } from "./usage-stats-indicator";
+import type { UserInputResponseHandler } from "./user-input";
+import { UserInputPanel } from "./user-input-panel";
 
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 
@@ -102,6 +101,13 @@ type WorkspaceComposerProps = {
 			/** Submit with the opposite follow-up behavior (queue ↔ steer)
 			 *  for this single message, leaving the persistent setting alone. */
 			oppositeFollowUp?: boolean;
+			startSubmitMode?: StartSubmitMode;
+			/** Snapshot of the editor's full Lexical state at submit time.
+			 *  Captured synchronously before the editor clears so callers
+			 *  that need to round-trip chips/text/images (e.g. the kanban
+			 *  "backlog" submit handler that copies the draft into a freshly
+			 *  created session) can do so without a re-encode pass. */
+			editorStateSnapshot?: SerializedEditorState;
 		},
 	) => void;
 	disabled?: boolean;
@@ -112,8 +118,6 @@ type WorkspaceComposerProps = {
 	modelSections: AgentModelSection[];
 	modelsLoading?: boolean;
 	onSelectModel: (modelId: string) => void;
-	favoriteModelIds?: string[];
-	onToggleFavorite?: (modelId: string) => void;
 	provider?: string;
 	effortLevel: string;
 	onSelectEffort: (level: string) => void;
@@ -142,14 +146,21 @@ type WorkspaceComposerProps = {
 	addDirCandidates?: readonly CandidateDirectory[];
 	/** Called when the user selects an entry from the /add-dir popup. */
 	onPickAddDir?: (entry: AddDirPickerEntry) => void;
-	pendingElicitation?: PendingElicitation | null;
-	onElicitationResponse?: ElicitationResponseHandler;
-	elicitationResponsePending?: boolean;
-	pendingDeferredTool?: PendingDeferredTool | null;
-	onDeferredToolResponse?: DeferredToolResponseHandler;
+	pendingUserInput?: PendingUserInput | null;
+	onUserInputResponse?: UserInputResponseHandler;
+	userInputResponsePending?: boolean;
+	pendingPermission?: PendingPermission | null;
+	onPermissionResponse?: PermissionPanelProps["onResponse"];
+	/** When set, the composer body is replaced with a GoalReplaceConfirm
+	 *  panel asking the user whether to overwrite the active codex goal.
+	 *  Same in-place takeover pattern as `pendingUserInput`. */
+	goalReplace?: {
+		currentObjective: string;
+		newObjective: string;
+		onReplace: () => void;
+		onCancel: () => void;
+	} | null;
 	hasPlanReview?: boolean;
-	planReview?: PlanReviewPart | null;
-	onImplementPlanInCleanThread?: (plan: PlanReviewPart) => void | Promise<void>;
 	/** When true, the ring is always rendered next to the send button.
 	 *  When false (the default), the ring auto-reveals only after usage
 	 *  crosses the threshold defined inside the ring component. */
@@ -159,28 +170,36 @@ type WorkspaceComposerProps = {
 	/** Provider's own session id (Claude Code UUID). Threaded into the
 	 *  context-usage ring for its hover-triggered live fetch. */
 	providerSessionId?: string | null;
-	/** Agent provider for this session — gates the Claude-only rich fetch. */
-	agentType?: "claude" | "codex" | "pi" | null;
+	/** Agent provider for this session — gates the Claude-only rich fetch
+	 *  and selects which rate-limits API to query. `"cursor"` exists but
+	 *  Cursor's SDK doesn't expose rate-limit / context-usage endpoints
+	 *  yet, so the indicators just hide for cursor sessions. */
+	agentType?: "claude" | "codex" | "cursor" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
-	/** When true hides the model picker / effort / plan toolbar and shows only
-	 *  the send/stop button — suited for narrow embedded panels. */
-	hideToolbar?: boolean;
+	toggleContextPanelShortcut?: string | null;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
+	/** Custom placeholder string. When omitted, falls back to the default
+	 *  "Ask to make changes…" copy. The kanban view supplies a hint that
+	 *  nudges the user toward composing inbox sources for new workspaces. */
+	placeholder?: string;
+	startSubmitMenu?: boolean;
+	startSubmitMode?: StartSubmitMode;
+	onStartSubmitModeChange?: (mode: StartSubmitMode) => void;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
 const noopPickAddDir = (_entry: AddDirPickerEntry) => {};
-const noopDeferredToolResponse = (
-	_deferred: PendingDeferredTool,
-	_behavior: "allow" | "deny",
-	_options?: DeferredToolResponseOptions,
-) => {};
-const noopElicitationResponse: ElicitationResponseHandler = () => {};
+const noopUserInputResponse: UserInputResponseHandler = () => {};
+const noopPermissionResponse: NonNullable<
+	WorkspaceComposerProps["onPermissionResponse"]
+> = () => {};
 // ---------------------------------------------------------------------------
 // Lexical editor config (stable reference — defined outside component)
 // ---------------------------------------------------------------------------
@@ -205,8 +224,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	modelSections,
 	modelsLoading = false,
 	onSelectModel,
-	favoriteModelIds = [],
-	onToggleFavorite,
 	provider: _provider = "claude",
 	effortLevel,
 	onSelectEffort,
@@ -223,6 +240,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	restoreNonce = 0,
 	pendingInsertRequests = [],
 	onPendingInsertRequestsConsumed,
+	placeholder,
 	slashCommands = EMPTY_SLASH_COMMANDS,
 	slashCommandsLoading = false,
 	slashCommandsError = false,
@@ -233,14 +251,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	linkedDirectoriesDisabled = false,
 	addDirCandidates = EMPTY_CANDIDATE_DIRECTORIES,
 	onPickAddDir = noopPickAddDir,
-	pendingElicitation = null,
-	onElicitationResponse = noopElicitationResponse,
-	elicitationResponsePending = false,
-	pendingDeferredTool = null,
-	onDeferredToolResponse = noopDeferredToolResponse,
+	pendingUserInput = null,
+	onUserInputResponse = noopUserInputResponse,
+	userInputResponsePending = false,
+	pendingPermission = null,
+	onPermissionResponse = noopPermissionResponse,
+	goalReplace = null,
 	hasPlanReview = false,
-	planReview = null,
-	onImplementPlanInCleanThread,
 	alwaysShowContextUsage = false,
 	sessionId = null,
 	providerSessionId = null,
@@ -248,9 +265,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	focusShortcut = null,
 	togglePlanShortcut = null,
 	toggleFollowUpShortcut = null,
-	hideToolbar = false,
+	toggleContextPanelShortcut = null,
+	contextPanelOpen = false,
+	onToggleContextPanel,
+	startSubmitMenu = false,
+	startSubmitMode = "startNow",
+	onStartSubmitModeChange,
 }: WorkspaceComposerProps) {
-	const hasActivePlanReview = hasPlanReview || planReview !== null;
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
@@ -268,7 +289,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const consumedInsertRequestIdsRef = useRef<Set<string>>(new Set());
 	const [hasContent, setHasContent] = useState(false);
 	const [isInputFocused, setIsInputFocused] = useState(false);
-	const [isDragOver, setIsDragOver] = useState(false);
 	const [modelPickerOpen, setModelPickerOpen] = useState(false);
 	useEffect(() => {
 		const handleFocusComposer = () => {
@@ -306,6 +326,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const supportsEffort = availableEffortLevels.length > 0;
 	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const supportsContextUsage = selectedModel?.supportsContextUsage !== false;
+	// Cursor SDK auto-handles plans internally — no toggle to expose.
+	const supportsPlanMode = selectedModel?.provider !== "cursor";
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],
@@ -326,9 +348,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		effortLevel,
 		onSelectEffort,
 	]);
-	const hasPendingElicitation = pendingElicitation !== null;
-	const hasPendingDeferredTool = pendingDeferredTool !== null;
-	const hasPendingInteraction = hasPendingElicitation || hasPendingDeferredTool;
+	const hasPendingUserInput = pendingUserInput !== null;
+	const hasPendingPermission = pendingPermission !== null;
+	const hasGoalReplace = goalReplace !== null;
+	const hasPendingInteraction =
+		hasPendingUserInput || hasPendingPermission || hasGoalReplace;
 	const inputDisabled = disabled || hasPendingInteraction;
 	const toolbarDisabled = disabled || hasPendingInteraction;
 	useEffect(() => {
@@ -362,7 +386,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		!submitDisabled &&
 		!hasPendingInteraction &&
 		Boolean(selectedModel) &&
-		hasContent;
+		(hasContent || startSubmitMenu);
 	const sendDisabled = !submitEnabled || sending;
 	const steerDisabled = !submitEnabled || !sending;
 	const submitDisabledForPlugin = !submitEnabled;
@@ -419,34 +443,16 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	}, [onPendingInsertRequestsConsumed, pendingInsertRequests]);
 
 	const handlePlanImplement = useCallback(() => {
-		if (!hasActivePlanReview) return;
+		if (!hasPlanReview) return;
 		onChangePermissionMode("bypassPermissions");
 		clearPersistedDraft(contextKey);
 		onSubmit("Go ahead with the plan.", [], [], [], {
 			permissionModeOverride: "bypassPermissions",
 		});
-	}, [contextKey, hasActivePlanReview, onChangePermissionMode, onSubmit]);
-
-	const handlePlanImplementCleanThread = useCallback(() => {
-		if (!planReview || !onImplementPlanInCleanThread) return;
-		void Promise.resolve(onImplementPlanInCleanThread(planReview)).catch(
-			(error) => {
-				console.error(
-					"[composer] failed to implement plan in clean thread:",
-					error,
-				);
-				toast.error("Could not implement plan in a clean thread", {
-					description:
-						error instanceof Error
-							? error.message
-							: "Check the logs for details.",
-				});
-			},
-		);
-	}, [onImplementPlanInCleanThread, planReview]);
+	}, [contextKey, hasPlanReview, onChangePermissionMode, onSubmit]);
 
 	const handlePlanRequestChanges = useCallback(() => {
-		if (!hasActivePlanReview) return;
+		if (!hasPlanReview) return;
 		const editor = editorRef.current;
 		let feedback = "";
 		if (editor) {
@@ -465,10 +471,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			clearPersistedDraft(contextKey);
 			setHasContent(false);
 		}
-	}, [hasActivePlanReview, onSubmit, contextKey]);
+	}, [hasPlanReview, onSubmit, contextKey]);
 
 	const submitDraft = useCallback(
-		(options?: { oppositeFollowUp?: boolean }) => {
+		(options?: {
+			oppositeFollowUp?: boolean;
+			startSubmitMode?: StartSubmitMode;
+		}) => {
 			const editor = editorRef.current;
 			if (!editor) return;
 			let prompt = "";
@@ -488,51 +497,69 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				files.length === 0 &&
 				customTags.length === 0
 			)
-				return;
-			if (options?.oppositeFollowUp) {
-				onSubmit(prompt, images, files, customTags, {
-					oppositeFollowUp: true,
-				});
-			} else {
-				onSubmit(prompt, images, files, customTags);
-			}
+				if (!startSubmitMenu) return;
+			// Snapshot the editor's full Lexical state BEFORE the clear below
+			// wipes it. Synchronous capture is critical because callers that
+			// want to round-trip the draft (e.g. kanban "backlog" submit
+			// copying chips/text/images into a freshly-created session) read
+			// from this snapshot — by the time their async work runs, the
+			// editor is already empty.
+			const editorStateSnapshot = editor
+				.getEditorState()
+				.toJSON() as SerializedEditorState;
+			onSubmit(prompt, images, files, customTags, {
+				oppositeFollowUp: options?.oppositeFollowUp,
+				startSubmitMode:
+					prompt ||
+					images.length > 0 ||
+					files.length > 0 ||
+					customTags.length > 0
+						? options?.startSubmitMode
+						: "createOnly",
+				editorStateSnapshot,
+			});
 			editor.update(() => {
 				$getRoot().clear();
 			});
 			clearPersistedDraft(contextKey);
 			setHasContent(false);
 		},
-		[onSubmit, contextKey],
+		[onSubmit, contextKey, startSubmitMenu],
 	);
 
 	const handleSubmit = useCallback(() => {
-		submitDraft();
-	}, [submitDraft]);
+		submitDraft(startSubmitMenu ? { startSubmitMode } : undefined);
+	}, [startSubmitMenu, startSubmitMode, submitDraft]);
 
 	const handleSubmitOpposite = useCallback(() => {
 		submitDraft({ oppositeFollowUp: true });
 	}, [submitDraft]);
 
-	const handleDragStateChange = useCallback(
-		(dragging: boolean) => {
-			if (inputDisabled || hasPendingInteraction) return;
-			setIsDragOver(dragging);
+	const handleStartSubmitMode = useCallback(
+		(mode: StartSubmitMode) => {
+			submitDraft({ startSubmitMode: mode });
 		},
-		[inputDisabled, hasPendingInteraction],
+		[submitDraft],
 	);
 
-	const handleOpenFilePicker = useCallback(async () => {
-		if (inputDisabled) return;
-		const rawSelected = await openFilePickerDialog({ multiple: true });
-		const selected = rawSelected ?? [];
-		if (selected.length === 0) return;
-		const editor = editorRef.current;
-		if (!editor) return;
-		editor.update(() => {
-			$insertFilePaths(selected);
-		});
-		editor.focus();
-	}, [inputDisabled]);
+	const handleSelectStartSubmitMode = useCallback(
+		(mode: StartSubmitMode) => {
+			onStartSubmitModeChange?.(mode);
+			handleStartSubmitMode(mode);
+		},
+		[handleStartSubmitMode, onStartSubmitModeChange],
+	);
+	const alternateStartSubmitMode: StartSubmitMode =
+		startSubmitMode === "saveForLater" ? "startNow" : "saveForLater";
+	const preferredStartSubmitLabel = !hasContent
+		? "New Workspace"
+		: startSubmitMode === "saveForLater"
+			? "Save for later"
+			: "Start now";
+	const alternateStartSubmitLabel =
+		alternateStartSubmitMode === "saveForLater"
+			? "Save for later"
+			: "Start now";
 
 	const handleComposerKeyDownCapture = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -554,7 +581,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				return;
 			}
 
-			if (togglePlanShortcut && hotkey === togglePlanShortcut) {
+			if (
+				togglePlanShortcut &&
+				hotkey === togglePlanShortcut &&
+				supportsPlanMode
+			) {
 				event.preventDefault();
 				event.stopPropagation();
 				onChangePermissionMode(permissionMode === "plan" ? "default" : "plan");
@@ -564,6 +595,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			inputDisabled,
 			onChangePermissionMode,
 			permissionMode,
+			supportsPlanMode,
 			togglePlanShortcut,
 			toggleFollowUpShortcut,
 			handleSubmitOpposite,
@@ -578,7 +610,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			data-focus-scope="composer"
 			onKeyDownCapture={handleComposerKeyDownCapture}
 			className={cn(
-				"relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)] transition-colors",
+				"relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
 				// Pending-interaction panels fill the shell edge-to-edge and own
 				// their own internal padding; the default composer gets the
 				// legacy px-4 pt-3 pb-3 breathing room.
@@ -586,24 +618,31 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				inputDisabled &&
 					!hasPendingInteraction &&
 					"cursor-not-allowed opacity-60",
-				isDragOver && !hasPendingInteraction && "border-primary/50",
 			)}
 		>
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input
 			</label>
 
-			{hasPendingElicitation ? (
-				<ElicitationPanel
-					elicitation={pendingElicitation!}
-					disabled={disabled || elicitationResponsePending}
-					onResponse={onElicitationResponse}
+			{hasPendingUserInput ? (
+				<UserInputPanel
+					userInput={pendingUserInput!}
+					disabled={disabled || userInputResponsePending}
+					onResponse={onUserInputResponse}
 				/>
-			) : hasPendingDeferredTool ? (
-				<DeferredToolPanel
-					deferred={pendingDeferredTool!}
+			) : hasPendingPermission ? (
+				<PermissionPanel
+					permission={pendingPermission!}
 					disabled={disabled}
-					onResponse={onDeferredToolResponse}
+					onResponse={onPermissionResponse}
+				/>
+			) : hasGoalReplace ? (
+				<GoalReplaceConfirm
+					currentObjective={goalReplace.currentObjective}
+					newObjective={goalReplace.newObjective}
+					onReplace={goalReplace.onReplace}
+					onCancel={goalReplace.onCancel}
+					disabled={disabled}
 				/>
 			) : (
 				<>
@@ -666,9 +705,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								}
 								placeholder={
 									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground/70">
-										{hasActivePlanReview && permissionMode === "plan"
+										{hasPlanReview && permissionMode === "plan"
 											? "Describe what to change, then click Request Changes"
-											: "Ask to make changes, @mention files, run /commands"}
+											: (placeholder ??
+												"Ask to make changes, @mention files, run /commands")}
 									</div>
 								}
 								ErrorBoundary={LexicalErrorBoundary}
@@ -677,13 +717,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								<div className="pointer-events-none absolute right-0 top-0 hidden h-5 items-center gap-1 text-[13px] leading-5 tracking-[-0.01em] text-muted-foreground/70 sm:flex">
 									<InlineShortcutDisplay hotkey={focusShortcut} />
 									<span>to focus</span>
-								</div>
-							) : null}
-							{isDragOver ? (
-								<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-primary/[0.04]">
-									<span className="text-[12px] font-medium text-primary/60">
-										Drop to attach
-									</span>
 								</div>
 							) : null}
 						</div>
@@ -722,7 +755,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						/>
 						<CompositionGuardPlugin />
 						<PasteImagePlugin />
-						<DropFilePlugin onDragStateChange={handleDragStateChange} />
+						<DropFilePlugin />
 						<AutoResizePlugin minHeight={64} maxHeight={240} />
 						<EditorRefPlugin editorRef={editorRef} />
 						<DraftPersistencePlugin
@@ -743,216 +776,195 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						</div>
 					) : null}
 
-					{hideToolbar ? (
-						/* Compact toolbar: model picker + send/stop — no effort/plan/fast mode */
-						<div className="mt-1.5 flex items-center justify-between gap-2">
-							<div className="min-w-0 flex-1">
-								{modelsLoading ? (
-									<ShimmerText className="px-1 py-0.5 text-[13px] text-muted-foreground">
-										Loading…
-									</ShimmerText>
-								) : (
-									<ModelPicker
+					<div className="mt-2.5 flex items-end justify-between gap-3">
+						<div className="flex flex-wrap items-center gap-2">
+							{modelsLoading ? (
+								<ShimmerText className="px-1 py-0.5 text-[13px] text-muted-foreground">
+									Loading models…
+								</ShimmerText>
+							) : (
+								<>
+									<DropdownMenu
 										open={modelPickerOpen}
 										onOpenChange={setModelPickerOpen}
-										disabled={toolbarDisabled}
-										selectedModel={selectedModel}
-										selectedModelId={selectedModelId}
-										modelSections={modelSections}
-										hasConfiguredClaudeProviderModels={
-											hasConfiguredClaudeProviderModels
-										}
-										favoriteModelIds={favoriteModelIds}
-										onSelectModel={onSelectModel}
-										onToggleFavorite={onToggleFavorite ?? (() => {})}
-										onOpenModelSettings={handleOpenModelSettings}
-										triggerClassName={cn(
-											`flex items-center gap-1.5 text-muted-foreground ${composerToolbarTriggerClassName}`,
-											toolbarDisabled &&
-												"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
-										)}
-									/>
-								)}
-							</div>
-							<div className="flex shrink-0 items-center gap-1.5">
-								<Button
-									variant="ghost"
-									size="icon"
-									aria-label="Attach files"
-									title="Attach files"
-									onClick={() => {
-										void handleOpenFilePicker();
-									}}
-									disabled={inputDisabled}
-									className="rounded-[9px] text-muted-foreground hover:text-foreground"
-								>
-									<Paperclip className="size-[14px]" strokeWidth={1.8} />
-								</Button>
-								{sending ? (
-									<>
-										<Button
-											variant="destructive"
-											size="icon"
-											aria-label="Stop"
-											onClick={onStop}
-											disabled={disabled || submitDisabled}
-											className="rounded-[9px]"
-										>
-											<Square className="size-3 fill-current" strokeWidth={0} />
-										</Button>
-										{hasContent ? (
-											<Button
-												variant="outline"
-												size="icon"
-												aria-label="Steer"
-												onClick={handleSubmit}
-												disabled={steerDisabled}
-												className="rounded-[9px]"
-											>
-												<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-											</Button>
-										) : null}
-									</>
-								) : (
-									<Button
-										variant="outline"
-										size="icon"
-										aria-label="Send"
-										onClick={handleSubmit}
-										disabled={sendDisabled}
-										className="rounded-[9px]"
 									>
-										<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-									</Button>
-								)}
-							</div>
-						</div>
-					) : (
-						/* Full toolbar: model picker, effort, fast mode, plan, send */
-						<div className="mt-2.5 flex items-end justify-between gap-3">
-							<div className="flex flex-wrap items-center gap-2">
-								{modelsLoading ? (
-									<ShimmerText className="px-1 py-0.5 text-[13px] text-muted-foreground">
-										Loading models…
-									</ShimmerText>
-								) : (
-									<>
-										<ModelPicker
-											open={modelPickerOpen}
-											onOpenChange={setModelPickerOpen}
+										<DropdownMenuTrigger
 											disabled={toolbarDisabled}
-											selectedModel={selectedModel}
-											selectedModelId={selectedModelId}
-											modelSections={modelSections}
-											hasConfiguredClaudeProviderModels={
-												hasConfiguredClaudeProviderModels
-											}
-											favoriteModelIds={favoriteModelIds}
-											onSelectModel={onSelectModel}
-											onToggleFavorite={onToggleFavorite ?? (() => {})}
-											onOpenModelSettings={handleOpenModelSettings}
-											triggerClassName={cn(
+											className={cn(
 												`flex items-center gap-1.5 text-muted-foreground ${composerToolbarTriggerClassName}`,
 												toolbarDisabled &&
 													"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
 											)}
-										/>
+										>
+											<ModelIcon
+												model={selectedModel}
+												className="size-[13px]"
+											/>
+											<span>
+												{selectedModel?.label ??
+													selectedModelId ??
+													"Select model"}
+											</span>
+											<ChevronDown
+												className="size-3 opacity-40"
+												strokeWidth={2}
+											/>
+										</DropdownMenuTrigger>
 
-										{onChangeFastMode && supportsFastMode && (
-											<Tooltip>
-												<TooltipTrigger asChild>
-													<ComposerButton
-														aria-label="Fast mode"
-														disabled={toolbarDisabled}
-														className={cn(
-															"relative",
-															composerToolbarTriggerClassName,
-															fastMode
-																? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
-																: "text-muted-foreground",
-															toolbarDisabled
-																? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
-																: null,
-														)}
-														onClick={() => onChangeFastMode(!fastMode)}
-													>
-														<span className="relative block size-[14px]">
-															<Zap
-																className={cn(
-																	"absolute inset-0 z-0 size-[14px]",
-																	fastMode ? null : "opacity-55",
-																)}
-																strokeWidth={1.8}
-															/>
-															{showFastModePrelude ? (
-																<FastModeLottieIcon className="absolute inset-[-5px] z-10 drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]" />
-															) : null}
-														</span>
-													</ComposerButton>
-												</TooltipTrigger>
-												<TooltipContent side="top" sideOffset={4}>
-													<span>Fast mode{fastMode ? " (on)" : ""}</span>
-												</TooltipContent>
-											</Tooltip>
-										)}
+										<DropdownMenuContent
+											side="top"
+											align="start"
+											sideOffset={4}
+											className="min-w-[17rem]"
+										>
+											{modelSections.map((section, index) => (
+												<DropdownMenuGroup key={section.id}>
+													{index > 0 ? <DropdownMenuSeparator /> : null}
+													<DropdownMenuLabel>{section.label}</DropdownMenuLabel>
+													{section.options.map((option) => (
+														<DropdownMenuItem
+															key={option.id}
+															disabled={toolbarDisabled}
+															onClick={() => {
+																onSelectModel(option.id);
+															}}
+															className="flex items-center justify-between gap-3"
+														>
+															<div className="grid min-w-0 grid-cols-[1rem_minmax(0,1fr)] items-center gap-3">
+																<span className="flex size-4 items-center justify-center text-muted-foreground">
+																	<ModelIcon
+																		model={option}
+																		className="size-4"
+																	/>
+																</span>
+																<span className="truncate font-mono tabular-nums">
+																	{option.label}
+																</span>
+															</div>
+														</DropdownMenuItem>
+													))}
+													{section.id === "claude" &&
+													!hasConfiguredClaudeProviderModels ? (
+														<DropdownMenuItem
+															onClick={handleOpenModelSettings}
+															className="flex items-center gap-3"
+														>
+															<span className="flex size-4 items-center justify-center text-muted-foreground">
+																<Plus className="size-4" strokeWidth={1.8} />
+															</span>
+															<span className="font-mono tabular-nums">
+																Add custom model...
+															</span>
+														</DropdownMenuItem>
+													) : null}
+												</DropdownMenuGroup>
+											))}
+										</DropdownMenuContent>
+									</DropdownMenu>
 
-										{supportsEffort && (
-											<DropdownMenu>
-												<DropdownMenuTrigger
+									{onChangeFastMode && supportsFastMode && (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Fast mode"
 													disabled={toolbarDisabled}
 													className={cn(
-														`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
-														effectiveEffort === "max" ||
-															effectiveEffort === "xhigh"
-															? "effort-max-text"
+														"relative",
+														composerToolbarTriggerClassName,
+														fastMode
+															? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
 															: "text-muted-foreground",
 														toolbarDisabled
 															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
 															: null,
 													)}
+													onClick={() => onChangeFastMode(!fastMode)}
 												>
-													<span className="capitalize">
-														{effectiveEffort === "xhigh"
-															? "Extra High"
-															: effectiveEffort}
+													<span className="relative block size-[14px]">
+														<Zap
+															className={cn(
+																"absolute inset-0 z-0 size-[14px]",
+																fastMode ? null : "opacity-55",
+															)}
+															strokeWidth={1.8}
+														/>
+														{showFastModePrelude ? (
+															<FastModeLottieIcon className="absolute inset-[-5px] z-10 drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]" />
+														) : null}
 													</span>
-													<ChevronDown
-														className="size-3 text-muted-foreground/40"
-														strokeWidth={2}
-													/>
-												</DropdownMenuTrigger>
-												<DropdownMenuContent
-													side="top"
-													align="start"
-													sideOffset={4}
-													className="min-w-[11rem]"
-												>
-													<DropdownMenuGroup>
-														<DropdownMenuLabel>Effort</DropdownMenuLabel>
-														{availableEffortLevels.map((level) => (
-															<DropdownMenuItem
-																key={level}
-																disabled={toolbarDisabled}
-																onClick={() => onSelectEffort(level)}
-																className="flex items-center justify-between gap-3"
-															>
-																<div className="flex items-center gap-2.5">
-																	<EffortBrainIcon level={level} />
-																	<span className="capitalize">
-																		{level === "xhigh" ? "Extra High" : level}
-																	</span>
-																</div>
-																{level === effectiveEffort ? (
-																	<span className="text-[11px] text-foreground">
-																		✓
-																	</span>
-																) : null}
-															</DropdownMenuItem>
-														))}
-													</DropdownMenuGroup>
-												</DropdownMenuContent>
-											</DropdownMenu>
-										)}
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent side="top" sideOffset={4}>
+												<span>Fast mode{fastMode ? " (on)" : ""}</span>
+											</TooltipContent>
+										</Tooltip>
+									)}
+
+									{supportsEffort && (
+										<DropdownMenu>
+											<DropdownMenuTrigger
+												disabled={toolbarDisabled}
+												// Always-on muted baseline: `effort-max-text`
+												// paints via `-webkit-text-fill-color: transparent`
+												// without setting `color`, so without this
+												// removing the gradient class would briefly expose
+												// `text-foreground` and `transition-colors`
+												// animates the flash. Hover stays muted to avoid
+												// a second flash on dropdown close.
+												className={cn(
+													`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
+													"text-muted-foreground hover:text-muted-foreground",
+													(effectiveEffort === "max" ||
+														effectiveEffort === "xhigh") &&
+														"effort-max-text",
+													toolbarDisabled
+														? "cursor-not-allowed opacity-45 hover:bg-transparent"
+														: null,
+												)}
+											>
+												<span className="capitalize">
+													{effectiveEffort === "xhigh"
+														? "Extra High"
+														: effectiveEffort}
+												</span>
+												<ChevronDown
+													className="size-3 text-muted-foreground/40"
+													strokeWidth={2}
+												/>
+											</DropdownMenuTrigger>
+											<DropdownMenuContent
+												side="top"
+												align="start"
+												sideOffset={4}
+												className="min-w-[11rem]"
+											>
+												<DropdownMenuGroup>
+													<DropdownMenuLabel>Effort</DropdownMenuLabel>
+													{availableEffortLevels.map((level) => (
+														<DropdownMenuItem
+															key={level}
+															disabled={toolbarDisabled}
+															onClick={() => onSelectEffort(level)}
+															className="flex items-center justify-between gap-3"
+														>
+															<div className="flex items-center gap-2.5">
+																<EffortBrainIcon level={level} />
+																<span className="capitalize">
+																	{level === "xhigh" ? "Extra High" : level}
+																</span>
+															</div>
+															{level === effectiveEffort ? (
+																<span className="text-[11px] text-foreground">
+																	✓
+																</span>
+															) : null}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuGroup>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									)}
+									{supportsPlanMode ? (
 										<ComposerButton
 											aria-label="Plan mode"
 											disabled={toolbarDisabled}
@@ -976,138 +988,193 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											/>
 											<span>Plan</span>
 										</ComposerButton>
-									</>
-								)}
-								<ComposerButton
-									aria-label="Attach files"
-									title="Attach files"
-									disabled={inputDisabled}
-									onClick={() => {
-										void handleOpenFilePicker();
-									}}
-									className={cn(composerToolbarTriggerClassName)}
-								>
-									<Paperclip className="size-[13px]" strokeWidth={1.8} />
-								</ComposerButton>
-							</div>
+									) : null}
+									{onToggleContextPanel ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Add context"
+													aria-pressed={contextPanelOpen}
+													disabled={toolbarDisabled}
+													className={cn(
+														composerToolbarTriggerClassName,
+														contextPanelOpen
+															? "text-foreground"
+															: "text-muted-foreground/70 hover:text-muted-foreground/70",
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+															: null,
+													)}
+													onClick={onToggleContextPanel}
+												>
+													<Layers className="size-[13px]" strokeWidth={1.8} />
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent
+												side="top"
+												sideOffset={4}
+												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+											>
+												<span>Add context</span>
+												{toggleContextPanelShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={toggleContextPanelShortcut}
+														className="text-background/60"
+													/>
+												) : null}
+											</TooltipContent>
+										</Tooltip>
+									) : null}
+								</>
+							)}
+						</div>
 
-							<div className="flex items-center gap-1">
-								<UsageStatsIndicator
+						<div className="flex items-center gap-1">
+							<UsageStatsIndicator agentType={agentType} disabled={disabled} />
+							{sessionId && supportsContextUsage ? (
+								<ContextUsageRing
+									sessionId={sessionId}
+									providerSessionId={providerSessionId}
+									composerModelId={selectedModel?.id ?? null}
+									cwd={workspaceRootPath}
 									agentType={agentType}
+									alwaysShow={alwaysShowContextUsage}
 									disabled={disabled}
 								/>
-								{sessionId && supportsContextUsage ? (
-									<ContextUsageRing
-										sessionId={sessionId}
-										providerSessionId={providerSessionId}
-										composerModelId={selectedModel?.id ?? null}
-										cwd={workspaceRootPath}
-										agentType={agentType}
-										alwaysShow={alwaysShowContextUsage}
+							) : null}
+							{/* Trailing actions sit behind a visible outline/border, while the
+							    indicators to the left don't — that pulls the perceived gap in
+							    by ~6 px. ml-1.5 reserves the missing space so the row reads as
+							    evenly spaced. */}
+							{hasPlanReview && permissionMode === "plan" ? (
+								<div className="ml-1.5 flex items-center gap-2">
+									<Button
+										variant="ghost"
+										size="sm"
+										aria-label="Request Changes"
+										onClick={handlePlanRequestChanges}
+										disabled={disabled || !hasContent}
+										className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none text-muted-foreground hover:text-foreground"
+									>
+										<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
+										Request Changes
+									</Button>
+									<Button
+										variant="default"
+										size="sm"
+										aria-label="Implement"
+										onClick={handlePlanImplement}
 										disabled={disabled}
-									/>
-								) : null}
-								{/* Trailing actions sit behind a visible outline/border, while the
-									    indicators to the left don't — that pulls the perceived gap in
-									    by ~6 px. ml-1.5 reserves the missing space so the row reads as
-									    evenly spaced. */}
-								{hasActivePlanReview && permissionMode === "plan" ? (
-									<div className="ml-1.5 flex items-center gap-2">
+										className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none"
+									>
+										<Check className="size-3.5" strokeWidth={2} />
+										Implement
+									</Button>
+								</div>
+							) : sending ? (
+								<div className="ml-1.5 flex items-center gap-1.5">
+									<Button
+										variant="destructive"
+										size="icon"
+										aria-label="Stop"
+										onClick={onStop}
+										disabled={disabled || submitDisabled}
+										className="rounded-[9px]"
+									>
+										<Square className="size-3 fill-current" strokeWidth={0} />
+									</Button>
+									{hasContent ? (
 										<Button
-											variant="ghost"
-											size="sm"
-											aria-label="Request Changes"
-											onClick={handlePlanRequestChanges}
-											disabled={disabled || !hasContent}
-											className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none text-muted-foreground hover:text-foreground"
-										>
-											<MessageSquareMore
-												className="size-3.5"
-												strokeWidth={1.8}
-											/>
-											Request Changes
-										</Button>
-										<div className="my-0.5 flex h-7 overflow-hidden rounded-lg">
-											<Button
-												variant="default"
-												size="sm"
-												aria-label="Implement"
-												onClick={handlePlanImplement}
-												disabled={disabled}
-												className="h-7 cursor-pointer gap-1 rounded-r-none px-2 text-[12px] transition-none"
-											>
-												<Check className="size-3.5" strokeWidth={2} />
-												Implement
-											</Button>
-											<DropdownMenu>
-												<DropdownMenuTrigger asChild>
-													<Button
-														variant="default"
-														size="icon"
-														aria-label="Implement options"
-														disabled={disabled || !onImplementPlanInCleanThread}
-														className="h-7 w-7 cursor-pointer rounded-l-none border-l border-primary-foreground/20 transition-none"
-													>
-														<ChevronDown className="size-3.5" strokeWidth={2} />
-													</Button>
-												</DropdownMenuTrigger>
-												<DropdownMenuContent align="end" className="w-56">
-													<DropdownMenuItem
-														onSelect={handlePlanImplementCleanThread}
-														disabled={
-															!planReview || !onImplementPlanInCleanThread
-														}
-													>
-														Implement in Clean Thread
-													</DropdownMenuItem>
-												</DropdownMenuContent>
-											</DropdownMenu>
-										</div>
-									</div>
-								) : sending ? (
-									<div className="ml-1.5 flex items-center gap-1.5">
-										<Button
-											variant="destructive"
+											variant="outline"
 											size="icon"
-											aria-label="Stop"
-											onClick={onStop}
-											disabled={disabled || submitDisabled}
+											aria-label="Steer"
+											onClick={handleSubmit}
+											disabled={steerDisabled}
 											className="rounded-[9px]"
 										>
-											<Square className="size-3 fill-current" strokeWidth={0} />
+											<ArrowUp className="size-[15px]" strokeWidth={2.2} />
 										</Button>
-										{hasContent ? (
-											<Button
-												variant="outline"
-												size="icon"
-												aria-label="Steer"
-												onClick={handleSubmit}
-												disabled={steerDisabled}
-												className="rounded-[9px]"
+									) : null}
+								</div>
+							) : (
+								<div className="ml-1.5 flex items-center">
+									{startSubmitMenu ? (
+										<DropdownMenu>
+											<ButtonGroup className="rounded-[9px]">
+												<Button
+													variant="outline"
+													size="sm"
+													aria-label={preferredStartSubmitLabel}
+													onClick={() => handleStartSubmitMode(startSubmitMode)}
+													disabled={sendDisabled}
+													className="gap-1.5 px-2.5"
+												>
+													{startSubmitMode === "saveForLater" ? (
+														<Clock3 className="size-3.5" strokeWidth={1.8} />
+													) : (
+														<ArrowUp className="size-3.5" strokeWidth={2.2} />
+													)}
+													<span>{preferredStartSubmitLabel}</span>
+												</Button>
+												<DropdownMenuTrigger asChild>
+													<Button
+														variant="outline"
+														size="sm"
+														aria-label="Start options"
+														disabled={sendDisabled}
+														className="px-2.5"
+													>
+														<ChevronDown
+															className="size-3 text-muted-foreground"
+															strokeWidth={2}
+														/>
+													</Button>
+												</DropdownMenuTrigger>
+											</ButtonGroup>
+											<DropdownMenuContent
+												side="bottom"
+												align="end"
+												sideOffset={6}
+												className="min-w-[133px] -translate-x-px"
 											>
-												<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-											</Button>
-										) : null}
-									</div>
-								) : (
-									<Button
-										variant="outline"
-										size="icon"
-										aria-label="Send"
-										onClick={handleSubmit}
-										disabled={sendDisabled}
-										className="ml-1.5 rounded-[9px]"
-									>
-										<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-									</Button>
-								)}
-							</div>
+												<DropdownMenuItem
+													onClick={() =>
+														handleSelectStartSubmitMode(
+															alternateStartSubmitMode,
+														)
+													}
+													disabled={sendDisabled}
+													className="gap-2"
+												>
+													{alternateStartSubmitMode === "saveForLater" ? (
+														<Clock3 className="size-3.5" strokeWidth={1.8} />
+													) : (
+														<ArrowUp className="size-3.5" strokeWidth={2} />
+													)}
+													<span>{alternateStartSubmitLabel}</span>
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									) : (
+										<Button
+											variant="outline"
+											size="icon"
+											aria-label="Send"
+											onClick={handleSubmit}
+											disabled={sendDisabled}
+											className="rounded-[9px]"
+										>
+											<ArrowUp className="size-[15px]" strokeWidth={2.2} />
+										</Button>
+									)}
+								</div>
+							)}
 						</div>
-					)}
+					</div>
 				</>
 			)}
 
-			{sendError && hasPendingElicitation ? (
+			{sendError && hasPendingUserInput ? (
 				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
 					{sendError}
 				</div>

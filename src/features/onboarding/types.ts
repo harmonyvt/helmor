@@ -1,10 +1,10 @@
-import type { ComponentType, SVGProps } from "react";
+import type { ClaudeIcon } from "@/components/icons";
 import type { AgentLoginProvider } from "@/lib/api";
 
 export type AgentLoginStatus = "ready" | "needsSetup";
 
 export type AgentLoginItem = {
-	icon: ComponentType<SVGProps<SVGSVGElement>>;
+	icon: typeof ClaudeIcon;
 	provider: AgentLoginProvider;
 	label: string;
 	description: string;

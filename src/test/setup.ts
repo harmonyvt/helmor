@@ -80,6 +80,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 		return {
 			getVirtualItems: () => items,
 			getTotalSize: () => offset,
+			measureElement: () => {},
 			scrollToIndex: () => {},
 		};
 	},
@@ -116,36 +117,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 			case "get_app_settings":
 				return {
 					"app.onboarding_completed": "true",
-				};
-			case "get_github_cli_status":
-				return {
-					status: "ready",
-					host: "github.com",
-					login: "test",
-					version: "test",
-					message: "ok",
-				};
-			case "get_github_cli_user":
-				return {
-					login: "test",
-					id: 0,
-					name: "Test",
-					avatarUrl: null,
-					email: null,
-				};
-			case "list_github_accessible_repositories":
-				return [];
-			case "list_github_pull_requests_for_repo":
-				return [];
-			case "resolve_github_pull_request_for_repo":
-				return {
-					number: 1,
-					title: "Test pull request",
-					url: "https://github.com/test/repo/pull/1",
-					state: "OPEN",
-					isMerged: false,
-					headBranch: "feature/test",
-					baseBranch: "main",
 				};
 			case "list_repositories":
 				return [];
@@ -186,8 +157,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return [];
 			case "list_remote_branches":
 				return [];
-			case "prefetch_remote_refs":
-				return { fetched: false };
 			case "list_workspace_files":
 				return [];
 			case "list_workspace_changes_with_content":
@@ -217,15 +186,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 					cli: null,
 					detectionSignals: [],
 				};
-			case "get_forge_cli_status":
-				return {
-					status: "unauthenticated",
-					provider: "gitlab",
-					host: "gitlab.com",
-					cliName: "glab",
-					message: "Run `glab auth login --hostname gitlab.com`.",
-					loginCommand: "glab auth login --hostname gitlab.com",
-				};
 			case "get_workspace_git_action_status":
 				return {
 					uncommittedCount: 0,
@@ -247,8 +207,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 					remoteState: "unavailable",
 					message: null,
 				};
-			case "open_forge_cli_auth_terminal":
-				return undefined;
+			case "list_forge_logins":
+			case "list_forge_accounts":
+			case "list_github_labels":
+				return [];
 			case "spawn_forge_cli_auth_terminal":
 				return undefined;
 			case "stop_forge_cli_auth_terminal":
@@ -303,35 +265,6 @@ if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
 		removeEventListener: () => {},
 		dispatchEvent: () => false,
 	})) as typeof window.matchMedia;
-}
-
-if (typeof window !== "undefined") {
-	const storage = new Map<string, string>();
-	const currentStorage = window.localStorage as Storage | undefined;
-	if (
-		!currentStorage ||
-		typeof currentStorage.getItem !== "function" ||
-		typeof currentStorage.setItem !== "function" ||
-		typeof currentStorage.clear !== "function"
-	) {
-		Object.defineProperty(window, "localStorage", {
-			configurable: true,
-			value: {
-				get length() {
-					return storage.size;
-				},
-				clear: () => storage.clear(),
-				getItem: (key: string) => storage.get(key) ?? null,
-				key: (index: number) => Array.from(storage.keys())[index] ?? null,
-				removeItem: (key: string) => {
-					storage.delete(key);
-				},
-				setItem: (key: string, value: string) => {
-					storage.set(key, String(value));
-				},
-			},
-		});
-	}
 }
 
 if (typeof HTMLCanvasElement !== "undefined") {

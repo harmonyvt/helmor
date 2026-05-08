@@ -5,7 +5,6 @@ import {
 	CheckCircle2,
 	ChevronDown,
 	ExternalLink,
-	RefreshCw,
 	Trash2,
 } from "lucide-react";
 import type { SVGProps } from "react";
@@ -33,13 +32,6 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { replacePiModels } from "@/lib/agent-models";
-import {
-	type AgentModelSection,
-	checkPiModels,
-	type PiModelCheckResponse,
-	type PiModelProviderSummary,
-} from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { ClaudeCustomProviderSettings } from "@/lib/settings";
 import { useSettings } from "@/lib/settings";
@@ -58,152 +50,6 @@ type Draft = {
 	apiKey: string;
 	models: string;
 };
-
-type PiCheckState =
-	| { status: "idle" }
-	| { status: "success"; result: PiModelCheckResponse }
-	| { status: "empty"; result: PiModelCheckResponse }
-	| { status: "error"; message: string };
-
-export function PiModelsCheckPanel() {
-	const queryClient = useQueryClient();
-	const [state, setState] = useState<PiCheckState>({ status: "idle" });
-	const [checking, setChecking] = useState(false);
-
-	async function handleCheck() {
-		setChecking(true);
-		try {
-			const result = await checkPiModels();
-			if (result.status === "error") {
-				setState({
-					status: "error",
-					message: result.error ?? "Unable to check Pi models.",
-				});
-				return;
-			}
-
-			if (result.models.length > 0) {
-				queryClient.setQueryData<AgentModelSection[]>(
-					helmorQueryKeys.agentModelSections,
-					(current) => replacePiModels(current, result.models),
-				);
-				setState({ status: "success", result });
-			} else {
-				setState({ status: "empty", result });
-			}
-		} catch (error) {
-			setState({
-				status: "error",
-				message:
-					error instanceof Error ? error.message : "Unable to check Pi models.",
-			});
-		} finally {
-			setChecking(false);
-		}
-	}
-
-	return (
-		<SettingsRow
-			title="Pi models"
-			description="Check Pi for configured providers and available models. Successful checks update the Pi models in the default model menu."
-			align="start"
-			className="gap-8"
-		>
-			<div className="flex w-[360px] flex-col gap-3">
-				<div className="flex items-center justify-between gap-3">
-					<PiCheckSummary state={state} />
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={() => void handleCheck()}
-						disabled={checking}
-						className="shrink-0 gap-1.5"
-					>
-						<RefreshCw
-							className={cn("size-3.5", checking ? "animate-spin" : null)}
-						/>
-						{checking ? "Checking…" : "Check Pi"}
-					</Button>
-				</div>
-				{state.status === "success" ? (
-					<PiCheckDetails result={state.result} />
-				) : null}
-			</div>
-		</SettingsRow>
-	);
-}
-
-function PiCheckSummary({ state }: { state: PiCheckState }) {
-	if (state.status === "idle") {
-		return (
-			<div className="min-w-0 text-[12px] text-muted-foreground">
-				Not checked yet.
-			</div>
-		);
-	}
-	if (state.status === "error") {
-		return (
-			<div className="min-w-0 text-[12px] text-destructive">
-				{state.message}
-			</div>
-		);
-	}
-	if (state.status === "empty") {
-		return (
-			<div className="min-w-0 text-[12px] text-muted-foreground">
-				No Pi models are currently available. Static fallback models remain in
-				the menu.
-			</div>
-		);
-	}
-
-	return (
-		<div className="min-w-0 text-[12px] text-muted-foreground">
-			<span className="font-medium text-foreground">
-				{state.result.models.length} Pi models
-			</span>{" "}
-			available from {formatProviderCount(state.result.providers)}.
-		</div>
-	);
-}
-
-function PiCheckDetails({ result }: { result: PiModelCheckResponse }) {
-	return (
-		<div className="rounded-lg border border-border/40 bg-muted/20 px-3 py-2">
-			<div className="flex flex-wrap gap-1.5">
-				{result.providers.map((provider) => (
-					<span
-						key={provider.key}
-						className="rounded-full bg-background/80 px-2 py-0.5 text-[11px] text-muted-foreground"
-					>
-						{provider.label} · {provider.modelCount}
-					</span>
-				))}
-			</div>
-			<div className="mt-2 max-h-28 overflow-y-auto pr-1">
-				{result.models.map((model) => (
-					<div
-						key={model.id}
-						className="flex min-h-6 items-center gap-2 text-[12px]"
-					>
-						<span className="min-w-0 flex-1 truncate text-foreground">
-							{model.label}
-						</span>
-						<span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-							{model.cliModel}
-						</span>
-					</div>
-				))}
-			</div>
-		</div>
-	);
-}
-
-function formatProviderCount(providers: PiModelProviderSummary[]): string {
-	if (providers.length === 1) return providers[0]?.label ?? "1 provider";
-	return `${providers.length} providers`;
-}
 
 export function ClaudeCustomProvidersPanel() {
 	const queryClient = useQueryClient();

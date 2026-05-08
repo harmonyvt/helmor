@@ -15,7 +15,6 @@ const GITLAB_FORGE: ForgeDetection = {
 		changeRequestFullName: "merge request",
 		connectAction: "Connect GitLab",
 	},
-	cli: null,
 	detectionSignals: [],
 };
 
@@ -32,7 +31,6 @@ const GITHUB_FORGE: ForgeDetection = {
 		changeRequestFullName: "pull request",
 		connectAction: "Connect GitHub",
 	},
-	cli: null,
 	detectionSignals: [],
 };
 
@@ -65,19 +63,6 @@ describe("buildCommitButtonPrompt", () => {
 		expect(prompt).toContain("Create a pull request");
 		expect(prompt).toContain(
 			"Open a pull request against `release/next` using `gh pr create --base release/next`.",
-		);
-	});
-
-	it("passes the Goal branch into child workspace create-pr prompts", () => {
-		const prompt = buildCommitButtonPrompt(
-			"create-pr",
-			{},
-			"helmor/goal/build-api",
-			GITHUB_FORGE,
-		);
-
-		expect(prompt).toContain(
-			"Open a pull request against `helmor/goal/build-api` using `gh pr create --base helmor/goal/build-api`.",
 		);
 	});
 
@@ -213,5 +198,54 @@ describe("buildCommitButtonPrompt", () => {
 		expect(prompt).toContain("Push the current branch to `upstream`.");
 		expect(prompt).toContain("`git push -u upstream HEAD`");
 		expect(prompt).not.toContain("<remote>");
+	});
+
+	it("diffs against the target ref and stays chat-only by default", () => {
+		const prompt = buildCommitButtonPrompt(
+			"review",
+			null,
+			"main",
+			null,
+			"origin",
+		);
+		expect(prompt).toContain("relative to `origin/main`");
+		expect(prompt).toContain("git diff origin/main...HEAD");
+		expect(prompt).toContain("IN THIS CHAT ONLY");
+		expect(prompt).toContain("Do NOT modify files");
+		// Forge-agnostic — never touches gh/glab.
+		expect(prompt).not.toContain("pull request");
+		expect(prompt).not.toContain("merge request");
+		expect(prompt).not.toContain("gh pr");
+		expect(prompt).not.toContain("glab mr");
+	});
+
+	it("produces the same review prompt regardless of forge (GitLab vs GitHub)", () => {
+		const githubPrompt = buildCommitButtonPrompt(
+			"review",
+			null,
+			"main",
+			null,
+			"origin",
+		);
+		const gitlabPrompt = buildCommitButtonPrompt(
+			"review",
+			null,
+			"main",
+			GITLAB_FORGE,
+			"origin",
+		);
+		expect(gitlabPrompt).toBe(githubPrompt);
+	});
+
+	it("appends review preferences after the built-in prompt", () => {
+		expect(
+			buildCommitButtonPrompt(
+				"review",
+				{ review: "Focus on security regressions." },
+				"main",
+				null,
+				"origin",
+			),
+		).toContain("### User Preferences\n\nFocus on security regressions.");
 	});
 });

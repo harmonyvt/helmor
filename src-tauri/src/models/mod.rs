@@ -1,6 +1,4 @@
-pub mod browser_tabs;
 pub mod db;
-pub mod goals;
 pub mod repos;
 pub mod sessions;
 pub mod settings;

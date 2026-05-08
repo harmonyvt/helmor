@@ -13,7 +13,6 @@ import type {
 	ComposerCustomTag,
 	ComposerInsertItem,
 } from "@/lib/composer-insert";
-import { isImageExtensionPath } from "@/lib/path-util";
 
 export function $setEditorContent(
 	draft: string,
@@ -118,6 +117,8 @@ export function $appendComposerInsertItems(items: ComposerInsertItem[]) {
 					label: item.label,
 					submitText: item.submitText,
 					preview: item.preview ?? null,
+					source: item.source,
+					stateTone: item.stateTone,
 				}),
 			);
 		}
@@ -135,18 +136,4 @@ export function $appendComposerInsertItems(items: ComposerInsertItem[]) {
 		const offset = selectionTarget.getTextContentSize();
 		selectionTarget.select(offset, offset);
 	}
-}
-
-/**
- * Append image/file badge nodes for the given file paths at the end of the
- * editor. Must be called inside `editor.update()`.
- */
-export function $insertFilePaths(paths: string[]) {
-	if (paths.length === 0) return;
-	const items: ComposerInsertItem[] = paths.map((path) =>
-		isImageExtensionPath(path)
-			? { kind: "image" as const, path }
-			: { kind: "file" as const, path },
-	);
-	$appendComposerInsertItems(items);
 }

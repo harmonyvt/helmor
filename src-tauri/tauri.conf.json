@@ -1,12 +1,12 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "Helmor",
-	"version": "0.12.2",
+	"version": "0.19.1",
 	"identifier": "ai.helmor.desktop",
 	"build": {
 		"beforeDevCommand": "bun x vite",
 		"devUrl": "http://localhost:1420",
-		"beforeBuildCommand": "node scripts/prepare-sidecar.mjs && bun run build && bun run build:web",
+		"beforeBuildCommand": "node scripts/prepare-sidecar.mjs && bun run build",
 		"frontendDist": "../dist"
 	},
 	"plugins": {
@@ -54,12 +54,10 @@
 		"targets": "all",
 		"externalBin": [
 			"../sidecar/dist/helmor-sidecar",
-			"./target/bundled/helmor-cli",
-			"./target/bundled/helmor-web"
+			"./target/bundled/helmor-cli"
 		],
 		"resources": {
-			"../sidecar/dist/vendor/": "vendor",
-			"../dist-web/": "web-dist"
+			"../sidecar/dist/vendor/": "vendor"
 		},
 		"icon": [
 			"icons/32x32.png",

@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum ForgeProvider {
     Github,
@@ -45,34 +45,6 @@ pub struct ForgeLabels {
     pub connect_action: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(tag = "status", rename_all = "camelCase")]
-pub enum ForgeCliStatus {
-    Ready {
-        provider: ForgeProvider,
-        host: String,
-        cli_name: String,
-        login: String,
-        version: String,
-        message: String,
-    },
-    Unauthenticated {
-        provider: ForgeProvider,
-        host: String,
-        cli_name: String,
-        version: Option<String>,
-        message: String,
-        login_command: String,
-    },
-    Error {
-        provider: ForgeProvider,
-        host: String,
-        cli_name: String,
-        version: Option<String>,
-        message: String,
-    },
-}
-
 /// Human-readable signal that the layered detector fired on. Surfaced in
 /// the frontend tooltip so the user can see *why* we classified their
 /// remote a given way.
@@ -92,7 +64,6 @@ pub struct ForgeDetection {
     pub repo: Option<String>,
     pub remote_url: Option<String>,
     pub labels: ForgeLabels,
-    pub cli: Option<ForgeCliStatus>,
     /// Signals that led to the current provider classification — shown in
     /// the UI tooltip. Empty for `Unknown`.
     pub detection_signals: Vec<DetectionSignal>,
@@ -209,39 +180,6 @@ impl ForgeActionStatus {
     }
 }
 
-/// A single comment from a PR — either the root comment of an inline review
-/// thread or a general issue-style comment on the PR itself.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PrComment {
-    /// Stable ID for this comment.
-    ///
-    /// - Inline review thread root: `"review-thread-{threadId}-comment-{dbId}"`
-    /// - General PR comment: `"comment-{dbId}"`
-    pub id: String,
-    pub author: String,
-    pub body: String,
-    pub url: String,
-    /// File path for inline review thread comments; `None` for general comments.
-    pub file_path: Option<String>,
-    /// `true` when the parent review thread has been marked resolved on GitHub.
-    /// Always `false` for general PR comments (they have no resolution state).
-    pub is_thread_resolved: bool,
-    pub created_at: String,
-}
-
-/// All PR comments for a workspace's current branch, fetched from GitHub.
-#[derive(Debug, Clone, Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct PrCommentData {
-    /// Flat list of comments ordered: unresolved inline threads first, then
-    /// resolved inline threads, then general comments; within each group
-    /// oldest-first by `created_at`.
-    pub comments: Vec<PrComment>,
-    pub pr_number: Option<i64>,
-    pub pr_url: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,4 +195,12 @@ mod tests {
             assert_eq!(ForgeProvider::from_str(encoded).unwrap(), provider);
         }
     }
+
+    // Note: the old `forge_cli_status_serializes_struct_variant_fields_as_camel_case`
+    // regression test was deleted along with the `ForgeCliStatus` enum
+    // it guarded. Multi-account architecture replaced that single
+    // global-status enum with per-account / per-host primitives; the
+    // serde-rename pitfall it documented (use `rename_all_fields` on
+    // enums with struct variants) is still recorded next to
+    // `UiMutationEvent` in `ui_sync::events`.
 }

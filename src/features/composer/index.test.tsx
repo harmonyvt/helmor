@@ -7,25 +7,81 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import type { SerializedEditorState } from "lexical";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import { createHelmorQueryClient } from "@/lib/query-client";
-import { getComposerDraftStorageKey } from "./draft-storage";
-
-const toastMocks = vi.hoisted(() => ({
-	error: vi.fn(),
-}));
+import {
+	__resetDraftCacheForTests,
+	loadPersistedDraft,
+	savePersistedDraft,
+} from "./draft-storage";
 
 vi.mock("@tauri-apps/api/core", () => ({
-	invoke: vi.fn(),
+	invoke: vi.fn(async (cmd: string) => {
+		// Drafts are now DB-backed; the in-memory cache is the
+		// source-of-truth in tests (no real Rust IPC). Returning sane
+		// defaults for the two draft commands keeps the cache plumbing
+		// happy without touching the assertions.
+		if (cmd === "list_session_drafts") return [];
+		if (cmd === "set_session_draft") return undefined;
+		return undefined;
+	}),
 	convertFileSrc: vi.fn((path: string) => `asset://localhost${path}`),
 	Channel: class {
 		onmessage: ((event: unknown) => void) | null = null;
 	},
 }));
+
+/** Match the legacy `localStorage` `.toContain()` assertion shape so
+ *  callers can keep reading "the persisted blob contains text X" without
+ *  reaching into Lexical's editor-state JSON manually. */
+function persistedDraftText(contextKey: string): string {
+	const state = loadPersistedDraft(contextKey);
+	return state ? JSON.stringify(state) : "";
+}
+
+/** Build a minimal Lexical `SerializedEditorState` from one paragraph
+ *  of plain text — keeps the test fixture short. The cast through
+ *  `unknown` is unavoidable: Lexical's `SerializedEditorState` includes
+ *  union types that require `format` to be a specific bit-flag literal,
+ *  but the editor's deserializer only checks structural shape — and we
+ *  want every test to keep using the same plain string for clarity. */
+function paragraphDraft(text: string): SerializedEditorState {
+	return {
+		root: {
+			type: "root",
+			version: 1,
+			format: "",
+			indent: 0,
+			direction: null,
+			children: [
+				{
+					type: "paragraph",
+					version: 1,
+					format: "",
+					indent: 0,
+					direction: null,
+					textFormat: 0,
+					textStyle: "",
+					children: [
+						{
+							type: "text",
+							version: 1,
+							text,
+							format: 0,
+							mode: "normal",
+							style: "",
+							detail: 0,
+						},
+					],
+				},
+			],
+		},
+	} as unknown as SerializedEditorState;
+}
 
 const openerMocks = vi.hoisted(() => ({
 	openUrl: vi.fn(),
@@ -51,19 +107,13 @@ vi.mock("@/components/ai/code-block", () => ({
 	),
 }));
 
-vi.mock("sonner", () => ({
-	toast: {
-		error: toastMocks.error,
-	},
-}));
-
 import { WorkspaceComposer } from "./index";
 
 afterEach(() => {
 	cleanup();
 	window.localStorage.clear();
+	__resetDraftCacheForTests();
 	vi.useRealTimers();
-	vi.clearAllMocks();
 });
 
 const MODEL_SECTIONS = [
@@ -83,7 +133,7 @@ const MODEL_SECTIONS = [
 	},
 ] satisfies import("@/lib/api").AgentModelSection[];
 
-function createAskUserQuestionDeferredTool(): PendingDeferredTool {
+function createAskUserQuestionUserInput(): PendingUserInput {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
@@ -91,9 +141,11 @@ function createAskUserQuestionDeferredTool(): PendingDeferredTool {
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
 		permissionMode: "default",
-		toolUseId: "tool-ask-1",
-		toolName: "AskUserQuestion",
-		toolInput: {
+		userInputId: "tool-ask-1",
+		source: "Claude",
+		message: "Claude is asking for your input.",
+		payload: {
+			kind: "ask-user-question",
 			questions: [
 				{
 					header: "UI",
@@ -133,64 +185,62 @@ function createAskUserQuestionDeferredTool(): PendingDeferredTool {
 	};
 }
 
-function createGenericDeferredTool(): PendingDeferredTool {
+function createGenericPermission(): PendingPermission {
 	return {
-		provider: "claude",
-		modelId: "opus-1m",
-		resolvedModel: "opus-1m",
-		providerSessionId: "provider-session-1",
-		workingDirectory: "/tmp/helmor",
-		permissionMode: "default",
-		toolUseId: "tool-generic-1",
+		permissionId: "permission-generic-1",
 		toolName: "Bash",
 		toolInput: {
 			command: "git status --short",
 		},
+		title: null,
+		description: null,
 	};
 }
 
-function createFormElicitation(): PendingElicitation {
+function createFormUserInput(): PendingUserInput {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
 		resolvedModel: "opus-1m",
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
-		elicitationId: "elicitation-form-1",
-		serverName: "design-server",
+		permissionMode: null,
+		userInputId: "elicitation-form-1",
+		source: "design-server",
 		message: "Tell the MCP server what to do next.",
-		mode: "form",
-		requestedSchema: {
-			type: "object",
-			properties: {
-				name: {
-					type: "string",
-					title: "Project name",
-					description: "Used for the next step.",
+		payload: {
+			kind: "form",
+			schema: {
+				type: "object",
+				properties: {
+					name: {
+						type: "string",
+						title: "Project name",
+						description: "Used for the next step.",
+					},
+					approved: {
+						type: "boolean",
+						title: "Approved",
+					},
 				},
-				approved: {
-					type: "boolean",
-					title: "Approved",
-				},
+				required: ["name", "approved"],
 			},
-			required: ["name", "approved"],
 		},
 	};
 }
 
-function createUrlElicitation(): PendingElicitation {
+function createUrlUserInput(): PendingUserInput {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
 		resolvedModel: "opus-1m",
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
-		elicitationId: "elicitation-url-1",
-		serverName: "auth-server",
+		permissionMode: null,
+		userInputId: "elicitation-url-1",
+		source: "auth-server",
 		message: "Finish sign-in in the browser.",
-		mode: "url",
-		url: "https://example.com/authorize",
-		requestedSchema: null,
+		payload: { kind: "url", url: "https://example.com/authorize" },
 	};
 }
 
@@ -265,13 +315,65 @@ describe("WorkspaceComposer", () => {
 					submitText: "Please implement the full requirements document.",
 				},
 			],
+			expect.objectContaining({
+				editorStateSnapshot: expect.objectContaining({
+					root: expect.any(Object),
+				}),
+			}),
 		);
 	});
 
-	it("persists drafts to localStorage and restores them after remount", async () => {
+	it("allows an empty start composer submit as a create-only workspace", async () => {
 		const queryClient = createHelmorQueryClient();
 		const handleSubmit = vi.fn();
-		const storageKey = getComposerDraftStorageKey("session:session-restore");
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="start:repo:repo-1"
+					onSubmit={handleSubmit}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					startSubmitMenu
+				/>
+			</QueryClientProvider>,
+		);
+
+		const button = screen.getByRole("button", { name: "New Workspace" });
+		expect(button).toBeEnabled();
+
+		await userEvent.click(button);
+
+		expect(handleSubmit).toHaveBeenCalledWith(
+			"",
+			[],
+			[],
+			[],
+			expect.objectContaining({
+				startSubmitMode: "createOnly",
+				editorStateSnapshot: expect.objectContaining({
+					root: expect.any(Object),
+				}),
+			}),
+		);
+	});
+
+	it("persists drafts to the in-memory cache and restores them after remount", async () => {
+		const queryClient = createHelmorQueryClient();
+		const handleSubmit = vi.fn();
+		const contextKey = "session:session-restore";
 		const { unmount } = render(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposer
@@ -313,7 +415,7 @@ describe("WorkspaceComposer", () => {
 		);
 
 		await waitFor(() => {
-			expect(window.localStorage.getItem(storageKey)).toContain(
+			expect(persistedDraftText(contextKey)).toContain(
 				"Restore this draft after restart.",
 			);
 		});
@@ -344,7 +446,7 @@ describe("WorkspaceComposer", () => {
 		);
 
 		await screen.findByText("Requirements");
-		expect(window.localStorage.getItem(storageKey)).toContain(
+		expect(persistedDraftText(contextKey)).toContain(
 			"Restore this draft after restart.",
 		);
 		expect(handleSubmit).not.toHaveBeenCalled();
@@ -354,7 +456,6 @@ describe("WorkspaceComposer", () => {
 		const queryClient = createHelmorQueryClient();
 		const handleSubmit = vi.fn();
 		const contextKey = "session:session-send";
-		const storageKey = getComposerDraftStorageKey(contextKey);
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -397,7 +498,7 @@ describe("WorkspaceComposer", () => {
 		);
 
 		await waitFor(() => {
-			expect(window.localStorage.getItem(storageKey)).toContain(
+			expect(persistedDraftText(contextKey)).toContain(
 				"Send this persisted draft.",
 			);
 		});
@@ -415,51 +516,26 @@ describe("WorkspaceComposer", () => {
 					submitText: "Send this persisted draft.",
 				},
 			],
+			expect.objectContaining({
+				editorStateSnapshot: expect.objectContaining({
+					root: expect.any(Object),
+				}),
+			}),
 		);
-		expect(window.localStorage.getItem(storageKey)).toBeNull();
+		expect(loadPersistedDraft(contextKey)).toBeNull();
 	});
 
 	it("does not rehydrate the active draft when restore props change in-place", async () => {
 		const queryClient = createHelmorQueryClient();
-		const storageKey = getComposerDraftStorageKey("session:session-stable");
-		window.localStorage.setItem(
-			storageKey,
-			JSON.stringify({
-				root: {
-					type: "root",
-					version: 1,
-					format: "",
-					indent: 0,
-					direction: null,
-					children: [
-						{
-							type: "paragraph",
-							version: 1,
-							format: "",
-							indent: 0,
-							direction: null,
-							textFormat: 0,
-							textStyle: "",
-							children: [
-								{
-									type: "text",
-									version: 1,
-									text: "Keep the persisted draft.",
-									format: 0,
-									mode: "normal",
-									style: "",
-									detail: 0,
-								},
-							],
-						},
-					],
-				},
-			}),
+		const stableContextKey = "session:session-stable";
+		savePersistedDraft(
+			stableContextKey,
+			paragraphDraft("Keep the persisted draft."),
 		);
 		const { rerender } = render(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposer
-					contextKey="session:session-stable"
+					contextKey={stableContextKey}
 					onSubmit={vi.fn()}
 					disabled={false}
 					submitDisabled={false}
@@ -481,7 +557,7 @@ describe("WorkspaceComposer", () => {
 		);
 
 		await waitFor(() => {
-			expect(window.localStorage.getItem(storageKey)).toContain(
+			expect(persistedDraftText(stableContextKey)).toContain(
 				"Keep the persisted draft.",
 			);
 		});
@@ -489,7 +565,7 @@ describe("WorkspaceComposer", () => {
 		rerender(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposer
-					contextKey="session:session-stable"
+					contextKey={stableContextKey}
 					onSubmit={vi.fn()}
 					disabled={false}
 					submitDisabled={false}
@@ -510,10 +586,10 @@ describe("WorkspaceComposer", () => {
 			</QueryClientProvider>,
 		);
 
-		expect(window.localStorage.getItem(storageKey)).not.toContain(
+		expect(persistedDraftText(stableContextKey)).not.toContain(
 			"stale restore payload",
 		);
-		expect(window.localStorage.getItem(storageKey)).toContain(
+		expect(persistedDraftText(stableContextKey)).toContain(
 			"Keep the persisted draft.",
 		);
 	});
@@ -521,41 +597,7 @@ describe("WorkspaceComposer", () => {
 	it("does not rehydrate stale local drafts on same-context rerenders", async () => {
 		const queryClient = createHelmorQueryClient();
 		const contextKey = "session:session-rerender";
-		const storageKey = getComposerDraftStorageKey(contextKey);
-		window.localStorage.setItem(
-			storageKey,
-			JSON.stringify({
-				root: {
-					type: "root",
-					version: 1,
-					format: "",
-					indent: 0,
-					direction: null,
-					children: [
-						{
-							type: "paragraph",
-							version: 1,
-							format: "",
-							indent: 0,
-							direction: null,
-							textFormat: 0,
-							textStyle: "",
-							children: [
-								{
-									type: "text",
-									version: 1,
-									text: "stale draft",
-									format: 0,
-									mode: "normal",
-									style: "",
-									detail: 0,
-								},
-							],
-						},
-					],
-				},
-			}),
-		);
+		savePersistedDraft(contextKey, paragraphDraft("stale draft"));
 
 		const renderComposer = (
 			pendingInsertRequests = [] as Array<{
@@ -615,7 +657,7 @@ describe("WorkspaceComposer", () => {
 		rerender(renderComposer());
 
 		expect(screen.getByText("New context")).toBeInTheDocument();
-		expect(window.localStorage.getItem(storageKey)).toContain("stale draft");
+		expect(persistedDraftText(contextKey)).toContain("stale draft");
 	});
 
 	it("only renders fast mode controls for supported models", () => {
@@ -751,183 +793,6 @@ describe("WorkspaceComposer", () => {
 		expect(overlay).not.toBeNull();
 		expect(overlay).toHaveClass("absolute", "inset-[-5px]", "z-10");
 		expect(zapIcon).not.toHaveClass("opacity-55");
-	});
-
-	it("groups Pi models by provider in the model picker", async () => {
-		const user = userEvent.setup();
-		const queryClient = createHelmorQueryClient();
-		render(
-			<QueryClientProvider client={queryClient}>
-				<WorkspaceComposer
-					contextKey="session:session-1"
-					onSubmit={vi.fn()}
-					disabled={false}
-					submitDisabled={false}
-					sending={false}
-					selectedModelId="opus-1m"
-					modelSections={[
-						...MODEL_SECTIONS,
-						{
-							id: "pi",
-							label: "Pi",
-							options: [
-								{
-									id: "pi:anthropic/claude-sonnet-4-6",
-									provider: "pi",
-									label: "Pi · Claude Sonnet 4.6",
-									cliModel: "anthropic/claude-sonnet-4-6",
-									providerKey: "anthropic",
-								},
-								{
-									id: "pi:azure-openai-responses/gpt-5.4",
-									provider: "pi",
-									label: "Pi · GPT-5.4",
-									cliModel: "azure-openai-responses/gpt-5.4",
-									providerKey: "azure-openai-responses",
-								},
-							],
-						},
-					]}
-					onSelectModel={vi.fn()}
-					provider="claude"
-					effortLevel="high"
-					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
-					onChangePermissionMode={vi.fn()}
-					restoreImages={[]}
-					restoreFiles={[]}
-					restoreCustomTags={[]}
-				/>
-			</QueryClientProvider>,
-		);
-
-		await user.click(screen.getByText("Opus 4.7 1M"));
-
-		expect(screen.getByText("Pi · Anthropic")).toBeInTheDocument();
-		expect(screen.getByText("Pi · Azure OpenAI Responses")).toBeInTheDocument();
-		expect(screen.getByText("Pi · Claude Sonnet 4.6")).toBeInTheDocument();
-		expect(screen.getByText("Pi · GPT-5.4")).toBeInTheDocument();
-	});
-
-	it("can select a Pi model without entering an update loop", async () => {
-		const user = userEvent.setup();
-		const queryClient = createHelmorQueryClient();
-		const piModelId = "pi:azure-openai-responses/gpt-5.4";
-		const sections = [
-			...MODEL_SECTIONS,
-			{
-				id: "pi",
-				label: "Pi",
-				options: [
-					{
-						id: piModelId,
-						provider: "pi",
-						label: "Pi · GPT-5.4",
-						cliModel: "azure-openai-responses/gpt-5.4",
-						providerKey: "azure-openai-responses",
-						effortLevels: ["low", "medium", "high", "xhigh"],
-						supportsFastMode: true,
-						supportsContextUsage: false,
-					},
-				],
-			},
-		] satisfies import("@/lib/api").AgentModelSection[];
-
-		function Harness() {
-			const [selectedModelId, setSelectedModelId] = useState("opus-1m");
-			return (
-				<QueryClientProvider client={queryClient}>
-					<TooltipProvider>
-						<WorkspaceComposer
-							contextKey="session:session-1"
-							onSubmit={vi.fn()}
-							disabled={false}
-							submitDisabled={false}
-							sending={false}
-							selectedModelId={selectedModelId}
-							modelSections={sections}
-							onSelectModel={setSelectedModelId}
-							provider="claude"
-							effortLevel="high"
-							onSelectEffort={vi.fn()}
-							permissionMode="acceptEdits"
-							onChangePermissionMode={vi.fn()}
-							restoreImages={[]}
-							restoreFiles={[]}
-							restoreCustomTags={[]}
-						/>
-					</TooltipProvider>
-				</QueryClientProvider>
-			);
-		}
-
-		render(<Harness />);
-
-		await user.click(
-			screen.getByRole("button", { name: "Model: Opus 4.7 1M" }),
-		);
-		await user.click(screen.getByRole("button", { name: "Pi · GPT-5.4" }));
-
-		expect(
-			screen.getByRole("button", { name: "Model: Pi · GPT-5.4" }),
-		).toBeInTheDocument();
-	});
-
-	it("can open a large Pi model list without entering an update loop", async () => {
-		const user = userEvent.setup();
-		const queryClient = createHelmorQueryClient();
-		const sections = [
-			...MODEL_SECTIONS,
-			{
-				id: "pi",
-				label: "Pi",
-				options: Array.from({ length: 506 }, (_, index) => ({
-					id: `pi:test-provider/model-${index}`,
-					provider: "pi",
-					label: `Pi · Test Provider: Model ${index}`,
-					cliModel: `test-provider/model-${index}`,
-					providerKey: "test-provider",
-					effortLevels: ["low", "medium", "high"],
-					supportsFastMode: false,
-					supportsContextUsage: false,
-				})),
-			},
-		] satisfies import("@/lib/api").AgentModelSection[];
-
-		render(
-			<TooltipProvider>
-				<QueryClientProvider client={queryClient}>
-					<WorkspaceComposer
-						contextKey="session:session-1"
-						onSubmit={vi.fn()}
-						disabled={false}
-						submitDisabled={false}
-						sending={false}
-						selectedModelId="opus-1m"
-						modelSections={sections}
-						onSelectModel={vi.fn()}
-						provider="claude"
-						effortLevel="high"
-						onSelectEffort={vi.fn()}
-						permissionMode="acceptEdits"
-						onChangePermissionMode={vi.fn()}
-						restoreImages={[]}
-						restoreFiles={[]}
-						restoreCustomTags={[]}
-					/>
-				</QueryClientProvider>
-			</TooltipProvider>,
-		);
-
-		await user.click(
-			screen.getByRole("button", { name: "Model: Opus 4.7 1M" }),
-		);
-
-		await screen.findByRole("listbox", { name: "Select model" });
-		expect(await screen.findByText("Pi · test-provider")).toBeInTheDocument();
-		expect(
-			screen.getByRole("button", { name: "Pi · Test Provider: Model 505" }),
-		).toBeInTheDocument();
 	});
 
 	it("does not render the fast mode lottie overlay when fast mode is only toggled on", () => {
@@ -1118,7 +983,7 @@ describe("WorkspaceComposer", () => {
 	it("collects AskUserQuestion answers into updatedInput and resumes via allow", async () => {
 		const user = userEvent.setup();
 		const queryClient = createHelmorQueryClient();
-		const handleDeferredToolResponse = vi.fn();
+		const handleUserInputResponse = vi.fn();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -1139,8 +1004,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingDeferredTool={createAskUserQuestionDeferredTool()}
-					onDeferredToolResponse={handleDeferredToolResponse}
+					pendingUserInput={createAskUserQuestionUserInput()}
+					onUserInputResponse={handleUserInputResponse}
 				/>
 			</QueryClientProvider>,
 		);
@@ -1172,11 +1037,11 @@ describe("WorkspaceComposer", () => {
 		await user.click(screen.getByRole("button", { name: /Typecheck/i }));
 		await user.click(screen.getByRole("button", { name: "Send Answers" }));
 
-		expect(handleDeferredToolResponse).toHaveBeenCalledWith(
-			expect.objectContaining({ toolUseId: "tool-ask-1" }),
-			"allow",
+		expect(handleUserInputResponse).toHaveBeenCalledWith(
+			expect.objectContaining({ userInputId: "tool-ask-1" }),
+			"submit",
 			expect.objectContaining({
-				updatedInput: expect.objectContaining({
+				content: expect.objectContaining({
 					answers: {
 						"Which UI path should we take?": "Build new",
 						"Which checks should run before merge?": "Vitest, Typecheck",
@@ -1192,10 +1057,10 @@ describe("WorkspaceComposer", () => {
 		);
 	});
 
-	it("keeps deferred tool approval buttons enabled while the stream is paused for approval", async () => {
+	it("keeps permission approval buttons enabled while the stream is paused for approval", async () => {
 		const user = userEvent.setup();
 		const queryClient = createHelmorQueryClient();
-		const handleDeferredToolResponse = vi.fn();
+		const handlePermissionResponse = vi.fn();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -1216,8 +1081,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingDeferredTool={createGenericDeferredTool()}
-					onDeferredToolResponse={handleDeferredToolResponse}
+					pendingPermission={createGenericPermission()}
+					onPermissionResponse={handlePermissionResponse}
 				/>
 			</QueryClientProvider>,
 		);
@@ -1230,14 +1095,9 @@ describe("WorkspaceComposer", () => {
 
 		await user.click(allowButton);
 
-		expect(handleDeferredToolResponse).toHaveBeenCalledWith(
-			expect.objectContaining({ toolUseId: "tool-generic-1" }),
+		expect(handlePermissionResponse).toHaveBeenCalledWith(
+			"permission-generic-1",
 			"allow",
-			expect.objectContaining({
-				updatedInput: {
-					command: "git status --short",
-				},
-			}),
 		);
 	});
 
@@ -1264,8 +1124,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingDeferredTool={createAskUserQuestionDeferredTool()}
-					onDeferredToolResponse={vi.fn()}
+					pendingUserInput={createAskUserQuestionUserInput()}
+					onUserInputResponse={vi.fn()}
 				/>
 			</QueryClientProvider>,
 		);
@@ -1290,7 +1150,7 @@ describe("WorkspaceComposer", () => {
 	it("renders a form elicitation panel and submits structured content", async () => {
 		const user = userEvent.setup();
 		const queryClient = createHelmorQueryClient();
-		const onElicitationResponse = vi.fn();
+		const onUserInputResponse = vi.fn();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -1311,8 +1171,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingElicitation={createFormElicitation()}
-					onElicitationResponse={onElicitationResponse}
+					pendingUserInput={createFormUserInput()}
+					onUserInputResponse={onUserInputResponse}
 				/>
 			</QueryClientProvider>,
 		);
@@ -1342,17 +1202,17 @@ describe("WorkspaceComposer", () => {
 		).not.toBeDisabled();
 		await user.click(screen.getByRole("button", { name: "Send Response" }));
 
-		expect(onElicitationResponse).toHaveBeenCalledWith(
-			expect.objectContaining({ elicitationId: "elicitation-form-1" }),
-			"accept",
-			{ approved: true, name: "Helmor Elicitation" },
+		expect(onUserInputResponse).toHaveBeenCalledWith(
+			expect.objectContaining({ userInputId: "elicitation-form-1" }),
+			"submit",
+			{ content: { approved: true, name: "Helmor Elicitation" } },
 		);
 	});
 
 	it("opens and copies URL elicitation links through the shared panel shell", async () => {
 		const user = userEvent.setup();
 		const queryClient = createHelmorQueryClient();
-		const onElicitationResponse = vi.fn();
+		const onUserInputResponse = vi.fn();
 		const writeText = vi.fn().mockResolvedValue(undefined);
 		Object.defineProperty(navigator, "clipboard", {
 			configurable: true,
@@ -1379,8 +1239,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingElicitation={createUrlElicitation()}
-					onElicitationResponse={onElicitationResponse}
+					pendingUserInput={createUrlUserInput()}
+					onUserInputResponse={onUserInputResponse}
 				/>
 			</QueryClientProvider>,
 		);
@@ -1398,9 +1258,9 @@ describe("WorkspaceComposer", () => {
 			"https://example.com/authorize",
 		);
 		await waitFor(() => {
-			expect(onElicitationResponse).toHaveBeenCalledWith(
-				expect.objectContaining({ elicitationId: "elicitation-url-1" }),
-				"accept",
+			expect(onUserInputResponse).toHaveBeenCalledWith(
+				expect.objectContaining({ userInputId: "elicitation-url-1" }),
+				"submit",
 			);
 		});
 	});
@@ -1480,117 +1340,6 @@ describe("WorkspaceComposer", () => {
 			[],
 			{ permissionModeOverride: "bypassPermissions" },
 		);
-	});
-
-	it("calls clean-thread handler from Implement options", async () => {
-		const queryClient = createHelmorQueryClient();
-		const onImplementPlanInCleanThread = vi.fn();
-		const planReview = {
-			type: "plan-review" as const,
-			toolUseId: "tool-plan-1",
-			toolName: "ExitPlanMode",
-			plan: "1. Do the thing",
-			planFilePath: null,
-			allowedPrompts: [],
-		};
-
-		render(
-			<QueryClientProvider client={queryClient}>
-				<WorkspaceComposer
-					contextKey="session:session-1"
-					onSubmit={vi.fn()}
-					disabled={false}
-					submitDisabled={false}
-					sending={false}
-					selectedModelId="opus-1m"
-					modelSections={MODEL_SECTIONS}
-					onSelectModel={vi.fn()}
-					provider="claude"
-					effortLevel="high"
-					onSelectEffort={vi.fn()}
-					permissionMode="plan"
-					onChangePermissionMode={vi.fn()}
-					restoreImages={[]}
-					restoreFiles={[]}
-					restoreCustomTags={[]}
-					planReview={planReview}
-					onImplementPlanInCleanThread={onImplementPlanInCleanThread}
-				/>
-			</QueryClientProvider>,
-		);
-
-		await userEvent.click(
-			screen.getByRole("button", { name: "Implement options" }),
-		);
-		await userEvent.click(
-			screen.getByRole("menuitem", { name: "Implement in Clean Thread" }),
-		);
-
-		expect(onImplementPlanInCleanThread).toHaveBeenCalledWith(planReview);
-	});
-
-	it("shows a toast when clean-thread implementation fails", async () => {
-		const queryClient = createHelmorQueryClient();
-		const error = new Error("Could not create session");
-		const consoleError = vi
-			.spyOn(console, "error")
-			.mockImplementation(() => undefined);
-		const onImplementPlanInCleanThread = vi.fn().mockRejectedValue(error);
-		const planReview = {
-			type: "plan-review" as const,
-			toolUseId: "tool-plan-1",
-			toolName: "ExitPlanMode",
-			plan: "1. Do the thing",
-			planFilePath: null,
-			allowedPrompts: [],
-		};
-
-		try {
-			render(
-				<QueryClientProvider client={queryClient}>
-					<WorkspaceComposer
-						contextKey="session:session-1"
-						onSubmit={vi.fn()}
-						disabled={false}
-						submitDisabled={false}
-						sending={false}
-						selectedModelId="opus-1m"
-						modelSections={MODEL_SECTIONS}
-						onSelectModel={vi.fn()}
-						provider="claude"
-						effortLevel="high"
-						onSelectEffort={vi.fn()}
-						permissionMode="plan"
-						onChangePermissionMode={vi.fn()}
-						restoreImages={[]}
-						restoreFiles={[]}
-						restoreCustomTags={[]}
-						planReview={planReview}
-						onImplementPlanInCleanThread={onImplementPlanInCleanThread}
-					/>
-				</QueryClientProvider>,
-			);
-
-			await userEvent.click(
-				screen.getByRole("button", { name: "Implement options" }),
-			);
-			await userEvent.click(
-				screen.getByRole("menuitem", { name: "Implement in Clean Thread" }),
-			);
-
-			await waitFor(() => {
-				expect(toastMocks.error).toHaveBeenCalledWith(
-					"Could not implement plan in a clean thread",
-					{ description: "Could not create session" },
-				);
-			});
-			expect(consoleError).toHaveBeenCalledWith(
-				"[composer] failed to implement plan in clean thread:",
-				error,
-			);
-		} finally {
-			consoleError.mockRestore();
-		}
 	});
 
 	it("disables Request Changes when input is empty", () => {
