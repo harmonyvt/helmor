@@ -999,6 +999,54 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 	});
 
+	it("renders PR comment bodies as markdown", async () => {
+		const user = userEvent.setup();
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			prNumber: 12,
+			prUrl: "https://github.com/acme/repo/pull/12",
+			comments: [
+				{
+					id: "comment-1",
+					author: "coderabbitai",
+					body: [
+						"**Run configuration**",
+						"",
+						"> [!NOTE]",
+						"> Currently processing new changes in this PR.",
+						"",
+						"[Review Change Stack](https://app.coderabbit.ai/change-stack)",
+					].join("\n"),
+					url: "https://github.com/acme/repo/pull/12#issuecomment-1",
+					filePath: null,
+					isThreadResolved: false,
+					createdAt: "2026-05-04T00:00:00Z",
+				},
+			],
+		});
+
+		renderInspector();
+
+		await user.click(await screen.findByRole("tab", { name: /Comments/ }));
+		const commentsPanel = document.getElementById("inspector-panel-comments");
+		expect(commentsPanel).not.toBeNull();
+
+		expect(
+			await within(commentsPanel as HTMLElement).findByText(
+				"Run configuration",
+				{
+					selector: '[data-streamdown="strong"]',
+				},
+			),
+		).toBeInTheDocument();
+		expect(
+			within(commentsPanel as HTMLElement).getByRole("link", {
+				name: "Review Change Stack",
+			}),
+		).toHaveAttribute("href", "https://app.coderabbit.ai/change-stack");
+		expect(commentsPanel).not.toHaveTextContent("**Run configuration**");
+		expect(commentsPanel).not.toHaveTextContent("> Currently processing");
+	});
+
 	it("review all selects the new session immediately after creating it", async () => {
 		const user = userEvent.setup();
 		const onQueuePendingPromptForSession = vi.fn();
