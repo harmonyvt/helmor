@@ -103,6 +103,7 @@ pub fn create_goal_child_workspace_and_start(
                 model: params.assigned_model_id.clone(),
                 permission_mode: params.permission_mode.clone(),
                 linked_directories: Vec::new(),
+                delegate_to_running_app: true,
             },
             on_event,
         )?;

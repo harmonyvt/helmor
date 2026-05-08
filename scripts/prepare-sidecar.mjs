@@ -16,7 +16,13 @@
  *   bun scripts/prepare-sidecar.mjs      # equivalent, Tauri uses this form
  */
 import { execFileSync, execSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import {
+	chmodSync,
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,6 +35,12 @@ const entitlementsPlist = resolve(repoRoot, "src-tauri", "Entitlements.plist");
 function run(cmd, cwd) {
 	console.log(`[prepare-sidecar] $ ${cmd} (cwd: ${cwd})`);
 	execSync(cmd, { cwd, stdio: "inherit" });
+}
+
+function stageExternalBinPlaceholder(path) {
+	if (existsSync(path)) return;
+	writeFileSync(path, "#!/bin/sh\nexit 0\n");
+	chmodSync(path, 0o755);
 }
 
 // Pre-sign the compiled sidecar with JIT entitlements so Bun's JSC runtime
@@ -125,16 +137,18 @@ function main() {
 	}
 
 	// Tauri validates every `externalBin` during `cargo build`, including the
-	// sidecar companion. Stage the target-suffixed sidecar first so a clean CI
-	// checkout can compile `helmor-cli` without depending on stale artifacts.
+	// companion binaries that this same command is about to produce. Stage
+	// target-suffixed placeholders first so clean CI checkouts can compile them
+	// without depending on stale artifacts; real binaries overwrite these below.
+	mkdirSync(bundledBinDir, { recursive: true });
 	copyFileSync(sidecarSource, sidecarDestination);
+	stageExternalBinPlaceholder(cliDestination);
+	stageExternalBinPlaceholder(webDestination);
 
 	run(
 		`cargo build --manifest-path ${resolve(srcTauriDir, "Cargo.toml")} --bin helmor-cli --bin helmor-web --release --target ${triple}`,
 		repoRoot,
 	);
-
-	mkdirSync(bundledBinDir, { recursive: true });
 
 	if (!existsSync(cliSource)) {
 		throw new Error(

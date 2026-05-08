@@ -38,6 +38,7 @@ import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { GoalWorkspaceContainer } from "@/features/goals";
+import MobileGoalView from "@/features/goals/mobile-goal-view";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import MobileInspectorView from "@/features/inspector/mobile-inspector-view";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
@@ -147,6 +148,25 @@ import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-f
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 const EMPTY_SENDING_SESSION_IDS = new Set<string>();
+const MOBILE_SHELL_QUERY = "(max-width: 1023.98px)";
+
+function useMobileShellVisibility() {
+	const [isVisible, setIsVisible] = useState(() => {
+		if (typeof window === "undefined" || !window.matchMedia) return false;
+		return window.matchMedia(MOBILE_SHELL_QUERY).matches;
+	});
+
+	useEffect(() => {
+		if (typeof window === "undefined" || !window.matchMedia) return;
+		const query = window.matchMedia(MOBILE_SHELL_QUERY);
+		const handleChange = () => setIsVisible(query.matches);
+		handleChange();
+		query.addEventListener("change", handleChange);
+		return () => query.removeEventListener("change", handleChange);
+	}, []);
+
+	return isVisible;
+}
 
 function App() {
 	const e2eScenario =
@@ -357,6 +377,7 @@ function AppShell({
 	) => void;
 }) {
 	useZoom();
+	const isMobileShellVisible = useMobileShellVisibility();
 	const queryClient = useQueryClient();
 	const workspaceSelectionRequestRef = useRef(0);
 	const sessionSelectionRequestRef = useRef(0);
@@ -2242,32 +2263,42 @@ function AppShell({
 						) : (
 							<>
 								{/* ── Mobile shell — visible below lg breakpoint ── */}
-								<div className="flex h-screen flex-col lg:hidden">
-									<MobileShell
-										selectedWorkspaceId={selectedWorkspaceId}
-										selectedSessionId={selectedSessionId}
-										onWorkspaceSelect={handleSelectWorkspace}
-										onSessionSelect={handleSelectSession}
-										workspacesView={
-											<MobileWorkspaceView
-												selectedWorkspaceId={selectedWorkspaceId}
-												onWorkspaceSelect={handleSelectWorkspace}
-											/>
-										}
-										threadView={
-											<MobileThreadView
-												selectedWorkspaceId={selectedWorkspaceId}
-												selectedSessionId={selectedSessionId}
-												onSessionSelect={handleSelectSession}
-											/>
-										}
-										inspectorView={
-											<MobileInspectorView
-												selectedWorkspaceId={selectedWorkspaceId}
-											/>
-										}
-									/>
-								</div>
+								{isMobileShellVisible ? (
+									<div className="flex h-screen flex-col lg:hidden">
+										<MobileShell
+											selectedWorkspaceId={selectedWorkspaceId}
+											selectedSessionId={selectedSessionId}
+											onWorkspaceSelect={handleSelectWorkspace}
+											onSessionSelect={handleSelectSession}
+											workspacesView={
+												<MobileWorkspaceView
+													selectedWorkspaceId={selectedWorkspaceId}
+													onWorkspaceSelect={handleSelectWorkspace}
+												/>
+											}
+											threadView={
+												selectedWorkspaceDetailQuery.data?.workspaceKind ===
+													"goal" && selectedWorkspaceId ? (
+													<MobileGoalView
+														workspaceId={selectedWorkspaceId}
+														onSessionSelect={handleSelectSession}
+													/>
+												) : (
+													<MobileThreadView
+														selectedWorkspaceId={selectedWorkspaceId}
+														selectedSessionId={selectedSessionId}
+														onSessionSelect={handleSelectSession}
+													/>
+												)
+											}
+											inspectorView={
+												<MobileInspectorView
+													selectedWorkspaceId={selectedWorkspaceId}
+												/>
+											}
+										/>
+									</div>
+								) : null}
 
 								{/* ── Desktop three-panel layout — visible at lg and above ── */}
 								<main

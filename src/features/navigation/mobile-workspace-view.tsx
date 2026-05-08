@@ -1,27 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
-import { useContext } from "react";
+import { ChevronRight, Folder, Plus } from "lucide-react";
+import { useContext, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
+import type { WorkspaceRow } from "@/lib/api";
 import {
 	archivedWorkspacesQueryOptions,
 	workspaceGroupsQueryOptions,
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { MobileShellContext } from "@/shell/mobile-shell";
-import { GroupIcon, humanizeBranch } from "./shared";
+import { GroupIcon, humanizeBranch, workspaceStatusToTone } from "./shared";
+import { projectSidebarListsByGoal } from "./sidebar-projection";
 
 interface MobileWorkspaceViewProps {
 	selectedWorkspaceId: string | null;
 	onWorkspaceSelect: (workspaceId: string) => void;
 }
-
-type GroupEntry = {
-	id: string;
-	label: string;
-	tone: WorkspaceGroup["tone"] | "backlog";
-	workspaces: WorkspaceRow[];
-};
 
 function WorkspaceItem({
 	workspace,
@@ -51,19 +45,7 @@ function WorkspaceItem({
 			aria-label={displayTitle}
 			aria-pressed={selected}
 		>
-			<GroupIcon
-				tone={
-					workspace.status === "review"
-						? "review"
-						: workspace.status === "done"
-							? "done"
-							: workspace.status === "backlog"
-								? "backlog"
-								: workspace.status === "canceled"
-									? "canceled"
-									: "progress"
-				}
-			/>
+			<GroupIcon tone={workspaceStatusToTone(workspace.status)} />
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span
 					className={cn(
@@ -109,35 +91,36 @@ export default function MobileWorkspaceView({
 	const archivedQuery = useQuery(archivedWorkspacesQueryOptions());
 
 	const groups = groupsQuery.data ?? [];
-	const archivedRows = archivedQuery.data ?? [];
+	const archivedSummaries = archivedQuery.data ?? [];
 
-	const groupEntries: GroupEntry[] = [
-		...groups
-			.filter((g) => g.rows.length > 0)
-			.map((g) => ({
-				id: g.id,
-				label: g.label,
-				tone: g.tone,
-				workspaces: g.rows,
-			})),
-		...(archivedRows.length > 0
-			? [
-					{
-						id: "__archived__",
-						label: "Archived",
-						tone: "backlog" as const,
-						workspaces: archivedRows,
-					},
-				]
-			: []),
-	];
+	const projection = useMemo(
+		() => projectSidebarListsByGoal(groups, new Map(), archivedSummaries),
+		[groups, archivedSummaries],
+	);
 
-	const totalCount = groupEntries.reduce((n, g) => n + g.workspaces.length, 0);
+	const { projectGroups, ungroupedRows, archivedGoalRows } = projection;
 
-	function handleSelect(workspaceId: string) {
-		onWorkspaceSelect(workspaceId);
-		navigateToTab("thread");
+	// Track collapsed goals. Absent = expanded; present = collapsed.
+	const [expandedGoals, setExpandedGoals] = useState<Set<string>>(
+		() => new Set<string>(),
+	);
+
+	function toggleGoal(goalId: string) {
+		setExpandedGoals((prev) => {
+			const next = new Set(prev);
+			if (next.has(goalId)) {
+				next.delete(goalId);
+			} else {
+				next.add(goalId);
+			}
+			return next;
+		});
 	}
+
+	const isEmpty =
+		projectGroups.length === 0 &&
+		ungroupedRows.length === 0 &&
+		archivedGoalRows.length === 0;
 
 	return (
 		<div className="flex h-full flex-col overflow-hidden bg-background">
@@ -149,9 +132,9 @@ export default function MobileWorkspaceView({
 				</Button>
 			</div>
 
-			{/* Grouped workspace list */}
+			{/* Goals hierarchy list */}
 			<div className="flex-1 overflow-y-auto scrollbar-none pb-4">
-				{totalCount === 0 ? (
+				{isEmpty ? (
 					<div className="flex flex-1 items-center justify-center p-8">
 						<div className="text-center">
 							<p className="text-sm text-muted-foreground">
@@ -163,22 +146,124 @@ export default function MobileWorkspaceView({
 						</div>
 					</div>
 				) : (
-					groupEntries.map((group) => (
-						<div key={group.id}>
-							<GroupHeader
-								label={group.label}
-								count={group.workspaces.length}
-							/>
-							{group.workspaces.map((ws) => (
-								<WorkspaceItem
-									key={ws.id}
-									workspace={ws}
-									selected={selectedWorkspaceId === ws.id}
-									onSelect={handleSelect}
-								/>
-							))}
-						</div>
-					))
+					<>
+						{/* Repo + goal groups */}
+						{projectGroups.map((projectGroup) => (
+							<div key={projectGroup.repoName}>
+								{/* Repo section header */}
+								<div className="flex items-center gap-2 px-4 py-2">
+									{projectGroup.repoIconSrc ? (
+										<img
+											src={projectGroup.repoIconSrc}
+											alt={projectGroup.repoName}
+											className="size-5 shrink-0 rounded"
+										/>
+									) : projectGroup.repoInitials ? (
+										<span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-semibold text-muted-foreground">
+											{projectGroup.repoInitials}
+										</span>
+									) : null}
+									<span className="text-xs font-semibold text-foreground">
+										{projectGroup.repoName}
+									</span>
+								</div>
+
+								{/* Goal folder rows */}
+								{projectGroup.goalGroups.map((goal) => {
+									const isOpen = !expandedGoals.has(goal.goalWorkspaceId);
+									return (
+										<div key={goal.goalWorkspaceId}>
+											<button
+												type="button"
+												className="flex min-h-[44px] w-full cursor-pointer items-center gap-2 px-4 py-2 hover:bg-accent/50"
+												onClick={() => {
+													toggleGoal(goal.goalWorkspaceId);
+													onWorkspaceSelect(goal.goalWorkspaceId);
+													navigateToTab("thread");
+												}}
+											>
+												<ChevronRight
+													className={cn(
+														"size-3 shrink-0 text-muted-foreground transition-transform",
+														isOpen && "rotate-90",
+													)}
+												/>
+												<Folder className="size-3.5 shrink-0 text-muted-foreground" />
+												<span className="flex-1 truncate text-sm font-medium">
+													{goal.goalTitle}
+												</span>
+												{goal.childRows.length > 0 && (
+													<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+														{goal.childRows.length}
+													</span>
+												)}
+											</button>
+
+											{/* Child workspace rows (shown when expanded) */}
+											{isOpen &&
+												goal.childRows.map((row) => (
+													<button
+														key={row.id}
+														type="button"
+														className="flex min-h-[44px] w-full cursor-pointer items-center gap-2 py-2 pl-8 pr-4 hover:bg-accent/50"
+														onClick={() => {
+															onWorkspaceSelect(row.id);
+															navigateToTab("thread");
+														}}
+													>
+														<GroupIcon
+															tone={workspaceStatusToTone(row.status)}
+														/>
+														<span className="flex-1 truncate text-sm">
+															{humanizeBranch(row.branch ?? "") ||
+																row.title ||
+																row.directoryName ||
+																row.id}
+														</span>
+													</button>
+												))}
+										</div>
+									);
+								})}
+							</div>
+						))}
+
+						{/* Ungrouped code workspaces */}
+						{ungroupedRows.length > 0 && (
+							<div>
+								<GroupHeader label="Workspaces" count={ungroupedRows.length} />
+								{ungroupedRows.map((row) => (
+									<WorkspaceItem
+										key={row.id}
+										workspace={row}
+										selected={selectedWorkspaceId === row.id}
+										onSelect={(id) => {
+											onWorkspaceSelect(id);
+											navigateToTab("thread");
+										}}
+									/>
+								))}
+							</div>
+						)}
+
+						{/* Archived goal workspaces */}
+						{archivedGoalRows.length > 0 && (
+							<div>
+								<GroupHeader label="Archived" count={archivedGoalRows.length} />
+								{archivedGoalRows.map((row) => (
+									<WorkspaceItem
+										key={row.id}
+										workspace={row}
+										selected={selectedWorkspaceId === row.id}
+										onSelect={(id) => {
+											onWorkspaceSelect(id);
+											navigateToTab("thread");
+										}}
+									/>
+								))}
+							</div>
+						)}
+					</>
 				)}
 			</div>
 		</div>
