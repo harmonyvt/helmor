@@ -93,15 +93,6 @@ pub enum NormPart {
     FileMention {
         path: String,
     },
-    GenericCard {
-        title: String,
-        subtitle: Option<String>,
-        body: Option<String>,
-        severity: Option<String>,
-        status: Option<String>,
-        provider: Option<String>,
-        has_details: bool,
-    },
     DelegationAnchor {
         delegation_id: String,
         parent_session_id: String,
@@ -266,24 +257,6 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 .collect(),
         },
         MessagePart::FileMention { path, .. } => NormPart::FileMention { path: path.clone() },
-        MessagePart::GenericCard {
-            title,
-            subtitle,
-            body,
-            severity,
-            status,
-            provider,
-            details,
-            ..
-        } => NormPart::GenericCard {
-            title: truncate(title),
-            subtitle: subtitle.as_deref().map(truncate),
-            body: body.as_deref().map(truncate),
-            severity: severity.as_ref().map(|s| format!("{s:?}").to_lowercase()),
-            status: status.clone(),
-            provider: provider.clone(),
-            has_details: details.is_some(),
-        },
         MessagePart::DelegationAnchor {
             title,
             provider,

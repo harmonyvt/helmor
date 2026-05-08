@@ -16,9 +16,7 @@ use crate::{
 
 use super::detect::build_detection_for_remote;
 use super::provider::{backend_for, WorkspaceForgeBackend};
-use super::types::{
-    ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, PrCommentData,
-};
+use super::types::{ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider};
 
 pub fn get_workspace_forge(workspace_id: &str) -> Result<ForgeDetection> {
     let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
@@ -151,35 +149,6 @@ pub fn lookup_workspace_forge_check_insert_text(
     Ok(text)
 }
 
-pub fn lookup_workspace_forge_deployment_insert_text(
-    workspace_id: &str,
-    item_id: &str,
-) -> Result<String> {
-    let Some((detection, backend)) = resolve_backend(workspace_id, "deployment_insert_text")?
-    else {
-        bail!("Workspace remote is not a supported forge repository");
-    };
-    let text = backend
-        .deployment_insert_text(workspace_id, item_id)
-        .inspect_err(|error| {
-            log_forge_backend_error(
-                error,
-                workspace_id,
-                &detection,
-                "Forge deployment insert text lookup failed",
-            )
-        })?;
-    tracing::debug!(
-        workspace_id,
-        provider = ?detection.provider,
-        host = ?detection.host,
-        item_id,
-        bytes = text.len(),
-        "Forge deployment insert text lookup completed"
-    );
-    Ok(text)
-}
-
 pub fn merge_workspace_change_request(workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
     let Some((detection, backend)) = resolve_backend(workspace_id, "merge_change_request")? else {
         return Ok(None);
@@ -216,57 +185,6 @@ pub fn close_workspace_change_request(workspace_id: &str) -> Result<Option<Chang
         "Forge close completed"
     );
     Ok(result)
-}
-
-pub fn lookup_workspace_pr_comments(workspace_id: &str) -> Result<PrCommentData> {
-    let Some((detection, backend)) = resolve_backend(workspace_id, "pr_comments")? else {
-        return Ok(PrCommentData::default());
-    };
-    let data = backend.pr_comments(workspace_id).inspect_err(|error| {
-        log_forge_backend_error(
-            error,
-            workspace_id,
-            &detection,
-            "Forge PR comments lookup failed",
-        )
-    })?;
-    tracing::debug!(
-        workspace_id,
-        provider = ?detection.provider,
-        host = ?detection.host,
-        comments = data.comments.len(),
-        "Forge PR comments lookup completed"
-    );
-    Ok(data)
-}
-
-pub fn lookup_workspace_pr_comment_insert_text(
-    workspace_id: &str,
-    comment_id: &str,
-) -> Result<String> {
-    let Some((detection, backend)) = resolve_backend(workspace_id, "pr_comment_insert_text")?
-    else {
-        bail!("Workspace remote is not a supported forge repository");
-    };
-    let text = backend
-        .pr_comment_insert_text(workspace_id, comment_id)
-        .inspect_err(|error| {
-            log_forge_backend_error(
-                error,
-                workspace_id,
-                &detection,
-                "Forge PR comment insert text lookup failed",
-            )
-        })?;
-    tracing::debug!(
-        workspace_id,
-        provider = ?detection.provider,
-        host = ?detection.host,
-        comment_id,
-        bytes = text.len(),
-        "Forge PR comment insert text lookup completed"
-    );
-    Ok(text)
 }
 
 fn resolve_backend(

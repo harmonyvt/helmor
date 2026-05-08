@@ -128,7 +128,6 @@ mod tests {
             description: format!("desc for {name}"),
             argument_hint: None,
             source: "skill".to_string(),
-            source_info: None,
         }
     }
 

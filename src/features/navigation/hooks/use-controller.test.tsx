@@ -28,7 +28,6 @@ const apiMocks = vi.hoisted(() => {
 		addRepositoryFromLocalPath: vi.fn(),
 		createWorkspaceFromRepo: vi.fn(),
 		prepareWorkspaceFromRepo: vi.fn(),
-		prepareWorkspaceFromSource: vi.fn(),
 		finalizeWorkspaceFromRepo: vi.fn(),
 		listRepositories: vi.fn(),
 		loadAddRepositoryDefaults: vi.fn(),
@@ -41,11 +40,9 @@ const apiMocks = vi.hoisted(() => {
 		permanentlyDeleteWorkspace: vi.fn(),
 		pinWorkspace: vi.fn(),
 		prepareArchiveWorkspace: vi.fn(),
-		prepareGoalWorkspace: vi.fn(),
 		restoreWorkspace: vi.fn(),
 		setWorkspaceStatus: vi.fn(),
 		startArchiveWorkspace: vi.fn(),
-		finalizeGoalWorkspace: vi.fn(),
 		unpinWorkspace: vi.fn(),
 		validateRestoreWorkspace: vi.fn(),
 		listenArchiveExecutionFailed: vi.fn(async (callback) => {
@@ -81,7 +78,6 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		addRepositoryFromLocalPath: apiMocks.addRepositoryFromLocalPath,
 		createWorkspaceFromRepo: apiMocks.createWorkspaceFromRepo,
 		prepareWorkspaceFromRepo: apiMocks.prepareWorkspaceFromRepo,
-		prepareWorkspaceFromSource: apiMocks.prepareWorkspaceFromSource,
 		finalizeWorkspaceFromRepo: apiMocks.finalizeWorkspaceFromRepo,
 		listRepositories: apiMocks.listRepositories,
 		loadAddRepositoryDefaults: apiMocks.loadAddRepositoryDefaults,
@@ -96,11 +92,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		permanentlyDeleteWorkspace: apiMocks.permanentlyDeleteWorkspace,
 		pinWorkspace: apiMocks.pinWorkspace,
 		prepareArchiveWorkspace: apiMocks.prepareArchiveWorkspace,
-		prepareGoalWorkspace: apiMocks.prepareGoalWorkspace,
 		restoreWorkspace: apiMocks.restoreWorkspace,
 		setWorkspaceStatus: apiMocks.setWorkspaceStatus,
 		startArchiveWorkspace: apiMocks.startArchiveWorkspace,
-		finalizeGoalWorkspace: apiMocks.finalizeGoalWorkspace,
 		unpinWorkspace: apiMocks.unpinWorkspace,
 		validateRestoreWorkspace: apiMocks.validateRestoreWorkspace,
 	};
@@ -206,6 +200,7 @@ function makeWorkspaceDetail(id: string): WorkspaceDetail {
 		branch: `feature/${id}`,
 		initializationParentBranch: "main",
 		intendedTargetBranch: "main",
+		mode: "worktree",
 		pinnedAt: null,
 		prTitle: null,
 		archiveCommit: null,
@@ -256,36 +251,6 @@ describe("useWorkspacesSidebarController archive flow", () => {
 				workspaceId,
 			}),
 		);
-		apiMocks.prepareGoalWorkspace.mockResolvedValue({
-			workspaceId: "goal-1",
-			initialSessionId: "session-goal-1",
-			repoId: "repo-1",
-			repoName: "helmor",
-			directoryName: "goal-build-api",
-			branch: "helmor/goal/build-api",
-			defaultBranch: "main",
-			intendedTargetBranch: "main",
-			sourceStartBranch: null,
-			title: "Build API",
-			description: "Ship the API",
-			state: "initializing" as const,
-			repoScripts: {
-				setupScript: null,
-				runScript: null,
-				archiveScript: null,
-				setupFromProject: false,
-				runFromProject: false,
-				archiveFromProject: false,
-				autoRunSetup: true,
-			},
-		});
-		apiMocks.finalizeGoalWorkspace.mockResolvedValue({
-			workspaceId: "goal-1",
-			finalState: "ready" as const,
-			prTitle: "Build API",
-			prUrl: "https://example.test/pr/1",
-			prSyncState: "open" as const,
-		});
 		apiMocks.permanentlyDeleteWorkspace.mockResolvedValue(undefined);
 		apiMocks.startArchiveWorkspace.mockResolvedValue(undefined);
 		apiMocks.validateRestoreWorkspace.mockResolvedValue({
@@ -302,6 +267,30 @@ describe("useWorkspacesSidebarController archive flow", () => {
 
 	afterEach(() => {
 		vi.clearAllMocks();
+	});
+
+	it("does not auto-select a workspace when auto selection is disabled", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		const pushWorkspaceToast = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					autoSelectEnabled: false,
+					onSelectWorkspace,
+					pushWorkspaceToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows[0]?.id).toBe("ws-1");
+		});
+		expect(onSelectWorkspace).not.toHaveBeenCalled();
 	});
 
 	it("optimistically moves the workspace after preflight success and switches to the next one", async () => {
@@ -500,7 +489,6 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		expect(onSelectWorkspace).toHaveBeenCalledWith(generatedWorkspaceId);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			generatedWorkspaceId,
-			undefined,
 		);
 
 		await act(async () => {
@@ -656,91 +644,6 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		expect(onSelectWorkspace).toHaveBeenCalledWith(generatedWorkspaceId);
 	});
 
-	it("creates a workspace from a remote branch source", async () => {
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false } },
-		});
-		const onSelectWorkspace = vi.fn();
-		const generatedWorkspaceId = crypto.randomUUID();
-		const generatedSessionId = crypto.randomUUID();
-
-		apiMocks.listRepositories.mockResolvedValue([
-			{
-				id: "repo-1",
-				name: "helmor",
-				defaultBranch: "main",
-				repoInitials: "HE",
-			},
-		]);
-		apiMocks.prepareWorkspaceFromSource.mockResolvedValue({
-			workspaceId: generatedWorkspaceId,
-			initialSessionId: generatedSessionId,
-			repoId: "repo-1",
-			repoName: "helmor",
-			directoryName: "feature-api",
-			branch: "feature/api",
-			defaultBranch: "main",
-			intendedTargetBranch: "main",
-			status: "in-progress" as const,
-			sourceStartBranch: "feature/api",
-			prTitle: null,
-			prSyncState: "none" as const,
-			prUrl: null,
-			state: "initializing" as const,
-			repoScripts: {
-				setupScript: null,
-				runScript: null,
-				archiveScript: null,
-				setupFromProject: false,
-				runFromProject: false,
-				archiveFromProject: false,
-				autoRunSetup: true,
-			},
-		});
-		apiMocks.finalizeWorkspaceFromRepo.mockImplementation(
-			() => new Promise(() => {}),
-		);
-
-		const { result } = renderHook(
-			() =>
-				useWorkspacesSidebarController({
-					selectedWorkspaceId: null,
-					onSelectWorkspace,
-					pushWorkspaceToast: vi.fn(),
-				}),
-			{ wrapper: createWrapper(queryClient) },
-		);
-
-		await waitFor(() => {
-			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
-				"ws-1",
-				"ws-2",
-			]);
-		});
-
-		await act(async () => {
-			void result.current.handleCreateWorkspaceFromRepo("repo-1", {
-				type: "remoteBranch",
-				branch: "feature/api",
-			});
-		});
-
-		await waitFor(() => {
-			expect(result.current.groups[0]?.rows[0]?.id).toBe(generatedWorkspaceId);
-		});
-		expect(apiMocks.prepareWorkspaceFromRepo).not.toHaveBeenCalled();
-		expect(apiMocks.prepareWorkspaceFromSource).toHaveBeenCalledWith("repo-1", {
-			type: "remoteBranch",
-			branch: "feature/api",
-		});
-		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
-			generatedWorkspaceId,
-			{ startBranch: "feature/api", fetchStartBranch: true },
-		);
-		expect(result.current.groups[0]?.rows[0]?.branch).toBe("feature/api");
-		expect(onSelectWorkspace).toHaveBeenCalledWith(generatedWorkspaceId);
-	});
-
 	it("does not optimistically reorder sidebar groups when setting manual status", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -778,176 +681,6 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		expect(
 			result.current.groups.find((group) => group.id === "done")?.rows ?? [],
 		).toEqual([]);
-	});
-
-	it("awaits Goal finalization before selecting the Goal", async () => {
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false } },
-		});
-		const onSelectWorkspace = vi.fn();
-		let resolveFinalize:
-			| ((value: {
-					workspaceId: string;
-					finalState: "ready";
-					prTitle: string;
-					prUrl: string;
-					prSyncState: "open";
-			  }) => void)
-			| null = null;
-
-		apiMocks.finalizeGoalWorkspace.mockImplementation(
-			() =>
-				new Promise((resolve) => {
-					resolveFinalize = resolve;
-				}),
-		);
-
-		const { result } = renderHook(
-			() =>
-				useWorkspacesSidebarController({
-					selectedWorkspaceId: null,
-					onSelectWorkspace,
-					pushWorkspaceToast: vi.fn(),
-				}),
-			{ wrapper: createWrapper(queryClient) },
-		);
-
-		await waitFor(() => {
-			expect(result.current.groups[0]?.rows).toHaveLength(2);
-		});
-		onSelectWorkspace.mockClear();
-
-		await act(async () => {
-			void result.current.handleCreateGoalWorkspace(
-				"repo-1",
-				"Build API",
-				"Ship the API",
-			);
-		});
-
-		await waitFor(() => {
-			expect(apiMocks.finalizeGoalWorkspace).toHaveBeenCalledWith(
-				"goal-1",
-				"Ship the API",
-				null,
-			);
-		});
-		expect(onSelectWorkspace).not.toHaveBeenCalled();
-		expect(result.current.creatingWorkspaceRepoId).toBe("repo-1");
-
-		await act(async () => {
-			resolveFinalize?.({
-				workspaceId: "goal-1",
-				finalState: "ready",
-				prTitle: "Build API",
-				prUrl: "https://example.test/pr/1",
-				prSyncState: "open",
-			});
-		});
-
-		await waitFor(() => {
-			expect(onSelectWorkspace).toHaveBeenCalledWith("goal-1");
-		});
-		expect(result.current.creatingWorkspaceRepoId).toBeNull();
-	});
-
-	it("passes an existing Goal branch through prepare and finalize", async () => {
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false } },
-		});
-		const onSelectWorkspace = vi.fn();
-		apiMocks.prepareGoalWorkspace.mockResolvedValueOnce({
-			workspaceId: "goal-pr-1",
-			initialSessionId: "session-goal-pr-1",
-			repoId: "repo-1",
-			repoName: "helmor",
-			directoryName: "goal-existing-pr",
-			branch: "feature/existing-goal",
-			defaultBranch: "main",
-			intendedTargetBranch: "develop",
-			sourceStartBranch: "feature/existing-goal",
-			title: "Existing PR title",
-			description: "Existing PR body",
-			state: "initializing" as const,
-			repoScripts: {
-				setupScript: null,
-				runScript: null,
-				archiveScript: null,
-				setupFromProject: false,
-				runFromProject: false,
-				archiveFromProject: false,
-				autoRunSetup: true,
-			},
-		});
-
-		const { result } = renderHook(
-			() =>
-				useWorkspacesSidebarController({
-					selectedWorkspaceId: null,
-					onSelectWorkspace,
-					pushWorkspaceToast: vi.fn(),
-				}),
-			{ wrapper: createWrapper(queryClient) },
-		);
-
-		await act(async () => {
-			await result.current.handleCreateGoalWorkspace(
-				"repo-1",
-				"Ignored title",
-				"Ignored body",
-				"feature/existing-goal",
-			);
-		});
-
-		expect(apiMocks.prepareGoalWorkspace).toHaveBeenCalledWith({
-			repoId: "repo-1",
-			title: "Ignored title",
-			description: "Ignored body",
-			sourceBranch: "feature/existing-goal",
-		});
-		expect(apiMocks.finalizeGoalWorkspace).toHaveBeenCalledWith(
-			"goal-pr-1",
-			"Existing PR body",
-			"feature/existing-goal",
-		);
-		expect(onSelectWorkspace).toHaveBeenCalledWith("goal-pr-1");
-	});
-
-	it("keeps Goal creation open when draft PR finalization fails", async () => {
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false } },
-		});
-		const onSelectWorkspace = vi.fn();
-		const pushWorkspaceToast = vi.fn();
-		apiMocks.finalizeGoalWorkspace.mockRejectedValue(
-			new Error("gh pr create failed"),
-		);
-
-		const { result } = renderHook(
-			() =>
-				useWorkspacesSidebarController({
-					selectedWorkspaceId: null,
-					onSelectWorkspace,
-					pushWorkspaceToast,
-				}),
-			{ wrapper: createWrapper(queryClient) },
-		);
-
-		await expect(
-			result.current.handleCreateGoalWorkspace(
-				"repo-1",
-				"Build API",
-				"Ship the API",
-			),
-		).rejects.toThrow("gh pr create failed");
-
-		expect(onSelectWorkspace).not.toHaveBeenCalled();
-		expect(pushWorkspaceToast).toHaveBeenCalledWith(
-			"gh pr create failed",
-			"Goal creation failed",
-			"destructive",
-		);
-		expect(result.current.creatingWorkspaceRepoId).toBeNull();
 	});
 
 	// The pending creation row and the navigation refetch share the same
@@ -1375,82 +1108,6 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		});
 	});
 
-	it("does not refetch sidebar lists until all overlapping archives finish", async () => {
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false } },
-		});
-		let groupsFromServer = workspaceGroups;
-		let archivedFromServer: WorkspaceSummary[] = [];
-		apiMocks.loadWorkspaceGroups.mockImplementation(
-			async () => groupsFromServer,
-		);
-		apiMocks.loadArchivedWorkspaces.mockImplementation(
-			async () => archivedFromServer,
-		);
-
-		const { result } = renderHook(
-			() =>
-				useWorkspacesSidebarController({
-					selectedWorkspaceId: null,
-					onSelectWorkspace: vi.fn(),
-					pushWorkspaceToast: vi.fn(),
-				}),
-			{ wrapper: createWrapper(queryClient) },
-		);
-
-		await waitFor(() => {
-			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
-				"ws-1",
-				"ws-2",
-			]);
-		});
-		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(1);
-		expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(1);
-
-		act(() => {
-			result.current.handleArchiveWorkspace("ws-1");
-		});
-		await waitFor(() => {
-			expect(result.current.archivedRows.map((row) => row.id)).toContain(
-				"ws-1",
-			);
-		});
-
-		act(() => {
-			result.current.handleArchiveWorkspace("ws-2");
-		});
-		await waitFor(() => {
-			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([]);
-			expect(result.current.archivedRows.map((row) => row.id).sort()).toEqual([
-				"ws-1",
-				"ws-2",
-			]);
-		});
-
-		act(() => {
-			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
-		});
-		await act(async () => {
-			await new Promise((resolve) => setTimeout(resolve, 0));
-		});
-		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(1);
-		expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(1);
-
-		groupsFromServer = [{ ...workspaceGroups[0], rows: [] }];
-		archivedFromServer = [
-			makeArchivedSummary("ws-1"),
-			makeArchivedSummary("ws-2"),
-		];
-		act(() => {
-			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-2" });
-		});
-
-		await waitFor(() => {
-			expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(2);
-			expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(2);
-		});
-	});
-
 	it("does not render the same workspace in both live and archived when the success event arrives before the server snapshot switches", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -1522,7 +1179,13 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			defaultOptions: { queries: { retry: false } },
 		});
 		const onSelectWorkspace = vi.fn();
-		apiMocks.startArchiveWorkspace.mockResolvedValue(undefined);
+		let resolveStart: (() => void) | null = null;
+		apiMocks.startArchiveWorkspace.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveStart = resolve;
+				}),
+		);
 
 		const { result } = renderHook(
 			() =>
@@ -1548,13 +1211,8 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			);
 		});
 
-		// The spinner should stay until the background task fires its event.
-		expect(result.current.archivingWorkspaceIds.has("ws-1")).toBe(true);
-
-		// Simulate the backend success event (the spinner clears here, not on
-		// startArchiveWorkspace resolving).
 		act(() => {
-			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
+			resolveStart?.();
 		});
 
 		await waitFor(() => {

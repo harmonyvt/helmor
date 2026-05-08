@@ -1,4 +1,5 @@
-import { ChevronDown, Plus, Terminal, X } from "lucide-react";
+import { ChevronDown, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
 	useCallback,
@@ -9,6 +10,13 @@ import {
 } from "react";
 import { suspendTerminalFit } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
+import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuSeparator,
+	ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
 	Tooltip,
 	TooltipContent,
@@ -32,6 +40,7 @@ export const RESIZE_HIT_AREA = 10;
 export const TABS_ANIMATION_MS = 350;
 /** Apple-style easing — used consistently across panel toggle, chevron, and hover-zoom. */
 export const TABS_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
+export const TABS_EASING_CURVE = [0.32, 0.72, 0, 1] as const;
 
 /** 300ms is the industry-standard hover-intent threshold (VSCode/Material). */
 export const TABS_HOVER_ACTIVATION_MS = 300;
@@ -43,7 +52,94 @@ const TABS_BLUR_FADE_MS = 120;
 /** Hold blur slightly past the transition so xterm's late re-fit stays hidden. */
 export const TABS_BLUR_HOLD_UNTIL_MS = TABS_HOVER_TRANSITION_MS - 50;
 /** 32px header (h-8) + 1px section border-b. */
-const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = 33;
+export const INSPECTOR_SECTION_HEADER_HEIGHT = 33;
+const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
+
+// Inspector layout persistence
+export const INSPECTOR_ACTIONS_OPEN_STORAGE_KEY =
+	"helmor.workspaceInspectorActionsOpen";
+export const INSPECTOR_TABS_OPEN_STORAGE_KEY =
+	"helmor.workspaceInspectorTabsOpen";
+export const INSPECTOR_ACTIVE_TAB_STORAGE_KEY =
+	"helmor.workspaceInspectorActiveTab";
+export const INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY =
+	"helmor.workspaceInspectorChangesHeight";
+export const INSPECTOR_TABS_HEIGHT_STORAGE_KEY =
+	"helmor.workspaceInspectorTabsHeight";
+
+export function getInitialActionsOpen(): boolean {
+	if (typeof window === "undefined") {
+		return true; // default: Actions open
+	}
+	try {
+		const stored = window.localStorage.getItem(
+			INSPECTOR_ACTIONS_OPEN_STORAGE_KEY,
+		);
+		if (!stored) return true;
+		return stored === "true";
+	} catch {
+		return true;
+	}
+}
+
+export function getInitialTabsOpen(): boolean {
+	if (typeof window === "undefined") {
+		return false; // default: Tabs collapsed
+	}
+	try {
+		const stored = window.localStorage.getItem(INSPECTOR_TABS_OPEN_STORAGE_KEY);
+		if (!stored) return false;
+		return stored === "true";
+	} catch {
+		return false;
+	}
+}
+
+export function getInitialActiveTab(): string {
+	if (typeof window === "undefined") {
+		return "setup";
+	}
+	try {
+		const stored = window.localStorage.getItem(
+			INSPECTOR_ACTIVE_TAB_STORAGE_KEY,
+		);
+		return stored || "setup";
+	} catch {
+		return "setup";
+	}
+}
+
+export function getInitialChangesHeight(defaultHeight: number): number {
+	if (typeof window === "undefined") {
+		return defaultHeight;
+	}
+	try {
+		const stored = window.localStorage.getItem(
+			INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY,
+		);
+		if (!stored) return defaultHeight;
+		const parsed = Number.parseInt(stored, 10);
+		return Number.isFinite(parsed) ? parsed : defaultHeight;
+	} catch {
+		return defaultHeight;
+	}
+}
+
+export function getInitialTabsHeight(defaultHeight: number): number {
+	if (typeof window === "undefined") {
+		return defaultHeight;
+	}
+	try {
+		const stored = window.localStorage.getItem(
+			INSPECTOR_TABS_HEIGHT_STORAGE_KEY,
+		);
+		if (!stored) return defaultHeight;
+		const parsed = Number.parseInt(stored, 10);
+		return Number.isFinite(parsed) ? parsed : defaultHeight;
+	} catch {
+		return defaultHeight;
+	}
+}
 
 export const INSPECTOR_SECTION_HEADER_CLASS =
 	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
@@ -105,7 +201,6 @@ type InspectorTabsSectionProps = {
 	tabActions?: React.ReactNode;
 	setupScriptState: ScriptIconState;
 	runScriptState: ScriptIconState;
-	archiveScriptState: ScriptIconState;
 	/**
 	 * Live list of terminal sub-tabs for the current workspace. Each instance
 	 * becomes a tab in the unified row, identified by `instance.id` as the
@@ -116,18 +211,21 @@ type InspectorTabsSectionProps = {
 	onAddTerminal: () => void;
 	/** SIGTERM the shell and remove its tab. */
 	onCloseTerminal: (instanceId: string) => void;
+	/** Disable / enable the inspector's hover-to-zoom enlargement for a single
+	 * terminal. */
+	onToggleTerminalHoverZoom: (instanceId: string, disabled: boolean) => void;
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
+	bodyHeight: number;
+	/** Enables the height transition only for explicit panel toggles. */
+	animatePanelToggle?: boolean;
+	isResizing?: boolean;
 	/**
 	 * Gate for the hover-to-zoom effect. When false, hovering the body does
 	 * nothing — used so we only zoom when there's actual terminal output worth
 	 * enlarging (and not on the empty "Run setup" / "Open settings" placeholders).
 	 */
 	canHoverExpand: boolean;
-	/** Show the Comments tab. True when the workspace has PR comment data. */
-	showCommentsTab: boolean;
-	/** Amber dot badge on the Comments tab when true. */
-	hasUnresolvedComments: boolean;
 	children?: React.ReactNode;
 };
 
@@ -140,18 +238,29 @@ export function InspectorTabsSection({
 	tabActions,
 	setupScriptState,
 	runScriptState,
-	archiveScriptState,
 	terminalInstances,
 	onAddTerminal,
 	onCloseTerminal,
+	onToggleTerminalHoverZoom,
 	canSpawnTerminal,
+	bodyHeight,
+	animatePanelToggle = false,
+	isResizing,
 	canHoverExpand,
-	showCommentsTab,
-	hasUnresolvedComments,
 	children,
 }: InspectorTabsSectionProps) {
 	const { settings } = useSettings();
 	const newTerminalShortcut = getShortcut(settings.shortcuts, "terminal.new");
+	const shouldReduceMotion = useReducedMotion();
+	const panelTransition = {
+		duration:
+			animatePanelToggle && !isResizing && !shouldReduceMotion
+				? TABS_ANIMATION_MS / 1000
+				: 0,
+		ease: TABS_EASING_CURVE,
+	};
+	const chevronTransitionMs =
+		animatePanelToggle && !shouldReduceMotion ? TABS_ANIMATION_MS : 0;
 	// `isHoverExpanded` drives the CSS transitions we CAN interpolate
 	// (width / height / box-shadow). Flipping it to `false` immediately starts
 	// the shrink animation.
@@ -163,15 +272,6 @@ export function InspectorTabsSection({
 	// zoomed visual identity stays consistent while the size is changing — the
 	// collapsing panel looks exactly like the expanding one in reverse.
 	const [isZoomPresented, setIsZoomPresented] = useState(false);
-	// Clamped zoom height as a percentage of wrapperRef's height. Normally
-	// `TABS_HOVER_ZOOM_MULTIPLIER * 100` (200%), but reduced in full-screen
-	// mode (or whenever the wrapper is tall) so the expanding panel never
-	// overflows the viewport top and gets clipped by the root overflow-hidden.
-	// Stays in `%` units so the CSS height transition always interpolates
-	// between the same unit type (100% → N%).
-	const [clampedZoomHeightPercent, setClampedZoomHeightPercent] = useState(
-		TABS_HOVER_ZOOM_MULTIPLIER * 100,
-	);
 	// Short-lived flag that applies a gaussian blur to the inner
 	// header+body while the panel is mid-transition. Masks the frames where
 	// xterm's canvas is being GPU-scaled and then re-fit, which would
@@ -185,6 +285,10 @@ export function InspectorTabsSection({
 	// the panel from collapsing on mouse-leave so text selection can extend
 	// beyond the container boundary without interruption.
 	const isSelectingRef = useRef(false);
+	// Right-click menu portal renders outside the container, so mouseleave
+	// fires the moment the cursor crosses into a menu item. Hold the zoom open
+	// until the menu closes, then re-check the pointer.
+	const isTabContextMenuOpenRef = useRef(false);
 	// Holds the outstanding `suspendTerminalFit()` release while the CSS
 	// width/height transition is running, plus the timer that will release it
 	// and trigger the final fit.
@@ -275,27 +379,6 @@ export function InspectorTabsSection({
 			triggerContentBlurPulse();
 			if (target) {
 				clearPresentationClearTimer();
-				// Clamp the zoom height so the expanding panel never overflows
-				// the top of the viewport. In full-screen (or on tall displays)
-				// the wrapperRef can be so tall that 200% of its height would
-				// exceed the distance from the wrapper's bottom to the screen
-				// top, clipping the Setup/Run/Terminal header off-screen.
-				//
-				// `rect.bottom` is the distance from the viewport top to the
-				// bottom of the wrapperRef (≡ the maximum height the
-				// absolute bottom-0 container can have before its top goes
-				// negative). Convert that cap back to a percentage of the
-				// wrapper so the CSS transition stays in the same unit (% → %)
-				// and interpolates correctly.
-				if (wrapperRef.current) {
-					const rect = wrapperRef.current.getBoundingClientRect();
-					if (rect.height > 0) {
-						const idealHeight = rect.height * TABS_HOVER_ZOOM_MULTIPLIER;
-						const maxHeight = rect.bottom; // viewport-top → wrapper-bottom
-						const safeHeight = Math.min(idealHeight, maxHeight);
-						setClampedZoomHeightPercent((safeHeight / rect.height) * 100);
-					}
-				}
 				setIsZoomPresented(true);
 			} else {
 				clearPresentationClearTimer();
@@ -306,7 +389,7 @@ export function InspectorTabsSection({
 			}
 			setIsHoverExpanded(target);
 		},
-		[wrapperRef, clearPresentationClearTimer, triggerContentBlurPulse],
+		[clearPresentationClearTimer, triggerContentBlurPulse],
 	);
 
 	// Hover trigger is bound to the BODY only (not the header) so moving the
@@ -351,6 +434,14 @@ export function InspectorTabsSection({
 		if (isSelectingRef.current) {
 			return;
 		}
+		// Don't collapse while a tab's right-click menu is open. The menu
+		// renders in a portal outside the container, so moving the cursor
+		// onto it triggers mouseleave even though the user is still
+		// interacting with our UI. The menu's onOpenChange handler re-checks
+		// the pointer once it closes.
+		if (isTabContextMenuOpenRef.current) {
+			return;
+		}
 		if (hadPendingHoverIntent || (!isHoverExpanded && !isZoomPresented)) {
 			return;
 		}
@@ -363,6 +454,20 @@ export function InspectorTabsSection({
 		beginZoomAnimation,
 		setZoomTarget,
 	]);
+
+	// On close, re-evaluate whether to collapse — the mouseleave that fired
+	// while the menu was open was suppressed.
+	const handleTabContextMenuOpenChange = useCallback(
+		(open: boolean) => {
+			isTabContextMenuOpenRef.current = open;
+			if (open) return;
+			if (pointerInsideContainerRef.current) return;
+			if (!isHoverExpanded && !isZoomPresented) return;
+			beginZoomAnimation();
+			setZoomTarget(false);
+		},
+		[isHoverExpanded, isZoomPresented, beginZoomAnimation, setZoomTarget],
+	);
 
 	// When the panel collapses we must drop any pending/active zoom so it
 	// doesn't linger over the neighbouring sections. Also release any
@@ -431,12 +536,7 @@ export function InspectorTabsSection({
 		releaseTerminalFitLock,
 	]);
 
-	// Width always uses the unclamped 200% (expands leftward into the panel;
-	// never clips horizontally on typical screen widths).
 	const zoomedSize = `${TABS_HOVER_ZOOM_MULTIPLIER * 100}%`;
-	// Height uses the viewport-clamped percentage computed in setZoomTarget so
-	// the expanding panel's top never goes above y=0 in full-screen mode.
-	const zoomedHeightSize = `${clampedZoomHeightPercent}%`;
 
 	// Smart tab click: closed → open + activate; open + clicking the active
 	// tab → collapse; open + different tab → just switch. Lets the user use
@@ -465,20 +565,24 @@ export function InspectorTabsSection({
 	}, [open, onAddTerminal, onToggle]);
 
 	return (
-		<div
+		<motion.div
 			ref={wrapperRef}
 			className={cn(
 				"relative flex min-h-0 shrink-0 flex-col",
-				open && "flex-1",
+				!isZoomPresented && "overflow-hidden",
 			)}
+			initial={false}
+			animate={{
+				height: TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX + (open ? bodyHeight : 0),
+			}}
+			transition={panelTransition}
 			style={{
 				// The real content lives inside the absolutely-positioned child
 				// below, which contributes nothing to layout. Reserve header
 				// height when the panel is closed so the parent flex column
 				// keeps a stable footprint for us.
-				minHeight: open
-					? undefined
-					: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
+				minHeight: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
+				willChange: isResizing ? undefined : "height",
 			}}
 		>
 			<div
@@ -501,8 +605,17 @@ export function InspectorTabsSection({
 					isZoomPresented && "z-50",
 				)}
 				style={{
+					top: isHoverExpanded ? undefined : 0,
 					width: isHoverExpanded ? zoomedSize : "100%",
-					height: isHoverExpanded ? zoomedHeightSize : "100%",
+					height: isHoverExpanded ? zoomedSize : "100%",
+					// Cap the zoomed box to a fraction of the viewport so a
+					// large inspector on a wide display (e.g. 27" fullscreen)
+					// doesn't grow past the window edges. The right/bottom
+					// anchors stay pinned, so capping just shortens the up/left
+					// extent. Resting size (100%) is well below the caps so it's
+					// unaffected.
+					maxWidth: "min(85vw, 1400px)",
+					maxHeight: "min(75vh, 900px)",
 					// `height` only transitions during hover-zoom; outside of
 					// zoom the toggle's web-animation drives wrapper height
 					// and inner must follow instantly.
@@ -555,26 +668,18 @@ export function InspectorTabsSection({
 							// header + body (but NOT the section with its bg/border)
 							// means the container's edges stay crisp while the
 							// content inside looks like it's "focusing in / out."
-							//
-							// IMPORTANT: use `none` (not `blur(0)`) at rest. Even
-							// `blur(0)` promotes the element to its own GPU compositing
-							// layer, forcing GPU rasterisation of all child text and
-							// making it look blurry. `filter: none` keeps text on the
-							// CPU paint path where font rendering is crisp.
-							// `will-change: filter` is likewise only set while the
-							// animation is live so the GPU layer is torn down as soon
-							// as the blur clears.
 							filter: isContentBlurred
 								? `blur(${TABS_BLUR_PEAK_PX}px)`
-								: "none",
+								: "blur(0)",
 							transition: `filter ${TABS_BLUR_FADE_MS}ms ease-out`,
-							...(isContentBlurred ? { willChange: "filter" } : {}),
+							willChange: "filter",
 						}}
 					>
 						<div
 							className={cn(
 								INSPECTOR_SECTION_HEADER_CLASS,
 								"relative z-10 items-stretch pt-0",
+								!open && "border-b-transparent",
 							)}
 						>
 							<div
@@ -630,62 +735,6 @@ export function InspectorTabsSection({
 										)}
 									/>
 								</button>
-								<button
-									type="button"
-									role="tab"
-									id="inspector-tab-archive"
-									aria-controls="inspector-panel-archive"
-									aria-selected={activeTab === "archive"}
-									tabIndex={activeTab === "archive" ? 0 : -1}
-									className={cn(
-										INSPECTOR_TAB_BUTTON_CLASS,
-										"shrink-0",
-										activeTab === "archive" && "text-foreground",
-									)}
-									onClick={() => handleTabClick("archive")}
-								>
-									<ScriptStatusIcon state={archiveScriptState} />
-									Archive
-									<span
-										aria-hidden="true"
-										className={cn(
-											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
-											activeTab === "archive" && "opacity-100",
-										)}
-									/>
-								</button>
-								{showCommentsTab && (
-									<button
-										type="button"
-										role="tab"
-										id="inspector-tab-comments"
-										aria-controls="inspector-panel-comments"
-										aria-selected={activeTab === "comments"}
-										tabIndex={activeTab === "comments" ? 0 : -1}
-										className={cn(
-											INSPECTOR_TAB_BUTTON_CLASS,
-											"shrink-0",
-											activeTab === "comments" && "text-foreground",
-										)}
-										onClick={() => handleTabClick("comments")}
-									>
-										Comments
-										{hasUnresolvedComments && (
-											<span
-												aria-hidden="true"
-												className="size-1.5 shrink-0 rounded-full bg-[var(--workspace-pr-conflicts-accent)]"
-											/>
-										)}
-										<span
-											aria-hidden="true"
-											className={cn(
-												"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
-												activeTab === "comments" && "opacity-100",
-											)}
-										/>
-									</button>
-								)}
-
 								{terminalInstances.length === 0 ? (
 									// Placeholder tab so the Terminal entry point is always
 									// discoverable, even on a fresh workspace with no live
@@ -704,7 +753,6 @@ export function InspectorTabsSection({
 											"shrink-0 disabled:cursor-not-allowed disabled:opacity-50",
 										)}
 									>
-										<Terminal className="size-3" strokeWidth={1.8} />
 										Terminal
 									</button>
 								) : (
@@ -714,53 +762,103 @@ export function InspectorTabsSection({
 											terminalInstances.length,
 										);
 										const isActive = activeTab === instance.id;
+										const isHoverZoomDisabled = instance.hoverZoomDisabled;
 										return (
-											<div
+											<ContextMenu
 												key={instance.id}
-												role="tab"
-												id={`inspector-tab-terminal-${instance.id}`}
-												aria-controls={`inspector-panel-terminal-${instance.id}`}
-												aria-selected={isActive}
-												tabIndex={isActive ? 0 : -1}
-												// Mirrors session-tab layout (no hover color, layout
-												// stable on mask toggle). `transform-gpu` keeps it
-												// on its own compositing layer.
-												className={cn(
-													"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-pointer items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
-													isActive && "text-foreground",
-												)}
-												onClick={() => handleTabClick(instance.id)}
-												onKeyDown={(e) => {
-													if (e.key === "Enter" || e.key === " ") {
-														e.preventDefault();
-														handleTabClick(instance.id);
-													}
-												}}
+												onOpenChange={handleTabContextMenuOpenChange}
 											>
-												<span className="terminal-tab-fade flex min-w-0 flex-1 items-center justify-center">
-													<span className="truncate">{label}</span>
-												</span>
-												<button
-													type="button"
-													aria-label={`Close ${label}`}
-													onClick={(e) => {
-														e.stopPropagation();
-														onCloseTerminal(instance.id);
-													}}
-													// Visibility-only toggle (no opacity transition) —
-													// matches session-tab + workspace-row patterns.
-													className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-pointer items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
-												>
-													<X className="size-3" strokeWidth={2} />
-												</button>
-												<span
-													aria-hidden="true"
-													className={cn(
-														"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
-														isActive && "opacity-100",
-													)}
-												/>
-											</div>
+												<ContextMenuTrigger asChild>
+													<div
+														role="tab"
+														id={`inspector-tab-terminal-${instance.id}`}
+														aria-controls={`inspector-panel-terminal-${instance.id}`}
+														aria-selected={isActive}
+														tabIndex={isActive ? 0 : -1}
+														// Mirrors session-tab layout (no hover color, layout
+														// stable on mask toggle). `transform-gpu` keeps it
+														// on its own compositing layer.
+														className={cn(
+															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-pointer items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
+															isActive && "text-foreground",
+														)}
+														onClick={() => handleTabClick(instance.id)}
+														onMouseDown={(e) => {
+															if (e.button === 1) {
+																// Middle-click closes the tab (matches
+																// browser tab UX). preventDefault stops
+																// the browser's autoscroll-anchor cursor.
+																e.preventDefault();
+																onCloseTerminal(instance.id);
+															}
+														}}
+														onKeyDown={(e) => {
+															if (e.key === "Enter" || e.key === " ") {
+																e.preventDefault();
+																handleTabClick(instance.id);
+															}
+														}}
+													>
+														<span className="terminal-tab-fade flex min-w-0 flex-1 items-center justify-center">
+															<span className="truncate">{label}</span>
+														</span>
+														<button
+															type="button"
+															aria-label={`Close ${label}`}
+															onClick={(e) => {
+																e.stopPropagation();
+																onCloseTerminal(instance.id);
+															}}
+															// Visibility-only toggle (no opacity transition) —
+															// matches session-tab + workspace-row patterns.
+															className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-pointer items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
+														>
+															<X className="size-3" strokeWidth={2} />
+														</button>
+														<span
+															aria-hidden="true"
+															className={cn(
+																"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+																isActive && "opacity-100",
+															)}
+														/>
+													</div>
+												</ContextMenuTrigger>
+												<ContextMenuContent className="min-w-48">
+													<ContextMenuItem
+														onClick={() =>
+															onToggleTerminalHoverZoom(
+																instance.id,
+																!isHoverZoomDisabled,
+															)
+														}
+													>
+														{isHoverZoomDisabled ? (
+															<ZoomIn
+																className="size-4 shrink-0"
+																strokeWidth={1.6}
+															/>
+														) : (
+															<ZoomOut
+																className="size-4 shrink-0"
+																strokeWidth={1.6}
+															/>
+														)}
+														<span>
+															{isHoverZoomDisabled
+																? "Enable hover zoom"
+																: "Disable hover zoom"}
+														</span>
+													</ContextMenuItem>
+													<ContextMenuSeparator />
+													<ContextMenuItem
+														onClick={() => onCloseTerminal(instance.id)}
+													>
+														<X className="size-4 shrink-0" strokeWidth={1.6} />
+														<span>Close terminal</span>
+													</ContextMenuItem>
+												</ContextMenuContent>
+											</ContextMenu>
 										);
 									})
 								)}
@@ -805,7 +903,7 @@ export function InspectorTabsSection({
 										strokeWidth={1.9}
 										style={{
 											transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-											transition: `transform ${TABS_ANIMATION_MS}ms ${TABS_EASING}`,
+											transition: `transform ${chevronTransitionMs}ms ${TABS_EASING}`,
 										}}
 									/>
 								</Button>
@@ -829,7 +927,7 @@ export function InspectorTabsSection({
 					</div>
 				</section>
 			</div>
-		</div>
+		</motion.div>
 	);
 }
 

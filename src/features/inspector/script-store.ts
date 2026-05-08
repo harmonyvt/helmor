@@ -93,7 +93,7 @@ export function getScriptState(workspaceId: string, scriptType: string) {
 
 export function startScript(
 	repoId: string,
-	scriptType: "setup" | "run" | "archive",
+	scriptType: "setup" | "run",
 	workspaceId: string,
 ) {
 	const k = key(workspaceId, scriptType);
@@ -201,7 +201,7 @@ export function startScript(
 
 export function stopScript(
 	repoId: string,
-	scriptType: "setup" | "run" | "archive",
+	scriptType: "setup" | "run",
 	workspaceId: string,
 ) {
 	void stopRepoScript(repoId, scriptType, workspaceId);
@@ -214,7 +214,7 @@ export function stopScript(
  */
 export function writeStdin(
 	repoId: string,
-	scriptType: "setup" | "run" | "archive",
+	scriptType: "setup" | "run",
 	workspaceId: string,
 	data: string,
 ) {
@@ -228,7 +228,7 @@ export function writeStdin(
  */
 export function resizeScript(
 	repoId: string,
-	scriptType: "setup" | "run" | "archive",
+	scriptType: "setup" | "run",
 	workspaceId: string,
 	cols: number,
 	rows: number,

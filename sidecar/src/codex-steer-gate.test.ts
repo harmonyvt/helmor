@@ -274,7 +274,7 @@ describe("Codex missing response item recovery", () => {
 		expect(events.at(-1)).toEqual({ id: "stream-rid-1", type: "end" });
 	});
 
-	test("falls back to the provider error when recovery compaction fails", async () => {
+	test("starts a fresh thread when fork and compaction recovery fail", async () => {
 		const { fake, events, sendMessagePromise } = await driveToSendMessage("s1");
 
 		await fake.fireNotification("error", {
@@ -287,13 +287,62 @@ describe("Codex missing response item recovery", () => {
 		expect(
 			fake.rejectNext("thread/compact/start", new Error("compaction failed")),
 		).toBe(true);
+		await new Promise((r) => setTimeout(r, 0));
+		expect(
+			fake.resolveNext("thread/start", { thread: { id: "thread-fresh" } }),
+		).toBe(true);
+		await new Promise((r) => setTimeout(r, 0));
+		expect(fake.resolveNext("turn/start", { turn: { id: "turn-fresh" } })).toBe(
+			true,
+		);
+		await new Promise((r) => setTimeout(r, 0));
+
+		fake.fireNotification("turn/completed", { turn: { id: "turn-fresh" } });
 		await sendMessagePromise;
+
+		expect(
+			events.filter((e) => (e as { type?: string }).type === "error"),
+		).toHaveLength(0);
+		expect(events.at(-1)).toEqual({ id: "stream-rid-1", type: "end" });
+	});
+
+	test("recovers missing response item errors before retry suppression", async () => {
+		const { fake, events, sendMessagePromise } = await driveToSendMessage("s1");
+
+		await fake.fireNotification("error", {
+			willRetry: true,
+			error: { message: missingResponseItemMessage },
+		});
+		await new Promise((r) => setTimeout(r, 0));
 
 		expect(events).toContainEqual({
 			id: "stream-rid-1",
-			type: "error",
-			message: missingResponseItemMessage,
+			type: "system",
+			subtype: "codex_missing_response_item_recovery",
 		});
+		expect(
+			events.filter(
+				(e) =>
+					(e as { type?: string; subtype?: string }).subtype ===
+					"codex_reconnecting",
+			),
+		).toHaveLength(0);
+		expect(
+			fake.resolveNext("thread/fork", { thread: { id: "thread-recovered" } }),
+		).toBe(true);
+		await new Promise((r) => setTimeout(r, 0));
+		expect(fake.resolveNext("turn/start", { turn: { id: "turn-retry" } })).toBe(
+			true,
+		);
+		await new Promise((r) => setTimeout(r, 0));
+
+		fake.fireNotification("turn/completed", { turn: { id: "turn-retry" } });
+		await sendMessagePromise;
+
+		expect(
+			events.filter((e) => (e as { type?: string }).type === "error"),
+		).toHaveLength(0);
+		expect(events.at(-1)).toEqual({ id: "stream-rid-1", type: "end" });
 	});
 
 	test("starts a fresh thread when recovered history still references a missing item", async () => {

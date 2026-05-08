@@ -46,8 +46,10 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
     ("repos", "conductor_config"),
     ("repos", "custom_prompt_code_review"),
     ("repos", "icon"),
-    ("repos", "branch_prefix_type"),
-    ("repos", "run_script_mode"),
+    // `branch_prefix_type` and `run_script_mode` were once stubs here.
+    // Both have since been revived as real per-repo columns (multi-account
+    // refactor and non-concurrent run mode respectively) — keep them OUT
+    // of this list so they survive startup.
     ("repos", "storage_version"),
     // workspaces: legacy fields with no read path in production.
     ("workspaces", "big_terminal_mode"),
@@ -219,6 +221,47 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add action_kind column")?;
     }
 
+    // Migration: ensure repos.custom_prompt_review exists.
+    //
+    // The column was originally introduced as `custom_prompt_review_pr`
+    // alongside the (removed) "Review PR" header button. The button is now
+    // a generic "Review changes" helper, so the column was renamed to
+    // `custom_prompt_review`. Three start states must converge cleanly:
+    //   1. Brand-new DB — CREATE TABLE already adds `custom_prompt_review`.
+    //   2. Old DB that picked up the previous migration — has the legacy
+    //      `custom_prompt_review_pr`. RENAME preserves any user-saved prompt.
+    //   3. Old DB that pre-dates either migration — neither column exists,
+    //      so we ADD the new one.
+    let has_repos_table: bool = connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'repos'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+    if has_repos_table {
+        let has_new_col: bool = connection
+            .prepare("SELECT 1 FROM pragma_table_info('repos') WHERE name = 'custom_prompt_review'")
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+        let has_legacy_col: bool = connection
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('repos') WHERE name = 'custom_prompt_review_pr'",
+            )
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+        if !has_new_col {
+            if has_legacy_col {
+                connection
+                    .execute_batch(
+                        "ALTER TABLE repos RENAME COLUMN custom_prompt_review_pr TO custom_prompt_review",
+                    )
+                    .context("Failed to rename custom_prompt_review_pr -> custom_prompt_review")?;
+            } else {
+                connection
+                    .execute_batch("ALTER TABLE repos ADD COLUMN custom_prompt_review TEXT")
+                    .context("Failed to add custom_prompt_review column")?;
+            }
+        }
+    }
+
     // Migration: wrap plain-text user prompts as JSON.
     //
     // Pre-migration, the `content` column held a union type: assistant/system/
@@ -355,6 +398,14 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add context_usage_meta column")?;
     }
 
+    // Migration: opaque JSON snapshot of the active Codex `/goal` state, used
+    // by the panel-header banner. NULL means no active goal.
+    if !has_column(connection, "sessions", "codex_goal_meta") {
+        connection
+            .execute_batch("ALTER TABLE sessions ADD COLUMN codex_goal_meta TEXT")
+            .context("Failed to add codex_goal_meta column")?;
+    }
+
     // Migration: toggle for auto-running the setup script on workspace
     // creation. Default 1 (on) — preserves the pre-feature behavior for
     // existing repos and is the most common case. Users opt out per-repo
@@ -377,10 +428,42 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add forge_provider column")?;
     }
 
+    // Migration: forge_login — the gh/glab account login bound to this
+    // repo. Auto-detected on add-repo by probing each logged-in account
+    // for access; NULL means no account had access (or detection hasn't
+    // run yet). Used to set GH_TOKEN per-spawn so multi-account users
+    // don't have to manually `gh auth switch` between repos.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "forge_login") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN forge_login TEXT")
+            .context("Failed to add forge_login column")?;
+    }
+
     if has_table(connection, "repos") && !has_column(connection, "repos", "branch_prefix_custom") {
         connection
             .execute_batch("ALTER TABLE repos ADD COLUMN branch_prefix_custom TEXT")
             .context("Failed to add branch_prefix_custom column")?;
+    }
+
+    // Re-add the per-repo `branch_prefix_type` column. Earlier shipped
+    // releases dropped it via DEAD_COLUMNS; the multi-account refactor
+    // brings it back as the canonical place for the override. No data
+    // back-fill — no prior release wrote a value worth preserving.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "branch_prefix_type") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN branch_prefix_type TEXT")
+            .context("Failed to add branch_prefix_type column")?;
+    }
+
+    // Migration: per-repo run-script mode. 'concurrent' (default) preserves
+    // the historical behavior of allowing multiple workspaces in the same
+    // repo to run their scripts at once. 'non-concurrent' makes a new run
+    // stop any other run script in the same repo first — convenient when
+    // the script binds a fixed port.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "run_script_mode") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN run_script_mode TEXT DEFAULT 'concurrent'")
+            .context("Failed to add run_script_mode column")?;
     }
 
     if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "pr_sync_state")
@@ -388,6 +471,18 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         connection
             .execute_batch("ALTER TABLE workspaces ADD COLUMN pr_sync_state TEXT DEFAULT 'none'")
             .context("Failed to add pr_sync_state column")?;
+    }
+
+    // Migration: composer drafts move from per-browser localStorage into
+    // SQLite as a JSON-serialised Lexical editor state. Nullable — most
+    // sessions don't have a draft most of the time, and clearing the
+    // draft writes NULL rather than an empty JSON blob. Frontend
+    // performs a one-time copy of leftover localStorage drafts into
+    // this column on first launch (see `draft-storage.ts`).
+    if has_table(connection, "sessions") && !has_column(connection, "sessions", "draft_state") {
+        connection
+            .execute_batch("ALTER TABLE sessions ADD COLUMN draft_state TEXT")
+            .context("Failed to add sessions.draft_state column")?;
     }
 
     // Migration: cache the live PR/MR url on the workspace row so the
@@ -398,57 +493,6 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         connection
             .execute_batch("ALTER TABLE workspaces ADD COLUMN pr_url TEXT")
             .context("Failed to add pr_url column")?;
-    }
-
-    if has_table(connection, "workspaces")
-        && !has_column(connection, "workspaces", "workspace_kind")
-    {
-        connection
-            .execute_batch("ALTER TABLE workspaces ADD COLUMN workspace_kind TEXT DEFAULT 'code'")
-            .context("Failed to add workspace_kind column")?;
-    }
-    if has_table(connection, "workspaces")
-        && !has_column(connection, "workspaces", "goal_workspace_id")
-    {
-        connection
-            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_workspace_id TEXT")
-            .context("Failed to add goal_workspace_id column")?;
-    }
-
-    // Migration: goal_title / goal_description — user-editable metadata for
-    // goal workspaces shown in the Kanban header and injected into Pi context.
-    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "goal_title") {
-        connection
-            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_title TEXT")
-            .context("Failed to add goal_title column")?;
-    }
-    if has_table(connection, "workspaces")
-        && !has_column(connection, "workspaces", "goal_description")
-    {
-        connection
-            .execute_batch("ALTER TABLE workspaces ADD COLUMN goal_description TEXT")
-            .context("Failed to add goal_description column")?;
-    }
-
-    connection
-        .execute_batch(GOAL_CARDS_SCHEMA)
-        .context("Failed to ensure goal_cards schema")?;
-
-    if has_table(connection, "pending_cli_sends") {
-        for (column, definition) in [
-            ("status", "TEXT NOT NULL DEFAULT 'queued'"),
-            ("last_drained_at", "TEXT"),
-            ("started_at", "TEXT"),
-            ("error", "TEXT"),
-        ] {
-            if !has_column(connection, "pending_cli_sends", column) {
-                connection
-                    .execute_batch(&format!(
-                        "ALTER TABLE pending_cli_sends ADD COLUMN {column} {definition}"
-                    ))
-                    .with_context(|| format!("Failed to add pending_cli_sends.{column}"))?;
-            }
-        }
     }
 
     let had_workspace_status =
@@ -499,25 +543,28 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         .execute_batch("UPDATE sessions SET model = 'default' WHERE model = 'opus-1m'")
         .ok();
 
+    // Migration: drop the old OAuth identity rows. The device-flow login
+    // is gone — auth is now per-repo via the bundled `gh` CLI's own
+    // credential store. Idempotent: DELETE on absent rows is a no-op.
+    connection
+        .execute_batch(
+            "DELETE FROM settings WHERE key IN ('github_identity_meta', 'github_identity_secret');",
+        )
+        .ok();
+
+    // Workspace `mode`: 'worktree' (existing — own dir, own branch) or
+    // 'local' (operates on the source repo's root, no separate worktree).
+    // Nullable + COALESCE'd at read sites so the conductor import flow
+    // (which copies columns directly without applying NOT NULL defaults)
+    // keeps working — NULL is treated as 'worktree' on read.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "mode") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN mode TEXT DEFAULT 'worktree'")
+            .context("Failed to add workspaces.mode column")?;
+    }
+
     Ok(())
 }
-
-const GOAL_CARDS_SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS goal_cards (
-    id TEXT PRIMARY KEY,
-    goal_workspace_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT,
-    lane TEXT NOT NULL DEFAULT 'backlog',
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    assigned_provider TEXT,
-    assigned_model_id TEXT,
-    assigned_effort_level TEXT,
-    child_workspace_id TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-"#;
 
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS repos (
@@ -532,6 +579,7 @@ CREATE TABLE IF NOT EXISTS repos (
     run_script TEXT,
     remote TEXT,
     custom_prompt_create_pr TEXT,
+    custom_prompt_review TEXT,
     custom_prompt_rename_branch TEXT,
     custom_prompt_general TEXT,
     hidden INTEGER DEFAULT 0,
@@ -539,7 +587,10 @@ CREATE TABLE IF NOT EXISTS repos (
     custom_prompt_resolve_merge_conflicts TEXT,
     auto_run_setup INTEGER DEFAULT 1,
     forge_provider TEXT,
+    forge_login TEXT,
+    branch_prefix_type TEXT,
     branch_prefix_custom TEXT,
+    run_script_mode TEXT DEFAULT 'concurrent',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -558,22 +609,7 @@ CREATE TABLE IF NOT EXISTS pending_cli_sends (
     prompt TEXT NOT NULL,
     model_id TEXT,
     permission_mode TEXT,
-    status TEXT NOT NULL DEFAULT 'queued',
-    last_drained_at TEXT,
-    started_at TEXT,
-    error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS workspace_browser_tabs (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    url TEXT NOT NULL,
-    title TEXT,
-    display_order INTEGER NOT NULL DEFAULT 0,
-    active INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -591,27 +627,9 @@ CREATE TABLE IF NOT EXISTS workspaces (
     pr_title TEXT,
     pr_sync_state TEXT DEFAULT 'none',
     pr_url TEXT,
-    workspace_kind TEXT DEFAULT 'code',
-    goal_workspace_id TEXT,
-    goal_title TEXT,
-    goal_description TEXT,
     archive_commit TEXT,
     linked_directory_paths TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS goal_cards (
-    id TEXT PRIMARY KEY,
-    goal_workspace_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT,
-    lane TEXT NOT NULL DEFAULT 'backlog',
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    assigned_provider TEXT,
-    assigned_model_id TEXT,
-    assigned_effort_level TEXT,
-    child_workspace_id TEXT,
+    mode TEXT DEFAULT 'worktree',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -632,6 +650,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     fast_mode INTEGER DEFAULT 0,
     action_kind TEXT,
     context_usage_meta TEXT,
+    codex_goal_meta TEXT,
+    draft_state TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -669,8 +689,6 @@ CREATE INDEX IF NOT EXISTS idx_session_delegations_parent ON session_delegations
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_child ON session_delegations(child_session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_parent_message ON session_delegations(parent_message_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
-CREATE INDEX IF NOT EXISTS idx_workspace_browser_tabs_workspace_order ON workspace_browser_tabs(workspace_id, display_order);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_browser_tabs_one_active ON workspace_browser_tabs(workspace_id) WHERE active = 1;
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
 CREATE TRIGGER IF NOT EXISTS update_repos_updated_at
@@ -691,13 +709,6 @@ CREATE TRIGGER IF NOT EXISTS update_sessions_updated_at
     AFTER UPDATE ON sessions
     BEGIN
         UPDATE sessions SET updated_at = datetime('now')
-        WHERE id = NEW.id;
-    END;
-
-CREATE TRIGGER IF NOT EXISTS update_workspace_browser_tabs_updated_at
-    AFTER UPDATE ON workspace_browser_tabs
-    BEGIN
-        UPDATE workspace_browser_tabs SET updated_at = datetime('now')
         WHERE id = NEW.id;
     END;
 
@@ -734,7 +745,6 @@ mod tests {
         assert!(tables.contains(&"session_messages".to_string()));
         assert!(tables.contains(&"session_delegations".to_string()));
         assert!(tables.contains(&"settings".to_string()));
-        assert!(tables.contains(&"workspace_browser_tabs".to_string()));
     }
 
     #[test]
@@ -781,34 +791,6 @@ mod tests {
         assert!(indexes.contains(&"idx_session_delegations_parent".to_string()));
         assert!(indexes.contains(&"idx_session_delegations_child".to_string()));
         assert!(indexes.contains(&"idx_session_delegations_parent_message".to_string()));
-    }
-
-    #[test]
-    fn ensure_schema_creates_browser_tabs_shape() {
-        let (connection, _dir) = open_test_db();
-        ensure_schema(&connection).unwrap();
-
-        let columns: Vec<String> = connection
-            .prepare("SELECT name FROM pragma_table_info('workspace_browser_tabs') ORDER BY cid")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .filter_map(Result::ok)
-            .collect();
-
-        assert_eq!(
-            columns,
-            vec![
-                "id",
-                "workspace_id",
-                "url",
-                "title",
-                "display_order",
-                "active",
-                "created_at",
-                "updated_at",
-            ]
-        );
     }
 
     #[test]
@@ -1319,6 +1301,59 @@ mod tests {
         let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
         assert!(column_exists(&connection, "repos", "forge_provider"));
+    }
+
+    #[test]
+    fn forge_login_added_to_legacy_and_idempotent() {
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        assert!(!column_exists(&connection, "repos", "forge_login"));
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "forge_login"));
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "forge_login"));
+    }
+
+    #[test]
+    fn forge_login_present_on_fresh_install() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "forge_login"));
+    }
+
+    #[test]
+    fn run_script_mode_present_on_fresh_install() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "run_script_mode"));
+    }
+
+    #[test]
+    fn run_script_mode_retained_from_legacy_schema() {
+        // Conductor DBs already carry this column. Migration must keep it
+        // (and any persisted value) rather than dropping it.
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, run_script_mode) VALUES ('r1', 'x', 'non-concurrent')",
+                [],
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "run_script_mode"));
+
+        let mode: String = connection
+            .query_row(
+                "SELECT run_script_mode FROM repos WHERE id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(mode, "non-concurrent");
     }
 
     #[test]

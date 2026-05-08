@@ -147,7 +147,6 @@ fn part_type(part: &helmor_lib::pipeline::types::ExtendedMessagePart) -> &'stati
         ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { .. }) => "prompt-suggestion",
         ExtendedMessagePart::Basic(MessagePart::FileMention { .. }) => "file-mention",
         ExtendedMessagePart::Basic(MessagePart::PlanReview { .. }) => "plan-review",
-        ExtendedMessagePart::Basic(MessagePart::GenericCard { .. }) => "generic-card",
         ExtendedMessagePart::Basic(MessagePart::DelegationAnchor { .. }) => "delegation-anchor",
         ExtendedMessagePart::CollapsedGroup(_) => "collapsed-group",
     }
@@ -178,49 +177,22 @@ fn collect_children_tool_names(msg: &ThreadMessageLike) -> Vec<String> {
     names
 }
 
-#[derive(Debug, Clone)]
-struct PersistedRow {
-    id: String,
-    role: helmor_lib::pipeline::types::MessageRole,
-    content: String,
-}
-
-/// Simulate `agents::persistence::persist_turn_message`: repeated turn ids
-/// update content in place without changing DB row order. This matters for
-/// Codex/Pi item lifecycles where `item/started` reserves order and
-/// `item/completed` later writes the final payload into the same row.
-fn persisted_rows(pipeline: &MessagePipeline) -> Vec<PersistedRow> {
-    let acc = &pipeline.accumulator;
-    let mut rows: Vec<PersistedRow> = Vec::new();
-    for i in 0..acc.turns_len() {
-        let turn = acc.turn_at(i);
-        if let Some(existing) = rows.iter_mut().find(|row| row.id == turn.id) {
-            existing.role = turn.role;
-            existing.content = turn.content_json.clone();
-        } else {
-            rows.push(PersistedRow {
-                id: turn.id.clone(),
-                role: turn.role,
-                content: turn.content_json.clone(),
-            });
-        }
-    }
-    rows
-}
-
 /// Build HistoricalRecords from the accumulator's persisted turns and run
 /// them through `convert_historical`. Mirrors what happens when a user
 /// closes the app and reopens a session — DB rows → loader → adapter →
 /// rendered ThreadMessageLikes.
 fn build_historical_snapshot(pipeline: &MessagePipeline) -> HistoricalRenderSnapshot {
-    let records: Vec<HistoricalRecord> = persisted_rows(pipeline)
-        .into_iter()
-        .map(|row| HistoricalRecord {
-            id: row.id,
-            role: row.role,
-            parsed_content: serde_json::from_str(&row.content).ok(),
-            content: row.content,
-            created_at: "2026-04-08T00:00:00.000Z".to_string(),
+    let acc = &pipeline.accumulator;
+    let records: Vec<HistoricalRecord> = (0..acc.turns_len())
+        .map(|i| {
+            let turn = acc.turn_at(i);
+            HistoricalRecord {
+                id: format!("hist-{i}"),
+                role: turn.role,
+                content: turn.content_json.clone(),
+                parsed_content: serde_json::from_str(&turn.content_json).ok(),
+                created_at: "2026-04-08T00:00:00.000Z".to_string(),
+            }
         })
         .collect();
     let rendered = MessagePipeline::convert_historical(&records);
@@ -241,16 +213,17 @@ fn build_historical_snapshot(pipeline: &MessagePipeline) -> HistoricalRenderSnap
 /// content. Reads the persistence-side state of the accumulator that
 /// `agents.rs::persist_turn_message` would write to the DB.
 fn build_persisted_snapshot(pipeline: &MessagePipeline) -> PersistedTurnsSnapshot {
-    let rows = persisted_rows(pipeline);
-    let turn_count = rows.len();
+    let acc = &pipeline.accumulator;
+    let turn_count = acc.turns_len();
     let mut turns = Vec::with_capacity(turn_count);
     let mut total_blocks = 0usize;
 
-    for row in rows {
-        // Each row's content is the raw `assistant`/`user` event payload
-        // (or, for batched assistant turns, the template with
+    for i in 0..turn_count {
+        let turn = acc.turn_at(i);
+        // Each turn's content_json is the raw `assistant`/`user` event
+        // payload (or, for batched assistant turns, the template with
         // `message.content` rewritten from cur_asst_blocks).
-        let parsed: Value = serde_json::from_str(&row.content).unwrap_or(Value::Null);
+        let parsed: Value = serde_json::from_str(&turn.content_json).unwrap_or(Value::Null);
         let block_types: Vec<String> = parsed
             .get("message")
             .and_then(|m| m.get("content"))
@@ -264,7 +237,7 @@ fn build_persisted_snapshot(pipeline: &MessagePipeline) -> PersistedTurnsSnapsho
             .unwrap_or_default();
         total_blocks += block_types.len();
         turns.push(PersistedTurn {
-            role: row.role.as_str().to_string(),
+            role: turn.role.as_str().to_string(),
             block_types,
         });
     }
@@ -296,7 +269,7 @@ fn stream_replay() {
             .and_then(|n| n.to_str())
             .unwrap_or_else(|| panic!("fixture {path:?} is missing a provider parent dir"));
         assert!(
-            matches!(provider, "claude" | "codex"),
+            matches!(provider, "claude" | "codex" | "cursor"),
             "fixture {path:?} is under unknown provider directory {provider:?}"
         );
 

@@ -14,6 +14,7 @@ mod actions;
 mod active_streams;
 mod bridges;
 mod cleanup;
+pub(crate) mod codex_goal;
 mod context_usage;
 mod params;
 mod session_id;
@@ -23,11 +24,10 @@ mod state;
 mod event_loop_tests;
 
 pub(crate) use active_streams::ActiveStreamHandle;
-pub use active_streams::{abort_all_active_streams_blocking, ActiveStreams};
+pub use active_streams::{abort_all_active_streams_blocking, ActiveStreamSummary, ActiveStreams};
 pub use bridges::{
-    bridge_aborted_event, bridge_deferred_tool_use_event, bridge_done_event,
-    bridge_elicitation_request_event, bridge_error_event, bridge_permission_request_event,
-    bridge_user_input_request_event, convert_elicitation_content_to_codex_answers,
+    bridge_aborted_event, bridge_done_event, bridge_error_event, bridge_permission_request_event,
+    bridge_user_input_request_event,
 };
 pub(crate) use cleanup::cleanup_abnormal_stream_exit;
 pub use params::{
@@ -50,57 +50,6 @@ use super::{
     AgentStreamEvent, CmdResult, ExchangeContext,
 };
 
-fn execute_delegation_tool_call(
-    app: AppHandle,
-    sidecar: &crate::sidecar::ManagedSidecar,
-    tool_call_id: &str,
-    parent_session_id: Option<&str>,
-    parent_provider: &str,
-    args: Value,
-) -> anyhow::Result<Value> {
-    let parent_session_id = parent_session_id
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!("delegate_agent requires a persisted Helmor parent session")
-        })?;
-    let mut payload = match args {
-        Value::Object(map) => map,
-        _ => serde_json::Map::new(),
-    };
-    payload.insert(
-        "parentSessionId".to_string(),
-        Value::String(parent_session_id.to_string()),
-    );
-    payload.insert(
-        "parentProvider".to_string(),
-        Value::String(parent_provider.to_string()),
-    );
-    let request: super::delegation::DelegateAgentRequest =
-        serde_json::from_value(Value::Object(payload)).map_err(|error| {
-            anyhow::anyhow!("Invalid delegate_agent arguments for {tool_call_id}: {error}")
-        })?;
-    let response = super::delegation::delegate_agent_blocking(app, sidecar, request)?;
-    Ok(serde_json::to_value(response)?)
-}
-
-fn send_pi_tool_result(
-    sidecar: &crate::sidecar::ManagedSidecar,
-    tool_call_id: &str,
-    result: Value,
-    is_error: bool,
-) -> anyhow::Result<()> {
-    let request = crate::sidecar::SidecarRequest {
-        id: Uuid::new_v4().to_string(),
-        method: "kanbanToolResult".to_string(),
-        params: serde_json::json!({
-            "toolCallId": tool_call_id,
-            "result": result,
-            "isError": is_error,
-        }),
-    };
-    sidecar.send(&request)
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn stream_via_sidecar(
     app: AppHandle,
@@ -115,24 +64,6 @@ pub(super) fn stream_via_sidecar(
 ) -> CmdResult<()> {
     let request_id = stream_id.to_string();
 
-    tracing::info!(
-        stream_id = %stream_id,
-        provider = %model.provider,
-        model_id = %model.id,
-        resolved_cli_model = %model.cli_model,
-        cwd = %working_directory.display(),
-        prompt_len = prompt.len(),
-        has_prompt_prefix = request.prompt_prefix.as_deref().is_some_and(|prefix| !prefix.trim().is_empty()),
-        resume_only = request.resume_only,
-        session_id = ?request.session_id,
-        helmor_session_id = ?request.helmor_session_id,
-        permission_mode = ?request.permission_mode,
-        effort_level = ?request.effort_level,
-        fast_mode = ?request.fast_mode,
-        file_count = request.files.as_ref().map_or(0, Vec::len),
-        image_count = request.images.as_ref().map_or(0, Vec::len),
-        "stream_via_sidecar starting"
-    );
     tracing::debug!(
         provider = %model.provider,
         model = %model.cli_model,
@@ -141,23 +72,29 @@ pub(super) fn stream_via_sidecar(
         "stream_via_sidecar"
     );
 
-    let resume_session_id = request.session_id.clone().or_else(|| {
+    // Single read against `sessions` for both lookups we need below:
+    // resume-session matching (provider_session_id + agent_type) and the
+    // workspace_id we stamp onto the active-streams handle. Two queries
+    // would borrow the read pool twice on the hot path of every send.
+    let session_row: Option<(Option<String>, Option<String>, Option<String>)> =
         request.helmor_session_id.as_deref().and_then(|hsid| {
             let conn = crate::models::db::read_conn().ok()?;
-            let (stored_sid, stored_provider): (Option<String>, Option<String>) = conn
-                .query_row(
-                    "SELECT provider_session_id, agent_type FROM sessions WHERE id = ?1",
-                    [hsid],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok()?;
-            let sid = stored_sid?;
-            if stored_provider.unwrap_or_default() == model.provider {
-                Some(sid)
-            } else {
-                None
-            }
-        })
+            conn.query_row(
+                "SELECT provider_session_id, agent_type, workspace_id FROM sessions WHERE id = ?1",
+                [hsid],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok()
+        });
+
+    let resume_session_id = request.session_id.clone().or_else(|| {
+        let (stored_sid, stored_provider, _) = session_row.as_ref()?;
+        let sid = stored_sid.clone()?;
+        if stored_provider.clone().unwrap_or_default() == model.provider {
+            Some(sid)
+        } else {
+            None
+        }
     });
 
     tracing::debug!(
@@ -165,13 +102,6 @@ pub(super) fn stream_via_sidecar(
         helmor_session_id = ?request.helmor_session_id,
         provider = %model.provider,
         "Session resume context"
-    );
-    tracing::info!(
-        stream_id = %stream_id,
-        resume_session_id = ?resume_session_id,
-        helmor_session_id = ?request.helmor_session_id,
-        provider = %model.provider,
-        "stream_via_sidecar resume context"
     );
 
     let helmor_session_id = request.helmor_session_id.clone();
@@ -194,15 +124,6 @@ pub(super) fn stream_via_sidecar(
     };
 
     let images_for_wire = request.images.clone().unwrap_or_default();
-    tracing::info!(
-        stream_id = %stream_id,
-        provider = %model.provider,
-        model = %model.cli_model,
-        combined_prompt_len = combined_prompt.len(),
-        prompt_prefix_len = prefix_trimmed.map_or(0, str::len),
-        image_count = images_for_wire.len(),
-        "stream_via_sidecar wire payload prepared"
-    );
     let params = build_send_message_params(BuildSendMessageParamsInput {
         sidecar_session_id: &sidecar_session_id,
         prompt: &combined_prompt,
@@ -217,10 +138,6 @@ pub(super) fn stream_via_sidecar(
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
         images: &images_for_wire,
-        kanban_workspace_id: request.kanban_workspace_id.as_deref(),
-        kanban_snapshot: request.kanban_snapshot.as_deref(),
-        goal_title: request.goal_title.as_deref(),
-        goal_description: request.goal_description.as_deref(),
     });
 
     // Surface the `/add-dir` decision in logs — we often debug linked-
@@ -250,18 +167,49 @@ pub(super) fn stream_via_sidecar(
         params,
     };
 
+    // Workspace for the UI's "this workspace is busy" badge —
+    // pulled out of the same `session_row` we already read above so
+    // we don't borrow the read pool a second time on every send.
+    let workspace_id_for_handle = session_row
+        .as_ref()
+        .and_then(|(_, _, workspace_id)| workspace_id.clone());
+
+    // Per-helmor-session lock — block overlapping sends so concurrent
+    // `query()` calls can't stack against the same `resume:` id and
+    // corrupt the conversation jsonl (issue #398).
+    let registered = active_streams.try_register_for_session(ActiveStreamHandle {
+        request_id: request_id.clone(),
+        sidecar_session_id: sidecar_session_id.clone(),
+        provider: model.provider.to_string(),
+        helmor_session_id: request.helmor_session_id.clone(),
+        workspace_id: workspace_id_for_handle,
+    });
+    if !registered {
+        tracing::warn!(
+            rid = %request_id,
+            helmor_session_id = ?request.helmor_session_id,
+            "Rejecting send: another stream is already active for this session"
+        );
+        return Err(anyhow::anyhow!(
+            "A previous send is still running for this session. Wait for it to finish or stop it first."
+        )
+        .into());
+    }
+    // Notify the UI that the active-streams set changed. Anonymous
+    // streams (helmor_session_id == None) are filtered out of the
+    // snapshot the frontend reads, but we still publish — the
+    // frontend's invalidate is cheap and the alternative (branch on
+    // visibility here) couples this call site to UI policy.
+    crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
+
     let rx = sidecar.subscribe(&request_id);
 
     if let Err(error) = sidecar.send(&sidecar_req) {
         sidecar.unsubscribe(&request_id);
+        active_streams.unregister(&request_id);
+        crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
         return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
     }
-
-    active_streams.register(ActiveStreamHandle {
-        request_id: request_id.clone(),
-        sidecar_session_id: sidecar_session_id.clone(),
-        provider: model.provider.to_string(),
-    });
 
     let model_id = model.id.clone();
     let provider = model.provider.clone();
@@ -275,7 +223,6 @@ pub(super) fn stream_via_sidecar(
     let user_message_id_copy = request.user_message_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
     let images_copy = request.images.clone().unwrap_or_default();
-    let resume_only = request.resume_only;
     let sidecar_session_id_copy = sidecar_session_id.clone();
     let rid = request_id.clone();
 
@@ -287,7 +234,6 @@ pub(super) fn stream_via_sidecar(
             sidecar_session_id = %sidecar_session_id_copy,
             provider = %provider,
             model = %model_copy.cli_model,
-            resume_only,
             "stream: event loop starting"
         );
 
@@ -337,23 +283,14 @@ pub(super) fn stream_via_sidecar(
                         tracing::error!(rid = %rid, "Failed to update fast_mode: {e}");
                     }
 
-                    if resume_only {
-                        exchange_ctx = Some(ctx);
-                    } else {
-                        match persist_user_message(
-                            &conn,
-                            &ctx,
-                            &prompt_copy,
-                            &files_copy,
-                            &images_copy,
-                        ) {
-                            Ok(()) => {
-                                tracing::debug!(rid = %rid, "User message persisted to DB");
-                                exchange_ctx = Some(ctx);
-                            }
-                            Err(error) => {
-                                tracing::error!(rid = %rid, "Failed to persist user message: {error}");
-                            }
+                    match persist_user_message(&conn, &ctx, &prompt_copy, &files_copy, &images_copy)
+                    {
+                        Ok(()) => {
+                            tracing::debug!(rid = %rid, "User message persisted to DB");
+                            exchange_ctx = Some(ctx);
+                        }
+                        Err(error) => {
+                            tracing::error!(rid = %rid, "Failed to persist user message: {error}");
                         }
                     }
                 }
@@ -540,16 +477,9 @@ pub(super) fn stream_via_sidecar(
                         resolved_session_id.as_deref(),
                         sid,
                         hsid_copy.as_deref(),
-                        model_copy.provider.as_str() == "codex",
                     ) {
                         resolved_session_id = Some(sid.to_string());
-                        if resume_only {
-                            tracing::debug!(
-                                rid = %rid,
-                                provider_session_id = sid,
-                                "Skipping provider session persistence for resume-only stream"
-                            );
-                        } else if let (Some(ctx), Some(conn)) =
+                        if let (Some(ctx), Some(conn)) =
                             (&exchange_ctx, &crate::models::db::write_conn().ok())
                         {
                             if let Err(error) = conn.execute(
@@ -595,6 +525,17 @@ pub(super) fn stream_via_sidecar(
                     let mut persisted = false;
                     let mut resolved_model = model_copy.cli_model.to_string();
                     let mut final_messages: Vec<ThreadMessageLike> = Vec::new();
+                    // Set on an empty `end` for a `resume:` stream — surface
+                    // an Error instead of silently committing a blank Done
+                    // (issue #398). We do NOT clear provider_session_id
+                    // here: a single empty response can be a transient API
+                    // blip, and dropping the resume id would lose the whole
+                    // conversation on retry (issue #402). The hard-evidence
+                    // clear lives in `cleanup_abnormal_stream_exit`.
+                    let mut bad_resume_failure = false;
+                    const BAD_RESUME_USER_MESSAGE: &str =
+                        "The provider returned an empty response. Please try again. \
+                         If this keeps happening on this thread, start a new conversation.";
 
                     if let Some(mut pipeline_state) = pipeline.take() {
                         if is_aborted {
@@ -605,6 +546,7 @@ pub(super) fn stream_via_sidecar(
 
                         if is_aborted {
                             pipeline_state.accumulator.flush_codex_in_progress();
+                            pipeline_state.accumulator.flush_cursor_in_progress();
                             pipeline_state.materialize_partial();
                             pipeline_state.accumulator.append_aborted_notice();
                         }
@@ -646,8 +588,48 @@ pub(super) fn stream_via_sidecar(
                         if !output.assistant_text.is_empty() {
                             resolved_model = output.resolved_model.clone();
                         }
+
+                        // Empty result on a `resume:` stream → surface as
+                        // Error. Skipped on the no-resume case (a brand-new
+                        // turn returning empty is a different kind of bug).
+                        let is_empty_resume = !is_aborted
+                            && resume_session_id.is_some()
+                            && persisted_turn_count == 0
+                            && output.assistant_text.trim().is_empty();
+
                         if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
-                            if is_aborted {
+                            if is_empty_resume {
+                                bad_resume_failure = true;
+                                match persist_error_message(
+                                    conn,
+                                    ctx,
+                                    &resolved_model,
+                                    BAD_RESUME_USER_MESSAGE,
+                                ) {
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        tracing::error!(
+                                            rid = %rid,
+                                            "Failed to persist bad-resume error: {error}"
+                                        );
+                                    }
+                                }
+                                match finalize_session_metadata(
+                                    conn,
+                                    ctx,
+                                    "idle",
+                                    effort_copy.as_deref(),
+                                    turn_session.ctx.permission_mode.as_deref(),
+                                ) {
+                                    Ok(_) => persisted = true,
+                                    Err(error) => {
+                                        tracing::error!(
+                                            rid = %rid,
+                                            "Failed to finalize after empty resume: {error}"
+                                        );
+                                    }
+                                }
+                            } else if is_aborted {
                                 match finalize_session_metadata(
                                     conn,
                                     ctx,
@@ -701,8 +683,34 @@ pub(super) fn stream_via_sidecar(
                         persisted_turn_count,
                         elapsed_ms = stream_started_at.elapsed().as_millis(),
                         persisted,
+                        bad_resume_failure,
                         "stream: terminal event received"
                     );
+
+                    if bad_resume_failure {
+                        // End in `Error` (not `Done`) so the frontend's
+                        // error path runs.
+                        let raw = json!({
+                            "type": "error",
+                            "message": BAD_RESUME_USER_MESSAGE,
+                            "internal": false,
+                        });
+                        match turn_session.handle_error(&raw, persisted) {
+                            Ok(actions) => {
+                                for action in actions {
+                                    actions::apply_action(action, &apply_ctx);
+                                }
+                            }
+                            Err(err) => {
+                                tracing::error!(
+                                    rid = %rid,
+                                    error = ?err,
+                                    "bad-resume error transition rejected",
+                                );
+                            }
+                        }
+                        break;
+                    }
 
                     match turn_session.handle_end_or_aborted(
                         is_aborted,
@@ -860,25 +868,29 @@ pub(super) fn stream_via_sidecar(
                         let _ = on_event.send(AgentStreamEvent::PlanCaptured {});
                     }
                 }
-                "deferredToolUse" => {
-                    // Infrastructure-side prep stays inline (DB writes +
-                    // pipeline ownership). The state machine owns the
-                    // terminal transition + the Update + DeferredToolUse
-                    // emit pair.
+                "userInputRequest" => {
+                    // Unified user-input pause. Sources: Claude
+                    // AskUserQuestion (canUseTool), Claude MCP elicitation
+                    // (onElicitation), Codex `requestUserInput`. The
+                    // sidecar has the live SDK callback parked on a
+                    // promise; the SDK process keeps running and the
+                    // pipeline keeps accumulating. We persist any
+                    // complete turns up to this point (crash-safe) and
+                    // emit a snapshot Update + the UserInputRequest
+                    // marker so the frontend overlay shows up at the
+                    // right position. Subsequent stream events flow
+                    // normally once the user submits via
+                    // `respondToUserInput`.
                     let mut resolved_model = model_copy.cli_model.to_string();
                     let mut final_messages: Vec<ThreadMessageLike> = Vec::new();
 
-                    if let Some(mut pipeline_state) = pipeline.take() {
+                    if let Some(pipeline_state) = pipeline.as_mut() {
                         pipeline_state.accumulator.flush_pending();
 
-                        // Borrow writer once for both turn persist and the
-                        // deferred-finalize. The pipeline_state.finish()
-                        // between them is purely in-memory.
-                        let writer = exchange_ctx
-                            .as_ref()
-                            .and_then(|_| crate::models::db::write_conn().ok());
-
-                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
+                        if let (Some(ctx), Some(conn)) = (
+                            exchange_ctx.as_ref(),
+                            crate::models::db::write_conn().ok().as_ref(),
+                        ) {
                             let model_str = pipeline_state.accumulator.resolved_model().to_string();
                             while persisted_turn_count < pipeline_state.accumulator.turns_len() {
                                 match persist_turn_message(
@@ -899,31 +911,14 @@ pub(super) fn stream_via_sidecar(
                             }
                         }
 
-                        // Deferred pause is terminal for this stream from the
-                        // frontend's perspective. IDs are already stable by
-                        // construction (same UUID in `collected[]` and
-                        // `CollectedTurn`), so no post-hoc sync is needed.
                         resolved_model = pipeline_state.accumulator.resolved_model().to_string();
+                        // `finish()` is non-destructive (a pure render),
+                        // so we keep the pipeline live for the events
+                        // that arrive after the user submits.
                         final_messages = pipeline_state.finish();
-
-                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
-                            if let Err(error) = finalize_session_metadata(
-                                conn,
-                                ctx,
-                                "idle",
-                                effort_copy.as_deref(),
-                                turn_session.ctx.permission_mode.as_deref(),
-                            ) {
-                                tracing::error!(
-                                    rid = %rid,
-                                    "Failed to finalize deferred exchange: {error}"
-                                );
-                            }
-                        }
-                        drop(writer);
                     }
 
-                    match turn_session.handle_deferred_tool_use(
+                    match turn_session.handle_user_input_request(
                         &event.raw,
                         &resolved_model,
                         final_messages,
@@ -937,11 +932,10 @@ pub(super) fn stream_via_sidecar(
                             tracing::error!(
                                 rid = %rid,
                                 error = ?err,
-                                "deferredToolUse transition rejected",
+                                "userInputRequest transition rejected",
                             );
                         }
                     }
-                    break;
                 }
                 "permissionModeChanged" => {
                     match turn_session.handle_permission_mode_changed(&event.raw) {
@@ -975,178 +969,20 @@ pub(super) fn stream_via_sidecar(
                         }
                     }
                 }
-                "elicitationRequest" => {
-                    let resolved_model = pipeline
-                        .as_ref()
-                        .map(|state| state.accumulator.resolved_model().to_string())
-                        .unwrap_or_else(|| model_copy.cli_model.to_string());
-                    match turn_session.handle_elicitation_request(&event.raw, &resolved_model) {
-                        Ok(actions) => {
-                            for action in actions {
-                                actions::apply_action(action, &apply_ctx);
-                            }
-                        }
-                        Err(err) => {
-                            tracing::error!(
-                                rid = %rid,
-                                error = ?err,
-                                "elicitationRequest transition rejected",
-                            );
+                "codexGoalUpdated" => match turn_session.handle_codex_goal_updated(&event.raw) {
+                    Ok(actions) => {
+                        for action in actions {
+                            actions::apply_action(action, &apply_ctx);
                         }
                     }
-                }
-                "userInputRequest" => {
-                    let resolved_model = pipeline
-                        .as_ref()
-                        .map(|state| state.accumulator.resolved_model().to_string())
-                        .unwrap_or_else(|| model_copy.cli_model.to_string());
-                    match turn_session.handle_user_input_request(&event.raw, &resolved_model) {
-                        Ok(actions) => {
-                            for action in actions {
-                                actions::apply_action(action, &apply_ctx);
-                            }
-                        }
-                        Err(err) => {
-                            tracing::error!(
-                                rid = %rid,
-                                error = ?err,
-                                "userInputRequest transition rejected",
-                            );
-                        }
+                    Err(err) => {
+                        tracing::error!(
+                            rid = %rid,
+                            error = ?err,
+                            "codexGoalUpdated transition rejected",
+                        );
                     }
-                }
-                "kanban_tool_call" => {
-                    // Pi Kanban custom tool called — forward directly to
-                    // the frontend so the Goals AI panel can execute the
-                    // corresponding Tauri IPC and respond via
-                    // `send_kanban_tool_result`.
-                    let tool_call_id = event
-                        .raw
-                        .get("toolCallId")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let tool = event
-                        .raw
-                        .get("tool")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let workspace_id = event
-                        .raw
-                        .get("workspaceId")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let args = event.raw.get("args").cloned().unwrap_or(Value::Null);
-                    tracing::debug!(
-                        rid = %rid,
-                        tool = %tool,
-                        tool_call_id = %tool_call_id,
-                        "Pi custom tool call",
-                    );
-                    if tool == "delegate_agent" {
-                        let (tool_result, is_error) = match execute_delegation_tool_call(
-                            app.clone(),
-                            sidecar_state.inner(),
-                            &tool_call_id,
-                            hsid_copy.as_deref(),
-                            &provider,
-                            args,
-                        ) {
-                            Ok(value) => (value, false),
-                            Err(error) => (serde_json::json!({ "error": error.to_string() }), true),
-                        };
-                        if let Err(error) = send_pi_tool_result(
-                            sidecar_state.inner(),
-                            &tool_call_id,
-                            tool_result,
-                            is_error,
-                        ) {
-                            let user_message = format!(
-                                "Failed to complete delegate_agent tool call {tool_call_id}. The parent stream was stopped; you can retry the request."
-                            );
-                            tracing::error!(
-                                rid = %rid,
-                                tool_call_id = %tool_call_id,
-                                error = ?error,
-                                "Failed to send delegate_agent tool result",
-                            );
-                            let resolved_model = pipeline
-                                .as_ref()
-                                .map(|p| p.accumulator.resolved_model().to_string())
-                                .unwrap_or_else(|| model_copy.cli_model.to_string());
-                            let persisted = cleanup_abnormal_stream_exit(
-                                &rid,
-                                exchange_ctx.as_ref(),
-                                &resolved_model,
-                                &user_message,
-                                effort_copy.as_deref(),
-                                turn_session.ctx.permission_mode.as_deref(),
-                            );
-                            match turn_session.handle_abnormal_exit(
-                                state::AbnormalExit::SidecarDisconnected,
-                                user_message,
-                                persisted,
-                            ) {
-                                Ok(actions) => {
-                                    for action in actions {
-                                        actions::apply_action(action, &apply_ctx);
-                                    }
-                                }
-                                Err(err) => {
-                                    tracing::error!(
-                                        rid = %rid,
-                                        error = ?err,
-                                        "delegate_agent result failure transition rejected",
-                                    );
-                                }
-                            }
-                            break;
-                        }
-                    } else {
-                        let _ = on_event.send(AgentStreamEvent::KanbanToolCall {
-                            tool_call_id,
-                            tool,
-                            workspace_id,
-                            args,
-                        });
-                    }
-                }
-                "pi_ui_request" => {
-                    // Pi extension interactive UI request — forward to the
-                    // frontend so the shared conversation surface can render
-                    // a picker/input/confirm card and respond via
-                    // `respond_to_pi_ui`.
-                    let interaction_id = event
-                        .raw
-                        .get("interactionId")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let kind = event
-                        .raw
-                        .get("kind")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let payload = event
-                        .raw
-                        .get("payload")
-                        .cloned()
-                        .unwrap_or(Value::Object(serde_json::Map::new()));
-                    tracing::debug!(
-                        rid = %rid,
-                        kind = %kind,
-                        interaction_id = %interaction_id,
-                        "Pi UI request",
-                    );
-                    let _ = on_event.send(AgentStreamEvent::PiUiRequest {
-                        interaction_id,
-                        ui_kind: kind,
-                        payload,
-                    });
-                }
+                },
                 "error" => {
                     // Pre-compute (message, internal) for tracing and DB
                     // writes. Final emit goes through the state machine
@@ -1283,6 +1119,7 @@ pub(super) fn stream_via_sidecar(
         );
         sidecar_state.unsubscribe(&rid);
         active_streams_state.unregister(&rid);
+        crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
     });
 
     Ok(())

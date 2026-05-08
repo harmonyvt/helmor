@@ -68,7 +68,7 @@ pub(crate) fn delegate_agent_blocking(
         .model_id
         .clone()
         .unwrap_or_else(|| default_model_id_for_provider(&request.provider));
-    let model = resolve_model(&model_id);
+    let model = resolve_model(&model_id, Some(&request.provider));
     if model.provider != request.provider {
         bail!(
             "Model {} does not belong to provider {}",
@@ -234,10 +234,6 @@ fn run_child_turn(
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
         images: &[],
-        kanban_workspace_id: None,
-        kanban_snapshot: None,
-        goal_title: None,
-        goal_description: None,
     });
     let request = crate::sidecar::SidecarRequest {
         id: request_id.clone(),
