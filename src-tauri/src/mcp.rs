@@ -333,6 +333,7 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                 model,
                 permission_mode,
                 linked_directories: Vec::new(),
+                delegate_to_running_app: true,
             };
 
             let mut output = String::new();

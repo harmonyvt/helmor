@@ -10,6 +10,7 @@
 		"vite.config.ts",
 		"vite.e2e.config.ts",
 		"playwright.config.ts",
+		"scripts/dev-web.ts",
 		"scripts/dev-preview.ts"
 	]
 }

@@ -123,6 +123,30 @@ export type DataInfo = {
 	dataDirLockedByEnv: boolean;
 };
 
+export type WebDaemonStatus = {
+	state: "running" | "stopped";
+	pid: number | null;
+	url: string;
+	openUrl: string;
+	reachableUrls: string[];
+	host: string;
+	listenHost: string;
+	port: number;
+	dataDir: string;
+	frontendDir: string;
+	frontendExists: boolean;
+	identity: string;
+	command: string;
+	startedAtMs: number | null;
+	lastError: string | null;
+};
+
+export type WebDaemonStartConfig = {
+	host?: string | null;
+	port?: number | null;
+	frontendDir?: string | null;
+};
+
 export type AgentProvider = "claude" | "codex" | "pi";
 
 export type AgentModelOption = {
@@ -865,6 +889,30 @@ export async function setDataDirPreference(
 	preference: DataDirPreference,
 ): Promise<void> {
 	await invoke("set_data_dir_preference", { preference });
+}
+
+export async function getWebDaemonStatus(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("get_web_daemon_status");
+}
+
+export async function startWebDaemon(
+	config?: WebDaemonStartConfig,
+): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("start_web_daemon", {
+		config: config ?? null,
+	});
+}
+
+export async function stopWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("stop_web_daemon");
+}
+
+export async function deleteWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("delete_web_daemon");
+}
+
+export async function cleanupWebDaemon(): Promise<WebDaemonStatus> {
+	return invoke<WebDaemonStatus>("cleanup_web_daemon");
 }
 
 export async function restartApp(force = false): Promise<void> {

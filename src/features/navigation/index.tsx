@@ -121,6 +121,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
 	creatingWorkspaceRepoId,
+	isPolling,
 	onAddRepository,
 	onOpenCloneDialog,
 	isCloneDialogOpen,
@@ -157,6 +158,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
 	creatingWorkspaceRepoId?: string | null;
+	/** When true, renders the polling shimmer hairline below the header. */
+	isPolling?: boolean;
 	onAddRepository?: () => void;
 	onOpenCloneDialog?: () => void;
 	isCloneDialogOpen?: boolean;
@@ -947,6 +950,22 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					onCreateGoalWorkspace?.(repoId, title, description, sourceBranch)
 				}
 			/>
+
+			{/*
+			 * Polling shimmer — a 1px hairline that sweeps left→right while the
+			 * workspace list is fetching in the background. Stays in layout at all
+			 * times (no height shift) and fades via opacity so the transition is
+			 * smooth even for sub-100ms local fetches. aria-hidden keeps it out of
+			 * the accessibility tree.
+			 */}
+			<div className="mx-3 mt-1 h-px overflow-hidden" aria-hidden="true">
+				<div
+					className={cn(
+						"workspace-poll-bar h-full w-full transition-opacity duration-200 ease-out motion-safe:transition-opacity",
+						isPolling ? "opacity-100" : "opacity-0",
+					)}
+				/>
+			</div>
 
 			{/* Virtualized workspace list */}
 			<div
