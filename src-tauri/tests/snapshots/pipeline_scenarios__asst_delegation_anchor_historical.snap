@@ -1,0 +1,20 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: delegation-anchor
+      delegation_id: delegation-1
+      parent_session_id: parent-1
+      child_session_id: child-1
+      title: Inspect parser
+      provider: codex
+      model_id: gpt-5.4
+      status: succeeded
+      has_structured_result: true
+      has_error: false
+  status: ~
+  streaming: ~

@@ -3,6 +3,7 @@ import { formatDistanceToNow } from "date-fns";
 import {
 	ArrowDown,
 	ArrowUp,
+	Bot,
 	FileDiff,
 	GitBranch,
 	GitPullRequest,
@@ -552,6 +553,13 @@ export function WorkspaceHoverCard({
 			: "Created";
 	const createdAt = relativeTime(row.createdAt);
 	const sessionCount = row.sessionCount ?? 0;
+	const { data: workspaceSessions } = useQuery(
+		workspaceSessionsQueryOptions(row.id, { staleTime: 5_000 }),
+	);
+	const totalChildCount = (workspaceSessions ?? []).reduce(
+		(sum, s) => sum + (s.childCount ?? 0),
+		0,
+	);
 
 	return (
 		<HoverCardRoot
@@ -633,6 +641,13 @@ export function WorkspaceHoverCard({
 							{sessionCount > 0 ? (
 								<span className="tabular-nums">
 									{sessionCount} {sessionCount === 1 ? "session" : "sessions"}
+								</span>
+							) : null}
+							{totalChildCount > 0 ? (
+								<span className="flex items-center gap-1 tabular-nums">
+									<Bot className="size-3 shrink-0" strokeWidth={1.8} />
+									{totalChildCount}{" "}
+									{totalChildCount === 1 ? "sub-agent" : "sub-agents"}
 								</span>
 							) : null}
 						</div>

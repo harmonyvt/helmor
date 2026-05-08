@@ -456,6 +456,10 @@ export type WorkspaceSessionSummary = {
 	 * inspector commit button (e.g. "create-pr", "commit-and-push"). Drives
 	 * post-stream verifiers and auto-close behavior. */
 	actionKind?: ActionKind | null;
+	parentSessionId?: string | null;
+	parentMessageId?: string | null;
+	delegationStatus?: string | null;
+	childCount?: number;
 	active: boolean;
 };
 
@@ -1413,6 +1417,7 @@ export type UiMutationEvent =
 	| { type: "workspaceListChanged" }
 	| { type: "workspaceChanged"; workspaceId: string }
 	| { type: "sessionListChanged"; workspaceId: string }
+	| { type: "sessionMessagesChanged"; workspaceId: string; sessionId: string }
 	| { type: "contextUsageChanged"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
@@ -2379,6 +2384,48 @@ export type AgentStreamStartResponse = {
 	streamId: string;
 };
 
+export type DelegateAgentRequest = {
+	parentSessionId: string;
+	task: string;
+	provider: AgentProvider;
+	modelId?: string | null;
+	effortLevel?: string | null;
+	permissionMode?: string | null;
+	title?: string | null;
+	outputSchema: Record<string, unknown>;
+	timeoutMs?: number | null;
+	parentProvider?: string | null;
+};
+
+export type DelegationRecord = {
+	id: string;
+	parentSessionId: string;
+	childSessionId: string;
+	parentMessageId: string;
+	provider: string;
+	modelId?: string | null;
+	title: string;
+	status: string;
+	outputSchema: unknown;
+	structuredResult?: unknown;
+	error?: string | null;
+	createdAt: string;
+	startedAt?: string | null;
+	completedAt?: string | null;
+};
+
+export type DelegateAgentResponse = {
+	delegation: DelegationRecord;
+	childSessionId: string;
+	result: unknown;
+};
+
+export async function delegateAgent(
+	request: DelegateAgentRequest,
+): Promise<DelegateAgentResponse> {
+	return invoke<DelegateAgentResponse>("delegate_agent", { request });
+}
+
 // ---------------------------------------------------------------------------
 // Pipeline output types — match Rust pipeline::types serde output exactly
 // ---------------------------------------------------------------------------
@@ -2474,6 +2521,23 @@ export type PlanReviewPart = {
 	planFilePath?: string | null;
 	allowedPrompts?: PlanReviewAllowedPrompt[];
 };
+export type DelegationAnchorPart = {
+	type: "delegation-anchor";
+	id: string;
+	delegationId: string;
+	parentSessionId: string;
+	childSessionId: string;
+	title: string;
+	provider: string;
+	modelId?: string | null;
+	status: string;
+	outputSchema: unknown;
+	structuredResult?: unknown;
+	error?: string | null;
+	startedAt?: string | null;
+	completedAt?: string | null;
+};
+
 export type GenericCardPart = {
 	type: "generic-card";
 	id: string;
@@ -2495,7 +2559,8 @@ export type MessagePart =
 	| PromptSuggestionPart
 	| FileMentionPart
 	| PlanReviewPart
-	| GenericCardPart;
+	| GenericCardPart
+	| DelegationAnchorPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";

@@ -41,6 +41,7 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
 
     let mut params = serde_json::json!({
         "sessionId": input.sidecar_session_id,
+        "helmorSessionId": input.helmor_session_id,
         "prompt": input.prompt,
         "model": input.cli_model,
         "cwd": input.cwd,

@@ -244,7 +244,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 		if (
 			displayedSessionId &&
-			sessions.some((session) => session.id === displayedSessionId)
+			(sessions.some((session) => session.id === displayedSessionId) ||
+				selectedSessionId === displayedSessionId)
 		) {
 			return displayedSessionId;
 		}
@@ -260,6 +261,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		displayedSessionId,
 		displayedWorkspaceId,
 		rememberedSessionId,
+		selectedSessionId,
 		sessions,
 		workspace?.activeSessionId,
 	]);
@@ -471,6 +473,13 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	const handleSelectSession = useCallback((sessionId: string) => {
 		onSelectSessionRef.current(sessionId);
 	}, []);
+	const handleFocusChildSession = useCallback(
+		(sessionId: string) => {
+			onResolveDisplayedSession(sessionId);
+			onSelectSessionRef.current(sessionId);
+		},
+		[onResolveDisplayedSession],
+	);
 	const handleSessionsChanged = useCallback(() => {
 		void invalidateSessionQueries();
 	}, [invalidateSessionQueries]);
@@ -542,6 +551,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			newSessionShortcut={getShortcut(settings.shortcuts, "session.new")}
 			missingScriptTypes={missingScriptTypes}
 			onInitializeScript={handleInitializeScript}
+			onFocusChildSession={handleFocusChildSession}
 			changeRequest={workspaceChangeRequest}
 			compact={compact}
 		/>

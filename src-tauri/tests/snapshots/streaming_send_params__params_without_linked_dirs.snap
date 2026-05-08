@@ -5,6 +5,7 @@ expression: "&params"
 cwd: /abs/workspace
 effortLevel: high
 fastMode: false
+helmorSessionId: s-1
 model: claude-opus-4
 permissionMode: bypassPermissions
 prompt: hello

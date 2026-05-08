@@ -11,6 +11,8 @@ export type Provider = "claude" | "codex" | "pi";
 
 export interface SendMessageParams {
 	readonly sessionId: string;
+	/** Helmor database session id. Used by Helmor-managed provider tools. */
+	readonly helmorSessionId?: string;
 	readonly prompt: string;
 	readonly model: string | undefined;
 	readonly cwd: string | undefined;

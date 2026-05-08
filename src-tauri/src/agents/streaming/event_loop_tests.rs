@@ -115,6 +115,9 @@ fn fingerprint_message(msg: &ThreadMessageLike) -> MessageFingerprint {
             ExtendedMessagePart::Basic(MessagePart::GenericCard { title, .. }) => {
                 format!("generic-card({title})")
             }
+            ExtendedMessagePart::Basic(MessagePart::DelegationAnchor { title, .. }) => {
+                format!("delegation-anchor({title})")
+            }
             ExtendedMessagePart::CollapsedGroup(g) => {
                 format!("collapsed-group({:?},tools={})", g.category, g.tools.len())
             }

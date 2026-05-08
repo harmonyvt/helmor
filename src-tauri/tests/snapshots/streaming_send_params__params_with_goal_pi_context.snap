@@ -7,6 +7,7 @@ effortLevel: high
 fastMode: false
 goalDescription: Ship the launch board
 goalTitle: Launch Goal
+helmorSessionId: s-goal
 kanbanSnapshot: "[{\"id\":\"child-1\",\"title\":\"Build UI\"}]"
 kanbanWorkspaceId: goal-workspace-1
 model: anthropic/claude-opus-4-7
