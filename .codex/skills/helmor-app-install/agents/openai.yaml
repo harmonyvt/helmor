@@ -1,4 +1,0 @@
-interface:
-  display_name: "Helmor App Install"
-  short_description: "Build and install Helmor.app."
-  default_prompt: "Build the production Helmor macOS app, install it into /Applications, ad-hoc sign the local copy, and verify the installed bundle."

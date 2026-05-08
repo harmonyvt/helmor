@@ -16,7 +16,6 @@ mod conductor;
 mod data;
 mod files;
 mod github;
-mod goal;
 mod output;
 mod refs;
 mod repo;
@@ -96,7 +95,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
         C::Settings { action } => settings::dispatch(action, cli),
         C::Repo { action } => repo::dispatch(action, cli),
         C::Workspace { action } => workspace::dispatch(action, cli),
-        C::Goal { action } => goal::dispatch(action, cli),
         C::Session { action } => session::dispatch(action, cli),
         C::Files { action } => files::dispatch(action, cli),
         C::Send(opts) => send::send(opts, cli),

@@ -26,7 +26,6 @@ import type {
 	CollapsedGroupPart,
 	ExtendedMessagePart,
 	FileMentionPart,
-	GenericCardPart,
 	ImagePart,
 	MessagePart,
 	PlanReviewPart,
@@ -160,18 +159,6 @@ export function partStructurallyEqual(
 				if (aPrompts[i]!.prompt !== bPrompts[i]!.prompt) return false;
 			}
 			return true;
-		}
-		case "generic-card": {
-			const gb = b as GenericCardPart;
-			return (
-				a.title === gb.title &&
-				a.subtitle === gb.subtitle &&
-				a.body === gb.body &&
-				a.severity === gb.severity &&
-				a.status === gb.status &&
-				a.provider === gb.provider &&
-				JSON.stringify(a.details ?? null) === JSON.stringify(gb.details ?? null)
-			);
 		}
 		default: {
 			const _exhaustive: never = a;

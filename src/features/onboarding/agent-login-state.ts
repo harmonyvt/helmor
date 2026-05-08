@@ -1,5 +1,4 @@
-import { Box } from "lucide-react";
-import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
+import { ClaudeIcon, CursorIcon, OpenAIIcon } from "@/components/icons";
 import type { AgentLoginStatusResult } from "@/lib/api";
 import type { AgentLoginItem } from "./types";
 
@@ -20,33 +19,19 @@ export function buildAgentLoginItems(
 			icon: OpenAIIcon,
 			provider: "codex",
 			label: "Codex",
-			description: codexDescription(status),
+			description: status?.codex
+				? "Signed in and ready to run OpenAI models in Helmor."
+				: "Sign in to Codex to use OpenAI models in Helmor.",
 			status: status?.codex ? "ready" : "needsSetup",
 		},
 		{
-			icon: Box,
-			provider: "pi",
-			label: "Pi",
-			description: piDescription(status),
-			status: status?.pi ? "ready" : "needsSetup",
+			icon: CursorIcon,
+			provider: "cursor",
+			label: "Cursor",
+			description: status?.cursor
+				? "API key saved and ready to run Cursor models in Helmor."
+				: "Add a Cursor API key to use Cursor models in Helmor.",
+			status: status?.cursor ? "ready" : "needsSetup",
 		},
 	];
-}
-
-function codexDescription(status?: AgentLoginStatusResult | null): string {
-	if (status?.codex && status.codexAuthMethod === "apiKey") {
-		const provider = status.codexProvider ?? "configured provider";
-		return `Using ${provider} from Codex config with its API key environment variable.`;
-	}
-	if (status?.codex) {
-		return "Signed in and ready to run OpenAI models in Helmor.";
-	}
-	return "Sign in to Codex or configure a Codex API-key provider to use Codex models in Helmor.";
-}
-
-function piDescription(status?: AgentLoginStatusResult | null): string {
-	if (status?.pi) {
-		return "Ready through existing Claude/Codex credentials or Pi auth.";
-	}
-	return "Pi uses your existing Claude or Codex setup; sign in to either provider to enable it.";
 }

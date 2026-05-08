@@ -1,7 +1,14 @@
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
 import { BrainIcon, ChevronRightIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { createContext, memo, useContext, useEffect, useState } from "react";
+import {
+	createContext,
+	memo,
+	useContext,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import {
 	Collapsible,
 	CollapsibleContent,
@@ -31,8 +38,9 @@ function useReasoning() {
 
 export type ReasoningProps = ComponentProps<typeof Collapsible> & {
 	/**
-	 * Current lifecycle phase. `"streaming"` and `"just-finished"` default
-	 * to open (active live turn); `"historical"` defaults to collapsed.
+	 * Current lifecycle phase. `"streaming"` defaults to open (active
+	 * generation); auto-collapses when transitioning to `"just-finished"`
+	 * or `"historical"`. Historical reloads also default to collapsed.
 	 */
 	lifecycle?: ReasoningLifecycle;
 	open?: boolean;
@@ -54,10 +62,15 @@ export const Reasoning = memo(
 		children,
 		...props
 	}: ReasoningProps) => {
-		// Live blocks (streaming OR just-finished) default open; historical
-		// reloads default collapsed so a returning user isn't buried in
-		// past reasoning text.
-		const resolvedDefaultOpen = defaultOpen ?? lifecycle !== "historical";
+		// Only the actively-streaming block defaults open. `just-finished`
+		// and `historical` both default closed so the row's DOM state is
+		// the same regardless of whether the user was watching when the
+		// stream ended — previously a transition-only `setIsOpen(false)`
+		// effect collapsed live observers but left switched-away viewers
+		// with an expanded block, which both surprises users (per their
+		// "thinking 输出完之后自动收起" expectation) and inflates
+		// `totalRowsHeight` against the layout estimator.
+		const resolvedDefaultOpen = defaultOpen ?? lifecycle === "streaming";
 
 		const [isOpen, setIsOpen] = useControllableState({
 			prop: open,
@@ -80,6 +93,19 @@ export const Reasoning = memo(
 				setStartTime(null);
 			}
 		}, [isStreaming, startTime, setDuration]);
+
+		// Auto-collapse on the live `streaming → !streaming` transition so
+		// the user watching it finish sees the block tuck away. Fresh
+		// mounts as `just-finished` already start collapsed via the
+		// defaultOpen above, so the two paths converge.
+		const prevLifecycleRef = useRef(lifecycle);
+		useEffect(() => {
+			const prev = prevLifecycleRef.current;
+			prevLifecycleRef.current = lifecycle;
+			if (prev === "streaming" && lifecycle !== "streaming") {
+				setIsOpen(false);
+			}
+		}, [lifecycle, setIsOpen]);
 
 		return (
 			<ReasoningContext.Provider

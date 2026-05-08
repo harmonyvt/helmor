@@ -61,13 +61,6 @@ pub(super) fn persist_user_message(
 /// Persist a single intermediate turn (assistant message or user tool
 /// result). Called each time the accumulator produces a complete turn
 /// during streaming. Returns the DB message ID.
-///
-/// Some provider surfaces (notably Pi via Codex-shaped item events) emit a
-/// start event that live-rendering inserts immediately, then a completion
-/// event later with the final result. We persist the start event to reserve
-/// its database position and upsert the completion into the same id. This
-/// preserves live start-order on historical reload while keeping final
-/// content current.
 pub(super) fn persist_turn_message(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -83,16 +76,11 @@ pub(super) fn persist_turn_message(
         &turn.content_json,
     )?;
 
-    // Preserve the original `sent_at` / rowid on duplicate ids so historical
-    // reload remains ordered by when the item started, not when it completed.
     conn.execute(
         r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-            ON CONFLICT(id) DO UPDATE SET
-              role = excluded.role,
-              content = excluded.content
             "#,
         params![msg_id, ctx.helmor_session_id, turn.role, content, now],
     )?;
@@ -381,56 +369,6 @@ mod tests {
             "#,
         )
         .unwrap();
-    }
-
-    #[test]
-    fn persist_turn_message_updates_content_without_moving_sent_at() {
-        let conn = Connection::open_in_memory().unwrap();
-        make_messages_table(&conn);
-        let ctx = test_exchange_context();
-
-        let started = CollectedTurn {
-            id: "turn-1".to_string(),
-            role: MessageRole::Assistant,
-            content_json: json!({
-                "type": "item.completed",
-                "item": {"type": "mcp_tool_call", "status": "in_progress"}
-            })
-            .to_string(),
-        };
-        persist_turn_message(&conn, &ctx, &started, "gpt-5.4").unwrap();
-        conn.execute(
-            "UPDATE session_messages SET sent_at = 'reserved-order', created_at = 'reserved-created' WHERE id = 'turn-1'",
-            [],
-        )
-        .unwrap();
-
-        let completed = CollectedTurn {
-            id: "turn-1".to_string(),
-            role: MessageRole::Assistant,
-            content_json: json!({
-                "type": "item.completed",
-                "item": {
-                    "type": "mcp_tool_call",
-                    "status": "completed",
-                    "result": {"content": [{"type": "text", "text": "done"}]}
-                }
-            })
-            .to_string(),
-        };
-        persist_turn_message(&conn, &ctx, &completed, "gpt-5.4").unwrap();
-
-        let (content, sent_at, created_at): (String, String, String) = conn
-            .query_row(
-                "SELECT content, sent_at, created_at FROM session_messages WHERE id = 'turn-1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        let parsed: Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed["item"]["status"], "completed");
-        assert_eq!(sent_at, "reserved-order");
-        assert_eq!(created_at, "reserved-created");
     }
 
     #[test]

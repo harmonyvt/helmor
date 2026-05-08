@@ -125,23 +125,6 @@ export function GroupIcon({ tone }: { tone: GroupTone }) {
 	}
 }
 
-export function workspaceStatusToTone(
-	status: WorkspaceStatus | null | undefined,
-): GroupTone {
-	switch (status) {
-		case "done":
-			return "done";
-		case "review":
-			return "review";
-		case "in-progress":
-			return "progress";
-		case "canceled":
-			return "canceled";
-		default:
-			return "backlog";
-	}
-}
-
 export function findSelectedSectionId(
 	selectedWorkspaceId: string | null | undefined,
 	groups: WorkspaceGroup[],

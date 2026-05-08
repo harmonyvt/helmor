@@ -3,7 +3,7 @@
 //! reload. Output is the raw `ThreadMessageLike` / JSON form — the
 //! `stabilize` sibling module converts it to snapshot-stable shape.
 
-use helmor_lib::pipeline::types::{HistoricalRecord, MessageRole, ThreadMessageLike};
+use helmor_lib::pipeline::types::{HistoricalRecord, ThreadMessageLike};
 use helmor_lib::pipeline::MessagePipeline;
 use serde_json::Value;
 
@@ -33,31 +33,6 @@ pub struct StreamReplayFingerprint {
     pub final_render: Vec<ThreadMessageLike>,
     pub persisted_turn_blocks: Vec<Value>,
     pub historical_render: Vec<ThreadMessageLike>,
-}
-
-struct PersistedRow {
-    id: String,
-    role: MessageRole,
-    content: String,
-}
-
-fn persisted_rows(pipeline: &MessagePipeline) -> Vec<PersistedRow> {
-    let acc = &pipeline.accumulator;
-    let mut rows: Vec<PersistedRow> = Vec::new();
-    for i in 0..acc.turns_len() {
-        let turn = acc.turn_at(i);
-        if let Some(existing) = rows.iter_mut().find(|row| row.id == turn.id) {
-            existing.role = turn.role;
-            existing.content = turn.content_json.clone();
-        } else {
-            rows.push(PersistedRow {
-                id: turn.id.clone(),
-                role: turn.role,
-                content: turn.content_json.clone(),
-            });
-        }
-    }
-    rows
 }
 
 pub fn replay_stream_events(provider: &str, events: &[Value]) -> StreamReplayFingerprint {
@@ -98,11 +73,11 @@ pub fn replay_stream_events(provider: &str, events: &[Value]) -> StreamReplayFin
     // Capture persisted block JSON verbatim — the strip/keep behavior of
     // `__is_streaming` vs `__duration_ms` is exactly what the snapshot
     // needs to pin.
-    let rows = persisted_rows(&pipeline);
-    let persisted_turn_blocks: Vec<Value> = rows
-        .iter()
-        .map(|row| {
-            let parsed: Value = serde_json::from_str(&row.content).unwrap_or(Value::Null);
+    let acc = &pipeline.accumulator;
+    let persisted_turn_blocks: Vec<Value> = (0..acc.turns_len())
+        .map(|i| {
+            let turn = acc.turn_at(i);
+            let parsed: Value = serde_json::from_str(&turn.content_json).unwrap_or(Value::Null);
             parsed
                 .get("message")
                 .and_then(|m| m.get("content"))
@@ -111,15 +86,16 @@ pub fn replay_stream_events(provider: &str, events: &[Value]) -> StreamReplayFin
         })
         .collect();
 
-    let historical_records: Vec<HistoricalRecord> = rows
-        .into_iter()
-        .enumerate()
-        .map(|(i, row)| HistoricalRecord {
-            id: format!("hist-{i}"),
-            role: row.role,
-            content: row.content.clone(),
-            parsed_content: serde_json::from_str(&row.content).ok(),
-            created_at: "2026-04-08T00:00:00.000Z".to_string(),
+    let historical_records: Vec<HistoricalRecord> = (0..acc.turns_len())
+        .map(|i| {
+            let turn = acc.turn_at(i);
+            HistoricalRecord {
+                id: format!("hist-{i}"),
+                role: turn.role,
+                content: turn.content_json.clone(),
+                parsed_content: serde_json::from_str(&turn.content_json).ok(),
+                created_at: "2026-04-08T00:00:00.000Z".to_string(),
+            }
         })
         .collect();
     let historical_render = MessagePipeline::convert_historical(&historical_records);

@@ -11,7 +11,6 @@ Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **R
 ```bash
 bun install                  # Install deps (bun 1.3+). Also runs `bun install` in sidecar/ via postinstall.
 bun run dev                  # Full desktop app: Tauri + Vite (localhost:1420 in webview)
-bun run dev:preview          # Secondary worktree preview with isolated data, ports, app identity, and MCP range
 bun run dev:analyze          # Same as dev, with perf HUD (VITE_HELMOR_PERF_HUD=1)
 bun run build                # tsc + vite build (frontend bundle to dist/)
 bun run typecheck            # tsc --noEmit for frontend AND sidecar
@@ -31,17 +30,6 @@ bun run test:watch           # vitest watch (frontend only)
 ```
 
 Single test file: `bun x vitest run src/App.test.tsx` | `cd sidecar && bun test src/foo.test.ts` | `cd src-tauri && cargo test --test pipeline_scenarios -- <name>`
-
-## Worktree previews
-
-Use `bun run dev` for the primary development app. To run a second Helmor dev app from a worktree at the same time, run `bun run dev:preview` from that worktree. The preview command derives a stable identity from `git rev-parse --show-toplevel`, prints the selected data directory, Vite URL, and MCP bridge port range, then launches Tauri with isolated `HELMOR_DATA_DIR`, `HELMOR_DEV_PORT`, `HELMOR_MCP_BASE_PORT`, product name, and app identifier.
-
-For Tauri MCP debugging against a preview window, connect the driver to the printed preview MCP base port/range instead of the normal default.
-## Pull requests and forks
-
-- For this checkout, treat `harmonyvt/helmor` as the default GitHub repository for `gh` commands. Verify with `gh repo set-default --view` before creating PRs.
-- Do **not** pass `--repo dohooo/helmor` to `gh pr create` unless the user explicitly asks for an upstream PR. Fork-local or temporary patch PRs should stay in `harmonyvt/helmor`.
-- When the intended target is ambiguous, ask whether the PR should go to the fork (`harmonyvt/helmor`) or upstream (`dohooo/helmor`) before creating it.
 
 ## Architecture
 
@@ -132,7 +120,6 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 ## Key conventions
 
 - **Path alias**: `@/` maps to `src/`
-- **Code search**: Prioritize CocoIndex (`/cc` / `ccc search`) for initial semantic codebase and file discovery. Run `ccc index` when the index may be stale, and fall back to `rg` / `rg --files` for exact text or path lookups.
 - **Styling**: Tailwind CSS v4 with oklch semantic color tokens (`bg-app-base`, `text-app-foreground`, etc.)
 - **UI**: shadcn/ui (base-nova), `lucide-react` icons. **No `@assistant-ui/react` or `react-virtuoso`** -- removed, do not re-introduce.
 - **Cursor**: Every clickable element MUST have `cursor-pointer`. This is already baked into base UI components (`Button`, `SidebarMenuButton`, `CommandItem`, `DropdownMenuItem`, `ContextMenuItem`, etc.). When adding custom clickable elements (e.g. `<div onClick>`), always include `cursor-pointer`.
@@ -145,6 +132,7 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 - **Data dir**: `~/helmor/` (release) or `~/helmor-dev/` (debug). Override: `HELMOR_DATA_DIR`.
 - **macOS chrome**: Overlay title bar, traffic lights at (16, 24). Drag via `data-tauri-drag-region`.
 - **Serde**: `#[serde(rename_all = "camelCase")]` -- JSON fields match TypeScript directly.
+- **Persisting React Query data**: Every query is **in-memory only by default**. To persist a query across app restarts, set `meta: PERSIST_META` (alias for `{ persist: true }`) on its `queryOptions` / `useQuery` call. Only do this for data the user must see *immediately on cold start* (sidebar lists, identity chips). Never opt in large or fast-refetching queries — the persisted blob is read synchronously on boot. See `src/lib/query-client.ts` for the wiring; the `react-query.d.ts` augmentation closes `meta`'s shape so typos like `presist` fail at compile time.
 - **Backend → frontend notifications**: Always go through `UiMutationEvent` (`src-tauri/src/ui_sync/events.rs`). Add a typed variant, broadcast with `crate::ui_sync::publish(&app, ...)`, mirror the variant in `UiMutationEvent` in `src/lib/api.ts`, and handle it in `src/shell/hooks/use-ui-sync-bridge.ts` to invalidate the right React Query keys. Do NOT add ad-hoc `app.emit("custom-event", ...)` channels with their own component-level `listen(...)` -- they fragment cache invalidation, skip the global bridge, and are easy to leak.
 - **Clippy**: Must pass `cargo clippy --all-targets -- -D warnings` with zero warnings.
 - **Perf**: `VITE_HELMOR_PERF_HUD=1` enables HUD + react-scan + long-frame tracker.
@@ -154,6 +142,11 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
   2. Pull the new SHA256 from `…/checksums.txt` (URLs in the file's header comment) and update `GH_SHA256` / `GLAB_SHA256`.
   3. Wipe `sidecar/.bundle-cache/` and re-run `bun run build` in `sidecar/` to force re-download + verify.
   Bump cadence: every release cycle if upstream has shipped a notable fix; immediately on security advisories. Pin so the auth-status JSON shape Helmor parses doesn't drift unexpectedly.
+- **Bundled agent CLIs (`claude-code`, `codex`)**: Pulled in via `sidecar/package.json` and staged into `sidecar/dist/vendor/{claude-code,codex}/` as platform-native binaries. Both upstreams ship per-platform npm sub-packages (`@anthropic-ai/claude-code-darwin-{arm64,x64}`, `@openai/codex-darwin-{arm64,x64}`). Cross-arch CI staging downloads the tarball straight from the npm registry and verifies against `CLAUDE_CODE_SHA256` / `CODEX_SHA256` in `stage-vendor.ts`. To upgrade:
+  1. Bump the version in `sidecar/package.json`, `cd sidecar && bun install`.
+  2. Compute the SHA256 of both arch tarballs (`shasum -a 256` on the cached `.tgz`) and update the table in `stage-vendor.ts` (key it under the new version string).
+  3. Wipe `sidecar/.bundle-cache/` and run `bun run build` in `sidecar/` to verify.
+  Both binaries are `bun build --compile` output (~200 MB each on macOS), so `maybeSignMacBinary(_, true)` is required — JSC needs `allow-jit` / `allow-unsigned-executable-memory` under hardened runtime. Run pipeline snapshot tests after every claude-code bump (`cd src-tauri && cargo test --tests`); the SDK event shape is the contract Helmor's accumulator depends on.
 
 ## 🚨 Code organization rules
 
@@ -172,7 +165,7 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 ### Prerequisites
 
 1. **Debug build only.** MCP bridge is behind `#[cfg(debug_assertions)]`. Always `bun run dev`.
-2. **Open driver session first.** Call `driver_session action=status` before `start`. Default port `9223`, window `main`. For `bun run dev:preview`, use the printed preview MCP base port/range.
+2. **Open driver session first.** Call `driver_session action=status` before `start`. Default port `9223`, window `main`.
 3. **Sanity-check.** Call `ipc_get_backend_state` after connecting to confirm the right instance.
 
 ### Tool playbook (condensed)

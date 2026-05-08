@@ -125,7 +125,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 
 	const statusIndicator = isLiveTool ? (
 		<LoaderCircle
-			className="size-3 shrink-0 animate-spin text-muted-foreground/50"
+			className="size-3 animate-spin text-muted-foreground/50"
 			strokeWidth={2}
 		/>
 	) : streamingStatus === "error" ? (
@@ -517,7 +517,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 				) : null}
 				{streaming ? (
 					<LoaderCircle
-						className="size-3 shrink-0 animate-spin text-muted-foreground/50"
+						className="size-3 animate-spin text-muted-foreground/50"
 						strokeWidth={2}
 					/>
 				) : null}
@@ -628,11 +628,11 @@ export function CollapsedToolGroup({
 				<span className="font-medium">{group.summary}</span>
 				{group.active ? (
 					<LoaderCircle
-						className="size-3 shrink-0 animate-spin text-muted-foreground/50"
+						className="size-3 animate-spin text-muted-foreground/50"
 						strokeWidth={2}
 					/>
 				) : (
-					<Check className="size-3 shrink-0 text-chart-2" strokeWidth={2} />
+					<Check className="size-3 text-chart-2" strokeWidth={2} />
 				)}
 				<span className="shrink-0 cursor-pointer text-muted-foreground/40 hover:text-muted-foreground">
 					<svg

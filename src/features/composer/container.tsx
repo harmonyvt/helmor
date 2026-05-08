@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
+import type { SerializedEditorState } from "lexical";
 import { CircleAlert, TimerReset } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ActionRow, ActionRowButton } from "@/components/action-row";
 import { ShimmerText } from "@/components/ui/shimmer-text";
 import { ShineBorder } from "@/components/ui/shine-border";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
-import { seedNewSessionInCache } from "@/features/panel/session-cache";
+import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import {
 	getShortcut,
 	getShortcutConflicts,
@@ -18,15 +18,15 @@ import type {
 	AgentModelSection,
 	AgentProvider,
 	CandidateDirectory,
-	PlanReviewPart,
 	SlashCommandEntry,
 } from "@/lib/api";
 import {
 	createSession,
-	loadSessionThreadMessages,
+	mutateCodexGoal,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
 } from "@/lib/api";
+import { isAutoHideableActionKind } from "@/lib/commit-button-prompts";
 import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
@@ -35,13 +35,13 @@ import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
 	helmorQueryKeys,
+	sessionCodexGoalQueryOptions,
 	slashCommandsQueryOptions,
 	workspaceCandidateDirectoriesQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceLinkedDirectoriesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
-import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { useSettings } from "@/lib/settings";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
@@ -52,16 +52,13 @@ import {
 	isNewSession,
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
-import { buildContextTransferPrefix } from "./build-context-transfer";
-import type { DeferredToolResponseHandler } from "./deferred-tool";
+import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
-import type { ElicitationResponseHandler } from "./elicitation";
 import { WorkspaceComposer } from "./index";
-import {
-	type ProviderSwapChoice,
-	ProviderSwapDialog,
-} from "./provider-swap-dialog";
+import type { PermissionPanelProps } from "./permission-panel";
+import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
+import type { UserInputResponseHandler } from "./user-input";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
 const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
@@ -86,62 +83,41 @@ const CODEX_COMPACT_COMMAND: SlashCommandEntry = {
 	providers: ["codex"],
 };
 
+const CODEX_GOAL_COMMAND: SlashCommandEntry = {
+	name: "goal",
+	description:
+		"Set a persistent goal Codex pursues turn-after-turn until done or paused",
+	argumentHint: "<objective>",
+	source: "builtin",
+	providers: ["codex"],
+};
+
 const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	ADD_DIR_COMMAND,
 	CODEX_COMPACT_COMMAND,
+	CODEX_GOAL_COMMAND,
 ];
-
-function debugNowMs(): number {
-	return globalThis.performance?.now?.() ?? Date.now();
-}
-
-function summarizeModelSections(
-	sections: readonly AgentModelSection[],
-): Record<string, number> {
-	return Object.fromEntries(
-		sections.map((section) => [section.id, section.options.length]),
-	);
-}
-
-function modelProviderCounts(
-	sections: readonly AgentModelSection[],
-): Record<string, number> {
-	const counts: Record<string, number> = {};
-	for (const section of sections) {
-		for (const option of section.options) {
-			counts[option.provider] = (counts[option.provider] ?? 0) + 1;
-		}
-	}
-	return counts;
-}
-
-function logComposerDebug(
-	event: string,
-	payload?: Record<string, unknown>,
-): void {
-	console.info(`[composer-debug] ${event}`, payload ?? {});
-}
-
-function filterModelSections(
-	sections: readonly AgentModelSection[],
-	predicate?: (model: AgentModelOption) => boolean,
-): AgentModelSection[] {
-	if (!predicate) {
-		return [...sections];
-	}
-
-	return sections
-		.map((section) => ({
-			...section,
-			options: section.options.filter(predicate),
-		}))
-		.filter((section) => section.options.length > 0);
-}
 
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
 	displayedSessionId: string | null;
+	/** Repo ID hint used when there's no workspace yet (start page). Lets the
+	 *  slash-command query hit the backend's repo-level cache fallback so the
+	 *  popup is populated before the user has created a workspace. */
+	repoId?: string | null;
 	disabled: boolean;
+	/** When true, treat the composer as available even if no workspace is
+	 *  selected — the bottom composer in kanban mode uses this so it can
+	 *  collect a prompt before any workspace exists. */
+	forceAvailable?: boolean;
+	/** Custom placeholder text. When omitted, the composer falls back to
+	 *  the default "Ask to make changes…" copy. */
+	placeholder?: string;
+	/** Override the composer's context key. Without this the key falls
+	 *  back to `getComposerContextKey(displayedWorkspaceId, displayedSessionId)`.
+	 *  The kanban view supplies a per-repo key so each repo keeps its
+	 *  own draft. */
+	contextKeyOverride?: string;
 	onStop?: () => void;
 	sending: boolean;
 	sendError: string | null;
@@ -150,13 +126,12 @@ type WorkspaceComposerContainerProps = {
 	restoreFiles: string[];
 	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce: number;
-	pendingElicitation?: PendingElicitation | null;
-	onElicitationResponse?: ElicitationResponseHandler;
-	elicitationResponsePending?: boolean;
-	pendingDeferredTool?: PendingDeferredTool | null;
-	onDeferredToolResponse?: DeferredToolResponseHandler;
-	planReview?: PlanReviewPart | null;
-	onImplementPlanInCleanThread?: (plan: PlanReviewPart) => void | Promise<void>;
+	pendingUserInput?: PendingUserInput | null;
+	onUserInputResponse?: UserInputResponseHandler;
+	userInputResponsePending?: boolean;
+	pendingPermission?: PendingPermission | null;
+	onPermissionResponse?: PermissionPanelProps["onResponse"];
+	hasPlanReview?: boolean;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
@@ -183,48 +158,62 @@ type WorkspaceComposerContainerProps = {
 		 *  one submit (queue ↔ steer). Used by the "send with opposite
 		 *  follow-up" composer shortcut. Ignored when `forceQueue` is true. */
 		followUpBehaviorOverride?: "queue" | "steer";
-		/**
-		 * Hidden conversation-history preamble injected on the wire when the
-		 * user switched providers mid-thread and chose "Bring history". Rides
-		 * as `promptPrefix` so it never appears in the chat bubble or DB.
-		 * Consumed once on the first message of the new session and then
-		 * cleared.
-		 */
-		contextTransferPrefix?: string | null;
+		startSubmitMode?: StartSubmitMode;
+		/** Snapshot of the editor's full Lexical state at submit time, so
+		 *  callers that need to round-trip chips/text/images (e.g. the kanban
+		 *  "backlog" handler that copies the draft into a freshly-created
+		 *  session's `sessions.draft_state`) can do so without re-encoding
+		 *  the badge nodes. */
+		editorStateSnapshot?: SerializedEditorState;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
-	 * session matches `sessionId`. */
+	 *  session matches `sessionId`. Per-session config (model / effort /
+	 *  fast-mode / permission mode) lives on the session row by the time
+	 *  this fires — the composer reads it off `currentSession` rather than
+	 *  having it ride along here. */
 	pendingPromptForSession?: {
 		sessionId: string;
 		prompt: string;
-		modelId?: string | null;
-		permissionMode?: string | null;
 		/** Force queue (bypass `followUpBehavior`) if a turn is streaming. */
 		forceQueue?: boolean;
-		pendingSendId?: string | null;
 	} | null;
 	/** Called after the pending prompt has been dispatched, so the caller can
 	 * clear the queue. */
-	onPendingPromptConsumed?: (pendingSendId?: string | null) => void;
+	onPendingPromptConsumed?: () => void;
 	pendingInsertRequests?: ResolvedComposerInsertRequest[];
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 	/** Follow-up queue rendered above composer when `followUpBehavior === 'queue'`. */
 	queueItems?: readonly QueuedSubmit[];
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
-	modelFilter?: (model: AgentModelOption) => boolean;
-	/** When true hides the full toolbar and shows only send/stop. */
-	hideToolbar?: boolean;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
+	startSubmitMenu?: boolean;
+	/** External owner of the linked-directories list. When provided, the
+	 *  composer reads from `directories` and writes via `onChange` instead of
+	 *  the workspace-scoped query/mutation. Used by the start-page composer
+	 *  where no workspace exists yet — picks accumulate in a parent-owned
+	 *  pending list and get applied at workspace creation time. */
+	linkedDirectoriesController?: {
+		directories: readonly string[];
+		onChange: (next: readonly string[]) => void;
+	} | null;
 };
 
-const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
-const noopElicitationResponse: ElicitationResponseHandler = () => {};
+const noopUserInputResponse: UserInputResponseHandler = () => {};
+const noopPermissionResponse: NonNullable<
+	WorkspaceComposerContainerProps["onPermissionResponse"]
+> = () => {};
 
 export const WorkspaceComposerContainer = memo(
 	function WorkspaceComposerContainer({
 		displayedWorkspaceId,
 		displayedSessionId,
+		repoId: propRepoId = null,
 		disabled,
+		forceAvailable = false,
+		placeholder,
+		contextKeyOverride,
 		onStop,
 		sending,
 		sendError,
@@ -233,13 +222,12 @@ export const WorkspaceComposerContainer = memo(
 		restoreFiles,
 		restoreCustomTags = [],
 		restoreNonce,
-		pendingElicitation = null,
-		onElicitationResponse = noopElicitationResponse,
-		elicitationResponsePending = false,
-		pendingDeferredTool = null,
-		onDeferredToolResponse = noopDeferredToolResponse,
-		planReview = null,
-		onImplementPlanInCleanThread,
+		pendingUserInput = null,
+		onUserInputResponse = noopUserInputResponse,
+		userInputResponsePending = false,
+		pendingPermission = null,
+		onPermissionResponse = noopPermissionResponse,
+		hasPlanReview = false,
 		modelSelections,
 		effortLevels = {},
 		permissionModes = {},
@@ -258,42 +246,28 @@ export const WorkspaceComposerContainer = memo(
 		queueItems = EMPTY_QUEUE_ITEMS,
 		onSteerQueued,
 		onRemoveQueued,
-		modelFilter,
-		hideToolbar = false,
+		contextPanelOpen = false,
+		onToggleContextPanel,
+		startSubmitMenu = false,
+		linkedDirectoriesController = null,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const { settings, updateSettings } = useSettings();
-		const renderDebugRef = useRef({
-			count: 0,
-			startedAt: debugNowMs(),
-			lastBurstWarningAt: 0,
-		});
-		renderDebugRef.current.count += 1;
-
-		// -----------------------------------------------------------------------
-		// Mid-thread provider swap state
-		// -----------------------------------------------------------------------
-
-		/**
-		 * When the user confirms a provider swap with "Bring history", we store the
-		 * context-transfer prefix keyed by the NEW session id. On the next submit
-		 * for that session, the prefix is consumed once and cleared.
-		 */
-		const pendingContextTransferRef = useRef<Map<string, string>>(new Map());
-
-		/**
-		 * Pending dialog state. When non-null the dialog is visible. Once the user
-		 * makes a choice (or cancels), `resolve` is called and the state is cleared.
-		 */
-		const [swapDialogState, setSwapDialogState] = useState<{
-			fromProvider: AgentProvider;
-			toProvider: AgentProvider;
-			modelId: string;
-			resolve: (choice: ProviderSwapChoice | null) => void;
-		} | null>(null);
-		const [providerSwitchStatus, setProviderSwitchStatus] = useState<
-			string | null
-		>(null);
+		const startSubmitMode: StartSubmitMode =
+			settings.kanbanViewState.createState === "backlog"
+				? "saveForLater"
+				: "startNow";
+		const handleStartSubmitModeChange = useCallback(
+			(mode: StartSubmitMode) => {
+				void updateSettings({
+					kanbanViewState: {
+						...settings.kanbanViewState,
+						createState: mode === "saveForLater" ? "backlog" : "in-progress",
+					},
+				});
+			},
+			[settings.kanbanViewState, updateSettings],
+		);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -307,19 +281,25 @@ export const WorkspaceComposerContainer = memo(
 			...workspaceLinkedDirectoriesQueryOptions(
 				displayedWorkspaceId ?? "__none__",
 			),
-			enabled: Boolean(displayedWorkspaceId),
+			// Skip the query when an external controller is supplying the list
+			// (start page) — the controller is the source of truth there.
+			enabled: Boolean(displayedWorkspaceId) && !linkedDirectoriesController,
 		});
-		const linkedDirectories =
-			linkedDirectoriesQuery.data ?? EMPTY_LINKED_DIRECTORIES;
+		const linkedDirectories: readonly string[] = linkedDirectoriesController
+			? linkedDirectoriesController.directories
+			: (linkedDirectoriesQuery.data ?? EMPTY_LINKED_DIRECTORIES);
 
 		// Candidate workspaces the /add-dir popup offers as quick picks.
 		// Excludes the currently-active workspace (you're already in it —
-		// linking self to self is a no-op).
+		// linking self to self is a no-op). On the start page no workspace
+		// is selected yet but a controller is in play; pass null exclude so
+		// the backend returns every workspace.
 		const candidateDirectoriesQuery = useQuery({
 			...workspaceCandidateDirectoriesQueryOptions(
 				displayedWorkspaceId ?? null,
 			),
-			enabled: Boolean(displayedWorkspaceId),
+			enabled:
+				Boolean(displayedWorkspaceId) || Boolean(linkedDirectoriesController),
 		});
 		const candidateDirectories =
 			candidateDirectoriesQuery.data ?? EMPTY_CANDIDATE_DIRECTORIES;
@@ -357,16 +337,32 @@ export const WorkspaceComposerContainer = memo(
 			},
 		});
 
+		// One-stop commit: routes to the parent controller when present,
+		// otherwise to the workspace-scoped mutation. Returns false when
+		// neither path is available (no workspace and no controller — should
+		// not happen in practice, but keeps the call sites honest).
+		const commitLinkedDirectories = useCallback(
+			(next: readonly string[]): boolean => {
+				if (linkedDirectoriesController) {
+					linkedDirectoriesController.onChange(next);
+					return true;
+				}
+				if (!displayedWorkspaceId) return false;
+				linkedDirectoriesMutation.mutate([...next]);
+				return true;
+			},
+			[
+				linkedDirectoriesController,
+				displayedWorkspaceId,
+				linkedDirectoriesMutation,
+			],
+		);
+
 		const handleRemoveLinkedDirectory = useCallback(
 			(path: string) => {
-				if (!displayedWorkspaceId) return;
-				// `mutate` (not `mutateAsync`) sends errors through the
-				// `onError` callback configured above — no need to catch.
-				linkedDirectoriesMutation.mutate(
-					linkedDirectories.filter((d) => d !== path),
-				);
+				commitLinkedDirectories(linkedDirectories.filter((d) => d !== path));
 			},
-			[displayedWorkspaceId, linkedDirectories, linkedDirectoriesMutation],
+			[commitLinkedDirectories, linkedDirectories],
 		);
 
 		// Handle a pick from the AddDirTypeaheadPlugin popup. For
@@ -375,7 +371,9 @@ export const WorkspaceComposerContainer = memo(
 		// the popup). For "browse" we open the native directory picker.
 		const handlePickAddDir = useCallback(
 			async (entry: AddDirPickerEntry) => {
-				if (!displayedWorkspaceId) return;
+				// Either a real workspace or a parent-supplied controller is
+				// required — without one of them there's nowhere to commit.
+				if (!displayedWorkspaceId && !linkedDirectoriesController) return;
 				if (entry.kind === "browse") {
 					let picked: string | null = null;
 					try {
@@ -394,26 +392,25 @@ export const WorkspaceComposerContainer = memo(
 					}
 					if (!picked) return;
 					if (linkedDirectories.includes(picked)) return;
-					linkedDirectoriesMutation.mutate([...linkedDirectories, picked]);
+					commitLinkedDirectories([...linkedDirectories, picked]);
 					return;
 				}
 				const path = entry.candidate.absolutePath;
 				if (entry.alreadyLinked) {
-					linkedDirectoriesMutation.mutate(
-						linkedDirectories.filter((d) => d !== path),
-					);
+					commitLinkedDirectories(linkedDirectories.filter((d) => d !== path));
 				} else {
-					linkedDirectoriesMutation.mutate([...linkedDirectories, path]);
+					commitLinkedDirectories([...linkedDirectories, path]);
 				}
 			},
-			[displayedWorkspaceId, linkedDirectories, linkedDirectoriesMutation],
+			[
+				displayedWorkspaceId,
+				linkedDirectoriesController,
+				linkedDirectories,
+				commitLinkedDirectories,
+			],
 		);
 
-		const rawModelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
-		const modelSections = useMemo(
-			() => filterModelSections(rawModelSections, modelFilter),
-			[rawModelSections, modelFilter],
-		);
+		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
 		const modelsLoading =
 			modelSectionsQuery.isLoading &&
 			modelSections.every((s) => s.options.length === 0);
@@ -421,15 +418,15 @@ export const WorkspaceComposerContainer = memo(
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
 			) ?? null;
-		const composerContextKey = getComposerContextKey(
-			displayedWorkspaceId,
-			displayedSessionId,
-		);
+		const composerContextKey =
+			contextKeyOverride ??
+			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
 		const selectedModelId = resolveSessionSelectedModelId({
 			session: currentSession,
 			modelSelections,
 			modelSections,
 			settingsDefaultModelId: settings.defaultModelId,
+			contextKey: composerContextKey,
 		});
 		const selectedModel = useMemo(
 			() => findModelOption(modelSections, selectedModelId),
@@ -452,30 +449,26 @@ export const WorkspaceComposerContainer = memo(
 		]
 			? null
 			: getShortcut(settings.shortcuts, "composer.toggleFollowUpBehavior");
-		const pendingOverrideActive =
-			pendingPromptForSession?.sessionId === displayedSessionId;
-		const pendingModel = useMemo(
-			() =>
-				pendingOverrideActive && pendingPromptForSession?.modelId
-					? findModelOption(modelSections, pendingPromptForSession.modelId)
-					: null,
-			[
-				displayedSessionId,
-				modelSections,
-				pendingOverrideActive,
-				pendingPromptForSession,
-			],
-		);
-		const effectiveModel = pendingModel ?? selectedModel;
+		const toggleContextPanelShortcut = shortcutConflicts.conflictById[
+			"composer.toggleContextPanel"
+		]
+			? null
+			: getShortcut(settings.shortcuts, "composer.toggleContextPanel");
+		const effectiveModel = selectedModel;
 		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
 		const provider =
 			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
-		const cachedEffort = composerContextKey.startsWith("session:")
-			? effortLevels[composerContextKey]
-			: undefined;
-		// For new sessions, use user setting; for existing sessions with history, use session's effort
+		// "User-configured" = the session row carries an explicit model. Fresh
+		// sessions get `model = NULL` *unless* an inspector helper (Create
+		// PR/MR, Review) pinned one at create time — in which case
+		// effort/fastMode/permissionMode were pinned in the same INSERT, so
+		// trusting the row here picks them up. The streaming finalizer
+		// continues to overwrite these on every turn.
+		const sessionIsConfigured =
+			!isNewSession(currentSession) || Boolean(currentSession?.model);
+		const cachedEffort = effortLevels[composerContextKey];
 		const sessionEffort =
-			(!isNewSession(currentSession) && currentSession?.effortLevel) || null;
+			(sessionIsConfigured && currentSession?.effortLevel) || null;
 		const rawEffort =
 			cachedEffort ?? sessionEffort ?? settings.defaultEffort ?? "high";
 		const effortLevel = clampEffortToModel(
@@ -483,24 +476,16 @@ export const WorkspaceComposerContainer = memo(
 			effectiveSelectedModelId,
 			modelSections,
 		);
-		const cachedPermissionMode = composerContextKey.startsWith("session:")
-			? permissionModes[composerContextKey]
-			: undefined;
-		const sessionPermissionMode = !isNewSession(currentSession)
+		const cachedPermissionMode = permissionModes[composerContextKey];
+		const sessionPermissionMode = sessionIsConfigured
 			? currentSession?.permissionMode
 			: null;
-		const permissionMode =
+		const effectivePermissionMode =
 			cachedPermissionMode ??
 			(sessionPermissionMode === "plan" ? "plan" : "bypassPermissions");
-		const effectivePermissionMode =
-			pendingOverrideActive && pendingPromptForSession?.permissionMode
-				? pendingPromptForSession.permissionMode
-				: permissionMode;
 		const supportsFastMode = effectiveModel?.supportsFastMode === true;
-		const cachedFastMode = composerContextKey.startsWith("session:")
-			? fastModes[composerContextKey]
-			: undefined;
-		const sessionFastMode = !isNewSession(currentSession)
+		const cachedFastMode = fastModes[composerContextKey];
+		const sessionFastMode = sessionIsConfigured
 			? currentSession?.fastMode
 			: undefined;
 		const fastMode = supportsFastMode
@@ -524,8 +509,9 @@ export const WorkspaceComposerContainer = memo(
 		//     finalize. The typical ~200-500ms window ends long before the
 		//     user finishes typing, so there is no visible transition.
 		const composerUnavailable =
-			displayedWorkspaceId === null ||
-			workspaceDetailQuery.data?.state === "archived";
+			!forceAvailable &&
+			(displayedWorkspaceId === null ||
+				workspaceDetailQuery.data?.state === "archived");
 		const composerAwaitingFinalize =
 			workspaceDetailQuery.data?.state === "initializing";
 
@@ -538,42 +524,15 @@ export const WorkspaceComposerContainer = memo(
 			[autoCloseQuery.data],
 		);
 		const sessionActionKind = currentSession?.actionKind ?? null;
-		const isActionSession = Boolean(sessionActionKind);
+		// "Action session" here drives the Auto-Close composer affordance.
+		// Some kinds (e.g. "review") are auto-created but explicitly NOT
+		// auto-hideable — they exist for the user to read — so we hide the
+		// toggle UI for them.
+		const isActionSession =
+			sessionActionKind !== null && isAutoHideableActionKind(sessionActionKind);
 		const autoCloseEnabled = sessionActionKind
 			? autoCloseActionKinds.has(sessionActionKind)
 			: false;
-
-		useEffect(() => {
-			logComposerDebug("model sections state", {
-				status: modelSectionsQuery.status,
-				fetchStatus: modelSectionsQuery.fetchStatus,
-				sectionCounts: summarizeModelSections(modelSections),
-				providerCounts: modelProviderCounts(modelSections),
-				selectedModelId,
-				effectiveSelectedModelId,
-				effectiveModelProvider: effectiveModel?.provider ?? null,
-				modelsLoading,
-			});
-		}, [
-			effectiveModel?.provider,
-			effectiveSelectedModelId,
-			modelSections,
-			modelSectionsQuery.fetchStatus,
-			modelSectionsQuery.status,
-			modelsLoading,
-			selectedModelId,
-		]);
-
-		useEffect(() => {
-			if (!swapDialogState) return;
-			logComposerDebug("provider swap dialog visible", {
-				fromProvider: swapDialogState.fromProvider,
-				toProvider: swapDialogState.toProvider,
-				modelId: swapDialogState.modelId,
-				workspaceId: displayedWorkspaceId,
-				sessionId: displayedSessionId,
-			});
-		}, [displayedSessionId, displayedWorkspaceId, swapDialogState]);
 
 		const handleToggleAutoClose = useCallback(async () => {
 			if (!sessionActionKind) return;
@@ -597,35 +556,9 @@ export const WorkspaceComposerContainer = memo(
 
 		const handleModelSelect = useCallback(
 			async (modelId: string) => {
-				if (providerSwitchStatus) {
-					logComposerDebug("model select ignored during provider switch", {
-						modelId,
-						providerSwitchStatus,
-						workspaceId: displayedWorkspaceId,
-						sessionId: displayedSessionId,
-					});
-					return;
-				}
-
 				const newModel = findModelOption(modelSections, modelId);
 				const currentProvider = provider;
 				const newProvider = newModel?.provider;
-				logComposerDebug("model select requested", {
-					modelId,
-					modelFound: Boolean(newModel),
-					currentProvider,
-					newProvider: newProvider ?? null,
-					currentSessionId: currentSession?.id ?? null,
-					currentSessionAgentType: currentSession?.agentType ?? null,
-					currentSessionModel: currentSession?.model ?? null,
-					currentSessionStatus: currentSession?.status ?? null,
-					isNewSession: isNewSession(currentSession),
-					workspaceId: displayedWorkspaceId,
-					sessionId: displayedSessionId,
-					contextKey: composerContextKey,
-					sectionCounts: summarizeModelSections(modelSections),
-					providerCounts: modelProviderCounts(modelSections),
-				});
 
 				// Only create a new session when provider changes AND the session
 				// already has messages. New/empty sessions just switch in-place.
@@ -637,135 +570,10 @@ export const WorkspaceComposerContainer = memo(
 					displayedSessionId &&
 					displayedWorkspaceId
 				) {
-					// Ask the user for consent before switching providers. Defer the
-					// dialog one tick so the model popover can finish closing first;
-					// otherwise Radix focus scopes can fight when a large Pi list is
-					// open, tripping React's nested-update guard.
-					const choice = await new Promise<ProviderSwapChoice | null>(
-						(resolve) => {
-							window.setTimeout(() => {
-								logComposerDebug("opening provider swap dialog", {
-									fromProvider: currentProvider,
-									toProvider: newProvider,
-									modelId,
-									workspaceId: displayedWorkspaceId,
-									sessionId: displayedSessionId,
-								});
-								setSwapDialogState({
-									fromProvider: currentProvider as AgentProvider,
-									toProvider: newProvider as AgentProvider,
-									modelId,
-									resolve,
-								});
-							}, 0);
-						},
-					);
-
-					// User cancelled — leave everything as-is.
-					logComposerDebug("provider swap dialog resolved", {
-						choice,
-						fromProvider: currentProvider,
-						toProvider: newProvider,
-						modelId,
-						workspaceId: displayedWorkspaceId,
-						sessionId: displayedSessionId,
-					});
-					if (choice === null) return;
-
-					const toastId = toast.loading("Preparing provider switch…");
-					setProviderSwitchStatus("Preparing provider switch…");
-
 					try {
-						// Build the context-transfer prefix BEFORE creating the new
-						// session so any load failure doesn't leave an orphaned session.
-						let contextPrefix: string | null = null;
-						if (choice === "bring-history") {
-							setProviderSwitchStatus("Loading conversation history…");
-							toast.loading("Loading conversation history…", { id: toastId });
-							logComposerDebug("loading provider swap history", {
-								sessionId: displayedSessionId,
-								fromProvider: currentProvider,
-								toProvider: newProvider,
-							});
-							try {
-								const msgs =
-									await loadSessionThreadMessages(displayedSessionId);
-								logComposerDebug("provider swap history loaded", {
-									sessionId: displayedSessionId,
-									messageCount: msgs.length,
-								});
-								const prefix = buildContextTransferPrefix(
-									msgs,
-									currentProvider as AgentProvider,
-								);
-								if (prefix) {
-									contextPrefix = prefix;
-								}
-								logComposerDebug("provider swap history prefix built", {
-									sessionId: displayedSessionId,
-									hasContextPrefix: Boolean(contextPrefix),
-									contextPrefixLength: contextPrefix?.length ?? 0,
-								});
-							} catch (error) {
-								console.warn(
-									"[composer] failed to load provider-swap history:",
-									error,
-								);
-								toast.warning("Could not load history; switching without it.", {
-									id: toastId,
-								});
-							}
-						}
-
-						setProviderSwitchStatus("Creating a new session…");
-						toast.loading("Creating a new session…", { id: toastId });
-						logComposerDebug("creating provider swap session", {
-							workspaceId: displayedWorkspaceId,
-							modelId,
-							toProvider: newProvider,
-						});
 						const { sessionId: newSessionId } =
 							await createSession(displayedWorkspaceId);
-						logComposerDebug("provider swap session created", {
-							workspaceId: displayedWorkspaceId,
-							newSessionId,
-						});
-						seedNewSessionInCache({
-							queryClient,
-							workspaceId: displayedWorkspaceId,
-							sessionId: newSessionId,
-							workspace: workspaceDetailQuery.data ?? null,
-							existingSessions: sessionsQuery.data ?? [],
-						});
-
-						queryClient.setQueryData(sessionThreadCacheKey(newSessionId), []);
-
-						// Register the pending context transfer for the new session.
-						if (contextPrefix) {
-							pendingContextTransferRef.current.set(
-								newSessionId,
-								contextPrefix,
-							);
-						}
-
-						setProviderSwitchStatus("Switching composer to new provider…");
-						toast.loading("Switching composer to new provider…", {
-							id: toastId,
-						});
-						const newContextKey = getComposerContextKey(
-							displayedWorkspaceId,
-							newSessionId,
-						);
-						logComposerDebug("applying provider swap model selection", {
-							newSessionId,
-							newContextKey,
-							modelId,
-							toProvider: newProvider,
-						});
-						onSelectModel(newContextKey, modelId);
-						onSwitchSession?.(newSessionId);
-
-						void Promise.all([
+						await Promise.all([
 							queryClient.invalidateQueries({
 								queryKey:
 									helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
@@ -781,38 +589,18 @@ export const WorkspaceComposerContainer = memo(
 									]
 								: []),
 						]);
-						toast.success("Provider switched. Send a message to continue.", {
-							id: toastId,
-						});
-						logComposerDebug("provider swap completed", {
-							workspaceId: displayedWorkspaceId,
-							oldSessionId: displayedSessionId,
+						onSwitchSession?.(newSessionId);
+						const newContextKey = getComposerContextKey(
+							displayedWorkspaceId,
 							newSessionId,
-							modelId,
-							fromProvider: currentProvider,
-							toProvider: newProvider,
-						});
-						return;
-					} catch (error) {
-						console.error("[composer] provider switch failed:", error);
-						toast.error(
-							error instanceof Error
-								? error.message
-								: "Failed to switch provider.",
-							{ id: toastId },
 						);
+						onSelectModel(newContextKey, modelId);
 						return;
-					} finally {
-						setProviderSwitchStatus(null);
+					} catch {
+						// Fall through to just update model
 					}
 				}
 
-				logComposerDebug("model select applied in current context", {
-					contextKey: composerContextKey,
-					modelId,
-					currentProvider,
-					newProvider: newProvider ?? null,
-				});
 				onSelectModel(composerContextKey, modelId);
 			},
 			[
@@ -825,10 +613,7 @@ export const WorkspaceComposerContainer = memo(
 				onSelectModel,
 				onSwitchSession,
 				queryClient,
-				workspaceDetailQuery.data,
 				workspaceDetailQuery.data?.repoId,
-				sessionsQuery.data,
-				providerSwitchStatus,
 			],
 		);
 
@@ -839,20 +624,28 @@ export const WorkspaceComposerContainer = memo(
 
 		// Narrow `provider` (which can be the loosely-typed agentType from a
 		// historical session) to a real AgentProvider before keying the
-		// query — anything else degrades to claude so we never miss the popup.
+		// query. Anything outside the known set degrades to claude so we
+		// never miss the popup. NOTE: the prior version of this branch
+		// collapsed everything except codex into claude, which masked
+		// cursor sessions as claude — the Rust cache then served cached
+		// claude skills back to the cursor popup. Keep cursor explicit.
 		const slashProvider: AgentProvider =
-			provider === "codex" || provider === "pi" ? provider : "claude";
-		// Slash command list — keyed by (provider, workingDirectory). The
-		// composer popup is hidden until this resolves; on error we fall back
-		// to an empty list and the popup never opens (no UI breakage).
+			provider === "codex" || provider === "cursor" ? provider : "claude";
+		// Prefer the repoId from a real workspace; on the start page there's no
+		// workspace yet, so fall back to the caller-supplied repoId hint.
+		const effectiveRepoId =
+			workspaceDetailQuery.data?.repoId ?? propRepoId ?? null;
+		// Slash command list — keyed by (provider, workingDirectory). On the
+		// start page workingDirectory is null, but the backend has a repo-level
+		// cache fallback, so we still fire the query when we know the repoId.
 		const slashCommandsQuery = useQuery({
 			...slashCommandsQueryOptions(
 				slashProvider,
 				workingDirectory,
-				workspaceDetailQuery.data?.repoId ?? null,
+				effectiveRepoId,
 				displayedWorkspaceId,
 			),
-			enabled: Boolean(workingDirectory),
+			enabled: Boolean(workingDirectory) || Boolean(effectiveRepoId),
 		});
 		const slashCommandsResponse = slashCommandsQuery.data;
 		const agentSlashCommands =
@@ -873,93 +666,34 @@ export const WorkspaceComposerContainer = memo(
 		// Pending only (`isPending`) covers the very first fetch with no data
 		// yet; once we have data, `isFetching` covers background refetches but
 		// users don't need a spinner for those — the cached list is fine.
+		const slashQueryActive =
+			Boolean(workingDirectory) || Boolean(effectiveRepoId);
 		const slashCommandsLoading =
-			Boolean(workingDirectory) &&
+			slashQueryActive &&
 			slashCommandsQuery.isPending &&
 			!slashCommandsQuery.isError;
-		const slashCommandsError =
-			Boolean(workingDirectory) && slashCommandsQuery.isError;
+		const slashCommandsError = slashQueryActive && slashCommandsQuery.isError;
 		const refetchSlashCommands = useCallback(() => {
-			logComposerDebug("slash commands retry requested", {
-				provider: slashProvider,
-				workingDirectory,
-				workspaceId: displayedWorkspaceId,
-			});
 			void slashCommandsQuery.refetch();
-		}, [
-			displayedWorkspaceId,
-			slashCommandsQuery,
-			slashProvider,
-			workingDirectory,
-		]);
+		}, [slashCommandsQuery]);
 
-		useEffect(() => {
-			logComposerDebug("slash commands state", {
-				provider: slashProvider,
-				workingDirectory,
-				workspaceId: displayedWorkspaceId,
-				status: slashCommandsQuery.status,
-				fetchStatus: slashCommandsQuery.fetchStatus,
-				isPending: slashCommandsQuery.isPending,
-				isError: slashCommandsQuery.isError,
-				agentCommandCount: agentSlashCommands.length,
-				totalCommandCount: slashCommands.length,
-			});
-		}, [
-			agentSlashCommands.length,
-			displayedWorkspaceId,
-			slashCommands.length,
-			slashCommandsQuery.fetchStatus,
-			slashCommandsQuery.isError,
-			slashCommandsQuery.isPending,
-			slashCommandsQuery.status,
-			slashProvider,
-			workingDirectory,
-		]);
+		// Pull the active codex goal so we can intercept `/goal X` submissions
+		// when one is already in flight and ask the user for confirmation
+		// before replacing it.
+		const codexGoalQuery = useQuery({
+			...sessionCodexGoalQueryOptions(displayedSessionId ?? "__none__"),
+			enabled: Boolean(displayedSessionId) && provider === "codex",
+		});
+		const activeGoal = codexGoalQuery.data ?? null;
 
-		useEffect(() => {
-			logComposerDebug("session context state", {
-				workspaceId: displayedWorkspaceId,
-				sessionId: displayedSessionId,
-				composerContextKey,
-				currentSessionId: currentSession?.id ?? null,
-				currentSessionAgentType: currentSession?.agentType ?? null,
-				currentSessionModel: currentSession?.model ?? null,
-				currentSessionStatus: currentSession?.status ?? null,
-				workspaceState: workspaceDetailQuery.data?.state ?? null,
-				workspaceStatus: workspaceDetailQuery.data?.status ?? null,
-				workingDirectory,
-				provider,
-				slashProvider,
-				effortLevel,
-				effectivePermissionMode,
-				fastMode,
-				supportsFastMode,
-				sessionsStatus: sessionsQuery.status,
-				sessionsCount: sessionsQuery.data?.length ?? 0,
-			});
-		}, [
-			composerContextKey,
-			currentSession?.agentType,
-			currentSession?.id,
-			currentSession?.model,
-			currentSession?.status,
-			displayedSessionId,
-			displayedWorkspaceId,
-			effectivePermissionMode,
-			effortLevel,
-			fastMode,
-			provider,
-			sessionsQuery.data?.length,
-			sessionsQuery.status,
-			slashProvider,
-			supportsFastMode,
-			workingDirectory,
-			workspaceDetailQuery.data?.state,
-			workspaceDetailQuery.data?.status,
-		]);
+		type PendingGoalReplace = {
+			newObjective: string;
+			args: Parameters<typeof handleComposerSubmitInner>;
+		};
+		const [goalReplaceConfirm, setGoalReplaceConfirm] =
+			useState<PendingGoalReplace | null>(null);
 
-		const handleComposerSubmit = useCallback(
+		const handleComposerSubmitInner = useCallback(
 			(
 				prompt: string,
 				imagePaths: string[],
@@ -968,15 +702,11 @@ export const WorkspaceComposerContainer = memo(
 				options?: {
 					permissionModeOverride?: string;
 					oppositeFollowUp?: boolean;
+					startSubmitMode?: StartSubmitMode;
+					editorStateSnapshot?: SerializedEditorState;
 				},
 			) => {
 				if (!effectiveModel) {
-					logComposerDebug("submit blocked without effective model", {
-						selectedModelId,
-						effectiveSelectedModelId,
-						workspaceId: displayedWorkspaceId,
-						sessionId: displayedSessionId,
-					});
 					return;
 				}
 				// Translate the per-submit "opposite" toggle into a concrete
@@ -987,36 +717,6 @@ export const WorkspaceComposerContainer = memo(
 						? "steer"
 						: "queue"
 					: undefined;
-
-				// Consume any pending context-transfer prefix for this session. It
-				// is cleared immediately so a second submit doesn't re-inject it.
-				let contextTransferPrefix: string | null = null;
-				if (displayedSessionId) {
-					const pending =
-						pendingContextTransferRef.current.get(displayedSessionId);
-					if (pending) {
-						contextTransferPrefix = pending;
-						pendingContextTransferRef.current.delete(displayedSessionId);
-					}
-				}
-
-				logComposerDebug("submit prepared", {
-					workspaceId: displayedWorkspaceId,
-					sessionId: displayedSessionId,
-					modelId: effectiveModel.id,
-					modelProvider: effectiveModel.provider,
-					modelCliModel: effectiveModel.cliModel,
-					workingDirectory,
-					effortLevel,
-					permissionMode:
-						options?.permissionModeOverride ?? effectivePermissionMode,
-					fastMode: supportsFastMode ? fastMode : false,
-					promptLength: prompt.length,
-					imageCount: imagePaths.length,
-					fileCount: filePaths.length,
-					customTagCount: customTags.length,
-					hasContextTransferPrefix: Boolean(contextTransferPrefix),
-				});
 				onSubmit({
 					prompt,
 					imagePaths,
@@ -1029,7 +729,8 @@ export const WorkspaceComposerContainer = memo(
 						options?.permissionModeOverride ?? effectivePermissionMode,
 					fastMode: supportsFastMode ? fastMode : false,
 					followUpBehaviorOverride,
-					contextTransferPrefix,
+					startSubmitMode: options?.startSubmitMode,
+					editorStateSnapshot: options?.editorStateSnapshot,
 				});
 			},
 			[
@@ -1041,12 +742,85 @@ export const WorkspaceComposerContainer = memo(
 				fastMode,
 				supportsFastMode,
 				settings.followUpBehavior,
-				displayedSessionId,
-				displayedWorkspaceId,
-				selectedModelId,
-				effectiveSelectedModelId,
 			],
 		);
+
+		const handleComposerSubmit = useCallback(
+			(
+				prompt: string,
+				imagePaths: string[],
+				filePaths: string[],
+				customTags: ComposerCustomTag[],
+				options?: {
+					permissionModeOverride?: string;
+					oppositeFollowUp?: boolean;
+				},
+			) => {
+				// `/goal …` interception for codex sessions. Three flavors:
+				//   - `/goal pause` / `/goal clear`  → out-of-band mutate IPC,
+				//     no chat bubble (matches the banner-button behaviour).
+				//   - `/goal resume`                 → falls through to send-
+				//     Message so the resulting stream subscription catches
+				//     the goal-continuation turn codex auto-spawns.
+				//   - `/goal <new objective>` while a goal already exists
+				//                                    → confirm-replace panel.
+				if (provider === "codex" && displayedSessionId) {
+					const match = prompt.trim().match(/^\/goal\s+([\s\S]+)$/);
+					const arg = match ? (match[1]?.trim() ?? "") : "";
+					if (arg === "pause" || arg === "clear") {
+						if (activeGoal) {
+							void mutateCodexGoal(displayedSessionId, arg).catch((err) => {
+								toast.error(
+									err instanceof Error ? err.message : `Failed to ${arg} goal`,
+								);
+							});
+						}
+						return;
+					}
+					if (
+						arg &&
+						arg !== "resume" &&
+						activeGoal &&
+						arg !== activeGoal.objective
+					) {
+						setGoalReplaceConfirm({
+							newObjective: arg,
+							args: [prompt, imagePaths, filePaths, customTags, options],
+						});
+						return;
+					}
+				}
+				handleComposerSubmitInner(
+					prompt,
+					imagePaths,
+					filePaths,
+					customTags,
+					options,
+				);
+			},
+			[provider, displayedSessionId, activeGoal, handleComposerSubmitInner],
+		);
+
+		const handleGoalReplaceConfirm = useCallback(() => {
+			if (!goalReplaceConfirm) return;
+			const args = goalReplaceConfirm.args;
+			setGoalReplaceConfirm(null);
+			handleComposerSubmitInner(...args);
+		}, [goalReplaceConfirm, handleComposerSubmitInner]);
+
+		const handleGoalReplaceCancel = useCallback(() => {
+			setGoalReplaceConfirm(null);
+		}, []);
+
+		// Resume button on the goal banner — synthesises a `/goal resume`
+		// submit so it travels through the normal sendMessage path. The
+		// resulting stream subscription is what catches the
+		// goal-continuation turn codex auto-spawns server-side; routing
+		// resume through `mutateCodexGoal` would skip that subscription
+		// and the chat would go silent even though the agent is working.
+		const handleResumeGoal = useCallback(() => {
+			handleComposerSubmitInner("/goal resume", [], [], []);
+		}, [handleComposerSubmitInner]);
 
 		// Track which queued prompt we've already dispatched so a re-render
 		// (e.g. due to query invalidation refreshing the session list) can't
@@ -1061,10 +835,6 @@ export const WorkspaceComposerContainer = memo(
 			if (pendingPromptForSession.sessionId !== displayedSessionId) {
 				return;
 			}
-			if (pendingPromptForSession.modelId && !pendingModel) {
-				// Wait for the model sections query to resolve the queued model.
-				return;
-			}
 			if (!effectiveModel) {
 				// Wait for the model sections query to resolve.
 				return;
@@ -1073,26 +843,13 @@ export const WorkspaceComposerContainer = memo(
 			const dispatchKey = [
 				pendingPromptForSession.sessionId,
 				pendingPromptForSession.prompt,
-				pendingPromptForSession.modelId ?? "",
-				pendingPromptForSession.permissionMode ?? "",
 				pendingPromptForSession.forceQueue ? "q" : "",
 			].join("|");
 			if (dispatchedPromptKeyRef.current === dispatchKey) {
-				logComposerDebug("pending prompt already dispatched", {
-					dispatchKey,
-					sessionId: displayedSessionId,
-				});
 				return;
 			}
 			dispatchedPromptKeyRef.current = dispatchKey;
 
-			logComposerDebug("dispatching pending prompt", {
-				sessionId: pendingPromptForSession.sessionId,
-				modelId: effectiveModel.id,
-				modelProvider: effectiveModel.provider,
-				promptLength: pendingPromptForSession.prompt.length,
-				forceQueue: pendingPromptForSession.forceQueue ?? false,
-			});
 			onSubmit({
 				prompt: pendingPromptForSession.prompt,
 				imagePaths: [],
@@ -1101,12 +858,11 @@ export const WorkspaceComposerContainer = memo(
 				model: effectiveModel,
 				workingDirectory,
 				effortLevel,
-				permissionMode:
-					pendingPromptForSession.permissionMode ?? effectivePermissionMode,
+				permissionMode: effectivePermissionMode,
 				fastMode: supportsFastMode ? fastMode : false,
 				forceQueue: pendingPromptForSession.forceQueue,
 			});
-			onPendingPromptConsumed?.(pendingPromptForSession.pendingSendId);
+			onPendingPromptConsumed?.();
 		}, [
 			displayedSessionId,
 			effectiveModel,
@@ -1115,75 +871,16 @@ export const WorkspaceComposerContainer = memo(
 			fastMode,
 			onPendingPromptConsumed,
 			onSubmit,
-			pendingModel,
 			pendingPromptForSession,
 			supportsFastMode,
 			workingDirectory,
 		]);
 
-		useEffect(() => {
-			const debug = renderDebugRef.current;
-			const elapsedMs = Math.round(debugNowMs() - debug.startedAt);
-			const snapshot = {
-				renderCount: debug.count,
-				elapsedMs,
-				workspaceId: displayedWorkspaceId,
-				sessionId: displayedSessionId,
-				contextKey: composerContextKey,
-				selectedModelId,
-				effectiveSelectedModelId,
-				provider,
-				slashProvider,
-				swapDialogOpen: Boolean(swapDialogState),
-				providerSwitchStatus,
-				modelSectionsStatus: modelSectionsQuery.status,
-				sessionsStatus: sessionsQuery.status,
-				workspaceStatus: workspaceDetailQuery.status,
-				slashCommandsStatus: slashCommandsQuery.status,
-				slashCommandsFetching: slashCommandsQuery.isFetching,
-				loadingConversationContext,
-				composerUnavailable,
-				composerAwaitingFinalize,
-			};
-			if (debug.count <= 20 || debug.count % 10 === 0) {
-				logComposerDebug("render snapshot", snapshot);
-			}
-			if (
-				debug.count >= 50 &&
-				elapsedMs < 2_000 &&
-				debugNowMs() - debug.lastBurstWarningAt > 250
-			) {
-				debug.lastBurstWarningAt = debugNowMs();
-				console.warn("[composer-debug] rapid render burst", snapshot);
-			}
-		});
-
 		const handleSelectModelInner = useCallback(
 			(modelId: string) => {
-				logComposerDebug("model picker callback", {
-					modelId,
-					workspaceId: displayedWorkspaceId,
-					sessionId: displayedSessionId,
-				});
 				void handleModelSelect(modelId);
 			},
-			[displayedSessionId, displayedWorkspaceId, handleModelSelect],
-		);
-
-		const handleToggleFavouriteInner = useCallback(
-			(modelId: string) => {
-				const current = settings.favoriteModelIds ?? [];
-				const next = current.includes(modelId)
-					? current.filter((id) => id !== modelId)
-					: [...current, modelId];
-				logComposerDebug("favorite models update", {
-					modelId,
-					wasFavorite: current.includes(modelId),
-					nextCount: next.length,
-				});
-				void updateSettings({ favoriteModelIds: next });
-			},
-			[settings.favoriteModelIds, updateSettings],
+			[handleModelSelect],
 		);
 
 		const handleSelectEffortInner = useCallback(
@@ -1206,192 +903,181 @@ export const WorkspaceComposerContainer = memo(
 			},
 			[onChangeFastMode, composerContextKey],
 		);
+
 		const autoCloseHelpText =
 			"When enabled, action sessions will close automatically when finished.";
 
 		return (
-			<>
-				{/* `z-20` lifts the entire composer stacking context above the thread
-			    viewport's `z-10` root (`thread-viewport.tsx:99`). Without this the
-			    slash/@ popup — which portals into the composer root — gets
-			    occluded by chat messages when it opens upward past the composer's
-			    top edge, because the composer's `isolate` traps popup z-index
-			    inside a stacking context whose outer z defaults to `auto`. */}
-				<div className="relative isolate z-20 flex flex-col">
-					{isActionSession ? (
-						<ActionRow
-							className={cn(
-								"relative z-0 mx-auto -mb-px w-[90%] rounded-t-2xl border-b-0",
-								autoCloseEnabled ? "border-transparent" : "border-secondary/80",
-							)}
-							overlay={
-								autoCloseEnabled ? (
-									<>
-										<ShineBorder
-											borderWidth={1}
-											duration={8}
-											shineColor="var(--primary)"
-										/>
-										<div className="pointer-events-none absolute inset-x-px bottom-0 z-[1] h-[2px] bg-background" />
-									</>
-								) : null
-							}
-							leading={
-								sending ? (
-									<ShimmerText
-										durationMs={1900}
-										className="truncate text-[12px] font-medium tracking-[0.02em] text-muted-foreground"
-									>
-										Working...
-									</ShimmerText>
-								) : (
-									<>
-										<CircleAlert
-											className="size-3.5 shrink-0 text-muted-foreground/60"
-											strokeWidth={1.8}
-											aria-hidden="true"
-										/>
-										<span className="truncate text-[12px] font-medium tracking-[0.01em] text-muted-foreground">
-											{autoCloseHelpText}
-										</span>
-									</>
-								)
-							}
-							trailing={
-								<ActionRowButton
-									active={autoCloseEnabled}
-									aria-label={
-										autoCloseEnabled
-											? "Disable Auto Close"
-											: "Enable Auto Close"
-									}
-									disabled={composerUnavailable}
-									onClick={() => {
-										void handleToggleAutoClose();
-									}}
-								>
-									<TimerReset
-										className="size-[13px] shrink-0"
-										strokeWidth={1.8}
+			// `z-20` lifts the entire composer stacking context above the thread
+			// viewport's `z-10` root (`thread-viewport.tsx:99`). Without this the
+			// slash/@ popup — which portals into the composer root — gets
+			// occluded by chat messages when it opens upward past the composer's
+			// top edge, because the composer's `isolate` traps popup z-index
+			// inside a stacking context whose outer z defaults to `auto`.
+			<div className="relative isolate z-20 flex flex-col">
+				{isActionSession ? (
+					<ActionRow
+						className={cn(
+							"relative z-0 mx-auto -mb-px w-[90%] rounded-t-2xl border-b-0",
+							autoCloseEnabled ? "border-transparent" : "border-secondary/80",
+						)}
+						overlay={
+							autoCloseEnabled ? (
+								<>
+									<ShineBorder
+										borderWidth={1}
+										duration={8}
+										shineColor="var(--primary)"
 									/>
-									<span className="inline-flex items-center">
-										{autoCloseEnabled ? "Auto Close On" : "Enable Auto Close"}
-									</span>
-								</ActionRowButton>
-							}
-						/>
-					) : null}
-
-					<div className="relative z-10">
-						{providerSwitchStatus ? (
-							<div className="mb-2 flex items-center justify-center rounded-xl border border-border bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground">
-								<ShimmerText durationMs={1700}>
-									{providerSwitchStatus}
+									<div className="pointer-events-none absolute inset-x-px bottom-0 z-[1] h-[2px] bg-background" />
+								</>
+							) : null
+						}
+						leading={
+							sending ? (
+								<ShimmerText
+									durationMs={1900}
+									className="truncate text-[12px] font-medium tracking-[0.02em] text-muted-foreground"
+								>
+									Working...
 								</ShimmerText>
-							</div>
-						) : null}
-						<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex justify-center">
-							<SubmitQueueList
-								items={queueItems}
-								onSteer={(id) => onSteerQueued?.(id)}
-								onRemove={(id) => onRemoveQueued?.(id)}
+							) : (
+								<>
+									<CircleAlert
+										className="size-3.5 shrink-0 text-muted-foreground/60"
+										strokeWidth={1.8}
+										aria-hidden="true"
+									/>
+									<span className="truncate text-[12px] font-medium tracking-[0.01em] text-muted-foreground">
+										{autoCloseHelpText}
+									</span>
+								</>
+							)
+						}
+						trailing={
+							<ActionRowButton
+								active={autoCloseEnabled}
+								aria-label={
+									autoCloseEnabled ? "Disable Auto Close" : "Enable Auto Close"
+								}
 								disabled={composerUnavailable}
-							/>
-						</div>
-						<WorkspaceComposer
-							contextKey={composerContextKey}
-							sessionId={displayedSessionId}
-							providerSessionId={currentSession?.providerSessionId ?? null}
-							agentType={slashProvider}
-							focusShortcut={focusShortcut}
-							togglePlanShortcut={togglePlanShortcut}
-							toggleFollowUpShortcut={toggleFollowUpShortcut}
-							alwaysShowContextUsage={settings.alwaysShowContextUsage}
-							hideToolbar={hideToolbar}
-							onSubmit={handleComposerSubmit}
-							disabled={composerUnavailable}
-							submitDisabled={
-								disabled ||
-								loadingConversationContext ||
-								composerAwaitingFinalize ||
-								Boolean(providerSwitchStatus)
-							}
-							onStop={onStop}
-							sending={sending}
-							selectedModelId={effectiveSelectedModelId}
-							modelSections={modelSections}
-							modelsLoading={modelsLoading}
-							onSelectModel={handleSelectModelInner}
-							favoriteModelIds={settings.favoriteModelIds}
-							onToggleFavorite={handleToggleFavouriteInner}
-							provider={provider}
-							effortLevel={effortLevel}
-							onSelectEffort={handleSelectEffortInner}
-							permissionMode={effectivePermissionMode}
-							onChangePermissionMode={handleChangePermissionModeInner}
-							fastMode={fastMode}
-							showFastModePrelude={showFastModePrelude}
-							onChangeFastMode={
-								supportsFastMode ? handleChangeFastModeInner : undefined
-							}
-							sendError={sendError}
-							restoreDraft={restoreDraft}
-							restoreImages={restoreImages}
-							restoreFiles={restoreFiles}
-							restoreCustomTags={restoreCustomTags}
-							restoreNonce={restoreNonce}
-							pendingElicitation={pendingElicitation}
-							onElicitationResponse={onElicitationResponse}
-							elicitationResponsePending={elicitationResponsePending}
-							pendingDeferredTool={pendingDeferredTool}
-							onDeferredToolResponse={onDeferredToolResponse}
-							planReview={planReview}
-							onImplementPlanInCleanThread={onImplementPlanInCleanThread}
-							pendingInsertRequests={pendingInsertRequests}
-							onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
-							slashCommands={slashCommands}
-							slashCommandsLoading={slashCommandsLoading}
-							slashCommandsError={slashCommandsError}
-							onRetrySlashCommands={refetchSlashCommands}
-							workspaceRootPath={workingDirectory}
-							linkedDirectories={linkedDirectories}
-							onRemoveLinkedDirectory={handleRemoveLinkedDirectory}
-							linkedDirectoriesDisabled={linkedDirectoriesMutation.isPending}
-							addDirCandidates={candidateDirectories}
-							onPickAddDir={handlePickAddDir}
-						/>
-					</div>
-				</div>
-
-				{/* Provider swap consent dialog — rendered as a portal so it floats
-			    above the composer; position in the tree doesn't matter visually. */}
-				{swapDialogState ? (
-					<ProviderSwapDialog
-						open={true}
-						fromProvider={swapDialogState.fromProvider}
-						toProvider={swapDialogState.toProvider}
-						onChoose={(choice) => {
-							logComposerDebug("provider swap choice selected", {
-								choice,
-								fromProvider: swapDialogState.fromProvider,
-								toProvider: swapDialogState.toProvider,
-								modelId: swapDialogState.modelId,
-							});
-							swapDialogState.resolve(choice);
-							setSwapDialogState(null);
-						}}
-						onCancel={() => {
-							logComposerDebug("provider swap cancelled", {
-								fromProvider: swapDialogState.fromProvider,
-								toProvider: swapDialogState.toProvider,
-								modelId: swapDialogState.modelId,
-							});
-							swapDialogState.resolve(null);
-							setSwapDialogState(null);
-						}}
+								onClick={() => {
+									void handleToggleAutoClose();
+								}}
+							>
+								<TimerReset
+									className="size-[13px] shrink-0"
+									strokeWidth={1.8}
+								/>
+								<span className="inline-flex items-center">
+									{autoCloseEnabled ? "Auto Close On" : "Enable Auto Close"}
+								</span>
+							</ActionRowButton>
+						}
 					/>
 				) : null}
-			</>
+
+				<div className="relative z-10">
+					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
+						{displayedSessionId ? (
+							<CodexGoalBanner
+								sessionId={displayedSessionId}
+								hasQueueBelow={queueItems.length > 0}
+								disabled={composerUnavailable}
+								onResume={handleResumeGoal}
+							/>
+						) : null}
+						<SubmitQueueList
+							items={queueItems}
+							onSteer={(id) => onSteerQueued?.(id)}
+							onRemove={(id) => onRemoveQueued?.(id)}
+							disabled={composerUnavailable}
+						/>
+					</div>
+					<WorkspaceComposer
+						contextKey={composerContextKey}
+						sessionId={displayedSessionId}
+						placeholder={placeholder}
+						providerSessionId={currentSession?.providerSessionId ?? null}
+						agentType={
+							effectiveModel?.provider === "codex"
+								? "codex"
+								: effectiveModel?.provider === "cursor"
+									? "cursor"
+									: "claude"
+						}
+						focusShortcut={focusShortcut}
+						togglePlanShortcut={togglePlanShortcut}
+						toggleFollowUpShortcut={toggleFollowUpShortcut}
+						toggleContextPanelShortcut={toggleContextPanelShortcut}
+						alwaysShowContextUsage={settings.alwaysShowContextUsage}
+						onSubmit={handleComposerSubmit}
+						disabled={composerUnavailable}
+						submitDisabled={
+							disabled || loadingConversationContext || composerAwaitingFinalize
+						}
+						onStop={onStop}
+						sending={sending}
+						selectedModelId={effectiveSelectedModelId}
+						modelSections={modelSections}
+						modelsLoading={modelsLoading}
+						onSelectModel={handleSelectModelInner}
+						provider={provider}
+						effortLevel={effortLevel}
+						onSelectEffort={handleSelectEffortInner}
+						permissionMode={effectivePermissionMode}
+						onChangePermissionMode={handleChangePermissionModeInner}
+						fastMode={fastMode}
+						showFastModePrelude={showFastModePrelude}
+						onChangeFastMode={
+							supportsFastMode ? handleChangeFastModeInner : undefined
+						}
+						sendError={sendError}
+						restoreDraft={restoreDraft}
+						restoreImages={restoreImages}
+						restoreFiles={restoreFiles}
+						restoreCustomTags={restoreCustomTags}
+						restoreNonce={restoreNonce}
+						pendingUserInput={pendingUserInput}
+						onUserInputResponse={onUserInputResponse}
+						userInputResponsePending={userInputResponsePending}
+						pendingPermission={pendingPermission}
+						onPermissionResponse={onPermissionResponse}
+						goalReplace={
+							goalReplaceConfirm && activeGoal
+								? {
+										currentObjective: activeGoal.objective,
+										newObjective: goalReplaceConfirm.newObjective,
+										onReplace: handleGoalReplaceConfirm,
+										onCancel: handleGoalReplaceCancel,
+									}
+								: null
+						}
+						hasPlanReview={hasPlanReview}
+						pendingInsertRequests={pendingInsertRequests}
+						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
+						slashCommands={slashCommands}
+						slashCommandsLoading={slashCommandsLoading}
+						slashCommandsError={slashCommandsError}
+						onRetrySlashCommands={refetchSlashCommands}
+						workspaceRootPath={workingDirectory}
+						linkedDirectories={linkedDirectories}
+						onRemoveLinkedDirectory={handleRemoveLinkedDirectory}
+						linkedDirectoriesDisabled={
+							linkedDirectoriesController
+								? false
+								: linkedDirectoriesMutation.isPending
+						}
+						addDirCandidates={candidateDirectories}
+						onPickAddDir={handlePickAddDir}
+						contextPanelOpen={contextPanelOpen}
+						onToggleContextPanel={onToggleContextPanel}
+						startSubmitMenu={startSubmitMenu}
+						startSubmitMode={startSubmitMode}
+						onStartSubmitModeChange={handleStartSubmitModeChange}
+					/>
+				</div>
+			</div>
 		);
 	},
 );

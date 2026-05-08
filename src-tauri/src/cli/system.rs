@@ -41,7 +41,7 @@ pub fn cli_status(cli: &Cli) -> Result<()> {
             None
         },
         current_binary: current,
-        build_mode: crate::data_dir::build_mode_label().to_string(),
+        build_mode: crate::data_dir::data_mode_label().to_string(),
         app_running: service::is_app_running(),
     };
     output::print(cli, &payload, |p| {

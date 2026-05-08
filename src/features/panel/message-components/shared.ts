@@ -1,7 +1,6 @@
 import type {
 	CollapsedGroupPart,
 	FileMentionPart,
-	GenericCardPart,
 	ImagePart,
 	MessagePart,
 	PlanReviewPart,
@@ -116,14 +115,6 @@ export function isPlanReviewPart(part: unknown): part is PlanReviewPart {
 		part.type === "plan-review" &&
 		typeof part.toolUseId === "string" &&
 		typeof part.toolName === "string"
-	);
-}
-
-export function isGenericCardPart(part: unknown): part is GenericCardPart {
-	return (
-		isObj(part) &&
-		part.type === "generic-card" &&
-		typeof part.title === "string"
 	);
 }
 
