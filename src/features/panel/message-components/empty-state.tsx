@@ -41,24 +41,15 @@ const SCRIPT_ACTION_COPY: Record<
 export function EmptyState({
 	hasSession,
 	workspaceState = null,
-	workspaceBranch = null,
-	workspacePrTitle = null,
 	missingScriptTypes = [],
 	onInitializeScript,
 }: {
 	hasSession: boolean;
 	workspaceState?: string | null;
-	workspaceBranch?: string | null;
-	workspacePrTitle?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 }) {
 	const isCreatingWorkspace = workspaceState === "initializing";
-	const creatingDescription = workspacePrTitle
-		? `Checking out the PR branch for ${workspacePrTitle}. Messaging will unlock automatically when setup finishes.`
-		: workspaceBranch
-			? `Checking out ${workspaceBranch}. Messaging will unlock automatically when setup finishes.`
-			: "Helmor is still preparing this workspace. Messaging will unlock automatically when setup finishes.";
 	const showScriptActions =
 		hasSession &&
 		!isCreatingWorkspace &&
@@ -84,7 +75,7 @@ export function EmptyState({
 				</EmptyTitle>
 				<EmptyDescription>
 					{isCreatingWorkspace
-						? creatingDescription
+						? "Helmor is still preparing this workspace. Messaging will unlock automatically when setup finishes."
 						: hasSession
 							? "This session does not have any messages yet."
 							: "Choose a session from the header to inspect its timeline."}

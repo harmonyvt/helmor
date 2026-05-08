@@ -17,6 +17,16 @@ pub enum UiMutationEvent {
     ContextUsageChanged {
         session_id: String,
     },
+    CodexGoalChanged {
+        session_id: String,
+    },
+    /// Fires when a `goal_status` system message has been synthesised into
+    /// the conversation history out-of-band — the streaming pipeline owns
+    /// real assistant messages, this exists for the lifecycle markers
+    /// (Goal paused / resumed / cleared) we insert ourselves.
+    SessionMessagesAppended {
+        session_id: String,
+    },
     WorkspaceFilesChanged {
         workspace_id: String,
     },
@@ -29,9 +39,6 @@ pub enum UiMutationEvent {
     WorkspaceChangeRequestChanged {
         workspace_id: String,
     },
-    WorkspaceBrowserTabsChanged {
-        workspace_id: String,
-    },
     RepositoryListChanged,
     RepositoryChanged {
         repo_id: String,
@@ -40,13 +47,17 @@ pub enum UiMutationEvent {
         key: Option<String>,
     },
     PendingCliSendQueued {
-        pending_send_id: String,
         workspace_id: String,
         session_id: String,
         prompt: String,
         model_id: Option<String>,
         permission_mode: Option<String>,
     },
+    /// The set of in-flight agent streams changed (a turn started or
+    /// ended). Carries no payload — frontends invalidate and re-fetch
+    /// `list_active_streams`. See `agents::streaming::active_streams` for
+    /// the source of truth this notification mirrors.
+    ActiveStreamsChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +102,12 @@ mod tests {
             UiMutationEvent::ContextUsageChanged {
                 session_id: "s".into(),
             },
+            UiMutationEvent::CodexGoalChanged {
+                session_id: "s".into(),
+            },
+            UiMutationEvent::SessionMessagesAppended {
+                session_id: "s".into(),
+            },
             UiMutationEvent::WorkspaceFilesChanged {
                 workspace_id: "w".into(),
             },
@@ -103,21 +120,18 @@ mod tests {
             UiMutationEvent::WorkspaceChangeRequestChanged {
                 workspace_id: "w".into(),
             },
-            UiMutationEvent::WorkspaceBrowserTabsChanged {
-                workspace_id: "w".into(),
-            },
             UiMutationEvent::RepositoryChanged {
                 repo_id: "r".into(),
             },
             UiMutationEvent::SettingsChanged { key: None },
             UiMutationEvent::PendingCliSendQueued {
-                pending_send_id: "p1".into(),
                 workspace_id: "w".into(),
                 session_id: "s".into(),
                 prompt: "p".into(),
                 model_id: None,
                 permission_mode: None,
             },
+            UiMutationEvent::ActiveStreamsChanged,
         ];
         for event in cases {
             let s = serde_json::to_string(&event).unwrap();
@@ -147,6 +161,10 @@ mod tests {
                 UiMutationEvent::RepositoryListChanged,
                 "repositoryListChanged",
             ),
+            (
+                UiMutationEvent::ActiveStreamsChanged,
+                "activeStreamsChanged",
+            ),
         ];
         for (event, expected) in cases {
             let json = serde_json::to_value(&event).unwrap();
@@ -157,7 +175,6 @@ mod tests {
     #[test]
     fn pending_cli_send_queued_includes_optional_fields_when_set() {
         let event = UiMutationEvent::PendingCliSendQueued {
-            pending_send_id: "pending-1".into(),
             workspace_id: "w".into(),
             session_id: "s".into(),
             prompt: "hello".into(),
@@ -167,7 +184,6 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["modelId"], "claude-sonnet-4-5");
         assert_eq!(json["permissionMode"], "acceptEdits");
-        assert_eq!(json["pendingSendId"], "pending-1");
         assert_eq!(json["workspaceId"], "w");
         assert_eq!(json["sessionId"], "s");
         assert_eq!(json["prompt"], "hello");

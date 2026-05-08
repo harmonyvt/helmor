@@ -22,10 +22,6 @@ pub use crate::workspaces::{
 
 // ---- Domain functions ----
 
-pub use crate::models::browser_tabs::{
-    close_browser_tab, create_browser_tab, list_workspace_browser_tabs, navigate_browser_tab,
-    normalize_browser_url, select_browser_tab, BrowserTabRecord,
-};
 pub use crate::models::workspaces::load_workspace_records;
 pub use crate::repos::{add_repository_from_local_path, list_repositories};
 pub use crate::sessions::{create_session, list_workspace_sessions};
@@ -37,15 +33,10 @@ pub use crate::workspaces::{
 pub fn get_data_info() -> Result<DataInfo> {
     let data_dir = crate::data_dir::data_dir()?;
     let db_path = crate::data_dir::db_path()?;
-    let data_dir_preference_path = crate::data_dir::bootstrap_settings_path()?;
     Ok(DataInfo {
         data_mode: crate::data_dir::data_mode_label().to_string(),
-        default_data_mode: crate::data_dir::default_data_mode_label().to_string(),
         data_dir: data_dir.display().to_string(),
         db_path: db_path.display().to_string(),
-        data_dir_preference: crate::data_dir::data_dir_preference(),
-        data_dir_preference_path: data_dir_preference_path.display().to_string(),
-        data_dir_locked_by_env: crate::data_dir::data_dir_locked_by_env(),
     })
 }
 
@@ -121,10 +112,6 @@ pub struct SendMessageParams {
     /// Extra linked directories (`/add-dir`). When empty, persisted linked
     /// directories for the session are used instead.
     pub linked_directories: Vec<String>,
-    /// CLI/MCP calls should hand off to a running desktop app so the window can
-    /// stream the turn. The web daemon runs its own sidecar and must not hand
-    /// off, otherwise browser users would only see the queued optimistic turn.
-    pub delegate_to_running_app: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,10 +121,6 @@ pub struct SendMessageResult {
     pub provider: String,
     pub model: String,
     pub persisted: bool,
-    pub app_running: bool,
-    pub queued: bool,
-    pub pending_send_id: Option<String>,
-    pub agent_started: bool,
 }
 
 /// Send a prompt to an AI agent. When the Helmor desktop app is running,
@@ -173,32 +156,33 @@ pub fn send_message(
                         .permission_mode
                         .as_deref()
                         .filter(|mode| *mode == "plan"),
+                    crate::models::sessions::CreateSessionOverrides::default(),
                 )?
                 .session_id
             }
         },
     };
 
-    // 3. Resolve model — explicit param > session row > user setting > "default"
+    // 3. Resolve model — param > session row > "default". Provider hint
+    //    is required so cursor's `default` doesn't infer to claude.
+    let (session_model, session_provider) =
+        crate::models::sessions::get_session_model_and_provider(&session_id)
+            .unwrap_or((None, None));
     let model_id = params
         .model
         .as_deref()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            crate::models::sessions::get_session_model(&session_id)
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| "default".to_string())
-        });
-    let model_id = model_id.as_str();
-    let model = crate::agents::resolve_model(model_id);
+        .map(str::to_string)
+        .or(session_model)
+        .unwrap_or_else(|| "default".to_string());
+    let provider_hint = session_provider.as_deref();
+    let model = crate::agents::resolve_model(&model_id, provider_hint);
 
     // ── App delegation ──────────────────────────────────────────────
     // When the desktop app is running, queue the prompt as a pending
     // send and return immediately. The app's focus handler picks it up
     // and streams through its shared sidecar so the frontend sees live
     // updates. The CLI prints a short confirmation instead of streaming.
-    if params.delegate_to_running_app && is_app_running() {
+    if is_app_running() {
         // Persist user message so the app's conversation container
         // shows the optimistic user bubble right away.
         let conn = crate::models::db::write_conn()?;
@@ -216,17 +200,32 @@ pub fn send_message(
             params![user_msg_id, session_id, user_content, timestamp],
         )?;
 
-        let pending_send_id = insert_pending_cli_send(
+        // Pin the resolved model + (optional) permission_mode onto the
+        // session row before queuing. The App composer reads these off
+        // `currentSession` when it auto-submits the drained prompt — so
+        // without this the row still has model=NULL and the composer
+        // falls back to settings.defaultModelId, ignoring the CLI's
+        // --model / --plan override.
+        conn.execute(
+            "UPDATE sessions SET model = ?2, permission_mode = COALESCE(?3, permission_mode), updated_at = ?4 WHERE id = ?1",
+            params![
+                session_id,
+                model_id,
+                params.permission_mode.as_deref(),
+                timestamp,
+            ],
+        )?;
+
+        insert_pending_cli_send(
             &workspace_id,
             &session_id,
             &params.prompt,
-            Some(model_id),
+            Some(&model_id),
             params.permission_mode.as_deref(),
         )?;
 
         let _ = crate::ui_sync::notify_running_app(
             crate::ui_sync::UiMutationEvent::PendingCliSendQueued {
-                pending_send_id: pending_send_id.clone(),
                 workspace_id: workspace_id.clone(),
                 session_id: session_id.clone(),
                 prompt: params.prompt.clone(),
@@ -250,10 +249,6 @@ pub fn send_message(
             provider: model.provider.to_string(),
             model: model.id.to_string(),
             persisted: true,
-            app_running: true,
-            queued: true,
-            pending_send_id: Some(pending_send_id),
-            agent_started: false,
         });
     }
 
@@ -503,10 +498,6 @@ pub fn send_message(
         provider: model.provider.to_string(),
         model: resolved_model,
         persisted: true,
-        app_running: false,
-        queued: false,
-        pending_send_id: None,
-        agent_started: true,
     })
 }
 
@@ -562,9 +553,6 @@ pub struct PendingCliSend {
     pub prompt: String,
     pub model_id: Option<String>,
     pub permission_mode: Option<String>,
-    pub status: String,
-    pub last_drained_at: Option<String>,
-    pub started_at: Option<String>,
     pub created_at: String,
 }
 
@@ -587,40 +575,16 @@ pub fn insert_pending_cli_send(
     Ok(id)
 }
 
-/// Claim the next queued pending send without deleting it. The frontend must
-/// call [`ack_pending_cli_send_started`] after the prompt has been handed to
-/// the composer submit path. This avoids silently losing prompts if the app
-/// drains the table but never starts streaming.
+/// Read and delete all pending sends in one atomic operation.
+/// Returns them oldest-first so the App processes them in order.
 pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
-    let mut conn = crate::models::db::write_conn()?;
-    let tx = conn
-        .transaction()
-        .context("Failed to start pending send drain")?;
-
-    tx.execute(
-        r#"
-        UPDATE pending_cli_sends
-        SET status = 'queued', last_drained_at = NULL
-        WHERE status = 'draining'
-          AND last_drained_at IS NOT NULL
-          AND datetime(last_drained_at) < datetime('now', '-30 seconds')
-        "#,
-        [],
-    )
-    .context("Failed to reset stale pending CLI sends")?;
-
-    let row = {
-        let mut stmt = tx.prepare(
-            r#"
-            SELECT id, workspace_id, session_id, prompt, model_id, permission_mode,
-                   status, last_drained_at, started_at, created_at
-            FROM pending_cli_sends
-            WHERE status = 'queued'
-            ORDER BY datetime(created_at) ASC, id ASC
-            LIMIT 1
-            "#,
-        )?;
-        let mut rows = stmt.query_map([], |row| {
+    let conn = crate::models::db::write_conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, workspace_id, session_id, prompt, model_id, permission_mode, created_at
+         FROM pending_cli_sends ORDER BY datetime(created_at) ASC",
+    )?;
+    let rows: Vec<PendingCliSend> = stmt
+        .query_map([], |row| {
             Ok(PendingCliSend {
                 id: row.get(0)?,
                 workspace_id: row.get(1)?,
@@ -628,54 +592,18 @@ pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
                 prompt: row.get(3)?,
                 model_id: row.get(4)?,
                 permission_mode: row.get(5)?,
-                status: row.get(6)?,
-                last_drained_at: row.get(7)?,
-                started_at: row.get(8)?,
-                created_at: row.get(9)?,
+                created_at: row.get(6)?,
             })
-        })?;
-        rows.next()
-            .transpose()
-            .context("Failed to read pending CLI send")?
-    };
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("Failed to read pending CLI sends")?;
 
-    let Some(send) = row else {
-        tx.commit()
-            .context("Failed to commit empty pending send drain")?;
-        return Ok(Vec::new());
-    };
+    if !rows.is_empty() {
+        conn.execute("DELETE FROM pending_cli_sends", [])
+            .context("Failed to delete pending CLI sends")?;
+    }
 
-    let drained_at = crate::models::db::current_timestamp()?;
-    tx.execute(
-        "UPDATE pending_cli_sends SET status = 'draining', last_drained_at = ?2 WHERE id = ?1",
-        params![&send.id, &drained_at],
-    )
-    .context("Failed to mark pending CLI send as draining")?;
-    tx.commit().context("Failed to commit pending send drain")?;
-
-    Ok(vec![PendingCliSend {
-        status: "draining".to_string(),
-        last_drained_at: Some(drained_at),
-        ..send
-    }])
-}
-
-/// Acknowledge that the frontend has handed a pending CLI send to the normal
-/// submit/start path. The row is removed only after this acknowledgement.
-pub fn ack_pending_cli_send_started(id: &str) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
-    conn.execute(
-        r#"
-        UPDATE pending_cli_sends
-        SET status = 'started', started_at = datetime('now')
-        WHERE id = ?1
-        "#,
-        [id],
-    )
-    .with_context(|| format!("Failed to acknowledge pending CLI send {id}"))?;
-    conn.execute("DELETE FROM pending_cli_sends WHERE id = ?1", [id])
-        .with_context(|| format!("Failed to delete acknowledged pending CLI send {id}"))?;
-    Ok(())
+    Ok(rows)
 }
 
 /// Check if the Helmor App is running by testing the MCP bridge port.
@@ -762,22 +690,13 @@ mod tests {
         assert_eq!(sends[0].model_id.as_deref(), Some("opus"));
         assert_eq!(sends[0].permission_mode.as_deref(), Some("default"));
 
-        assert_eq!(sends[0].status, "draining");
-        assert!(sends[0].last_drained_at.is_some());
-        assert!(sends[0].started_at.is_none());
-
-        // Second drain skips the in-flight row until the frontend acknowledges
-        // that it was handed to the submit path.
+        // Second drain should be empty — rows were deleted.
         let sends2 = drain_pending_cli_sends().unwrap();
         assert!(sends2.is_empty());
-
-        ack_pending_cli_send_started(&id).unwrap();
-        let sends3 = drain_pending_cli_sends().unwrap();
-        assert!(sends3.is_empty());
     }
 
     #[test]
-    fn drain_claims_one_send_at_a_time_in_oldest_order() {
+    fn drain_returns_oldest_first() {
         let _lock = TEST_ENV_LOCK.lock().unwrap();
         let _dir = TestDataDir::new("drain-order");
 
@@ -787,13 +706,9 @@ mod tests {
         insert_pending_cli_send("ws-1", "sess-b", "second", None, None).unwrap();
 
         let sends = drain_pending_cli_sends().unwrap();
-        assert_eq!(sends.len(), 1);
+        assert_eq!(sends.len(), 2);
         assert_eq!(sends[0].prompt, "first");
-        ack_pending_cli_send_started(&sends[0].id).unwrap();
-
-        let sends = drain_pending_cli_sends().unwrap();
-        assert_eq!(sends.len(), 1);
-        assert_eq!(sends[0].prompt, "second");
+        assert_eq!(sends[1].prompt, "second");
     }
 
     #[test]
@@ -827,7 +742,13 @@ mod tests {
         )
         .unwrap();
 
-        let response = create_session("w1", None, Some("plan")).unwrap();
+        let response = create_session(
+            "w1",
+            None,
+            Some("plan"),
+            crate::models::sessions::CreateSessionOverrides::default(),
+        )
+        .unwrap();
         let permission_mode: String = conn
             .query_row(
                 "SELECT permission_mode FROM sessions WHERE id = ?1",
@@ -857,8 +778,13 @@ mod tests {
         )
         .unwrap();
 
-        let response =
-            create_session("w1", Some(crate::agents::ActionKind::CreatePr), None).unwrap();
+        let response = create_session(
+            "w1",
+            Some(crate::agents::ActionKind::CreatePr),
+            None,
+            crate::models::sessions::CreateSessionOverrides::default(),
+        )
+        .unwrap();
         let title: String = conn
             .query_row(
                 "SELECT title FROM sessions WHERE id = ?1",

@@ -12,6 +12,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 use helmor_lib::agents::{build_send_message_params, BuildSendMessageParamsInput};
 use helmor_lib::data_dir;
+use helmor_lib::db;
 use insta::assert_yaml_snapshot;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -39,13 +40,10 @@ impl TestEnv {
         data_dir::ensure_directory_structure().unwrap();
         let conn = rusqlite::Connection::open(data_dir::db_path().unwrap()).unwrap();
         helmor_lib::schema::ensure_schema(&conn).unwrap();
-        conn.execute_batch(
-            "DELETE FROM session_messages;
-             DELETE FROM sessions;
-             DELETE FROM workspaces;
-             DELETE FROM repos;",
-        )
-        .unwrap();
+        // Rebuild the connection pool so `read_conn()` sees the fresh
+        // data dir. The lib's prod fast path caches the pool path, and
+        // integration tests link against the lib in non-test mode.
+        db::init_pools().unwrap();
         conn.execute(
             "INSERT INTO repos (id, name, default_branch) VALUES ('r-1', 'Repo One', 'main')",
             [],
@@ -89,12 +87,7 @@ fn seed_workspace_session(
     .unwrap();
 }
 
-fn build(_env: &TestEnv, input: BuildSendMessageParamsInput<'_>) -> Value {
-    // Integration tests compile `helmor_lib` without `cfg(test)`, so the
-    // global DB pool uses the production fast path. Rebuild it after each
-    // test's fixture writes so the linked-directory lookup observes the
-    // current temp DB contents.
-    helmor_lib::models::db::init_pools().unwrap();
+fn build(input: BuildSendMessageParamsInput<'_>) -> Value {
     build_send_message_params(input)
 }
 
@@ -113,10 +106,6 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         claude_base_url: None,
         claude_auth_token: None,
         images: &[],
-        kanban_workspace_id: None,
-        kanban_snapshot: None,
-        goal_title: None,
-        goal_description: None,
     }
 }
 
@@ -125,7 +114,7 @@ fn omits_additional_directories_when_session_has_none() {
     let env = TestEnv::new();
     seed_workspace_session(&env.connection(), "w-1", "s-1", None);
 
-    let params = build(&env, base_input(Some("s-1")));
+    let params = build(base_input(Some("s-1")));
     assert_yaml_snapshot!("params_without_linked_dirs", &params);
 }
 
@@ -139,26 +128,8 @@ fn includes_additional_directories_from_workspace() {
         Some(r#"["/abs/claw-code","/abs/rust"]"#),
     );
 
-    let params = build(&env, base_input(Some("s-2")));
+    let params = build(base_input(Some("s-2")));
     assert_yaml_snapshot!("params_with_linked_dirs", &params);
-}
-
-#[test]
-fn includes_goal_pi_context_for_kanban_tools() {
-    let env = TestEnv::new();
-    seed_workspace_session(&env.connection(), "w-goal", "s-goal", None);
-
-    let mut input = base_input(Some("s-goal"));
-    input.provider = "pi";
-    input.cli_model = "anthropic/claude-opus-4-7";
-    input.kanban_workspace_id = Some("goal-workspace-1");
-    input.kanban_snapshot = Some(r#"[{"id":"child-1","title":"Build UI"}]"#);
-    input.goal_title = Some("Launch Goal");
-    input.goal_description = Some("Ship the launch board");
-
-    let params = build(&env, input);
-
-    assert_yaml_snapshot!("params_with_goal_pi_context", &params);
 }
 
 #[test]
@@ -170,7 +141,7 @@ fn includes_claude_environment_for_custom_provider() {
     input.claude_base_url = Some("https://api.example.com/anthropic");
     input.claude_auth_token = Some("sk-test");
 
-    let params = build(&env, input);
+    let params = build(input);
     assert_yaml_snapshot!("params_with_claude_environment", &params);
 }
 
@@ -181,7 +152,7 @@ fn omits_additional_directories_when_helmor_session_id_is_absent() {
     let env = TestEnv::new();
     seed_workspace_session(&env.connection(), "w-3", "s-3", Some(r#"["/abs/a"]"#));
 
-    let params = build(&env, base_input(None));
+    let params = build(base_input(None));
     assert_yaml_snapshot!("params_for_new_session", &params);
 }
 
@@ -190,6 +161,21 @@ fn malformed_linked_column_falls_back_to_no_directories() {
     let env = TestEnv::new();
     seed_workspace_session(&env.connection(), "w-4", "s-4", Some("not-valid-json"));
 
-    let params = build(&env, base_input(Some("s-4")));
+    let params = build(base_input(Some("s-4")));
     assert_yaml_snapshot!("params_malformed_linked_column", &params);
+}
+
+#[test]
+fn includes_source_repo_path_when_repo_has_root_path() {
+    let env = TestEnv::new();
+    let conn = env.connection();
+    conn.execute(
+        "UPDATE repos SET root_path = '/Users/me/repos/my-repo' WHERE id = 'r-1'",
+        [],
+    )
+    .unwrap();
+    seed_workspace_session(&conn, "w-5", "s-5", None);
+
+    let params = build(base_input(Some("s-5")));
+    assert_yaml_snapshot!("params_with_source_repo_path", &params);
 }

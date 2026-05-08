@@ -6,9 +6,9 @@
  * 1. `cd sidecar && bun install --frozen-lockfile` (so CI runners have deps).
  * 2. `bun run build` — produces `sidecar/dist/helmor-sidecar` plus the
  *    `sidecar/dist/vendor/` tree that Tauri bundles as resources.
- * 3. `cargo build --bin helmor-cli --bin helmor-web --release --target <triple>` — produces
- *    the CLI and web companion binaries that ship inside the desktop app bundle.
- * 4. Copy the compiled sidecar / companions to target-suffixed names so Tauri's
+ * 3. `cargo build --bin helmor-cli --release --target <triple>` — produces
+ *    the CLI companion binary that ships inside the desktop app bundle.
+ * 4. Copy the compiled sidecar / CLI to target-suffixed names so Tauri's
  *    `externalBin` entries can find the artifacts they expect.
  *
  * Usage (from repo root):
@@ -16,13 +16,7 @@
  *   bun scripts/prepare-sidecar.mjs      # equivalent, Tauri uses this form
  */
 import { execFileSync, execSync } from "node:child_process";
-import {
-	chmodSync,
-	copyFileSync,
-	existsSync,
-	mkdirSync,
-	writeFileSync,
-} from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,12 +29,6 @@ const entitlementsPlist = resolve(repoRoot, "src-tauri", "Entitlements.plist");
 function run(cmd, cwd) {
 	console.log(`[prepare-sidecar] $ ${cmd} (cwd: ${cwd})`);
 	execSync(cmd, { cwd, stdio: "inherit" });
-}
-
-function stageExternalBinPlaceholder(path) {
-	if (existsSync(path)) return;
-	writeFileSync(path, "#!/bin/sh\nexit 0\n");
-	chmodSync(path, 0o755);
 }
 
 // Pre-sign the compiled sidecar with JIT entitlements so Bun's JSC runtime
@@ -112,23 +100,16 @@ function main() {
 		"dist",
 		`helmor-sidecar-${triple}`,
 	);
-	const exeSuffix = process.platform === "win32" ? ".exe" : "";
+	const cliBinaryName =
+		process.platform === "win32" ? "helmor-cli.exe" : "helmor-cli";
 	const cliSource = resolve(
 		srcTauriDir,
 		"target",
 		triple,
 		"release",
-		`helmor-cli${exeSuffix}`,
-	);
-	const webSource = resolve(
-		srcTauriDir,
-		"target",
-		triple,
-		"release",
-		`helmor-web${exeSuffix}`,
+		cliBinaryName,
 	);
 	const cliDestination = resolve(bundledBinDir, `helmor-cli-${triple}`);
-	const webDestination = resolve(bundledBinDir, `helmor-web-${triple}`);
 
 	if (!existsSync(sidecarSource)) {
 		throw new Error(
@@ -137,32 +118,24 @@ function main() {
 	}
 
 	// Tauri validates every `externalBin` during `cargo build`, including the
-	// companion binaries that this same command is about to produce. Stage
-	// target-suffixed placeholders first so clean CI checkouts can compile them
-	// without depending on stale artifacts; real binaries overwrite these below.
-	mkdirSync(bundledBinDir, { recursive: true });
+	// sidecar companion. Stage the target-suffixed sidecar first so a clean CI
+	// checkout can compile `helmor-cli` without depending on stale artifacts.
 	copyFileSync(sidecarSource, sidecarDestination);
-	stageExternalBinPlaceholder(cliDestination);
-	stageExternalBinPlaceholder(webDestination);
 
 	run(
-		`cargo build --manifest-path ${resolve(srcTauriDir, "Cargo.toml")} --bin helmor-cli --bin helmor-web --release --target ${triple}`,
+		`cargo build --manifest-path ${resolve(srcTauriDir, "Cargo.toml")} --bin helmor-cli --release --target ${triple}`,
 		repoRoot,
 	);
+
+	mkdirSync(bundledBinDir, { recursive: true });
 
 	if (!existsSync(cliSource)) {
 		throw new Error(
 			`[prepare-sidecar] expected compiled CLI at ${cliSource} but it does not exist`,
 		);
 	}
-	if (!existsSync(webSource)) {
-		throw new Error(
-			`[prepare-sidecar] expected compiled web daemon at ${webSource} but it does not exist`,
-		);
-	}
 
 	copyFileSync(cliSource, cliDestination);
-	copyFileSync(webSource, webDestination);
 
 	// Sign the target-suffixed copy (the one Tauri ingests as externalBin).
 	// No-op when APPLE_SIGNING_IDENTITY is unset.
@@ -170,7 +143,6 @@ function main() {
 
 	console.log(`[prepare-sidecar] staged sidecar → ${sidecarDestination}`);
 	console.log(`[prepare-sidecar] staged CLI → ${cliDestination}`);
-	console.log(`[prepare-sidecar] staged web daemon → ${webDestination}`);
 }
 
 main();

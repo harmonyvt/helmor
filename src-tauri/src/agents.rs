@@ -10,12 +10,12 @@ use crate::error::CommandError;
 pub mod action_kind;
 mod builtin_claude_providers;
 mod catalog;
+pub(crate) mod claude_project_files;
 mod custom_providers;
 mod persistence;
-mod pi_models;
 mod queries;
 mod slash_commands;
-mod streaming;
+pub(crate) mod streaming;
 mod support;
 
 pub use self::action_kind::ActionKind;
@@ -27,11 +27,10 @@ pub use self::queries::{
 };
 pub use self::slash_commands::SlashCommandCache;
 pub use self::streaming::{
-    abort_all_active_streams_blocking, bridge_aborted_event, bridge_deferred_tool_use_event,
-    bridge_done_event, bridge_elicitation_request_event, bridge_error_event,
+    abort_all_active_streams_blocking, bridge_aborted_event, bridge_done_event, bridge_error_event,
     bridge_permission_request_event, bridge_user_input_request_event, build_send_message_params,
-    convert_elicitation_content_to_codex_answers, lookup_workspace_linked_directories,
-    ActiveStreams, BuildSendMessageParamsInput,
+    lookup_workspace_linked_directories, ActiveStreamSummary, ActiveStreams,
+    BuildSendMessageParamsInput,
 };
 
 use self::persistence::{
@@ -39,7 +38,7 @@ use self::persistence::{
     persist_result_and_finalize, persist_turn_message, persist_user_message,
 };
 use self::streaming::stream_via_sidecar;
-use self::support::{resolve_resume_working_directory, resolve_working_directory};
+use self::support::resolve_working_directory;
 
 #[cfg(test)]
 use self::support::{non_empty, parse_claude_output, parse_codex_output};
@@ -110,60 +109,34 @@ pub enum AgentStreamEvent {
         title: Option<String>,
         description: Option<String>,
     },
-    DeferredToolUse {
+    /// Unified "agent needs user input" event. Sources:
+    /// - Claude AskUserQuestion (sidecar `canUseTool`)
+    /// - Claude MCP elicitation (sidecar `onElicitation`)
+    /// - Codex `requestUserInput`
+    ///
+    /// `payload.kind` discriminates how the frontend should render:
+    /// `ask-user-question` keeps AUQ's native question/option/preview/
+    /// notes UI; `form` is a JSON-Schema-driven form (used for both MCP
+    /// form elicitations and Codex's synthesized form); `url` is a
+    /// URL-launcher card. The Rust side just forwards the payload — all
+    /// schema normalization happens in the sidecar.
+    UserInputRequest {
         provider: String,
         model_id: String,
         resolved_model: String,
         session_id: Option<String>,
         working_directory: String,
         permission_mode: Option<String>,
-        #[serde(rename = "toolUseId")]
-        tool_use_id: String,
-        #[serde(rename = "toolName")]
-        tool_name: String,
-        #[serde(rename = "toolInput")]
-        tool_input: Value,
-    },
-    ElicitationRequest {
-        provider: String,
-        model_id: String,
-        resolved_model: String,
-        session_id: Option<String>,
-        working_directory: String,
-        #[serde(rename = "elicitationId")]
-        elicitation_id: Option<String>,
-        #[serde(rename = "serverName")]
-        server_name: String,
+        #[serde(rename = "userInputId")]
+        user_input_id: String,
+        source: String,
         message: String,
-        mode: Option<String>,
-        url: Option<String>,
-        #[serde(rename = "requestedSchema")]
-        requested_schema: Option<Value>,
+        payload: Value,
     },
     /// A plan was captured from ExitPlanMode. The plan content is already
     /// in the thread messages as a PlanReview card; this event just tells
     /// the frontend to show the Implement / Request Changes buttons.
     PlanCaptured {},
-    /// A Pi Kanban custom tool was invoked by the AI. The frontend must
-    /// execute the corresponding IPC call and respond via
-    /// `send_kanban_tool_result`.
-    KanbanToolCall {
-        #[serde(rename = "toolCallId")]
-        tool_call_id: String,
-        tool: String,
-        #[serde(rename = "workspaceId")]
-        workspace_id: String,
-        args: Value,
-    },
-    /// A Pi extension called `ctx.ui.select/confirm/input`. The frontend
-    /// must show the interactive element and respond via `respond_to_pi_ui`.
-    PiUiRequest {
-        #[serde(rename = "interactionId")]
-        interaction_id: String,
-        #[serde(rename = "uiKind")]
-        ui_kind: String,
-        payload: Value,
-    },
     Error {
         message: String,
         persisted: bool,
@@ -191,8 +164,6 @@ pub struct AgentSendRequest {
     /// the chat bubble. Empty/absent ⇒ no prefix.
     #[serde(default)]
     pub prompt_prefix: Option<String>,
-    #[serde(default)]
-    pub resume_only: bool,
     pub session_id: Option<String>,
     pub helmor_session_id: Option<String>,
     pub working_directory: Option<String>,
@@ -208,66 +179,31 @@ pub struct AgentSendRequest {
     /// round-trip without regex re-extraction.
     #[serde(default)]
     pub images: Option<Vec<String>>,
-    /// Goal workspace id. When present for Pi, the sidecar registers the
-    /// goal-board Kanban/thread tools and writes the board context file.
-    #[serde(default)]
-    pub kanban_workspace_id: Option<String>,
-    /// JSON-serialized snapshot of the current goal board.
-    #[serde(default)]
-    pub kanban_snapshot: Option<String>,
-    /// Optional goal metadata injected into Pi's goal-board context.
-    #[serde(default)]
-    pub goal_title: Option<String>,
-    #[serde(default)]
-    pub goal_description: Option<String>,
 }
 
 #[cfg(test)]
 use crate::pipeline::types::{AgentUsage, CollectedTurn, MessageRole};
 
 /// Context shared across incremental persistence calls within a single exchange.
-struct ExchangeContext {
-    helmor_session_id: String,
-    model_id: String,
-    model_provider: String,
-    user_message_id: String,
+pub(crate) struct ExchangeContext {
+    pub(crate) helmor_session_id: String,
+    pub(crate) model_id: String,
+    pub(crate) model_provider: String,
+    pub(crate) user_message_id: String,
 }
 
 #[tauri::command]
 pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
-    let sections = queries::fetch_agent_model_sections();
-    let section_counts = sections
-        .iter()
-        .map(|section| format!("{}:{}", section.id, section.options.len()))
-        .collect::<Vec<_>>();
-    tracing::info!(
-        section_count = sections.len(),
-        section_counts = ?section_counts,
-        "list_agent_model_sections resolved"
-    );
-    Ok(sections)
+    Ok(queries::fetch_agent_model_sections())
 }
 
 #[tauri::command]
-pub fn check_pi_models(
+pub async fn list_cursor_models(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-) -> CmdResult<pi_models::PiModelCheckResponse> {
-    tracing::info!("check_pi_models requested");
-    let result = pi_models::check(&sidecar);
-    let provider_counts = result
-        .providers
-        .iter()
-        .map(|provider| format!("{}:{}", provider.key, provider.model_count))
-        .collect::<Vec<_>>();
-    tracing::info!(
-        status = ?result.status,
-        model_count = result.models.len(),
-        provider_count = result.providers.len(),
-        provider_counts = ?provider_counts,
-        error = ?result.error,
-        "check_pi_models completed"
-    );
-    Ok(result)
+    api_key: Option<String>,
+) -> CmdResult<Vec<queries::CursorModelEntry>> {
+    // Inline blocking — same pattern as `list_slash_commands`.
+    queries::fetch_cursor_models(sidecar.inner(), api_key)
 }
 
 #[tauri::command]
@@ -278,35 +214,13 @@ pub async fn send_agent_message_stream(
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
-    if prompt.is_empty() && !request.resume_only {
+    if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
 
-    let model = resolve_model(&request.model_id);
-    tracing::info!(
-        request_provider = %request.provider,
-        requested_model_id = %request.model_id,
-        resolved_provider = %model.provider,
-        resolved_cli_model = %model.cli_model,
-        supports_effort = model.supports_effort,
-        session_id = ?request.session_id,
-        helmor_session_id = ?request.helmor_session_id,
-        resume_only = request.resume_only,
-        has_prompt_prefix = request.prompt_prefix.as_deref().is_some_and(|prefix| !prefix.trim().is_empty()),
-        prompt_len = prompt.len(),
-        file_count = request.files.as_ref().map_or(0, Vec::len),
-        image_count = request.images.as_ref().map_or(0, Vec::len),
-        "send_agent_message_stream model resolved"
-    );
+    let model = resolve_model(&request.model_id, Some(request.provider.as_str()));
 
     if request.provider != model.provider {
-        tracing::warn!(
-            request_provider = %request.provider,
-            requested_model_id = %request.model_id,
-            resolved_provider = %model.provider,
-            resolved_cli_model = %model.cli_model,
-            "send_agent_message_stream provider/model mismatch"
-        );
         return Err(anyhow::anyhow!(
             "Model {} does not belong to provider {}.",
             request.model_id,
@@ -318,16 +232,6 @@ pub async fn send_agent_message_stream(
     let working_directory = resolve_stream_working_directory(&request)?;
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
-    tracing::info!(
-        stream_id = %stream_id,
-        provider = %model.provider,
-        model_id = %request.model_id,
-        resolved_cli_model = %model.cli_model,
-        working_directory = %working_directory.display(),
-        session_id = ?request.session_id,
-        helmor_session_id = ?request.helmor_session_id,
-        "send_agent_message_stream starting sidecar stream"
-    );
 
     stream_via_sidecar(
         app.clone(),
@@ -345,27 +249,6 @@ pub async fn send_agent_message_stream(
 fn resolve_stream_working_directory(
     request: &AgentSendRequest,
 ) -> anyhow::Result<std::path::PathBuf> {
-    if request.resume_only {
-        if let Some(session_id) = request.helmor_session_id.as_deref() {
-            if let Some(workspace_dir) = resolve_resume_working_directory(session_id)? {
-                if !workspace_dir.is_dir() {
-                    // Tag as `WorkspaceBroken` so the frontend toast can
-                    // offer "Permanently Delete" + default-keep-history,
-                    // matching the non-resume path in resolve_working_directory.
-                    return Err(
-                        crate::error::coded(crate::error::ErrorCode::WorkspaceBroken).context(
-                            format!(
-                                "Workspace directory is missing for resumed session: {}",
-                                workspace_dir.display()
-                            ),
-                        ),
-                    );
-                }
-                return Ok(workspace_dir);
-            }
-        }
-    }
-
     resolve_working_directory(request.working_directory.as_deref())
 }
 
@@ -374,6 +257,19 @@ fn resolve_stream_working_directory(
 pub struct AgentStopRequest {
     pub session_id: String,
     pub provider: Option<String>,
+}
+
+/// Snapshot of currently in-flight agent streams for the UI. Source of
+/// truth is `ActiveStreams`; the UI re-fetches this whenever a
+/// `UiMutationEvent::ActiveStreamsChanged` arrives. The frontend uses
+/// it to drive the abort button visibility and per-session busy badges
+/// — replacing the prior hook-local `sessionRunStates` that drifted on
+/// container unmount/remount.
+#[tauri::command]
+pub async fn list_active_streams(
+    active_streams: tauri::State<'_, ActiveStreams>,
+) -> CmdResult<Vec<ActiveStreamSummary>> {
+    Ok(active_streams.snapshot_for_ui())
 }
 
 #[tauri::command]
@@ -559,144 +455,38 @@ pub async fn respond_to_permission_request(
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeferredToolResponseRequest {
-    pub tool_use_id: String,
-    pub behavior: String,
-    pub reason: Option<String>,
-    pub updated_input: Option<Value>,
-}
-
-#[tauri::command]
-pub async fn respond_to_deferred_tool(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    request: DeferredToolResponseRequest,
-) -> CmdResult<()> {
-    tracing::info!(
-        tool_use_id = %request.tool_use_id,
-        behavior = %request.behavior,
-        "Deferred tool response"
-    );
-    let req = crate::sidecar::SidecarRequest {
-        id: Uuid::new_v4().to_string(),
-        method: "deferredToolResponse".to_string(),
-        params: serde_json::json!({
-            "toolUseId": request.tool_use_id,
-            "behavior": request.behavior,
-            "reason": request.reason,
-            "updatedInput": request.updated_input,
-        }),
-    };
-    sidecar
-        .send(&req)
-        .map_err(|e| anyhow::anyhow!("Failed to send deferred tool response: {e}"))?;
-    Ok(())
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ElicitationResponseRequest {
-    pub elicitation_id: String,
+pub struct UserInputResponseRequest {
+    pub user_input_id: String,
+    /// One of `"submit"`, `"decline"`, `"cancel"` — keeps the wire
+    /// shape provider-neutral; each sidecar manager translates it
+    /// into the SDK-specific resolution (AUQ allow/deny, MCP
+    /// elicitation accept/decline/cancel, Codex answer payload).
     pub action: String,
     pub content: Option<Value>,
 }
 
-fn build_elicitation_response_sidecar_request(
-    request: &ElicitationResponseRequest,
-) -> crate::sidecar::SidecarRequest {
-    crate::sidecar::SidecarRequest {
+#[tauri::command]
+pub async fn respond_to_user_input(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: UserInputResponseRequest,
+) -> CmdResult<()> {
+    tracing::info!(
+        user_input_id = %request.user_input_id,
+        action = %request.action,
+        "User-input response"
+    );
+    let req = crate::sidecar::SidecarRequest {
         id: Uuid::new_v4().to_string(),
-        method: "elicitationResponse".to_string(),
+        method: "userInputResponse".to_string(),
         params: serde_json::json!({
-            "elicitationId": request.elicitation_id,
+            "userInputId": request.user_input_id,
             "action": request.action,
             "content": request.content,
         }),
-    }
-}
-
-#[tauri::command]
-pub async fn respond_to_elicitation_request(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    request: ElicitationResponseRequest,
-) -> CmdResult<()> {
-    if request.elicitation_id.starts_with("codex-input-") {
-        // Codex user-input: convert form content → answers, send via separate channel.
-        let answers = if request.action == "accept" {
-            request
-                .content
-                .as_ref()
-                .map(convert_elicitation_content_to_codex_answers)
-                .unwrap_or(Value::Null)
-        } else {
-            Value::Null
-        };
-        let req = crate::sidecar::SidecarRequest {
-            id: Uuid::new_v4().to_string(),
-            method: "userInputResponse".to_string(),
-            params: serde_json::json!({
-                "userInputId": request.elicitation_id,
-                "answers": answers,
-            }),
-        };
-        sidecar
-            .send(&req)
-            .map_err(|e| anyhow::anyhow!("Failed to send user-input response: {e}"))?;
-    } else {
-        let req = build_elicitation_response_sidecar_request(&request);
-        sidecar
-            .send(&req)
-            .map_err(|e| anyhow::anyhow!("Failed to send elicitation response: {e}"))?;
-    }
-    Ok(())
-}
-
-/// Send the result of a Pi Kanban custom tool call back to the sidecar.
-/// Called by the frontend after it has executed the corresponding Tauri IPC
-/// action (e.g. `upsert_goal_card`) in response to a `kanban_tool_call` event.
-#[tauri::command]
-pub async fn send_kanban_tool_result(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    tool_call_id: String,
-    result: Value,
-    is_error: bool,
-) -> CmdResult<()> {
-    tracing::debug!(tool_call_id = %tool_call_id, is_error, "Kanban tool result");
-    let req = crate::sidecar::SidecarRequest {
-        id: Uuid::new_v4().to_string(),
-        method: "kanbanToolResult".to_string(),
-        params: serde_json::json!({
-            "toolCallId": tool_call_id,
-            "result": result,
-            "isError": is_error,
-        }),
     };
     sidecar
         .send(&req)
-        .map_err(|e| anyhow::anyhow!("Failed to send kanban tool result: {e}"))?;
-    Ok(())
-}
-
-/// Send the result of a Pi extension interactive UI request (select/confirm/input)
-/// back to the sidecar. Called by the frontend after the user interacts with the
-/// corresponding element rendered by the shared conversation UI.
-#[tauri::command]
-pub async fn respond_to_pi_ui(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    interaction_id: String,
-    result: Value,
-) -> CmdResult<()> {
-    tracing::debug!(interaction_id = %interaction_id, "Pi UI response");
-    let req = crate::sidecar::SidecarRequest {
-        id: Uuid::new_v4().to_string(),
-        method: "piUiResponse".to_string(),
-        params: serde_json::json!({
-            "interactionId": interaction_id,
-            "result": result,
-        }),
-    };
-    sidecar
-        .send(&req)
-        .map_err(|e| anyhow::anyhow!("Failed to send Pi UI response: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to send user-input response: {e}"))?;
     Ok(())
 }
 
@@ -722,7 +512,6 @@ pub async fn list_slash_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::assert_yaml_snapshot;
 
     // -----------------------------------------------------------------------
     // parse_claude_output
@@ -882,14 +671,14 @@ mod tests {
 
     #[test]
     fn resolve_model_infers_provider() {
-        let claude = resolve_model("default");
+        let claude = resolve_model("default", None);
         assert_eq!(claude.provider, "claude");
         assert_eq!(claude.cli_model, "default");
 
-        let codex = resolve_model("gpt-5.4");
+        let codex = resolve_model("gpt-5.4", None);
         assert_eq!(codex.provider, "codex");
 
-        let unknown_claude = resolve_model("sonnet[1m]");
+        let unknown_claude = resolve_model("sonnet[1m]", None);
         assert_eq!(unknown_claude.provider, "claude");
     }
 
@@ -983,100 +772,6 @@ mod tests {
         assert!(
             msg_count >= 2,
             "Should have at least user + result messages, got {msg_count}"
-        );
-
-        std::env::remove_var("HELMOR_DATA_DIR");
-    }
-
-    #[test]
-    fn resume_stream_uses_session_workspace_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
-        std::env::set_var("HELMOR_DATA_DIR", dir.path());
-
-        let db_path = setup_test_db(dir.path());
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
-            [],
-        )
-        .unwrap();
-
-        let workspace_dir = crate::data_dir::workspace_dir("test-repo", "test").unwrap();
-        std::fs::create_dir_all(&workspace_dir).unwrap();
-
-        let provided_dir = dir.path().join("somewhere-else");
-        std::fs::create_dir_all(&provided_dir).unwrap();
-
-        let request = AgentSendRequest {
-            provider: "claude".to_string(),
-            model_id: "opus-1m".to_string(),
-            prompt: String::new(),
-            prompt_prefix: None,
-            resume_only: true,
-            session_id: Some("provider-session-1".to_string()),
-            helmor_session_id: Some("s1".to_string()),
-            working_directory: Some(provided_dir.display().to_string()),
-            effort_level: None,
-            permission_mode: Some("plan".to_string()),
-            fast_mode: None,
-            user_message_id: None,
-            files: None,
-            images: None,
-            kanban_workspace_id: None,
-            kanban_snapshot: None,
-            goal_title: None,
-            goal_description: None,
-        };
-
-        let resolved = resolve_stream_working_directory(&request).unwrap();
-        assert_eq!(resolved, workspace_dir);
-
-        std::env::remove_var("HELMOR_DATA_DIR");
-    }
-
-    #[test]
-    fn resume_stream_errors_when_session_workspace_is_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
-        std::env::set_var("HELMOR_DATA_DIR", dir.path());
-
-        let db_path = setup_test_db(dir.path());
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
-            [],
-        )
-        .unwrap();
-
-        let request = AgentSendRequest {
-            provider: "claude".to_string(),
-            model_id: "opus-1m".to_string(),
-            prompt: String::new(),
-            prompt_prefix: None,
-            resume_only: true,
-            session_id: Some("provider-session-1".to_string()),
-            helmor_session_id: Some("s1".to_string()),
-            working_directory: None,
-            effort_level: None,
-            permission_mode: Some("plan".to_string()),
-            fast_mode: None,
-            user_message_id: None,
-            files: None,
-            images: None,
-            kanban_workspace_id: None,
-            kanban_snapshot: None,
-            goal_title: None,
-            goal_description: None,
-        };
-
-        let error = resolve_stream_working_directory(&request).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Workspace directory is missing for resumed session"),);
-        assert_eq!(
-            crate::error::extract_code(&error),
-            crate::error::ErrorCode::WorkspaceBroken,
         );
 
         std::env::remove_var("HELMOR_DATA_DIR");
@@ -1311,35 +1006,5 @@ mod tests {
         assert_eq!(messages[3].role, PipelineRole::Assistant);
 
         std::env::remove_var("HELMOR_DATA_DIR");
-    }
-
-    #[test]
-    fn build_elicitation_response_sidecar_request_serializes_expected_payload() {
-        let request = ElicitationResponseRequest {
-            elicitation_id: "elicitation-1".to_string(),
-            action: "accept".to_string(),
-            content: Some(serde_json::json!({
-                "name": "Helmor",
-                "approved": true,
-            })),
-        };
-
-        let sidecar_request = build_elicitation_response_sidecar_request(&request);
-        assert_eq!(sidecar_request.method, "elicitationResponse");
-        let mut serialized = serde_json::to_value(&sidecar_request).unwrap();
-        serialized["id"] = serde_json::json!("<uuid>");
-        assert_yaml_snapshot!(
-            serialized,
-            @r#"
-id: "<uuid>"
-method: elicitationResponse
-params:
-  action: accept
-  content:
-    approved: true
-    name: Helmor
-  elicitationId: elicitation-1
-        "#
-        );
     }
 }

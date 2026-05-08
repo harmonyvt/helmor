@@ -42,7 +42,7 @@ export type MockWorkspaceGroup = {
 export type MockSession = {
 	id: string;
 	title: string;
-	provider: "claude" | "codex" | "pi";
+	provider: "claude" | "codex";
 	active?: boolean;
 	unread?: boolean;
 	streaming?: boolean;

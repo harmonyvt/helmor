@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { AssistantToolCall } from "./tool-call";
 
@@ -76,20 +76,5 @@ describe("AssistantToolCall default-collapsed", () => {
 		expect(details!.open).toBe(false);
 		// Output content should not be rendered until the user opens the details.
 		expect(screen.queryByText(/drwxr-xr-x/)).not.toBeInTheDocument();
-	});
-
-	it("renders Pi read tools as normal file reads instead of generic MCP rows", () => {
-		const { container } = render(
-			<AssistantToolCall
-				toolName="mcp__pi__read"
-				args={{ path: "/workspace/src/App.tsx", limit: 20 }}
-				result="content"
-			/>,
-		);
-		const view = within(container);
-
-		expect(view.getByText("Read 20 lines")).toBeInTheDocument();
-		expect(view.getByText("App.tsx")).toBeInTheDocument();
-		expect(view.queryByText("via pi")).not.toBeInTheDocument();
 	});
 });

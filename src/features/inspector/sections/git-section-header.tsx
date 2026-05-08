@@ -1,5 +1,5 @@
-import { ChevronsRight, ExternalLink, RefreshCw } from "lucide-react";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { ChevronsRight, ExternalLink } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import {
@@ -65,42 +65,6 @@ function getShortcutIdForCommitMode(
 	}
 }
 
-function PrStatusRefreshButton({
-	isRefreshing,
-	onRefresh,
-}: {
-	isRefreshing: boolean;
-	onRefresh: () => Promise<void>;
-}) {
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon"
-					aria-label="Refresh PR status"
-					className="size-6 shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
-					disabled={isRefreshing}
-					onClick={() => void onRefresh()}
-				>
-					<RefreshCw
-						size={12}
-						strokeWidth={2}
-						className={isRefreshing ? "animate-spin" : ""}
-					/>
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent
-				side="bottom"
-				className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
-			>
-				Refresh PR status
-			</TooltipContent>
-		</Tooltip>
-	);
-}
-
 export type GitSectionHeaderProps = {
 	commitButtonMode: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
@@ -126,7 +90,6 @@ export type GitSectionHeaderProps = {
 	onChangeRequestClick?: () => void;
 	onCommit?: () => void | Promise<void>;
 	onContinueWorkspace?: () => void | Promise<void>;
-	onRefreshPrStatus?: () => Promise<void>;
 	isContinuingWorkspace?: boolean;
 	className?: string;
 };
@@ -144,20 +107,9 @@ export function GitSectionHeader({
 	onChangeRequestClick,
 	onCommit,
 	onContinueWorkspace,
-	onRefreshPrStatus,
 	isContinuingWorkspace = false,
 	className,
 }: GitSectionHeaderProps) {
-	const [isRefreshingPr, setIsRefreshingPr] = useState(false);
-	const handleRefreshPrStatus = useCallback(async () => {
-		if (!onRefreshPrStatus || isRefreshingPr) return;
-		setIsRefreshingPr(true);
-		try {
-			await onRefreshPrStatus();
-		} finally {
-			setIsRefreshingPr(false);
-		}
-	}, [onRefreshPrStatus, isRefreshingPr]);
 	const { settings } = useSettings();
 	const gitHeaderHighlightClass =
 		getGitSectionHeaderHighlightClass(commitButtonMode);
@@ -181,17 +133,27 @@ export function GitSectionHeader({
 	//   - Background polling on stable data (would be noisy).
 	//   - Active lifecycle phases (creating/streaming/verifying) — the button
 	//     itself shows a busy spinner, additional shimmer is redundant.
-	const isComputing = isRefreshing || commitButtonState === "disabled";
+	const [forgeConnecting, setForgeConnecting] = useState(false);
+	const isComputing =
+		isRefreshing || commitButtonState === "disabled" || forgeConnecting;
 	const showShimmer = useMinDisplayDuration(
 		isComputing,
 		SHIMMER_MIN_DISPLAY_MS,
 	);
 
-	const cliStatus = forgeDetection?.cli ?? null;
-	const cliNeedsAttention =
-		cliStatus?.status === "unauthenticated" ||
-		forgeRemoteState === "unauthenticated";
-	const showForgeOnboarding = cliNeedsAttention && forgeDetection !== null;
+	// Per-repo auth state is the source of truth in the multi-account
+	// architecture: `forgeRemoteState` already covers both "no accounts
+	// at all" (per-repo lookup fails because there's nothing to bind)
+	// and "this repo's bound account is broken". The legacy
+	// `cliStatus.status === "unauthenticated"` clause was redundant
+	// global-state plumbing.
+	const showForgeOnboarding =
+		forgeRemoteState === "unauthenticated" && forgeDetection !== null;
+	useEffect(() => {
+		if (!showForgeOnboarding) {
+			setForgeConnecting(false);
+		}
+	}, [showForgeOnboarding]);
 	const showButton =
 		hasChanges ||
 		commitButtonState === "busy" ||
@@ -199,7 +161,6 @@ export function GitSectionHeader({
 		showForgeOnboarding;
 	const isMergeRequest = forgeDetection?.provider === "gitlab";
 	const showChangeRequest = changeRequest !== null && !showForgeOnboarding;
-	const showRefreshPrStatus = Boolean(onRefreshPrStatus);
 	const showContinue = commitButtonMode === "merged" && showChangeRequest;
 	const headerRef = useRef<HTMLDivElement | null>(null);
 	const changeRequestRef = useRef<HTMLDivElement | null>(null);
@@ -313,19 +274,9 @@ export function GitSectionHeader({
 				className="flex shrink-0 items-center gap-1.5"
 			>
 				{!showChangeRequest ? (
-					<>
-						<span
-							className={cn(INSPECTOR_SECTION_TITLE_CLASS, "translate-y-px")}
-						>
-							Git
-						</span>
-						{showRefreshPrStatus && (
-							<PrStatusRefreshButton
-								isRefreshing={isRefreshingPr}
-								onRefresh={handleRefreshPrStatus}
-							/>
-						)}
-					</>
+					<span className={cn(INSPECTOR_SECTION_TITLE_CLASS, "translate-y-px")}>
+						Git
+					</span>
 				) : (
 					(() => {
 						const button = (
@@ -371,28 +322,18 @@ export function GitSectionHeader({
 							? "Open merge request"
 							: "Open pull request";
 						return (
-							<>
-								<Tooltip>
-									<TooltipTrigger asChild>{button}</TooltipTrigger>
-									<TooltipContent
-										side="bottom"
-										className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
-									>
-										<span className="truncate">{openLabel}</span>
-										{openChangeRequestShortcut ? (
-											<InlineShortcutDisplay
-												hotkey={openChangeRequestShortcut}
-											/>
-										) : null}
-									</TooltipContent>
-								</Tooltip>
-								{showRefreshPrStatus && (
-									<PrStatusRefreshButton
-										isRefreshing={isRefreshingPr}
-										onRefresh={handleRefreshPrStatus}
-									/>
-								)}
-							</>
+							<Tooltip>
+								<TooltipTrigger asChild>{button}</TooltipTrigger>
+								<TooltipContent
+									side="bottom"
+									className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
+								>
+									<span className="truncate">{openLabel}</span>
+									{openChangeRequestShortcut ? (
+										<InlineShortcutDisplay hotkey={openChangeRequestShortcut} />
+									) : null}
+								</TooltipContent>
+							</Tooltip>
 						);
 					})()
 				)}
@@ -402,7 +343,8 @@ export function GitSectionHeader({
 					<ForgeCliTrigger
 						detection={forgeDetection}
 						workspaceId={workspaceId}
-						authRequired={forgeRemoteState === "unauthenticated"}
+						connecting={forgeConnecting}
+						onConnectingChange={setForgeConnecting}
 					/>
 				) : (
 					<div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">

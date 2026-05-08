@@ -7,7 +7,6 @@ use chrono::Utc;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
-#[cfg(any(target_os = "macos", test))]
 struct ClaudeCredentialsFile {
     #[serde(rename = "claudeAiOauth")]
     claude_ai_oauth: Option<ClaudeOAuthCredentials>,
@@ -37,7 +36,6 @@ impl ClaudeOAuthCredentials {
 /// fallback file). Accepts both the nested Claude-CLI shape
 /// (`{"claudeAiOauth": {...}}`) and the flat shape so the same code can
 /// consume hand-edited overrides.
-#[cfg(any(target_os = "macos", test))]
 pub(super) fn parse_credentials(data: &[u8]) -> Option<ClaudeOAuthCredentials> {
     serde_json::from_slice::<ClaudeCredentialsFile>(data)
         .ok()

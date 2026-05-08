@@ -7,6 +7,7 @@ import { useUiSyncBridge } from "./use-ui-sync-bridge";
 
 const apiMocks = vi.hoisted(() => ({
 	subscribeUiMutations: vi.fn(),
+	unlistenUiMutations: vi.fn(),
 }));
 
 let capturedSubscription: ((event: UiMutationEvent) => void) | null = null;
@@ -18,6 +19,7 @@ vi.mock("@/lib/api", async () => {
 		subscribeUiMutations: apiMocks.subscribeUiMutations.mockImplementation(
 			async (callback: (event: UiMutationEvent) => void) => {
 				capturedSubscription = callback;
+				return apiMocks.unlistenUiMutations;
 			},
 		),
 	};
@@ -33,6 +35,7 @@ describe("useUiSyncBridge", () => {
 	beforeEach(() => {
 		capturedSubscription = null;
 		apiMocks.subscribeUiMutations.mockClear();
+		apiMocks.unlistenUiMutations.mockClear();
 	});
 
 	it("invalidates the expected query families for workspace git state changes", async () => {
@@ -44,7 +47,6 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends: vi.fn(),
 				reloadSettings: vi.fn(),
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
@@ -86,14 +88,12 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends,
 				reloadSettings: vi.fn(),
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
 		act(() => {
 			capturedSubscription?.({
 				type: "pendingCliSendQueued",
-				pendingSendId: "pending-1",
 				workspaceId: "workspace-1",
 				sessionId: "session-1",
 				prompt: "hello",
@@ -116,7 +116,6 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends: vi.fn(),
 				reloadSettings: vi.fn(),
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
@@ -132,11 +131,11 @@ describe("useUiSyncBridge", () => {
 				queryKey: helmorQueryKeys.workspaceForge("workspace-1"),
 			});
 		});
-		// Settings → Account stores CLI auth under a separate cache key; the
-		// bridge fans the same backend signal out to it so a stale "ready"
-		// in Account can't survive an auth flip detected elsewhere.
+		// Settings → Account renders the per-account roster from this
+		// cache; the bridge fans the same backend signal out so a fresh
+		// auth flip detected elsewhere shows up there too.
 		expect(invalidateQueries).toHaveBeenCalledWith({
-			queryKey: helmorQueryKeys.forgeCliStatusAll,
+			queryKey: helmorQueryKeys.forgeAccountsAll,
 		});
 	});
 
@@ -149,7 +148,6 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends: vi.fn(),
 				reloadSettings: vi.fn(),
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
@@ -183,7 +181,6 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends: vi.fn(),
 				reloadSettings,
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
@@ -214,5 +211,25 @@ describe("useUiSyncBridge", () => {
 		await waitFor(() => {
 			expect(reloadSettings).toHaveBeenCalledOnce();
 		});
+	});
+
+	it("unsubscribes from backend mutations on unmount", async () => {
+		const queryClient = makeClient();
+
+		const { unmount } = renderHook(() =>
+			useUiSyncBridge({
+				queryClient,
+				processPendingCliSends: vi.fn(),
+				reloadSettings: vi.fn(),
+			}),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.subscribeUiMutations).toHaveBeenCalledOnce();
+		});
+
+		unmount();
+
+		expect(apiMocks.unlistenUiMutations).toHaveBeenCalledOnce();
 	});
 });
