@@ -1,43 +1,61 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import type { ComponentProps } from "react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
+import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 
 const apiMockState = vi.hoisted(() => ({
+	createSession: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	listSlashCommands: vi.fn(),
 	listWorkspaceLinkedDirectories: vi.fn(),
 	setWorkspaceLinkedDirectories: vi.fn(),
-	mutateCodexGoal: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async () => {
 	const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
 	return {
 		...actual,
+		createSession: apiMockState.createSession,
+		loadSessionThreadMessages: apiMockState.loadSessionThreadMessages,
 		listSlashCommands: apiMockState.listSlashCommands,
 		listWorkspaceLinkedDirectories: apiMockState.listWorkspaceLinkedDirectories,
 		setWorkspaceLinkedDirectories: apiMockState.setWorkspaceLinkedDirectories,
-		mutateCodexGoal: apiMockState.mutateCodexGoal,
 	};
 });
 
+vi.mock("./provider-swap-dialog", () => ({
+	ProviderSwapDialog: ({
+		onChoose,
+		onCancel,
+	}: {
+		onChoose: (choice: "bring-history" | "start-fresh") => void;
+		onCancel: () => void;
+	}) => (
+		<div data-testid="provider-swap-dialog">
+			<button type="button" onClick={() => onChoose("bring-history")}>
+				Bring history
+			</button>
+			<button type="button" onClick={() => onChoose("start-fresh")}>
+				Start fresh
+			</button>
+			<button type="button" onClick={onCancel}>
+				Cancel
+			</button>
+		</div>
+	),
+}));
+
 type PickHandler = (entry: unknown) => void;
 type RemoveHandler = (path: string) => void;
-
-type ComposerSubmitHandler = (
-	prompt: string,
-	imagePaths: string[],
-	filePaths: string[],
-	customTags: unknown[],
-	options?: {
-		permissionModeOverride?: string;
-		oppositeFollowUp?: boolean;
-		startSubmitMode?: StartSubmitMode;
-	},
-) => void;
 
 const composerMockState = vi.hoisted(() => ({
 	renders: [] as string[],
@@ -53,13 +71,10 @@ const composerMockState = vi.hoisted(() => ({
 	lastOnRemoveLinkedDirectory: null as RemoveHandler | null,
 	lastAddDirCandidates: [] as readonly unknown[],
 	lastOnPickAddDir: null as PickHandler | null,
-	lastOnSubmit: null as ComposerSubmitHandler | null,
-	lastStartSubmitMode: null as StartSubmitMode | null,
-	lastOnStartSubmitModeChange: null as ((mode: StartSubmitMode) => void) | null,
 	lastOnSelectModel: null as ((modelId: string) => void) | null,
-	lastOnSelectEffort: null as ((level: string) => void) | null,
-	lastOnChangePermissionMode: null as ((mode: string) => void) | null,
-	lastOnChangeFastMode: null as ((enabled: boolean) => void) | null,
+	lastPlanReview: null as unknown,
+	lastOnImplementPlanInCleanThread: null as ((plan: unknown) => void) | null,
+	lastAgentType: null as "claude" | "codex" | "pi" | null,
 }));
 
 vi.mock("./index", async () => {
@@ -69,6 +84,7 @@ vi.mock("./index", async () => {
 		WorkspaceComposer: (props: {
 			contextKey: string;
 			selectedModelId: string | null;
+			onSelectModel: (modelId: string) => void;
 			fastMode?: boolean;
 			disabled?: boolean;
 			submitDisabled?: boolean;
@@ -82,15 +98,9 @@ vi.mock("./index", async () => {
 			onRemoveLinkedDirectory?: RemoveHandler;
 			addDirCandidates?: readonly unknown[];
 			onPickAddDir?: PickHandler;
-			onSubmit?: ComposerSubmitHandler;
-			startSubmitMode?: StartSubmitMode;
-			onStartSubmitModeChange?: (mode: StartSubmitMode) => void;
-			onSelectModel?: (modelId: string) => void;
-			effortLevel?: string;
-			onSelectEffort?: (level: string) => void;
-			permissionMode?: string;
-			onChangePermissionMode?: (mode: string) => void;
-			onChangeFastMode?: (enabled: boolean) => void;
+			planReview?: unknown;
+			onImplementPlanInCleanThread?: (plan: unknown) => void;
+			agentType?: "claude" | "codex" | "pi" | null;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -101,15 +111,11 @@ vi.mock("./index", async () => {
 				...(props.addDirCandidates ?? []),
 			];
 			composerMockState.lastOnPickAddDir = props.onPickAddDir ?? null;
-			composerMockState.lastOnSubmit = props.onSubmit ?? null;
-			composerMockState.lastStartSubmitMode = props.startSubmitMode ?? null;
-			composerMockState.lastOnStartSubmitModeChange =
-				props.onStartSubmitModeChange ?? null;
-			composerMockState.lastOnSelectModel = props.onSelectModel ?? null;
-			composerMockState.lastOnSelectEffort = props.onSelectEffort ?? null;
-			composerMockState.lastOnChangePermissionMode =
-				props.onChangePermissionMode ?? null;
-			composerMockState.lastOnChangeFastMode = props.onChangeFastMode ?? null;
+			composerMockState.lastOnSelectModel = props.onSelectModel;
+			composerMockState.lastPlanReview = props.planReview ?? null;
+			composerMockState.lastOnImplementPlanInCleanThread =
+				props.onImplementPlanInCleanThread ?? null;
+			composerMockState.lastAgentType = props.agentType ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -121,10 +127,9 @@ vi.mock("./index", async () => {
 				<div
 					data-testid="workspace-composer-mock"
 					data-fast-mode={props.fastMode ? "on" : "off"}
-					data-effort-level={props.effortLevel ?? ""}
-					data-permission-mode={props.permissionMode ?? ""}
 					data-disabled={props.disabled ? "true" : "false"}
 					data-submit-disabled={props.submitDisabled ? "true" : "false"}
+					data-agent-type={props.agentType ?? "none"}
 				>
 					{props.contextKey}:{props.selectedModelId ?? "none"}
 				</div>
@@ -134,7 +139,6 @@ vi.mock("./index", async () => {
 });
 
 import { WorkspaceComposerContainer } from "./container";
-import type { StartSubmitMode } from "./start-submit-mode";
 
 const MODEL_SECTIONS = [
 	{
@@ -161,6 +165,19 @@ const MODEL_SECTIONS = [
 				cliModel: "gpt-5.4",
 				effortLevels: ["low", "medium", "high"],
 				supportsFastMode: true,
+			},
+		],
+	},
+	{
+		id: "pi",
+		label: "Pi",
+		options: [
+			{
+				id: "pi-gpt-5.4",
+				provider: "pi",
+				label: "Pi · GPT-5.4",
+				cliModel: "azure-openai-responses/gpt-5.4",
+				effortLevels: ["low", "medium", "high"],
 			},
 		],
 	},
@@ -236,20 +253,21 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.renders = [];
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
-		composerMockState.lastOnSubmit = null;
 		composerMockState.lastOnSelectModel = null;
-		composerMockState.lastOnSelectEffort = null;
-		composerMockState.lastOnChangePermissionMode = null;
-		composerMockState.lastOnChangeFastMode = null;
+		composerMockState.lastPlanReview = null;
+		composerMockState.lastOnImplementPlanInCleanThread = null;
+		composerMockState.lastAgentType = null;
+		apiMockState.createSession.mockReset();
+		apiMockState.createSession.mockResolvedValue({ sessionId: "session-new" });
+		apiMockState.loadSessionThreadMessages.mockReset();
+		apiMockState.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMockState.listSlashCommands.mockReset();
-		apiMockState.listWorkspaceLinkedDirectories.mockReset();
-		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
-		apiMockState.setWorkspaceLinkedDirectories.mockReset();
-		apiMockState.mutateCodexGoal.mockReset();
-		apiMockState.mutateCodexGoal.mockResolvedValue(undefined);
 		apiMockState.listSlashCommands.mockResolvedValue({
 			commands: [],
 		});
+		apiMockState.listWorkspaceLinkedDirectories.mockReset();
+		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
+		apiMockState.setWorkspaceLinkedDirectories.mockReset();
 	});
 
 	afterEach(() => {
@@ -311,43 +329,51 @@ describe("WorkspaceComposerContainer", () => {
 		);
 		expect(composerMockState.mounts).toBe(1);
 		expect(composerMockState.unmounts).toBe(0);
-		// Allow extra synchronous renders from react-query observers
-		// (CodexGoal banner subscribes to a per-session query). The
-		// invariant we care about: no remount, and the session id seen
-		// in the rendered child stream eventually flips to session-2.
-		expect(composerMockState.renders[0]).toBe("session:session-1");
-		expect(
-			composerMockState.renders[composerMockState.renders.length - 1],
-		).toBe("session:session-2");
+		expect(composerMockState.renders).toEqual([
+			"session:session-1",
+			"session:session-2",
+		]);
 	});
 
-	it("uses the context-key model selection before a workspace exists", () => {
+	it("passes the Pi provider through to the composer for Pi sessions", () => {
 		const queryClient = createHelmorQueryClient();
-		const handleSelectModel = vi.fn();
 		queryClient.setQueryData(
 			helmorQueryKeys.agentModelSections,
 			MODEL_SECTIONS,
 		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			...WORKSPACE_SESSIONS,
+			{
+				...WORKSPACE_SESSIONS[0],
+				id: "session-pi",
+				title: "Pi session",
+				agentType: "pi",
+				model: "pi-gpt-5.4",
+				active: false,
+			},
+		]);
 
 		render(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposerContainer
-					displayedWorkspaceId={null}
-					displayedSessionId={null}
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-pi"
 					disabled={false}
-					forceAvailable
-					contextKeyOverride="start:repo:repo-1"
 					sending={false}
 					sendError={null}
 					restoreDraft={null}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreNonce={0}
-					modelSelections={{ "start:repo:repo-1": "gpt-5.4" }}
+					modelSelections={{}}
 					effortLevels={{}}
 					permissionModes={{}}
 					fastModes={{}}
-					onSelectModel={handleSelectModel}
+					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
 					onChangeFastMode={vi.fn()}
@@ -356,81 +382,14 @@ describe("WorkspaceComposerContainer", () => {
 			</QueryClientProvider>,
 		);
 
-		expect(screen.getByTestId("workspace-composer-mock")).toHaveTextContent(
-			"start:repo:repo-1:gpt-5.4",
-		);
-
-		composerMockState.lastOnSelectModel?.("opus-1m");
-
-		expect(handleSelectModel).toHaveBeenCalledWith(
-			"start:repo:repo-1",
-			"opus-1m",
-		);
+		const composer = screen.getByTestId("workspace-composer-mock");
+		expect(composer).toHaveTextContent("session:session-pi:pi-gpt-5.4");
+		expect(composer).toHaveAttribute("data-agent-type", "pi");
+		expect(composerMockState.lastAgentType).toBe("pi");
 	});
 
-	it("uses context-key effort/plan/fast selections before a workspace exists", () => {
+	it("filters available models for specialized chat surfaces", () => {
 		const queryClient = createHelmorQueryClient();
-		const handleSelectEffort = vi.fn();
-		const handleChangePermissionMode = vi.fn();
-		const handleChangeFastMode = vi.fn();
-		queryClient.setQueryData(
-			helmorQueryKeys.agentModelSections,
-			MODEL_SECTIONS,
-		);
-
-		render(
-			<QueryClientProvider client={queryClient}>
-				<WorkspaceComposerContainer
-					displayedWorkspaceId={null}
-					displayedSessionId={null}
-					disabled={false}
-					forceAvailable
-					contextKeyOverride="start:repo:repo-1"
-					sending={false}
-					sendError={null}
-					restoreDraft={null}
-					restoreImages={[]}
-					restoreFiles={[]}
-					restoreNonce={0}
-					modelSelections={{ "start:repo:repo-1": "gpt-5.4" }}
-					effortLevels={{ "start:repo:repo-1": "low" }}
-					permissionModes={{ "start:repo:repo-1": "plan" }}
-					fastModes={{ "start:repo:repo-1": true }}
-					onSelectModel={vi.fn()}
-					onSelectEffort={handleSelectEffort}
-					onChangePermissionMode={handleChangePermissionMode}
-					onChangeFastMode={handleChangeFastMode}
-					onSubmit={vi.fn()}
-				/>
-			</QueryClientProvider>,
-		);
-
-		const mock = screen.getByTestId("workspace-composer-mock");
-		expect(mock).toHaveAttribute("data-effort-level", "low");
-		expect(mock).toHaveAttribute("data-permission-mode", "plan");
-		expect(mock).toHaveAttribute("data-fast-mode", "on");
-
-		composerMockState.lastOnSelectEffort?.("medium");
-		composerMockState.lastOnChangePermissionMode?.("bypassPermissions");
-		composerMockState.lastOnChangeFastMode?.(false);
-
-		expect(handleSelectEffort).toHaveBeenCalledWith(
-			"start:repo:repo-1",
-			"medium",
-		);
-		expect(handleChangePermissionMode).toHaveBeenCalledWith(
-			"start:repo:repo-1",
-			"bypassPermissions",
-		);
-		expect(handleChangeFastMode).toHaveBeenCalledWith(
-			"start:repo:repo-1",
-			false,
-		);
-	});
-
-	it("forwards the start submit mode into the composer payload", () => {
-		const queryClient = createHelmorQueryClient();
-		const handleSubmit = vi.fn();
 		queryClient.setQueryData(
 			helmorQueryKeys.agentModelSections,
 			MODEL_SECTIONS,
@@ -464,27 +423,19 @@ describe("WorkspaceComposerContainer", () => {
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
 					onChangeFastMode={vi.fn()}
-					onSubmit={handleSubmit}
-					startSubmitMenu
+					onSubmit={vi.fn()}
+					modelFilter={(model) => model.provider === "pi"}
 				/>
 			</QueryClientProvider>,
 		);
 
-		composerMockState.lastOnSubmit?.("Save this for later.", [], [], [], {
-			startSubmitMode: "saveForLater",
-		});
-
-		expect(handleSubmit).toHaveBeenCalledWith(
-			expect.objectContaining({
-				prompt: "Save this for later.",
-				startSubmitMode: "saveForLater",
-			}),
-		);
+		const composer = screen.getByTestId("workspace-composer-mock");
+		expect(composer).toHaveTextContent("session:session-1:pi-gpt-5.4");
+		expect(composer).toHaveAttribute("data-agent-type", "pi");
 	});
 
-	it("persists the selected start submit mode in settings", () => {
+	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {
 		const queryClient = createHelmorQueryClient();
-		const updateSettings = vi.fn();
 		queryClient.setQueryData(
 			helmorQueryKeys.agentModelSections,
 			MODEL_SECTIONS,
@@ -496,80 +447,6 @@ describe("WorkspaceComposerContainer", () => {
 		queryClient.setQueryData(
 			helmorQueryKeys.workspaceSessions("workspace-1"),
 			WORKSPACE_SESSIONS,
-		);
-
-		render(
-			<SettingsContext.Provider
-				value={{
-					settings: {
-						...DEFAULT_SETTINGS,
-						kanbanViewState: {
-							...DEFAULT_SETTINGS.kanbanViewState,
-							createState: "backlog",
-						},
-					},
-					isLoaded: true,
-					updateSettings,
-				}}
-			>
-				<QueryClientProvider client={queryClient}>
-					<WorkspaceComposerContainer
-						displayedWorkspaceId="workspace-1"
-						displayedSessionId="session-1"
-						disabled={false}
-						sending={false}
-						sendError={null}
-						restoreDraft={null}
-						restoreImages={[]}
-						restoreFiles={[]}
-						restoreNonce={0}
-						modelSelections={{}}
-						effortLevels={{}}
-						permissionModes={{}}
-						fastModes={{}}
-						onSelectModel={vi.fn()}
-						onSelectEffort={vi.fn()}
-						onChangePermissionMode={vi.fn()}
-						onChangeFastMode={vi.fn()}
-						onSubmit={vi.fn()}
-						startSubmitMenu
-					/>
-				</QueryClientProvider>
-			</SettingsContext.Provider>,
-		);
-
-		expect(composerMockState.lastStartSubmitMode).toBe("saveForLater");
-
-		composerMockState.lastOnStartSubmitModeChange?.("startNow");
-
-		expect(updateSettings).toHaveBeenCalledWith({
-			kanbanViewState: {
-				...DEFAULT_SETTINGS.kanbanViewState,
-				createState: "in-progress",
-			},
-		});
-	});
-
-	it("auto-submits queued CLI prompts using the model + permission_mode pinned on the session row", async () => {
-		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(
-			helmorQueryKeys.agentModelSections,
-			MODEL_SECTIONS,
-		);
-		queryClient.setQueryData(
-			helmorQueryKeys.workspaceDetail("workspace-1"),
-			WORKSPACE_DETAIL,
-		);
-		// CLI-send path pins the resolved model + permissionMode onto the
-		// session row before queuing the prompt; the composer reads them off
-		// `currentSession` rather than off the (now prompt-only) handoff.
-		queryClient.setQueryData(
-			helmorQueryKeys.workspaceSessions("workspace-1"),
-			WORKSPACE_SESSIONS.map((session) =>
-				session.id === "session-1"
-					? { ...session, model: "gpt-5.4", permissionMode: "plan" }
-					: session,
-			),
 		);
 
 		const onSubmit = vi.fn();
@@ -599,6 +476,8 @@ describe("WorkspaceComposerContainer", () => {
 					pendingPromptForSession={{
 						sessionId: "session-1",
 						prompt: "Plan the fix",
+						modelId: "gpt-5.4",
+						permissionMode: "plan",
 					}}
 					onPendingPromptConsumed={onPendingPromptConsumed}
 				/>
@@ -617,6 +496,199 @@ describe("WorkspaceComposerContainer", () => {
 			}),
 		);
 		expect(onPendingPromptConsumed).toHaveBeenCalledTimes(1);
+	});
+
+	it("seeds the new session and empty thread cache before selecting a switched provider model", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+		apiMockState.loadSessionThreadMessages.mockResolvedValue([
+			{
+				id: "m1",
+				role: "user",
+				content: [{ type: "text", id: "m1:t", text: "hello" }],
+				createdAt: "2026-04-05T00:00:00Z",
+			},
+		]);
+
+		const onSelectModel = vi.fn();
+		const onSwitchSession = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={onSelectModel}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSwitchSession={onSwitchSession}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(composerMockState.lastOnSelectModel).not.toBeNull();
+		composerMockState.lastOnSelectModel?.("gpt-5.4");
+		fireEvent.click(await screen.findByText("Bring history"));
+
+		await waitFor(() => {
+			expect(onSelectModel).toHaveBeenCalledWith(
+				"session:session-new",
+				"gpt-5.4",
+			);
+		});
+		expect(onSwitchSession).toHaveBeenCalledWith("session-new");
+		expect(apiMockState.createSession).toHaveBeenCalledWith("workspace-1");
+		expect(apiMockState.loadSessionThreadMessages).toHaveBeenCalledWith(
+			"session-1",
+		);
+		expect(
+			queryClient
+				.getQueryData<typeof WORKSPACE_SESSIONS>(
+					helmorQueryKeys.workspaceSessions("workspace-1"),
+				)
+				?.some((session) => session.id === "session-new"),
+		).toBe(true);
+		expect(
+			queryClient.getQueryData(sessionThreadCacheKey("session-new")),
+		).toEqual([]);
+	});
+
+	it("passes through pending prompt permission mode without a model override", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		const onSubmit = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={onSubmit}
+					pendingPromptForSession={{
+						sessionId: "session-1",
+						prompt: "Implement this plan",
+						permissionMode: "bypassPermissions",
+					}}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Implement this plan",
+				permissionMode: "bypassPermissions",
+			}),
+		);
+	});
+
+	it("creates a clean implementation prompt for plan review actions", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		const onImplementPlanInCleanThread = vi.fn();
+		const planReview = {
+			type: "plan-review" as const,
+			toolUseId: "tool-plan-1",
+			toolName: "ExitPlanMode",
+			plan: "1. Do the thing",
+			planFilePath: "/tmp/plan.md",
+			allowedPrompts: [],
+		};
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={vi.fn()}
+					planReview={planReview}
+					onImplementPlanInCleanThread={onImplementPlanInCleanThread}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(composerMockState.lastPlanReview).toBe(planReview);
+		composerMockState.lastOnImplementPlanInCleanThread?.(planReview);
+
+		expect(onImplementPlanInCleanThread).toHaveBeenCalledWith(planReview);
 	});
 
 	it("loads slash commands when the composer mounts", async () => {
@@ -977,7 +1049,7 @@ describe("WorkspaceComposerContainer", () => {
 			});
 		});
 
-		it("adds built-in /compact and /goal commands for Codex sessions", async () => {
+		it("adds a built-in /compact command for Codex sessions", async () => {
 			apiMockState.listSlashCommands.mockResolvedValue({
 				commands: [],
 				isComplete: true,
@@ -989,20 +1061,11 @@ describe("WorkspaceComposerContainer", () => {
 				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
 					"add-dir",
 					"compact",
-					"goal",
 				]);
 			});
 			expect(composerMockState.lastSlashCommands[1]).toEqual({
 				name: "compact",
 				description: "Compact this Codex thread's context",
-				source: "builtin",
-				providers: ["codex"],
-			});
-			expect(composerMockState.lastSlashCommands[2]).toEqual({
-				name: "goal",
-				description:
-					"Set a persistent goal Codex pursues turn-after-turn until done or paused",
-				argumentHint: "<objective>",
 				source: "builtin",
 				providers: ["codex"],
 			});
@@ -1020,148 +1083,6 @@ describe("WorkspaceComposerContainer", () => {
 			// AddDirTypeaheadPlugin dispatches through it when the user
 			// picks a candidate from the inline popup.
 			expect(composerMockState.lastOnPickAddDir).not.toBeNull();
-		});
-	});
-
-	// Regression coverage for the review-flagged bug where typing
-	// `/goal pause` (or `/goal clear`) was interpreted by the sidecar
-	// parser as `{kind: "set", objective: "pause"}` and would silently
-	// overwrite the existing goal. The container intercept must short-
-	// circuit these out-of-band so they go through `mutateCodexGoal`
-	// instead of leaking to the agent stream.
-	describe("/goal pause/clear interception", () => {
-		const ACTIVE_GOAL = {
-			threadId: "t1",
-			objective: "improve test coverage",
-			status: "active" as const,
-			tokenBudget: null,
-			tokensUsed: 100,
-			timeUsedSeconds: 30,
-			createdAt: 0,
-			updatedAt: 0,
-		};
-
-		function setupCodexSessionWithGoal(): {
-			queryClient: ReturnType<typeof createHelmorQueryClient>;
-		} {
-			const queryClient = createHelmorQueryClient();
-			queryClient.setQueryData(
-				helmorQueryKeys.agentModelSections,
-				MODEL_SECTIONS,
-			);
-			queryClient.setQueryData(
-				helmorQueryKeys.workspaceDetail("workspace-1"),
-				WORKSPACE_DETAIL,
-			);
-			queryClient.setQueryData(
-				helmorQueryKeys.workspaceSessions("workspace-1"),
-				WORKSPACE_SESSIONS,
-			);
-			queryClient.setQueryData(
-				helmorQueryKeys.sessionCodexGoal("session-2"),
-				ACTIVE_GOAL,
-			);
-			return { queryClient };
-		}
-
-		type ContainerOnSubmit = ComponentProps<
-			typeof WorkspaceComposerContainer
-		>["onSubmit"];
-
-		function renderCodexComposer(
-			queryClient: ReturnType<typeof createHelmorQueryClient>,
-			onSubmit: ContainerOnSubmit,
-		) {
-			render(
-				<QueryClientProvider client={queryClient}>
-					<TooltipProvider>
-						<SettingsContext.Provider
-							value={{
-								settings: DEFAULT_SETTINGS,
-								updateSettings: vi.fn(),
-								isLoaded: true,
-							}}
-						>
-							<WorkspaceComposerContainer
-								displayedWorkspaceId="workspace-1"
-								displayedSessionId="session-2"
-								disabled={false}
-								sending={false}
-								sendError={null}
-								restoreDraft={null}
-								restoreImages={[]}
-								restoreFiles={[]}
-								restoreNonce={0}
-								modelSelections={{ "session:session-2": "gpt-5.4" }}
-								effortLevels={{}}
-								permissionModes={{}}
-								fastModes={{}}
-								onSelectModel={vi.fn()}
-								onSelectEffort={vi.fn()}
-								onChangePermissionMode={vi.fn()}
-								onChangeFastMode={vi.fn()}
-								onSubmit={onSubmit}
-							/>
-						</SettingsContext.Provider>
-					</TooltipProvider>
-				</QueryClientProvider>,
-			);
-		}
-
-		it("routes /goal pause to mutateCodexGoal and does NOT call onSubmit", async () => {
-			const { queryClient } = setupCodexSessionWithGoal();
-			const onSubmit = vi.fn<ContainerOnSubmit>();
-			renderCodexComposer(queryClient, onSubmit);
-
-			await waitFor(() =>
-				expect(composerMockState.lastOnSubmit).not.toBeNull(),
-			);
-
-			composerMockState.lastOnSubmit?.("/goal pause", [], [], []);
-
-			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledTimes(1);
-			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledWith(
-				"session-2",
-				"pause",
-			);
-			expect(onSubmit).not.toHaveBeenCalled();
-		});
-
-		it("routes /goal clear to mutateCodexGoal and does NOT call onSubmit", async () => {
-			const { queryClient } = setupCodexSessionWithGoal();
-			const onSubmit = vi.fn<ContainerOnSubmit>();
-			renderCodexComposer(queryClient, onSubmit);
-
-			await waitFor(() =>
-				expect(composerMockState.lastOnSubmit).not.toBeNull(),
-			);
-
-			composerMockState.lastOnSubmit?.("/goal clear", [], [], []);
-
-			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledTimes(1);
-			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledWith(
-				"session-2",
-				"clear",
-			);
-			expect(onSubmit).not.toHaveBeenCalled();
-		});
-
-		it("lets /goal resume fall through to onSubmit (sendMessage path)", async () => {
-			const { queryClient } = setupCodexSessionWithGoal();
-			const onSubmit = vi.fn<ContainerOnSubmit>();
-			renderCodexComposer(queryClient, onSubmit);
-
-			await waitFor(() =>
-				expect(composerMockState.lastOnSubmit).not.toBeNull(),
-			);
-
-			composerMockState.lastOnSubmit?.("/goal resume", [], [], []);
-
-			expect(apiMockState.mutateCodexGoal).not.toHaveBeenCalled();
-			expect(onSubmit).toHaveBeenCalledTimes(1);
-			expect(onSubmit).toHaveBeenCalledWith(
-				expect.objectContaining({ prompt: "/goal resume" }),
-			);
 		});
 	});
 });

@@ -1,227 +1,264 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ComposerSubmitPayload } from "./hooks/use-streaming";
+import { QueryClientProvider } from "@tanstack/react-query";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PlanReviewPart, ThreadMessageLike } from "@/lib/api";
+import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
 
-const streamingMocks = vi.hoisted(() => ({
-	handleComposerSubmit: vi.fn(),
-}));
-const composerMocks = vi.hoisted(() => ({
-	props: [] as Array<{ sending?: boolean }>,
+const apiMockState = vi.hoisted(() => ({
+	createSession: vi.fn(),
+	respondToPiUi: vi.fn(),
 }));
 
-vi.mock("@/lib/api", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("@/lib/api")>();
+const composerMockState = vi.hoisted(() => ({
+	lastPlanReview: null as PlanReviewPart | null,
+	lastOnImplementPlanInCleanThread: null as
+		| ((plan: PlanReviewPart) => void | Promise<void>)
+		| null,
+}));
+
+const streamingMockState = vi.hoisted(() => ({
+	lastArgs: null as {
+		onPiUiRequest?: (event: {
+			kind: "piUiRequest";
+			interactionId: string;
+			uiKind: "select" | "confirm" | "input";
+			payload: Record<string, unknown>;
+		}) => void;
+	} | null,
+}));
+
+vi.mock("@/lib/api", async () => {
+	const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
 	return {
 		...actual,
-		loadSessionThreadMessages: vi.fn().mockResolvedValue([]),
+		createSession: apiMockState.createSession,
+		respondToPiUi: apiMockState.respondToPiUi,
 	};
 });
 
+vi.mock("./hooks/use-streaming", () => ({
+	useConversationStreaming: (args: typeof streamingMockState.lastArgs) => {
+		streamingMockState.lastArgs = args;
+		return {
+			activeSendError: null,
+			handleComposerSubmit: vi.fn(),
+			handleDeferredToolResponse: vi.fn(),
+			handleElicitationResponse: vi.fn(),
+			handlePermissionResponse: vi.fn(),
+			handleStopStream: vi.fn(),
+			handleSteerQueued: vi.fn(),
+			handleRemoveQueued: vi.fn(),
+			elicitationResponsePending: false,
+			isSending: false,
+			pendingElicitation: null,
+			pendingDeferredTool: null,
+			pendingPermissions: [],
+			restoreCustomTags: [],
+			restoreDraft: null,
+			restoreFiles: [],
+			restoreImages: [],
+			restoreNonce: 0,
+			sendingSessionIds: new Set<string>(),
+		};
+	},
+}));
+
+vi.mock("@/lib/settings", () => ({
+	useSettings: () => ({ settings: { followUpBehavior: "queue" } }),
+}));
+
+vi.mock("@/lib/use-submit-queue", () => ({
+	EMPTY_QUEUE: [],
+	useSubmitQueue: () => ({
+		queuesBySessionId: new Map(),
+		api: {
+			enqueue: vi.fn(),
+			remove: vi.fn(),
+			shift: vi.fn(),
+		},
+	}),
+}));
+
+vi.mock("@/features/panel/container", () => ({
+	WorkspacePanelContainer: () => <div data-testid="panel" />,
+}));
+
+vi.mock("@/features/panel/message-components/file-link-context", () => ({
+	FileLinkProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 vi.mock("@/features/composer/container", () => ({
-	WorkspaceComposerContainer: (props: { sending?: boolean }) => {
-		composerMocks.props.push(props);
+	WorkspaceComposerContainer: (props: {
+		planReview?: PlanReviewPart | null;
+		onImplementPlanInCleanThread?: (
+			plan: PlanReviewPart,
+		) => void | Promise<void>;
+	}) => {
+		composerMockState.lastPlanReview = props.planReview ?? null;
+		composerMockState.lastOnImplementPlanInCleanThread =
+			props.onImplementPlanInCleanThread ?? null;
 		return <div data-testid="composer" />;
 	},
 }));
 
-vi.mock("./hooks/use-streaming", () => ({
-	useConversationStreaming: () => ({
-		activeSendError: null,
-		handleComposerSubmit: streamingMocks.handleComposerSubmit,
-		handleDeferredToolResponse: vi.fn(),
-		handleElicitationResponse: vi.fn(),
-		handlePermissionResponse: vi.fn(),
-		handleStopStream: vi.fn(),
-		handleSteerQueued: vi.fn(),
-		handleRemoveQueued: vi.fn(),
-		elicitationResponsePending: false,
-		isSending: false,
-		pendingElicitation: null,
-		pendingDeferredTool: null,
-		pendingPermissions: [],
-		restoreCustomTags: [],
-		restoreDraft: null,
-		restoreFiles: [],
-		restoreImages: [],
-		restoreNonce: 0,
-		activeFastPreludes: {},
-		busySessionIds: new Set(),
-	}),
-}));
-
 import { WorkspaceConversationContainer } from "./index";
 
-const MODEL = {
-	id: "gpt-5.4",
-	provider: "codex" as const,
-	label: "GPT-5.4",
-	cliModel: "gpt-5.4",
-};
+function planReviewPart(): PlanReviewPart {
+	return {
+		type: "plan-review",
+		toolUseId: "tool-plan-1",
+		toolName: "ExitPlanMode",
+		plan: "1. Update the UI",
+		planFilePath: "/tmp/plan.md",
+		allowedPrompts: [],
+	};
+}
 
-function renderContainer(
-	pendingPayload: ComposerSubmitPayload,
-	onConsumed = vi.fn(),
-	options: {
-		finalized?: boolean;
-		busySessionIds?: Set<string>;
-		stoppableSessionIds?: Set<string>;
-		workspaceRootPath?: string | null;
-	} = {},
-) {
-	const queryClient = new QueryClient({
-		defaultOptions: { queries: { retry: false } },
-	});
-
-	render(
-		<QueryClientProvider client={queryClient}>
-			<WorkspaceConversationContainer
-				selectedWorkspaceId="workspace-1"
-				displayedWorkspaceId="workspace-1"
-				selectedSessionId="session-1"
-				displayedSessionId="session-1"
-				repoId="repo-1"
-				onSelectSession={vi.fn()}
-				onResolveDisplayedSession={vi.fn()}
-				pendingCreatedWorkspaceSubmit={{
-					id: "pending-1",
-					workspaceId: "workspace-1",
-					sessionId: "session-1",
-					payload: pendingPayload,
-					finalized: options.finalized ?? true,
-				}}
-				onPendingCreatedWorkspaceSubmitConsumed={onConsumed}
-				busySessionIds={options.busySessionIds}
-				stoppableSessionIds={options.stoppableSessionIds}
-				workspaceRootPath={
-					options.workspaceRootPath === undefined
-						? "/tmp/new-workspace"
-						: options.workspaceRootPath
-				}
-				composerOnly
-			/>
-		</QueryClientProvider>,
-	);
+function planReviewMessage(part = planReviewPart()): ThreadMessageLike {
+	return {
+		role: "assistant",
+		id: "msg-plan",
+		content: [part],
+	};
 }
 
 describe("WorkspaceConversationContainer", () => {
 	beforeEach(() => {
-		composerMocks.props = [];
-		streamingMocks.handleComposerSubmit.mockClear();
-	});
-
-	it("dispatches a created workspace submit through the normal send path", async () => {
-		const onConsumed = vi.fn();
-		// App.tsx is now responsible for patching `workingDirectory` onto the
-		// payload (from prepare/finalize response) before flipping
-		// `finalized=true`. This test mirrors that contract: payload arrives
-		// already populated; conversation/index.tsx must dispatch it as-is.
-		const pendingPayload: ComposerSubmitPayload = {
-			prompt: "Build this now",
-			imagePaths: [],
-			filePaths: [],
-			customTags: [],
-			model: MODEL,
-			workingDirectory: "/tmp/new-workspace",
-			effortLevel: "high",
-			permissionMode: "default",
-			fastMode: false,
-		};
-
-		renderContainer(pendingPayload, onConsumed);
-
-		await waitFor(() => {
-			expect(streamingMocks.handleComposerSubmit).toHaveBeenCalledWith(
-				pendingPayload,
-				{
-					sessionId: "session-1",
-					workspaceId: "workspace-1",
-					contextKey: "session:session-1",
-				},
-			);
+		apiMockState.createSession.mockReset();
+		apiMockState.createSession.mockResolvedValue({
+			sessionId: "session-clean",
 		});
-		expect(onConsumed).toHaveBeenCalledWith("pending-1");
+		apiMockState.respondToPiUi.mockReset();
+		apiMockState.respondToPiUi.mockResolvedValue(undefined);
+		composerMockState.lastPlanReview = null;
+		composerMockState.lastOnImplementPlanInCleanThread = null;
+		streamingMockState.lastArgs = null;
 	});
 
-	it("uses payload.workingDirectory verbatim even when workspaceRootPath is null", async () => {
-		// Regression: previously, when the workspaceDetail React Query was
-		// still in-flight on first send (very common for local-mode submits
-		// where finalize is a no-op), `workspaceRootPath` was null and the
-		// container fell back to `payload.workingDirectory` — but the start
-		// composer always seeded that as null too. The result was
-		// `workingDirectory: null` reaching the agent, the CLI defaulting to
-		// process cwd `/`, and the second turn failing with
-		// `bad_resume_failure` because the transcript was written to the
-		// wrong project bucket. With the fix, App.tsx always patches the
-		// payload from prepare/finalize before flipping `finalized=true`.
-		const onConsumed = vi.fn();
-		const pendingPayload: ComposerSubmitPayload = {
-			prompt: "Build this now",
-			imagePaths: [],
-			filePaths: [],
-			customTags: [],
-			model: MODEL,
-			workingDirectory: "/Users/me/repos/foo",
-			effortLevel: "high",
-			permissionMode: "default",
-			fastMode: false,
-		};
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+	});
 
-		renderContainer(pendingPayload, onConsumed, { workspaceRootPath: null });
+	it("renders Pi UI requests through the shared conversation accessory", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onPiUiRequest = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceConversationContainer
+					selectedWorkspaceId="workspace-1"
+					displayedWorkspaceId="workspace-1"
+					selectedSessionId="session-1"
+					displayedSessionId="session-1"
+					onSelectSession={vi.fn()}
+					onResolveDisplayedSession={vi.fn()}
+					onPiUiRequest={onPiUiRequest}
+				/>
+			</QueryClientProvider>,
+		);
+
+		act(() => {
+			streamingMockState.lastArgs?.onPiUiRequest?.({
+				kind: "piUiRequest",
+				interactionId: "interaction-1",
+				uiKind: "select",
+				payload: {
+					title: "Pick a lane",
+					options: ["Backlog", "Done"],
+				},
+			});
+		});
+
+		expect(onPiUiRequest).toHaveBeenCalledWith(
+			expect.objectContaining({ interactionId: "interaction-1" }),
+		);
+		expect(screen.getByText("Pick a lane")).toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
 		await waitFor(() => {
-			expect(streamingMocks.handleComposerSubmit).toHaveBeenCalledWith(
-				pendingPayload,
-				{
-					sessionId: "session-1",
-					workspaceId: "workspace-1",
-					contextKey: "session:session-1",
-				},
+			expect(apiMockState.respondToPiUi).toHaveBeenCalledWith(
+				"interaction-1",
+				"Done",
 			);
 		});
 	});
 
-	it("does not show composer stop while the session is only pending finalize", () => {
-		const pendingPayload: ComposerSubmitPayload = {
-			prompt: "Build this now",
-			imagePaths: [],
-			filePaths: [],
-			customTags: [],
-			model: MODEL,
-			workingDirectory: null,
-			effortLevel: "high",
-			permissionMode: "default",
-			fastMode: false,
-		};
+	it("creates a new session and queues the visible plan prompt for clean-thread implementation", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			[planReviewMessage()],
+		);
+		const onQueuePendingPromptForSession = vi.fn();
+		const onSelectSession = vi.fn();
 
-		renderContainer(pendingPayload, vi.fn(), {
-			finalized: false,
-			busySessionIds: new Set(["session-1"]),
-			stoppableSessionIds: new Set(),
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceConversationContainer
+					selectedWorkspaceId="workspace-1"
+					displayedWorkspaceId="workspace-1"
+					selectedSessionId="session-1"
+					displayedSessionId="session-1"
+					onSelectSession={onSelectSession}
+					onResolveDisplayedSession={vi.fn()}
+					onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => {
+			expect(composerMockState.lastPlanReview?.plan).toBe("1. Update the UI");
 		});
+		await composerMockState.lastOnImplementPlanInCleanThread?.(
+			composerMockState.lastPlanReview!,
+		);
 
-		expect(composerMocks.props.at(-1)?.sending).toBe(false);
+		expect(apiMockState.createSession).toHaveBeenCalledWith("workspace-1", {
+			permissionMode: "bypassPermissions",
+		});
+		await waitFor(() => {
+			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
+				sessionId: "session-clean",
+				prompt:
+					"Implement this plan in a clean thread:\n\nPlan file: /tmp/plan.md\n\n1. Update the UI",
+				permissionMode: "bypassPermissions",
+			});
+		});
+		expect(onSelectSession).toHaveBeenCalledWith("session-clean");
 	});
 
-	it("shows composer stop when the displayed session is stoppable", () => {
-		const pendingPayload: ComposerSubmitPayload = {
-			prompt: "Build this now",
-			imagePaths: [],
-			filePaths: [],
-			customTags: [],
-			model: MODEL,
-			workingDirectory: null,
-			effortLevel: "high",
-			permissionMode: "default",
-			fastMode: false,
-		};
+	it("does not expose clean-thread implementation when queueing is unavailable", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			[planReviewMessage()],
+		);
 
-		renderContainer(pendingPayload, vi.fn(), {
-			finalized: false,
-			busySessionIds: new Set(["session-1"]),
-			stoppableSessionIds: new Set(["session-1"]),
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceConversationContainer
+					selectedWorkspaceId="workspace-1"
+					displayedWorkspaceId="workspace-1"
+					selectedSessionId="session-1"
+					displayedSessionId="session-1"
+					onSelectSession={vi.fn()}
+					onResolveDisplayedSession={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => {
+			expect(composerMockState.lastPlanReview?.plan).toBe("1. Update the UI");
 		});
-
-		expect(composerMocks.props.at(-1)?.sending).toBe(true);
+		expect(composerMockState.lastOnImplementPlanInCleanThread).toBeNull();
 	});
 });

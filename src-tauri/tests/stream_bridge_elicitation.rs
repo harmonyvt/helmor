@@ -1,11 +1,7 @@
-//! Bridge replay test: form / URL user-input requests ride alongside the
-//! pipeline message stream without polluting it (no dropped events, no
-//! cross-talk into the assistant turn timeline).
-
 mod common;
 
 use common::*;
-use helmor_lib::agents::{bridge_user_input_request_event, AgentStreamEvent};
+use helmor_lib::agents::{bridge_elicitation_request_event, AgentStreamEvent};
 use helmor_lib::pipeline::PipelineEmit;
 use insta::assert_yaml_snapshot;
 use serde::Serialize;
@@ -29,14 +25,13 @@ fn replay_stream(lines: &[Value]) -> StreamBridgeSnapshot {
     let mut control_events = Vec::new();
 
     for value in lines {
-        if value.get("type").and_then(Value::as_str) == Some("userInputRequest") {
-            control_events.push(serialize_event(bridge_user_input_request_event(
+        if value.get("type").and_then(Value::as_str) == Some("elicitationRequest") {
+            control_events.push(serialize_event(bridge_elicitation_request_event(
                 "claude",
                 "opus-1m",
                 "claude-opus-4-20250514",
                 Some("provider-session-1".to_string()),
                 "/tmp/helmor",
-                None,
                 value,
             )));
             continue;
@@ -70,7 +65,7 @@ fn replay_stream(lines: &[Value]) -> StreamBridgeSnapshot {
 }
 
 #[test]
-fn form_user_input_replays_alongside_message_stream() {
+fn form_elicitation_replays_alongside_message_stream() {
     let snapshot = replay_stream(&[
         json!({
             "type": "system",
@@ -84,25 +79,23 @@ fn form_user_input_replays_alongside_message_stream() {
             "uuid": "assistant-1",
             "message": {
                 "content": [
-                    { "type": "text", "text": "Before user input." }
+                    { "type": "text", "text": "Before elicitation." }
                 ]
             }
         }),
         json!({
-            "type": "userInputRequest",
-            "userInputId": "user-input-form-1",
-            "source": "design-server",
+            "type": "elicitationRequest",
+            "elicitationId": "elicitation-form-1",
+            "serverName": "design-server",
             "message": "Need structured input",
-            "payload": {
-                "kind": "form",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "name": { "type": "string", "title": "Project name" },
-                        "approved": { "type": "boolean", "title": "Approved" }
-                    },
-                    "required": ["name", "approved"]
-                }
+            "mode": "form",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "title": "Project name" },
+                    "approved": { "type": "boolean", "title": "Approved" }
+                },
+                "required": ["name", "approved"]
             }
         }),
         json!({
@@ -111,7 +104,7 @@ fn form_user_input_replays_alongside_message_stream() {
             "uuid": "assistant-2",
             "message": {
                 "content": [
-                    { "type": "text", "text": "After user input." }
+                    { "type": "text", "text": "After elicitation." }
                 ]
             }
         }),
@@ -130,7 +123,7 @@ fn form_user_input_replays_alongside_message_stream() {
 }
 
 #[test]
-fn url_user_input_replays_without_polluting_pipeline() {
+fn url_elicitation_replays_without_polluting_pipeline() {
     let snapshot = replay_stream(&[
         json!({
             "type": "assistant",
@@ -143,14 +136,12 @@ fn url_user_input_replays_without_polluting_pipeline() {
             }
         }),
         json!({
-            "type": "userInputRequest",
-            "userInputId": "user-input-url-1",
-            "source": "auth-server",
+            "type": "elicitationRequest",
+            "elicitationId": "elicitation-url-1",
+            "serverName": "auth-server",
             "message": "Finish sign-in in the browser.",
-            "payload": {
-                "kind": "url",
-                "url": "https://example.com/authorize"
-            }
+            "mode": "url",
+            "url": "https://example.com/authorize"
         }),
         json!({
             "type": "result",

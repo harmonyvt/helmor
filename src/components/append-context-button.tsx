@@ -8,10 +8,6 @@ import type {
 } from "@/lib/composer-insert";
 import { buildComposerPreviewInsertItem } from "@/lib/composer-insert";
 import { useComposerInsert } from "@/lib/composer-insert-context";
-import type {
-	ContextCardSource,
-	ContextCardStateTone,
-} from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { Button } from "./ui/button";
@@ -22,8 +18,6 @@ export type AppendContextTagPayload = {
 	submitText: string;
 	key?: string;
 	preview?: ComposerPreviewPayload | null;
-	source?: ContextCardSource;
-	stateTone?: ContextCardStateTone;
 };
 
 export type AppendContextRequestPayload = {
@@ -77,8 +71,6 @@ function normalizeAppendContextPayload(
 					submitText: payload.submitText,
 					key: payload.key,
 					preview: payload.preview,
-					source: payload.source,
-					stateTone: payload.stateTone,
 				},
 			],
 			behavior: "append",
@@ -126,8 +118,7 @@ export function AppendContextButton({
 		try {
 			const payload = await getPayload();
 			if (!payload) return;
-			const request = normalizeAppendContextPayload(payload);
-			insertIntoComposer(request);
+			insertIntoComposer(normalizeAppendContextPayload(payload));
 			onInserted?.();
 		} catch (error) {
 			pushToast(

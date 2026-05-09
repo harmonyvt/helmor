@@ -5,16 +5,19 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
     bail_coded, db,
     error::{coded, ErrorCode},
-    git_ops, helpers,
+    git_ops, github_graphql, helpers,
     models::workspaces as workspace_models,
     repos,
-    workspace_state::{WorkspaceMode, WorkspaceState},
+    workspace_kind::WorkspaceKind,
+    workspace_pr_sync::PrSyncState,
+    workspace_state::WorkspaceState,
+    workspace_status::WorkspaceStatus,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,21 +74,18 @@ pub struct PrepareWorkspaceResponse {
     pub directory_name: String,
     pub branch: String,
     pub default_branch: String,
+    pub intended_target_branch: String,
+    pub status: WorkspaceStatus,
+    pub source_start_branch: Option<String>,
+    pub pr_number: Option<i64>,
+    pub pr_title: Option<String>,
+    pub pr_sync_state: PrSyncState,
+    pub pr_url: Option<String>,
     pub state: WorkspaceState,
     /// DB-level repo scripts. After Phase 2 (worktree creation) the frontend
     /// may refetch to pick up any `helmor.json` overrides copied into the
     /// worktree, but for a freshly cloned workspace these match exactly.
     pub repo_scripts: repos::RepoScripts,
-    /// CWD the agent CLI should run in for the very first turn. Local mode
-    /// fills this with `repo.root_path` (on disk already); worktree mode
-    /// returns `None` here — the worktree directory doesn't exist until
-    /// Phase 2, so callers MUST wait for `FinalizeWorkspaceResponse
-    /// .working_directory`. Returning the cwd alongside the row metadata
-    /// lets the start-page submit flow skip the workspaceDetail query
-    /// round-trip that previously raced finalize and let the first turn
-    /// run with cwd=`/`, writing transcripts into the wrong Claude
-    /// project bucket and breaking subsequent resume.
-    pub working_directory: Option<String>,
 }
 
 /// Response from the slow Phase 2 (git worktree + scaffold + setup probe).
@@ -96,11 +96,37 @@ pub struct PrepareWorkspaceResponse {
 pub struct FinalizeWorkspaceResponse {
     pub workspace_id: String,
     pub final_state: WorkspaceState,
-    /// CWD the agent CLI should run in. Always populated when finalize
-    /// succeeds — local mode echoes the repo root, worktree mode returns
-    /// the freshly-materialised worktree path. The frontend writes this
-    /// onto the pending submit payload before flipping `finalized=true`.
-    pub working_directory: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum WorkspaceCreationSource {
+    DefaultBranch,
+    RemoteBranch { branch: String },
+    GithubPullRequest { number: i64 },
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FinalizeWorkspaceOptions {
+    pub start_branch: Option<String>,
+    pub fetch_start_branch: Option<bool>,
+    /// When set, move this existing worktree directory into the Helmor workspace
+    /// location instead of creating a new one. The original branch is preserved
+    /// as-is — no `-copy` suffix. Requires git 2.32+.
+    pub migrate_from_path: Option<String>,
+}
+
+struct WorkspaceSourcePlan {
+    branch: String,
+    initialization_parent_branch: String,
+    intended_target_branch: String,
+    status: WorkspaceStatus,
+    source_start_branch: Option<String>,
+    pr_number: Option<i64>,
+    pr_title: Option<String>,
+    pr_sync_state: PrSyncState,
+    pr_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -130,9 +156,13 @@ pub struct TargetBranchConflict {
 /// worktree on disk and flips the workspace row from `Initializing` to
 /// `Ready` / `SetupPending`. It can run in the background while the UI
 /// already shows the workspace.
-pub fn prepare_workspace_from_repo_impl(
+pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspaceResponse> {
+    prepare_workspace_from_source_impl(repo_id, WorkspaceCreationSource::DefaultBranch)
+}
+
+pub fn prepare_workspace_from_source_impl(
     repo_id: &str,
-    source_branch: Option<&str>,
+    source: WorkspaceCreationSource,
 ) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -153,33 +183,40 @@ pub fn prepare_workspace_from_repo_impl(
 
     let directory_name = helpers::allocate_directory_name_for_repo(repo_id)?;
     let branch_settings = crate::repos::load_repo_branch_prefix_settings(repo_id)?;
-    let branch = helpers::branch_name_for_directory(&directory_name, &branch_settings);
-    // Picker selection (or repo default). Stored as both
-    // `initialization_parent_branch` and `intended_target_branch`
-    // (branch from X → merge back to X). Phase 2 uses init_parent as start_ref.
-    let base_branch = source_branch
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .or_else(|| {
-            repository
-                .default_branch
-                .clone()
-                .filter(|value| !value.trim().is_empty())
-        })
+    let default_branch = repository
+        .default_branch
+        .clone()
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "main".to_string());
+    let source_plan = workspace_source_plan(
+        &repository,
+        &repo_root,
+        &directory_name,
+        &branch_settings,
+        &default_branch,
+        source,
+    )?;
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let timestamp = db::current_timestamp()?;
 
-    workspace_models::insert_initializing_workspace_and_session(
+    workspace_models::insert_initializing_workspace_and_session_with_metadata(
         &repository,
         &workspace_id,
         &session_id,
         &directory_name,
-        &branch,
-        &base_branch,
-        &timestamp,
+        &source_plan.branch,
+        workspace_models::InitializingWorkspaceMetadata {
+            initialization_parent_branch: &source_plan.initialization_parent_branch,
+            intended_target_branch: &source_plan.intended_target_branch,
+            workspace_kind: WorkspaceKind::Code,
+            goal_workspace_id: None,
+            status: source_plan.status,
+            pr_title: source_plan.pr_title.as_deref(),
+            pr_sync_state: source_plan.pr_sync_state,
+            pr_url: source_plan.pr_url.as_deref(),
+            timestamp: &timestamp,
+        },
     )?;
 
     // `load_repo_scripts` is the single truth source. The worktree
@@ -199,7 +236,6 @@ pub fn prepare_workspace_from_repo_impl(
                 run_from_project: false,
                 archive_from_project: false,
                 auto_run_setup: true,
-                run_script_mode: "concurrent".to_string(),
             }
         }
     };
@@ -210,123 +246,92 @@ pub fn prepare_workspace_from_repo_impl(
         repo_id: repository.id,
         repo_name: repository.name,
         directory_name,
-        branch,
-        // Field name is legacy; value is the effective base branch.
-        default_branch: base_branch,
+        branch: source_plan.branch,
+        default_branch,
+        intended_target_branch: source_plan.intended_target_branch,
+        status: source_plan.status,
+        source_start_branch: source_plan.source_start_branch,
+        pr_number: source_plan.pr_number,
+        pr_title: source_plan.pr_title,
+        pr_sync_state: source_plan.pr_sync_state,
+        pr_url: source_plan.pr_url,
         state: WorkspaceState::Initializing,
         repo_scripts,
-        // Worktree dir doesn't exist yet — finalize fills this in.
-        working_directory: None,
     })
 }
 
-/// One-shot local workspace creation. Skips the prepare/finalize split
-/// since there's no worktree to create — the workspace operates
-/// directly on `repo.root_path`. If the user picked a `source_branch`
-/// different from the repo's current HEAD, switches the local repo to
-/// it (requires a clean working tree, errors otherwise).
-///
-/// Returns a `PrepareWorkspaceResponse` shaped identically to the
-/// worktree-mode prepare path so the frontend's create flow can reuse
-/// the same optimistic-render code. The row is inserted in
-/// `Initializing` state and immediately transitioned to `Ready`; the
-/// follow-up `finalize_workspace_from_repo` no-ops gracefully.
-pub fn prepare_local_workspace_impl(
-    repo_id: &str,
-    source_branch: Option<&str>,
-) -> Result<PrepareWorkspaceResponse> {
-    let repository = repos::load_repository_by_id(repo_id)?
-        .with_context(|| format!("Repository not found: {repo_id}"))?;
-    let repo_root = PathBuf::from(repository.root_path.trim());
-    git_ops::ensure_git_repository(&repo_root)?;
-
-    // Detached HEAD: surface a specific error.
-    let current_branch = git_ops::current_branch_name(&repo_root).map_err(|_| {
-        anyhow::anyhow!(
-            "Repository is in detached HEAD state. Check out a branch first, then try again."
-        )
-    })?;
-    let target_branch = source_branch
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| current_branch.clone());
-
-    // Tracked-only check — `git checkout` is fine with untracked files.
-    if target_branch != current_branch
-        && !git_ops::tracked_changes_clean(&repo_root)
-            .with_context(|| format!("Failed to read working tree status for {repo_id}"))?
-    {
-        bail!(
-            "Local repo has uncommitted tracked changes; commit or stash before switching to `{target_branch}`."
-        );
-    }
-
-    // Local shares the repo root; empty directory_name is fine.
-    let directory_name = String::new();
-    let workspace_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let timestamp = db::current_timestamp()?;
-
-    // DB insert before any git mutation, so partial failures roll back cleanly.
-    workspace_models::insert_initializing_workspace_and_session_with_mode(
-        &repository,
-        &workspace_id,
-        &session_id,
-        &directory_name,
-        &target_branch,
-        &target_branch,
-        crate::workspace_state::WorkspaceMode::Local,
-        &timestamp,
-    )?;
-
-    if target_branch != current_branch {
-        if let Err(error) = git_ops::checkout_branch(&repo_root, &target_branch) {
-            let _ = workspace_models::delete_workspace_and_session_rows(&workspace_id);
-            return Err(error);
+fn workspace_source_plan(
+    repository: &repos::RepositoryRecord,
+    repo_root: &Path,
+    directory_name: &str,
+    branch_settings: &crate::settings::EffectiveBranchPrefixSettings,
+    default_branch: &str,
+    source: WorkspaceCreationSource,
+) -> Result<WorkspaceSourcePlan> {
+    match source {
+        WorkspaceCreationSource::DefaultBranch => {
+            let branch = helpers::branch_name_for_directory(directory_name, branch_settings);
+            Ok(WorkspaceSourcePlan {
+                branch,
+                initialization_parent_branch: default_branch.to_string(),
+                intended_target_branch: default_branch.to_string(),
+                status: WorkspaceStatus::InProgress,
+                source_start_branch: None,
+                pr_number: None,
+                pr_title: None,
+                pr_sync_state: PrSyncState::None,
+                pr_url: None,
+            })
+        }
+        WorkspaceCreationSource::RemoteBranch { branch } => {
+            let branch = normalize_source_branch(&branch)?;
+            ensure_source_branch_available(repo_root, &branch)?;
+            Ok(WorkspaceSourcePlan {
+                branch: branch.clone(),
+                initialization_parent_branch: default_branch.to_string(),
+                intended_target_branch: default_branch.to_string(),
+                status: WorkspaceStatus::InProgress,
+                source_start_branch: Some(branch),
+                pr_number: None,
+                pr_title: None,
+                pr_sync_state: PrSyncState::None,
+                pr_url: None,
+            })
+        }
+        WorkspaceCreationSource::GithubPullRequest { number } => {
+            let pr = github_graphql::resolve_repository_pull_request_by_number(repository, number)?;
+            let branch = normalize_source_branch(&pr.head_branch)?;
+            Ok(WorkspaceSourcePlan {
+                branch: branch.clone(),
+                initialization_parent_branch: pr.base_branch.clone(),
+                intended_target_branch: pr.base_branch,
+                status: WorkspaceStatus::Review,
+                source_start_branch: Some(branch),
+                pr_number: Some(pr.number),
+                pr_title: Some(pr.title),
+                pr_sync_state: PrSyncState::Open,
+                pr_url: Some(pr.url),
+            })
         }
     }
+}
 
-    if let Err(error) =
-        workspace_models::update_workspace_state(&workspace_id, WorkspaceState::Ready, &timestamp)
-    {
-        // Clean DB + restore HEAD if we moved it.
-        let _ = workspace_models::delete_workspace_and_session_rows(&workspace_id);
-        if target_branch != current_branch {
-            let _ = git_ops::checkout_branch(&repo_root, &current_branch);
-        }
-        return Err(error);
+fn normalize_source_branch(branch: &str) -> Result<String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        bail!("Branch name is required");
     }
+    if branch == "HEAD" || branch.starts_with("refs/") {
+        bail!("Unsupported branch name: {branch}");
+    }
+    Ok(branch.to_string())
+}
 
-    let repo_scripts =
-        repos::load_repo_scripts(repo_id, Some(&workspace_id)).unwrap_or_else(|_| {
-            repos::RepoScripts {
-                setup_script: None,
-                run_script: None,
-                archive_script: None,
-                setup_from_project: false,
-                run_from_project: false,
-                archive_from_project: false,
-                auto_run_setup: false,
-                run_script_mode: "concurrent".to_string(),
-            }
-        });
-
-    Ok(PrepareWorkspaceResponse {
-        workspace_id,
-        initial_session_id: session_id,
-        repo_id: repository.id,
-        repo_name: repository.name,
-        directory_name,
-        branch: target_branch.clone(),
-        default_branch: target_branch,
-        state: WorkspaceState::Ready,
-        repo_scripts,
-        // Local mode operates directly on the repo root — already on disk,
-        // safe to return immediately so the caller doesn't need to wait
-        // for finalize (which is a no-op for local).
-        working_directory: Some(repo_root.display().to_string()),
-    })
+fn ensure_source_branch_available(repo_root: &Path, branch: &str) -> Result<()> {
+    if git_ops::verify_branch_exists(repo_root, branch).is_ok() {
+        bail!("Local branch already exists: {branch}");
+    }
+    Ok(())
 }
 
 /// Phase 2 of workspace creation: creates the git worktree, probes
@@ -336,40 +341,25 @@ pub fn prepare_local_workspace_impl(
 /// caller can surface the error without leaving a broken workspace
 /// lingering.
 pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeWorkspaceResponse> {
+    finalize_workspace_from_repo_with_options_impl(
+        workspace_id,
+        FinalizeWorkspaceOptions::default(),
+    )
+}
+
+pub fn finalize_workspace_from_repo_with_options_impl(
+    workspace_id: &str,
+    options: FinalizeWorkspaceOptions,
+) -> Result<FinalizeWorkspaceResponse> {
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-    // Local workspaces never need worktree materialisation. Short-circuit
-    // unconditionally — even an orphaned `Initializing` local row (left by
-    // a partially-failed prepare) must not enter the worktree-creation
-    // path below, where a failure would route into
-    // `cleanup_failed_created_workspace(repo_root, root_path, ...)`.
-    if record.mode == WorkspaceMode::Local {
-        let working_directory = helpers::workspace_path(&record)?.display().to_string();
-        return Ok(FinalizeWorkspaceResponse {
-            workspace_id: workspace_id.to_string(),
-            final_state: record.state,
-            working_directory,
-        });
-    }
-
-    match record.state {
-        WorkspaceState::Initializing => {}
-        WorkspaceState::Ready | WorkspaceState::SetupPending => {
-            let working_directory = helpers::workspace_path(&record)?.display().to_string();
-            return Ok(FinalizeWorkspaceResponse {
-                workspace_id: workspace_id.to_string(),
-                final_state: record.state,
-                working_directory,
-            });
-        }
-        _ => {
-            bail!(
-                "Workspace {workspace_id} is not in initializing state (current: {})",
-                record.state
-            );
-        }
+    if record.state != WorkspaceState::Initializing {
+        bail!(
+            "Workspace {workspace_id} is not in initializing state (current: {})",
+            record.state
+        );
     }
 
     let repository = repos::load_repository_by_id(&record.repo_id)?
@@ -379,21 +369,15 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         .remote
         .clone()
         .unwrap_or_else(|| "origin".to_string());
-    // start_ref source: init_parent (Phase 1's stored pick), with
-    // repo default as fallback for legacy rows.
-    let base_branch = helpers::non_empty(&record.initialization_parent_branch)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            record
-                .default_branch
-                .clone()
-                .filter(|value| !value.trim().is_empty())
-        })
+    let default_branch = record
+        .default_branch
+        .clone()
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "main".to_string());
     let branch = helpers::non_empty(&record.branch)
         .map(ToOwned::to_owned)
         .with_context(|| format!("Workspace {workspace_id} is missing branch"))?;
-    let workspace_dir = helpers::workspace_path(&record)?;
+    let workspace_dir = crate::data_dir::workspace_dir(&repository.name, &record.directory_name)?;
     let timestamp = db::current_timestamp()?;
     let mut created_worktree = false;
 
@@ -406,25 +390,55 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         }
 
         git_ops::ensure_git_repository(&repo_root)?;
-        let start_ref = git_ops::default_branch_ref(&remote, &base_branch);
-        git_ops::verify_commitish_exists(
-            &repo_root,
-            &start_ref,
-            &format!("Base branch is missing in source repo: {base_branch}"),
-        )?;
-        match git_ops::create_worktree_from_start_point(
-            &repo_root,
-            &workspace_dir,
-            &branch,
-            &start_ref,
-        ) {
-            Ok(_) => {
-                created_worktree = true;
+        let source_start_branch = options
+            .start_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let create_result = if let Some(ref existing_path_str) = options.migrate_from_path {
+            // Migrate path: physically move the existing worktree into the Helmor
+            // workspace location. No branch copy — the original branch is preserved.
+            let existing_dir = PathBuf::from(existing_path_str.trim());
+            git_ops::move_worktree(&repo_root, &existing_dir, &workspace_dir).map(|_| String::new())
+        } else if let Some(start_branch) = source_start_branch {
+            let is_pr_workspace = record.pr_url.is_some();
+            if is_pr_workspace && git_ops::verify_branch_exists(&repo_root, &branch).is_ok() {
+                git_ops::create_worktree(&repo_root, &workspace_dir, &branch).map(|_| String::new())
+            } else {
+                if options.fetch_start_branch.unwrap_or(false) {
+                    git_ops::fetch_remote_branch_refspec(&repo_root, &remote, start_branch)?;
+                }
+                let start_ref = git_ops::default_branch_ref(&remote, start_branch);
+                git_ops::verify_commitish_exists(
+                    &repo_root,
+                    &start_ref,
+                    &format!("Remote branch is missing in source repo: {start_branch}"),
+                )?;
+                git_ops::create_worktree_new_branch_from_start_point(
+                    &repo_root,
+                    &workspace_dir,
+                    &branch,
+                    &start_ref,
+                )
             }
-            Err(error) => {
-                return Err(error);
-            }
+        } else {
+            let start_ref = git_ops::default_branch_ref(&remote, default_branch.as_str());
+            git_ops::verify_commitish_exists(
+                &repo_root,
+                &start_ref,
+                &format!("Remote branch is missing in source repo: {default_branch}"),
+            )?;
+            git_ops::create_worktree_from_start_point(
+                &repo_root,
+                &workspace_dir,
+                &branch,
+                &start_ref,
+            )
         };
+        match create_result {
+            Ok(_) => created_worktree = true,
+            Err(error) => return Err(error),
+        }
 
         // Defer setup to the frontend inspector: if a script is configured AND
         // the user opted into auto-run, the workspace starts in "setup_pending"
@@ -448,8 +462,6 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         Ok(FinalizeWorkspaceResponse {
             workspace_id: workspace_id.to_string(),
             final_state,
-            // Worktree dir was just materialised — safe to hand back.
-            working_directory: workspace_dir.display().to_string(),
         })
     })();
 
@@ -468,195 +480,11 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MoveLocalToWorktreeResponse {
-    pub workspace_id: String,
-    pub directory_name: String,
-    pub branch: String,
-    pub state: WorkspaceState,
-}
-
-/// Move a local-mode workspace into a fresh worktree. The local repo
-/// is left completely untouched: its branch, working tree, and
-/// uncommitted state stay exactly as they were. The new worktree
-/// gets a fresh auto-named branch off the local's HEAD commit, with
-/// all uncommitted state (tracked + untracked) carried over. The
-/// workspace row's mode flips Local → Worktree (same workspace_id —
-/// it's a relocation, not a clone).
-///
-/// Failure rolls back any partial state we created (worktree dir +
-/// new branch) so the user can retry. The local repo never sees a
-/// stash push/pop cycle — we use `git stash create` for tracked
-/// changes (which doesn't touch the working tree) and a manual
-/// `cp -p` for untracked files.
-pub fn move_local_workspace_to_worktree_impl(
-    workspace_id: &str,
-) -> Result<MoveLocalToWorktreeResponse> {
-    let record = workspace_models::load_workspace_record_by_id(workspace_id)?
-        .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
-        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-
-    if record.mode != WorkspaceMode::Local {
-        bail!(
-            "Workspace {workspace_id} is not a local workspace (mode: {})",
-            record.mode
-        );
-    }
-    if !record.state.is_operational() {
-        bail!(
-            "Workspace {workspace_id} is not operational (state: {})",
-            record.state
-        );
-    }
-
-    let repository = repos::load_repository_by_id(&record.repo_id)?
-        .with_context(|| format!("Repository not found: {}", record.repo_id))?;
-    let repo_root = PathBuf::from(repository.root_path.trim());
-    git_ops::ensure_git_repository(&repo_root)?;
-
-    // 1. Capture the local repo's current state (no working-tree mutation).
-    let head_branch =
-        git_ops::current_branch_name(&repo_root).context("Failed to read repo HEAD branch")?;
-    let head_commit = git_ops::run_git(
-        [
-            "-C",
-            repo_root.to_str().unwrap_or_default(),
-            "rev-parse",
-            "HEAD",
-        ],
-        None,
-    )
-    .context("Failed to resolve HEAD commit")?
-    .trim()
-    .to_string();
-
-    let stash_sha = git_ops::stash_create(&repo_root)?;
-    let untracked = git_ops::list_untracked_files(&repo_root).unwrap_or_default();
-
-    // 2. Allocate the new directory + branch name.
-    let directory_name = helpers::allocate_directory_name_for_repo(&record.repo_id)?;
-    let branch_settings = repos::load_repo_branch_prefix_settings(&record.repo_id)?;
-    let new_branch = helpers::branch_name_for_directory(&directory_name, &branch_settings);
-    let workspace_dir = crate::data_dir::workspace_dir(&repository.name, &directory_name)?;
-
-    if workspace_dir.exists() {
-        bail!(
-            "Workspace target already exists at {}",
-            workspace_dir.display()
-        );
-    }
-
-    let mut created_worktree = false;
-    let mut copied_untracked: Vec<PathBuf> = Vec::new();
-
-    let result: Result<()> = (|| {
-        // 3. Create the worktree from the captured commit.
-        git_ops::create_worktree_from_start_point(
-            &repo_root,
-            &workspace_dir,
-            &new_branch,
-            &head_commit,
-        )?;
-        created_worktree = true;
-
-        // 4. Apply tracked + index changes (if any).
-        if let Some(sha) = stash_sha.as_deref() {
-            git_ops::stash_apply_sha(&workspace_dir, sha)?;
-        }
-
-        // 5. Carry over untracked files via `cp -p`.
-        for relative in &untracked {
-            let src = repo_root.join(relative);
-            let dst = workspace_dir.join(relative);
-            if let Some(parent) = dst.parent() {
-                if !parent.exists() {
-                    fs::create_dir_all(parent)
-                        .with_context(|| format!("Failed to mkdir -p {}", parent.display()))?;
-                }
-            }
-            // Skip symlinks / specials silently — `cp -p` would carry
-            // them but we keep the surface narrow for v1.
-            match fs::metadata(&src) {
-                Ok(meta) if meta.is_file() => {
-                    fs::copy(&src, &dst).with_context(|| {
-                        format!(
-                            "Failed to copy untracked {} to {}",
-                            src.display(),
-                            dst.display()
-                        )
-                    })?;
-                    copied_untracked.push(dst);
-                }
-                _ => continue,
-            }
-        }
-
-        Ok(())
-    })();
-
-    if let Err(error) = result {
-        // Rollback: drop everything we touched in the worktree dir.
-        if created_worktree {
-            for path in &copied_untracked {
-                let _ = fs::remove_file(path);
-            }
-            let _ = git_ops::remove_worktree(&repo_root, &workspace_dir);
-            let _ = fs::remove_dir_all(&workspace_dir);
-            let _ = git_ops::remove_branch(&repo_root, &new_branch);
-        }
-        return Err(error);
-    }
-
-    // 6. Flip the DB row from local → worktree.
-    let timestamp = db::current_timestamp()?;
-    workspace_models::convert_to_worktree(
-        workspace_id,
-        &directory_name,
-        &new_branch,
-        // target = source (matches the existing "branch from X, PR back to X" default).
-        &head_branch,
-        &head_branch,
-        &timestamp,
-    )?;
-
-    // 7. Carry over Claude Code's per-cwd session jsonls so resume keeps
-    // working after the cwd flips from the local repo to the worktree.
-    // Best-effort: a copy failure here just degrades to a one-shot
-    // "empty resume" error on the next turn — not worth rolling back the
-    // whole worktree creation. Codex sessions are cwd-independent so
-    // they need no migration.
-    match crate::models::sessions::list_claude_provider_session_ids(workspace_id) {
-        Ok(ids) if !ids.is_empty() => {
-            crate::agents::claude_project_files::migrate_session_files(
-                &repo_root,
-                &workspace_dir,
-                &ids,
-            );
-        }
-        Ok(_) => {}
-        Err(error) => {
-            tracing::warn!(
-                workspace_id,
-                %error,
-                "Failed to list Claude sessions for cwd migration",
-            );
-        }
-    }
-
-    Ok(MoveLocalToWorktreeResponse {
-        workspace_id: workspace_id.to_string(),
-        directory_name,
-        branch: new_branch,
-        state: record.state,
-    })
-}
-
 /// Legacy combined flow. Runs Phase 1 + Phase 2 back-to-back and returns
 /// the old-shape response. Used by CLI, MCP, and `add_repository_from_local_path`
 /// — all non-UI callers that do not benefit from the prepare/finalize split.
 pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceResponse> {
-    let prepared = prepare_workspace_from_repo_impl(repo_id, None)?;
+    let prepared = prepare_workspace_from_repo_impl(repo_id)?;
     let finalized = finalize_workspace_from_repo_impl(&prepared.workspace_id)?;
 
     Ok(CreateWorkspaceResponse {
@@ -682,27 +510,18 @@ pub fn cleanup_orphaned_initializing_workspaces(max_age_seconds: i64) -> Result<
         let record = &orphan.record;
         let repo_root_value = record.root_path.as_deref().unwrap_or("").trim();
         let repo_root = PathBuf::from(repo_root_value);
-        // Local-mode orphans: never touch the worktree path (it's the
-        // user's actual repo). Just remove the DB row.
-        if record.mode == crate::workspace_state::WorkspaceMode::Local {
-            let _ = workspace_models::delete_workspace_and_session_rows(&record.id);
-            tracing::info!(
-                workspace_id = %record.id,
-                "Cleaned up orphaned initializing local workspace (DB only)",
-            );
-            continue;
-        }
-        let workspace_dir = match helpers::workspace_path(record) {
-            Ok(path) => path,
-            Err(error) => {
-                tracing::warn!(
-                    workspace_id = %record.id,
-                    error = %error,
-                    "Failed to resolve workspace dir for orphan cleanup",
-                );
-                continue;
-            }
-        };
+        let workspace_dir =
+            match crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        workspace_id = %record.id,
+                        error = %error,
+                        "Failed to resolve workspace dir for orphan cleanup",
+                    );
+                    continue;
+                }
+            };
         let branch = record.branch.as_deref().unwrap_or("");
 
         cleanup_failed_created_workspace(
@@ -853,7 +672,7 @@ pub fn prepare_archive_plan(workspace_id: &str) -> Result<ArchivePreparedPlan> {
         );
     }
 
-    let workspace_dir = helpers::workspace_path(&record)?;
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     if !workspace_dir.is_dir() {
         bail_coded!(
             ErrorCode::WorkspaceBroken,
@@ -880,26 +699,6 @@ pub fn validate_archive_workspace(workspace_id: &str) -> Result<()> {
 }
 
 pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResponse> {
-    // Local workspaces: archive is purely a DB state flip. We MUST NOT
-    // touch the worktree (it's the user's repo) or delete the branch
-    // (the user / other local workspaces may still be using it).
-    if let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? {
-        if record.mode == WorkspaceMode::Local {
-            if !is_archive_eligible_state(record.state) {
-                bail!(
-                    "Workspace is not archive-ready: {workspace_id} (state: {})",
-                    record.state
-                );
-            }
-            // Pass an empty archive_commit; the column is informational
-            // for the worktree restore flow which doesn't apply to local.
-            workspace_models::update_archived_workspace_state(workspace_id, "")?;
-            return Ok(ArchiveWorkspaceResponse {
-                archived_workspace_id: workspace_id.to_string(),
-                archived_state: WorkspaceState::Archived,
-            });
-        }
-    }
     let plan = prepare_archive_plan(workspace_id)?;
     execute_archive_plan(&plan)
 }
@@ -909,24 +708,6 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
     let branch = &plan.branch;
     let workspace_dir = &plan.workspace_dir;
     let workspace_id = &plan.workspace_id;
-
-    // CRITICAL safety check: for local-mode workspaces, `workspace_dir`
-    // IS the user's repo root. The downstream `remove_worktree` would
-    // rename + delete the user's repo. Short-circuit to a DB-only flip
-    // here BEFORE we touch anything on disk. The frontend's
-    // `archive_workspace_impl` already does this; this is a second
-    // line of defence for the kanban / queue path that goes through
-    // `prepare_archive_plan` + this function.
-    if let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? {
-        if record.mode == WorkspaceMode::Local {
-            workspace_models::update_archived_workspace_state(workspace_id, "")?;
-            return Ok(ArchiveWorkspaceResponse {
-                archived_workspace_id: workspace_id.clone(),
-                archived_state: WorkspaceState::Archived,
-            });
-        }
-    }
-
     let timing = std::time::Instant::now();
     if !repo_root.is_dir() {
         bail_coded!(
@@ -1033,9 +814,9 @@ fn restore_workspace_preflight(workspace_id: &str) -> Result<RestorePreflightDat
         .or_else(|| helpers::non_empty(&record.default_branch))
         .unwrap_or("main")
         .to_string();
-
-    let workspace_dir = helpers::workspace_path(&record)?;
     let remote = record.remote.unwrap_or_else(|| "origin".to_string());
+
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     git_ops::ensure_git_repository(&repo_root)?;
     if let Some(archive_commit) = archive_commit.as_deref() {
         git_ops::verify_commit_exists(&repo_root, archive_commit)?;
@@ -1052,19 +833,11 @@ fn restore_workspace_preflight(workspace_id: &str) -> Result<RestorePreflightDat
 }
 
 pub fn validate_restore_workspace(workspace_id: &str) -> Result<ValidateRestoreResponse> {
+    let preflight = restore_workspace_preflight(workspace_id)?;
+
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-    // Local restore is a pure DB state flip — no git involved, so no
-    // target-branch conflict is ever possible.
-    if record.mode == WorkspaceMode::Local {
-        return Ok(ValidateRestoreResponse {
-            target_branch_conflict: None,
-        });
-    }
-
-    let preflight = restore_workspace_preflight(workspace_id)?;
-
     let remote = record.remote.unwrap_or_else(|| "origin".to_string());
     let intended = record
         .intended_target_branch
@@ -1103,32 +876,6 @@ pub fn restore_workspace_impl(
     workspace_id: &str,
     target_branch_override: Option<&str>,
 ) -> Result<RestoreWorkspaceResponse> {
-    // Local workspaces aren't materialised as a worktree — restoring
-    // one is purely a DB state flip. Skip every git operation (branch
-    // creation, worktree creation, archive_commit verification, …)
-    // that the worktree path performs.
-    {
-        let record = workspace_models::load_workspace_record_by_id(workspace_id)?
-            .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
-            .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-        if record.state != WorkspaceState::Archived {
-            bail!("Workspace is not archived: {workspace_id}");
-        }
-        if record.mode == WorkspaceMode::Local {
-            workspace_models::update_restored_workspace_state(
-                workspace_id,
-                target_branch_override,
-            )?;
-            return Ok(RestoreWorkspaceResponse {
-                restored_workspace_id: workspace_id.to_string(),
-                restored_state: WorkspaceState::Ready,
-                selected_workspace_id: workspace_id.to_string(),
-                branch_rename: None,
-                restored_from_target_branch: None,
-            });
-        }
-    }
-
     let RestorePreflightData {
         repo_root,
         branch,
@@ -1142,13 +889,6 @@ pub fn restore_workspace_impl(
         .unwrap_or(stored_target_branch.as_str());
 
     if workspace_dir.exists() {
-        // Belt + suspenders against local-mode mis-routing.
-        if git_ops::paths_resolve_equal(&repo_root, &workspace_dir) {
-            bail!(
-                "Refusing to wipe restore target {} — equals repo_root",
-                workspace_dir.display()
-            );
-        }
         std::fs::remove_dir_all(&workspace_dir).with_context(|| {
             format!(
                 "Failed to remove existing workspace directory: {}",
@@ -1278,12 +1018,7 @@ fn cleanup_failed_created_workspace(
     branch: &str,
     created_worktree: bool,
 ) {
-    // Refuse to touch the source repo even if a caller mis-routed a
-    // local-mode record into this worktree-creation cleanup path.
-    if created_worktree
-        && workspace_dir.exists()
-        && !git_ops::paths_resolve_equal(repo_root, workspace_dir)
-    {
+    if created_worktree && workspace_dir.exists() {
         let _ = git_ops::remove_worktree(repo_root, workspace_dir);
         let _ = fs::remove_dir_all(workspace_dir);
     }
@@ -1295,10 +1030,8 @@ fn cleanup_failed_created_workspace(
 }
 
 fn cleanup_failed_restore(repo_root: &Path, workspace_dir: &Path, branch: &str) {
-    if !git_ops::paths_resolve_equal(repo_root, workspace_dir) {
-        let _ = git_ops::remove_worktree(repo_root, workspace_dir);
-        let _ = fs::remove_dir_all(workspace_dir);
-    }
+    let _ = git_ops::remove_worktree(repo_root, workspace_dir);
+    let _ = fs::remove_dir_all(workspace_dir);
     let _ = git_ops::remove_branch(repo_root, branch);
 }
 

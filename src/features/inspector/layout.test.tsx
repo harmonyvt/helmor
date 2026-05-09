@@ -27,13 +27,14 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="running"
+				archiveScriptState="no-script"
 				terminalInstances={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
-				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
-				bodyHeight={128}
 				canHoverExpand
+				showCommentsTab={false}
+				hasUnresolvedComments={false}
 			>
 				<div>Terminal body</div>
 			</InspectorTabsSection>,
@@ -54,12 +55,12 @@ describe("InspectorTabsSection", () => {
 			vi.advanceTimersByTime(TABS_BLUR_HOLD_UNTIL_MS);
 		});
 
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
 
 		fireEvent.mouseEnter(header);
 		fireEvent.mouseEnter(tabsBody);
 
-		expect(filterLayer).toHaveStyle({ filter: "blur(0)" });
+		expect(filterLayer).toHaveStyle({ filter: "none" });
 	});
 
 	it("stays zoomed when the active tab becomes non-zoomable until the pointer leaves", () => {
@@ -74,13 +75,14 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="running"
+				archiveScriptState="no-script"
 				terminalInstances={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
-				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
-				bodyHeight={128}
 				canHoverExpand
+				showCommentsTab={false}
+				hasUnresolvedComments={false}
 			>
 				<div>Terminal body</div>
 			</InspectorTabsSection>,
@@ -109,13 +111,14 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="running"
+				archiveScriptState="no-script"
 				terminalInstances={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
-				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
-				bodyHeight={128}
 				canHoverExpand={false}
+				showCommentsTab={false}
+				hasUnresolvedComments={false}
 			>
 				<div>Placeholder body</div>
 			</InspectorTabsSection>,

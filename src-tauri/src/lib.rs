@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod browser_profile;
 pub mod cli;
 pub(crate) mod commands;
 pub mod data_dir;
@@ -6,6 +7,7 @@ pub mod error;
 pub mod forge;
 pub mod git;
 pub mod global_hotkey;
+pub mod goal_orchestration;
 pub mod image_store;
 mod import;
 pub mod logging;
@@ -17,16 +19,18 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
-mod system_limits;
 pub mod ui_sync;
 pub mod updater;
+pub mod web;
+pub mod web_daemon;
 pub mod workspace;
 
 #[cfg(test)]
 pub(crate) mod testkit;
 
 pub use forge as forge_ops;
-pub use forge::github as github_pr;
+pub use forge::github::cli as github_cli;
+pub use forge::github::graphql as github_graphql;
 pub use git::ops as git_ops;
 pub use git::watcher as git_watcher;
 pub use models::db;
@@ -35,6 +39,7 @@ pub use models::sessions;
 pub use models::settings;
 pub use workspace::files as editor_files;
 pub use workspace::helpers;
+pub use workspace::kind as workspace_kind;
 pub use workspace::pr_sync as workspace_pr_sync;
 pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
@@ -50,8 +55,6 @@ pub fn schema_init(conn: &rusqlite::Connection) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    system_limits::raise_nofile_soft_limit();
-
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -61,7 +64,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build());
 
     #[cfg(debug_assertions)]
-    let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    let builder = builder.plugin(
+        tauri_plugin_mcp_bridge::Builder::new()
+            .base_port(resolve_mcp_base_port())
+            .build(),
+    );
 
     let app = builder
         .manage(sidecar::ManagedSidecar::new())
@@ -71,6 +78,7 @@ pub fn run() {
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
+        .manage(web_daemon::WebDaemonManager::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .setup(|app| {
@@ -135,41 +143,6 @@ pub fn run() {
 
             forge::init_bundled_cli_paths();
 
-            // Background backfill: re-run auto-bind for repos whose
-            // forge_login is still NULL. Covers (a) repos added before
-            // the multi-account migration shipped, and (b) repos whose
-            // initial bind found no candidate but the user has since
-            // run `gh/glab auth login`. Spawned blocking so the CLI
-            // probes don't stall the UI thread.
-            let backfill_handle = app.handle().clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                match forge::accounts::backfill_unbound_repos() {
-                    Ok(summary) if summary.bound > 0 => {
-                        tracing::info!(
-                            examined = summary.examined,
-                            bound = summary.bound,
-                            "Forge binding backfill bound new repos"
-                        );
-                        ui_sync::publish(
-                            &backfill_handle,
-                            ui_sync::UiMutationEvent::RepositoryListChanged,
-                        );
-                    }
-                    Ok(summary) => {
-                        tracing::debug!(
-                            examined = summary.examined,
-                            "Forge binding backfill found nothing to bind"
-                        );
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %format!("{error:#}"),
-                            "Forge binding backfill failed"
-                        );
-                    }
-                }
-            });
-
             updater::configure()?;
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
@@ -199,6 +172,7 @@ pub fn run() {
             if let Err(error) = ui_sync::start_listener(app.handle().clone()) {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
+            mcp::set_app_handle(app.handle().clone());
 
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
@@ -211,13 +185,15 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
-            agents::list_cursor_models,
+            agents::check_pi_models,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
-            agents::list_active_streams,
             agents::steer_agent_stream,
             agents::respond_to_permission_request,
-            agents::respond_to_user_input,
+            agents::respond_to_deferred_tool,
+            agents::respond_to_elicitation_request,
+            agents::send_kanban_tool_result,
+            agents::respond_to_pi_ui,
             agents::generate_session_title,
             agents::list_slash_commands,
             agents::prewarm_slash_commands_for_workspace,
@@ -228,19 +204,23 @@ pub fn run() {
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
+            commands::workspace_commands::prepare_workspace_from_source,
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
+            commands::settings_commands::set_data_dir_preference,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
+            web_daemon::get_web_daemon_status,
+            web_daemon::start_web_daemon,
+            web_daemon::stop_web_daemon,
+            web_daemon::delete_web_daemon,
+            web_daemon::cleanup_web_daemon,
             commands::system_commands::get_agent_login_status,
             commands::system_commands::get_helmor_skills_status,
             commands::system_commands::install_cli,
-            commands::system_commands::read_query_cache,
-            commands::system_commands::write_query_cache,
-            commands::system_commands::delete_query_cache,
             commands::system_commands::install_helmor_skills,
             commands::system_commands::enter_onboarding_window_mode,
             commands::system_commands::exit_onboarding_window_mode,
@@ -249,28 +229,40 @@ pub fn run() {
             commands::system_commands::stop_agent_login_terminal,
             commands::system_commands::write_agent_login_terminal_stdin,
             commands::system_commands::resize_agent_login_terminal,
+            commands::github_commands::get_github_cli_status,
+            commands::github_commands::get_github_cli_user,
             commands::forge_commands::get_workspace_forge,
-            commands::forge_commands::list_forge_accounts,
-            commands::forge_commands::list_inbox_items,
-            commands::forge_commands::list_github_labels,
-            commands::forge_commands::get_inbox_item_detail,
-            commands::forge_commands::get_workspace_account_profile,
-            commands::forge_commands::cache_forge_avatar,
-            commands::forge_commands::list_forge_logins,
-            commands::forge_commands::backfill_forge_repo_bindings,
+            commands::forge_commands::get_forge_cli_status,
+            commands::forge_commands::open_forge_cli_auth_terminal,
             commands::forge_commands::spawn_forge_cli_auth_terminal,
             commands::forge_commands::stop_forge_cli_auth_terminal,
-            commands::forge_commands::invalidate_forge_caches,
             commands::forge_commands::write_forge_cli_auth_terminal_stdin,
             commands::forge_commands::resize_forge_cli_auth_terminal,
             commands::forge_commands::refresh_workspace_change_request,
             commands::forge_commands::get_workspace_forge_action_status,
             commands::forge_commands::get_workspace_forge_check_insert_text,
+            commands::forge_commands::get_workspace_forge_deployment_insert_text,
+            commands::forge_commands::get_workspace_pr_comments,
+            commands::goal_commands::prepare_goal_workspace,
+            commands::goal_commands::finalize_goal_workspace,
+            commands::goal_commands::list_goal_cards,
+            commands::goal_commands::upsert_goal_card,
+            commands::goal_commands::link_goal_card_workspace,
+            commands::goal_commands::create_goal_child_workspace,
+            commands::goal_commands::create_goal_child_workspace_and_start,
+            commands::goal_commands::set_goal_child_workspace_status,
+            commands::goal_commands::assign_workspace_to_goal,
+            commands::forge_commands::get_workspace_pr_comment_insert_text,
             commands::forge_commands::merge_workspace_change_request,
             commands::forge_commands::close_workspace_change_request,
             commands::workspace_commands::get_workspace,
+            commands::workspace_commands::list_goal_child_workspaces,
+            commands::workspace_commands::update_goal_workspace_meta,
             commands::repository_commands::add_repository_from_local_path,
             commands::repository_commands::clone_repository_from_url,
+            commands::github_commands::list_github_accessible_repositories,
+            commands::github_commands::list_github_pull_requests_for_repo,
+            commands::github_commands::resolve_github_pull_request_for_repo,
             commands::workspace_commands::list_archived_workspaces,
             commands::repository_commands::list_repositories,
             commands::repository_commands::update_repository_default_branch,
@@ -281,10 +273,8 @@ pub fn run() {
             commands::repository_commands::load_repo_preferences,
             commands::repository_commands::update_repo_scripts,
             commands::repository_commands::update_repo_auto_run_setup,
-            commands::repository_commands::update_repo_run_script_mode,
             commands::repository_commands::update_repo_preferences,
             commands::repository_commands::delete_repository,
-            commands::repository_commands::retry_repo_forge_binding,
             commands::script_commands::execute_repo_script,
             commands::script_commands::stop_repo_script,
             commands::script_commands::write_repo_script_stdin,
@@ -293,6 +283,24 @@ pub fn run() {
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
+            commands::browser_commands::list_workspace_browser_tabs,
+            commands::browser_commands::create_browser_tab,
+            commands::browser_commands::select_browser_tab,
+            commands::browser_commands::navigate_browser_tab,
+            commands::browser_commands::update_browser_tab_title,
+            commands::browser_commands::close_browser_tab,
+            commands::browser_commands::get_workspace_browser_profile,
+            commands::browser_commands::get_browser_tab_profile,
+            commands::browser_commands::create_browser_webview,
+            commands::browser_commands::browser_go_back,
+            commands::browser_commands::browser_go_forward,
+            commands::browser_commands::open_browser_devtools,
+            commands::browser_commands::browser_snapshot,
+            commands::browser_commands::browser_screenshot,
+            commands::browser_commands::browser_click,
+            commands::browser_commands::browser_type,
+            commands::browser_commands::browser_key,
+            commands::browser_commands::browser_scroll,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,
@@ -303,19 +311,11 @@ pub fn run() {
             commands::session_commands::delete_session,
             commands::session_commands::list_hidden_sessions,
             commands::session_commands::get_session_context_usage,
-            commands::session_commands::get_session_codex_goal,
-            commands::session_commands::mutate_codex_goal,
-            commands::session_commands::list_session_drafts,
-            commands::session_commands::set_session_draft,
             commands::session_commands::get_live_context_usage,
             commands::agent_commands::delegate_agent,
             commands::session_commands::mark_session_read,
             commands::session_commands::mark_session_unread,
             commands::workspace_commands::list_remote_branches,
-            commands::workspace_commands::list_branches_for_local_picker,
-            commands::workspace_commands::get_repo_current_branch,
-            commands::workspace_commands::create_and_checkout_branch,
-            commands::workspace_commands::move_local_workspace_to_worktree,
             commands::workspace_commands::rename_workspace_branch,
             commands::workspace_commands::update_intended_target_branch,
             commands::workspace_commands::prefetch_remote_refs,
@@ -335,6 +335,7 @@ pub fn run() {
             commands::editor_commands::unstage_workspace_file,
             commands::editor_commands::get_workspace_git_action_status,
             commands::system_commands::drain_pending_cli_sends,
+            commands::system_commands::ack_pending_cli_send_started,
             commands::editor_commands::read_editor_file,
             commands::editor_commands::read_file_at_ref,
             commands::workspace_commands::set_workspace_status,
@@ -353,11 +354,10 @@ pub fn run() {
             commands::conductor_commands::list_conductor_workspaces,
             commands::conductor_commands::import_conductor_workspaces,
             commands::system_commands::save_pasted_image,
-            commands::system_commands::save_text_file_as,
             commands::system_commands::show_image_in_finder,
-            commands::system_commands::reveal_path_in_finder,
             commands::system_commands::copy_image_to_clipboard,
             commands::system_commands::request_quit,
+            commands::system_commands::restart_app,
             commands::system_commands::dev_reset_all_data,
             commands::settings_commands::update_app_settings,
             commands::session_commands::update_session_settings,
@@ -367,7 +367,6 @@ pub fn run() {
             commands::settings_commands::save_auto_close_opt_in_asked,
             global_hotkey::sync_global_hotkey,
             ui_sync::subscribe_ui_mutations,
-            ui_sync::unsubscribe_ui_mutations,
             commands::updater_commands::get_app_update_status,
             commands::updater_commands::check_for_app_update,
             commands::updater_commands::install_downloaded_app_update,
@@ -431,6 +430,14 @@ pub fn run() {
     });
 }
 
+#[cfg(debug_assertions)]
+fn resolve_mcp_base_port() -> u16 {
+    std::env::var("HELMOR_MCP_BASE_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(9223)
+}
+
 // Route a user-initiated exit through the frontend quit-confirm flow.
 // If the emit fails the webview is almost certainly gone, so falling
 // back to a direct exit is safer than leaving the process hanging with
@@ -445,7 +452,9 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
 const HELMOR_QUIT_MENU_ID: &str = "helmor-quit";
+#[cfg(target_os = "macos")]
 const HELMOR_CLOSE_CURRENT_SESSION_MENU_ID: &str = "helmor-close-current-session";
 
 #[cfg(target_os = "macos")]
@@ -513,6 +522,7 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn emit_close_current_session_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://close-current-session", ()) {
         tracing::warn!(error = %e, "Failed to emit close-current-session event");

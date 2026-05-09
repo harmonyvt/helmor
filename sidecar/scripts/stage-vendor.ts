@@ -1,4 +1,4 @@
-// Stage claude-code + codex + gh + glab into `sidecar/dist/vendor/`
+// Stage claude-code + codex + bun + gh + glab + pi into `sidecar/dist/vendor/`
 // for Tauri to ship as bundle resources. macOS host only.
 //
 // Cross-arch staging: in CI the host is always Apple Silicon (macos-26
@@ -6,11 +6,6 @@
 // bundles. We honor TAURI_TARGET_TRIPLE so the staged vendor binaries match
 // the bundle target — otherwise Intel users get arm64 binaries and
 // `gh auth login` fails with "bad CPU type in executable" (#293).
-//
-// Claude Code and Codex are each shipped as a single self-contained native
-// binary, pulled from the platform-specific npm sub-package
-// (@anthropic-ai/claude-code-darwin-{arm64,x64}/claude,
-//  @openai/codex-darwin-{arm64,x64}/.../codex).
 
 import { execFileSync } from "node:child_process";
 import {
@@ -32,12 +27,13 @@ const DIST_VENDOR = join(SIDECAR_ROOT, "dist", "vendor");
 const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 
 // Bumping any version: update SHA256 below + wipe sidecar/.bundle-cache.
-//   gh:          github.com/cli/cli/releases/download/v$VER/gh_${VER}_checksums.txt
-//   glab:        gitlab.com/gitlab-org/cli/-/releases/v$VER/downloads/checksums.txt
-//   codex:       shasum -a 256 of the npm tarball at
-//                registry.npmjs.org/@openai/codex/-/codex-$VER-darwin-{arm64,x64}.tgz
-//   claude-code: shasum -a 256 of the npm tarballs at
-//                registry.npmjs.org/@anthropic-ai/claude-code-darwin-{arm64,x64}/-/claude-code-darwin-{arm64,x64}-$VER.tgz
+//   gh:    github.com/cli/cli/releases/download/v$VER/gh_${VER}_checksums.txt
+//   glab:  gitlab.com/gitlab-org/cli/-/releases/v$VER/downloads/checksums.txt
+//   bun:   github.com/oven-sh/bun/releases/download/bun-v$VER/SHASUMS256.txt
+//   codex: shasum -a 256 of the npm tarball at
+//          registry.npmjs.org/@openai/codex/-/codex-$VER-darwin-{arm64,x64}.tgz
+//   fd:    shasum -a 256 of the GitHub release asset at
+//          github.com/sharkdp/fd/releases/download/v$VER/fd-v$VER-{aarch64,x86_64}-apple-darwin.tar.gz
 
 const GH_VERSION = "2.91.0";
 const GH_SHA256 = {
@@ -51,25 +47,25 @@ const GLAB_SHA256 = {
 	amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
 } as const;
 
+const BUN_VERSION = "1.3.2";
+const BUN_SHA256 = {
+	arm64: "d85847982db574518130a45582bcf14d8e2be9610b66cb5046c20348578b0fe2",
+	x64: "78d4f0c8637427ac0be55639a697ff6a025e8eb940a6920ca508603c41a5a7b0",
+} as const;
+
+const FD_VERSION = "10.3.0";
+const FD_SHA256 = {
+	arm64: "0570263812089120bc2a5d84f9e65cd0c25e4a4d724c80075c357239c74ae904",
+	x64: "50d30f13fe3d5914b14c4fff5abcbd4d0cdab4b855970a6956f4f006c17117a3",
+} as const;
+
 // Codex version is whatever sidecar/package.json pulled in. The SHAs below
 // must match THAT version — bump them together (or staging cross-arch will
 // abort with a clear error).
 const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
-	"0.128.0": {
-		arm64: "25499d957ae18d317cd13012750e681a60a1d7ce45f577c6f07e53d374199d9b",
-		x64: "1f4ffa3c70c243c2993dedb67635f6a98c13d3f2b86a5caa445ef762532fc21f",
-	},
-};
-
-// Same versioning rule as Codex: must match whatever sidecar/package.json
-// pulled in (`@anthropic-ai/claude-code`). Cross-arch staging downloads
-// straight from the npm registry and verifies against this table.
-const CLAUDE_CODE_SHA256: Readonly<
-	Record<string, { arm64: string; x64: string }>
-> = {
-	"2.1.126": {
-		arm64: "8ef17e23ed2987a3fdd39beae7750acef7b45026c9b7a9384d98a8808c4ba5f8",
-		x64: "0aa89a9bfc0b3667bc652c21df2e8cb09a26b32f8c4faf11b94d2128b96acffc",
+	"0.124.0": {
+		arm64: "8221653b5f1592007ff19a756cfd00afaa4005b3e944412a3ca2372d0abb3b5a",
+		x64: "eb9c0cf46fc9aa58592cd103f0cbc9535667087eb3369d0b99ae62b49f9133da",
 	},
 };
 
@@ -83,10 +79,8 @@ type DarwinArch = "arm64" | "x64";
 
 interface TargetInfo {
 	arch: DarwinArch;
-	/** `@anthropic-ai/claude-code-darwin-<arch>` is the platform sub-package. */
-	claudeCodePkg: string;
-	/** claude-code npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
-	claudeCodeNpmSuffix: string;
+	/** `@anthropic-ai/claude-code` uses `<arch>-darwin` naming. */
+	ccVendorArch: string;
 	/** `@openai/codex-darwin-<arch>` is the npm optional-dep package. */
 	codexPkg: string;
 	/** Target triple inside the codex platform package. */
@@ -97,30 +91,36 @@ interface TargetInfo {
 	ghArch: "arm64" | "amd64";
 	/** `glab` release naming: `arm64` / `amd64`. */
 	glabArch: "arm64" | "amd64";
+	/** `bun` release naming: `aarch64` / `x64`. */
+	bunArch: "aarch64" | "x64";
+	/** `fd` release target naming. */
+	fdArch: "aarch64" | "x86_64";
 }
 
 function infoForArch(arch: DarwinArch): TargetInfo {
 	if (arch === "arm64") {
 		return {
 			arch,
-			claudeCodePkg: "@anthropic-ai/claude-code-darwin-arm64",
-			claudeCodeNpmSuffix: "darwin-arm64",
+			ccVendorArch: "arm64-darwin",
 			codexPkg: "@openai/codex-darwin-arm64",
 			codexTriple: "aarch64-apple-darwin",
 			codexNpmSuffix: "darwin-arm64",
 			ghArch: "arm64",
 			glabArch: "arm64",
+			bunArch: "aarch64",
+			fdArch: "aarch64",
 		};
 	}
 	return {
 		arch,
-		claudeCodePkg: "@anthropic-ai/claude-code-darwin-x64",
-		claudeCodeNpmSuffix: "darwin-x64",
+		ccVendorArch: "x64-darwin",
 		codexPkg: "@openai/codex-darwin-x64",
 		codexTriple: "x86_64-apple-darwin",
 		codexNpmSuffix: "darwin-x64",
 		ghArch: "amd64",
 		glabArch: "amd64",
+		bunArch: "x64",
+		fdArch: "x86_64",
 	};
 }
 
@@ -166,6 +166,17 @@ function ensureExists(path: string, label: string): void {
 function copyFile(src: string, dest: string): void {
 	mkdirSync(dirname(dest), { recursive: true });
 	cpSync(src, dest);
+}
+
+function copyDir(src: string, dest: string): void {
+	mkdirSync(dirname(dest), { recursive: true });
+	cpSync(src, dest, { recursive: true });
+}
+
+function copyDirIfExists(src: string, dest: string): void {
+	if (existsSync(src)) {
+		copyDir(src, dest);
+	}
 }
 
 function humanSize(path: string): string {
@@ -288,6 +299,22 @@ function locateExtractedBin(extractDir: string, name: string): string {
 	);
 }
 
+function locateExtractedFile(extractDir: string, name: string): string {
+	const stack = [extractDir];
+	while (stack.length > 0) {
+		const current = stack.pop();
+		if (!current) continue;
+		for (const entry of readdirSync(current, { withFileTypes: true })) {
+			const path = join(current, entry.name);
+			if (entry.isFile() && entry.name === name) return path;
+			if (entry.isDirectory()) stack.push(path);
+		}
+	}
+	throw new Error(
+		`[stage-vendor] could not locate ${name} under ${extractDir}`,
+	);
+}
+
 function stageGhBinary(arch: "arm64" | "amd64"): string {
 	ensureCacheDir();
 	const slug = `gh_${GH_VERSION}_macOS_${arch}`;
@@ -336,62 +363,48 @@ function stageGlabBinary(arch: "arm64" | "amd64"): string {
 }
 
 // ---------------------------------------------------------------------------
-// claude-code — prefer the platform sub-package already on disk; fall back to
-// downloading the npm tarball when staging for a non-host architecture.
-//
-// Source layout: `node_modules/@anthropic-ai/claude-code-darwin-<arch>/claude`
-// (single self-contained native binary, ~210 MB; ripgrep + audio-capture +
-// JSC runtime are statically embedded).
-//
-// codesign uses entitlements (allow-jit / allow-unsigned-executable-memory)
-// because it's `bun build --compile` output and JSC needs JIT under
-// hardened runtime.
+// bun — pinned download from oven-sh/bun releases for the target arch.
+// Was previously copied from `which bun`, which silently produced an arm64
+// binary for x86_64 builds whenever the runner host was Apple Silicon.
 // ---------------------------------------------------------------------------
 
-function readClaudeCodeVersion(): string {
-	const pkgJsonPath = join(
-		NODE_MODULES,
-		"@anthropic-ai",
-		"claude-code",
-		"package.json",
-	);
-	ensureExists(pkgJsonPath, "@anthropic-ai/claude-code package.json");
-	const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as {
-		version?: string;
-	};
-	if (!pkg.version) {
-		throw new Error(`[stage-vendor] @anthropic-ai/claude-code has no version`);
-	}
-	return pkg.version;
-}
+function stageBunBinary(target: TargetInfo): string {
+	ensureCacheDir();
+	const slug = `bun-darwin-${target.bunArch}`;
+	const archive = join(BUNDLE_CACHE, `${slug}-${BUN_VERSION}.zip`);
+	const url = `https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${slug}.zip`;
+	downloadAndVerify(url, archive, BUN_SHA256[target.arch]);
 
-function copyClaudeCodeBin(src: string): string {
-	const dest = join(DIST_VENDOR, "claude-code", "claude");
-	copyFile(src, dest);
-	chmodSync(dest, 0o755);
-	maybeSignMacBinary(dest, true);
-	return dest;
-}
+	const extractDir = join(BUNDLE_CACHE, `bun-${BUN_VERSION}-${target.bunArch}`);
+	freshExtractDir(extractDir);
+	execFileSync("unzip", ["-q", "-o", archive, "-d", extractDir], {
+		stdio: "inherit",
+	});
 
-function stageClaudeCodeBinary(target: TargetInfo): string {
-	const installed = join(NODE_MODULES, target.claudeCodePkg, "claude");
-	if (existsSync(installed)) {
-		return copyClaudeCodeBin(installed);
-	}
-
-	// Cross-arch: download the platform tarball from npm.
-	const version = readClaudeCodeVersion();
-	const shaTable = CLAUDE_CODE_SHA256[version];
-	if (!shaTable) {
+	// Archive layout: `bun-darwin-<arch>/bun`.
+	const binSrc = join(extractDir, slug, "bun");
+	if (!existsSync(binSrc)) {
 		throw new Error(
-			`[stage-vendor] no pinned SHA256 for claude-code ${version} — add it to CLAUDE_CODE_SHA256 in stage-vendor.ts`,
+			`[stage-vendor] bun binary missing after extract: ${binSrc}`,
 		);
 	}
+	const binDest = join(DIST_VENDOR, "bun", "bun");
+	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, true);
+	return binDest;
+}
+
+// ---------------------------------------------------------------------------
+// Pi — package assets + helper binaries used by the SDK at runtime.
+// ---------------------------------------------------------------------------
+
+function stageFdBinary(target: TargetInfo): string {
 	ensureCacheDir();
-	const slug = `claude-code-${target.claudeCodeNpmSuffix}-${version}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.tgz`);
-	const url = `https://registry.npmjs.org/${target.claudeCodePkg}/-/claude-code-${target.claudeCodeNpmSuffix}-${version}.tgz`;
-	downloadAndVerify(url, archive, shaTable[target.arch]);
+	const slug = `fd-v${FD_VERSION}-${target.fdArch}-apple-darwin`;
+	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
+	const url = `https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/${slug}.tar.gz`;
+	downloadAndVerify(url, archive, FD_SHA256[target.arch]);
 
 	const extractDir = join(BUNDLE_CACHE, slug);
 	freshExtractDir(extractDir);
@@ -399,14 +412,89 @@ function stageClaudeCodeBinary(target: TargetInfo): string {
 		stdio: "inherit",
 	});
 
-	// npm tarballs nest everything under `package/`.
-	const binSrc = join(extractDir, "package", "claude");
-	if (!existsSync(binSrc)) {
-		throw new Error(
-			`[stage-vendor] claude-code binary missing after extract: ${binSrc}`,
-		);
+	const binSrc = locateExtractedFile(extractDir, "fd");
+	const binDest = join(DIST_VENDOR, "pi", "bin", "fd");
+	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, false);
+	return binDest;
+}
+
+function stagePiRgBinary(target: TargetInfo): string | null {
+	const src = join(
+		NODE_MODULES,
+		"@anthropic-ai",
+		"claude-code",
+		"vendor",
+		"ripgrep",
+		target.ccVendorArch,
+		"rg",
+	);
+	if (!existsSync(src)) return null;
+	const dest = join(DIST_VENDOR, "pi", "bin", "rg");
+	copyFile(src, dest);
+	chmodSync(dest, 0o755);
+	maybeSignMacBinary(dest, false);
+	return dest;
+}
+
+function stagePiPackageAssets(): string {
+	const piSrc = join(NODE_MODULES, "@mariozechner", "pi-coding-agent");
+	const piDest = join(DIST_VENDOR, "pi", "package");
+	ensureExists(
+		join(piSrc, "package.json"),
+		"@mariozechner/pi-coding-agent/package.json",
+	);
+
+	for (const file of ["package.json", "README.md", "CHANGELOG.md"]) {
+		const src = join(piSrc, file);
+		if (existsSync(src)) copyFile(src, join(piDest, file));
 	}
-	return copyClaudeCodeBin(binSrc);
+
+	copyDirIfExists(
+		join(piSrc, "dist", "modes", "interactive", "theme"),
+		join(piDest, "dist", "modes", "interactive", "theme"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "modes", "interactive", "theme"),
+		join(piDest, "theme"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "modes", "interactive", "assets"),
+		join(piDest, "dist", "modes", "interactive", "assets"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "modes", "interactive", "assets"),
+		join(piDest, "assets"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "core", "export-html"),
+		join(piDest, "dist", "core", "export-html"),
+	);
+	copyDirIfExists(
+		join(piSrc, "dist", "core", "export-html"),
+		join(piDest, "export-html"),
+	);
+
+	const photonWasm = join(
+		NODE_MODULES,
+		"@silvia-odwyer",
+		"photon-node",
+		"photon_rs_bg.wasm",
+	);
+	if (existsSync(photonWasm)) {
+		copyFile(photonWasm, join(piDest, "photon_rs_bg.wasm"));
+	}
+	copyDirIfExists(join(piSrc, "docs"), join(piDest, "docs"));
+	copyDirIfExists(join(piSrc, "examples"), join(piDest, "examples"));
+
+	return piDest;
+}
+
+function stagePiRuntime(target: TargetInfo): void {
+	stagePiPackageAssets();
+	stageFdBinary(target);
+	stagePiRgBinary(target);
 }
 
 // ---------------------------------------------------------------------------
@@ -426,55 +514,25 @@ function readCodexVersion(): string {
 	return pkg.version;
 }
 
-/**
- * Stage codex out of `<vendorRoot>/<triple>/`.
- *
- * Source layout (npm tarball or installed package):
- *   <triple>/codex/codex      — the binary
- *   <triple>/path/rg          — ripgrep, expected on PATH at runtime
- *                                (codex spawns it for /search)
- *
- * Output:
- *   dist/vendor/codex/codex
- *   dist/vendor/codex/path/rg
- *
- * The sidecar prepends `dist/vendor/codex/path/` to the codex child's PATH
- * env when spawning, so codex finds `rg` without it being globally installed.
- */
-function stageCodexFromVendorRoot(archRoot: string): void {
-	const binSrc = join(archRoot, "codex", "codex");
-	if (!existsSync(binSrc)) {
-		throw new Error(`[stage-vendor] codex binary missing at ${binSrc}`);
-	}
-	const binDest = join(DIST_VENDOR, "codex", "codex");
-	copyFile(binSrc, binDest);
-	chmodSync(binDest, 0o755);
-	maybeSignMacBinary(binDest, false);
-
-	const pathSrc = join(archRoot, "path");
-	if (existsSync(pathSrc)) {
-		const pathDest = join(DIST_VENDOR, "codex", "path");
-		cpSync(pathSrc, pathDest, { recursive: true });
-		for (const entry of readdirSync(pathDest)) {
-			const file = join(pathDest, entry);
-			if (statSync(file).isFile()) {
-				chmodSync(file, 0o755);
-				maybeSignMacBinary(file, false);
-			}
-		}
-	}
+function copyCodexBin(src: string): string {
+	const dest = join(DIST_VENDOR, "codex", "codex");
+	copyFile(src, dest);
+	chmodSync(dest, 0o755);
+	maybeSignMacBinary(dest, false);
+	return dest;
 }
 
-function stageCodexBinary(target: TargetInfo): void {
-	const installedRoot = join(
+function stageCodexBinary(target: TargetInfo): string {
+	const installed = join(
 		NODE_MODULES,
 		target.codexPkg,
 		"vendor",
 		target.codexTriple,
+		"codex",
+		"codex",
 	);
-	if (existsSync(join(installedRoot, "codex", "codex"))) {
-		stageCodexFromVendorRoot(installedRoot);
-		return;
+	if (existsSync(installed)) {
+		return copyCodexBin(installed);
 	}
 
 	// Cross-arch: download the platform tarball from npm.
@@ -498,13 +556,20 @@ function stageCodexBinary(target: TargetInfo): void {
 	});
 
 	// npm tarballs nest everything under `package/`.
-	const extractedRoot = join(
+	const binSrc = join(
 		extractDir,
 		"package",
 		"vendor",
 		target.codexTriple,
+		"codex",
+		"codex",
 	);
-	stageCodexFromVendorRoot(extractedRoot);
+	if (!existsSync(binSrc)) {
+		throw new Error(
+			`[stage-vendor] codex binary missing after extract: ${binSrc}`,
+		);
+	}
+	return copyCodexBin(binSrc);
 }
 
 // ---------------------------------------------------------------------------
@@ -522,18 +587,56 @@ rmSync(DIST_VENDOR, { recursive: true, force: true });
 mkdirSync(DIST_VENDOR, { recursive: true });
 
 // ----- Claude Code -----
-stageClaudeCodeBinary(target);
+const ccSrc = join(NODE_MODULES, "@anthropic-ai/claude-code");
+const ccDest = join(DIST_VENDOR, "claude-code");
+ensureExists(join(ccSrc, "cli.js"), "@anthropic-ai/claude-code/cli.js");
+
+copyFile(join(ccSrc, "cli.js"), join(ccDest, "cli.js"));
+
+// Target-arch subset of claude-code's vendor dirs. cli.js resolves these
+// relative to itself at runtime; any missing subdir just disables that
+// particular feature (ripgrep -> /search, audio-capture -> voice I/O).
+const ccVendorSubdirs = ["ripgrep", "audio-capture"] as const;
+for (const sub of ccVendorSubdirs) {
+	const from = join(ccSrc, "vendor", sub, target.ccVendorArch);
+	if (existsSync(from)) {
+		copyDir(from, join(ccDest, "vendor", sub, target.ccVendorArch));
+	}
+}
 
 // ----- Codex -----
 stageCodexBinary(target);
+
+// ----- Bun -----
+stageBunBinary(target);
+
+for (const rel of [
+	join(ccDest, "vendor", "ripgrep", target.ccVendorArch, "rg"),
+	join(
+		ccDest,
+		"vendor",
+		"audio-capture",
+		target.ccVendorArch,
+		"audio-capture.node",
+	),
+]) {
+	if (existsSync(rel)) {
+		maybeSignMacBinary(rel, false);
+	}
+}
 
 // ----- gh + glab (forge CLIs) -----
 stageGhBinary(target.ghArch);
 stageGlabBinary(target.glabArch);
 
+// ----- Pi -----
+stagePiRuntime(target);
+
 // ----- Summary -----
 console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);
-console.log(`  claude-code ${humanSize(join(DIST_VENDOR, "claude-code"))}`);
+console.log(`  claude-code ${humanSize(ccDest)}`);
 console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
+console.log(`  bun         ${humanSize(join(DIST_VENDOR, "bun"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);
+console.log(`  pi          ${humanSize(join(DIST_VENDOR, "pi"))}`);

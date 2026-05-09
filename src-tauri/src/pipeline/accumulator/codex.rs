@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use super::StreamAccumulator;
-use crate::pipeline::codex_collab::{build_collab_result_text, collab_synthetic_tool_name};
+use crate::pipeline::file_change::file_change_result_text;
+use crate::pipeline::pi_tools::{canonical_pi_tool_name, mcp_result_text, normalize_pi_tool_args};
 use crate::pipeline::types::{CollectedTurn, MessageRole};
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,7 @@ pub(super) struct CodexItemState {
     output: String,
     reasoning_text: String,
     initial_item: Value,
+    started_at_ms: f64,
 }
 
 impl CodexItemState {
@@ -36,7 +38,13 @@ impl CodexItemState {
             output: String::new(),
             reasoning_text: String::new(),
             initial_item,
+            started_at_ms: super::now_ms(),
         }
+    }
+
+    fn duration_ms(&self) -> Option<u64> {
+        let duration = super::now_ms() - self.started_at_ms;
+        (duration >= 0.0).then_some(duration as u64)
     }
 
     /// Build a full item snapshot from accumulated delta state.
@@ -85,17 +93,10 @@ pub(super) fn handle_item_started(acc: &mut StreamAccumulator, _raw_line: &str, 
         );
     }
 
-    // Skip mid-flight render for collab tool calls — `item/started` has
-    // empty agentsStates / receiverThreadIds, so all the frontend can show
-    // is a "Sub-agent" placeholder that flickers off when completed lands.
-    // The entry stays in `codex_items` so abort/flush still works.
-    if item_type == "collab_agent_tool_call" {
-        return;
-    }
-
     let synthetic = serde_json::json!({"item": item});
     let synthetic_str = serde_json::to_string(&synthetic).unwrap_or_default();
     dispatch_item(acc, &synthetic_str, &synthetic, false);
+    reserve_item_turn_order(acc, item_type, item_id, &item);
 }
 
 pub(super) fn handle_item_completed(acc: &mut StreamAccumulator, _raw_line: &str, value: &Value) {
@@ -105,10 +106,16 @@ pub(super) fn handle_item_completed(acc: &mut StreamAccumulator, _raw_line: &str
     let item = normalize_item(raw_item);
     let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
 
-    // Clean up delta state
-    if !item_id.is_empty() {
-        acc.codex_items.remove(item_id);
-    }
+    // Clean up delta state. Keep the removed state long enough to fill
+    // completion payload gaps (Pi thinking_end can omit content) and to
+    // stamp reasoning duration for both the live just-finished render and
+    // the persisted historical row.
+    let completed_state = if !item_id.is_empty() {
+        acc.codex_items.remove(item_id)
+    } else {
+        None
+    };
+    let item = enrich_completed_item(item, completed_state.as_ref());
 
     // Include "type": "item.completed" so the adapter's historical
     // reload can dispatch via `msg_type == "item.completed"`.
@@ -259,6 +266,95 @@ fn emit_snapshot_for(acc: &mut StreamAccumulator, item_id: &str) {
     dispatch_item(acc, &s, &synthetic, false);
 }
 
+/// Reserve a database row at item start time for item types whose live
+/// renderer inserts a placeholder immediately and replaces it as deltas or
+/// completion arrive. Persistence later upserts the same id, preserving
+/// start-order in `session_messages.sent_at/rowid` while keeping the final
+/// content up to date. Without this, long-running Pi/Codex tools are stored
+/// in completion order even though the live thread displays them in start
+/// order.
+fn reserve_item_turn_order(
+    acc: &mut StreamAccumulator,
+    item_type: &str,
+    item_id: &str,
+    item: &Value,
+) {
+    if item_type == "reasoning" {
+        let has_text = item
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty());
+        let is_pi_reasoning = item_id.starts_with("pi-reasoning-");
+        if !has_text && !is_pi_reasoning {
+            return;
+        }
+    }
+
+    let Some(turn_id) = item_turn_id(item_type, Some(item_id), acc.line_count) else {
+        return;
+    };
+
+    let role = item_turn_role(item_type);
+    let envelope = serde_json::json!({"type": "item.completed", "item": item});
+    let content_json = serde_json::to_string(&envelope).unwrap_or_default();
+    acc.turns.push(CollectedTurn {
+        id: turn_id,
+        role,
+        content_json,
+    });
+}
+
+fn item_turn_role(_item_type: &str) -> MessageRole {
+    MessageRole::Assistant
+}
+
+fn item_turn_id(item_type: &str, item_id: Option<&str>, line_count: u64) -> Option<String> {
+    let id = item_id.filter(|id| !id.is_empty());
+    match item_type {
+        "agent_message" => Some(
+            id.map(|id| format!("codex-item:{id}"))
+                .unwrap_or_else(|| format!("codex-item:{line_count}")),
+        ),
+        "reasoning" => Some(
+            id.map(|id| format!("codex-reasoning:{id}"))
+                .unwrap_or_else(|| format!("codex-reasoning:{line_count}")),
+        ),
+        "command_execution" => Some(
+            id.map(|id| format!("codex-cmd-asst:{id}"))
+                .unwrap_or_else(|| format!("codex-cmd-asst:{line_count}")),
+        ),
+        "file_change" => Some(
+            id.map(|id| format!("codex-patch-asst:{id}"))
+                .unwrap_or_else(|| format!("codex-patch-asst:{line_count}")),
+        ),
+        "web_search" => Some(
+            id.map(|id| format!("codex-search-asst:{id}"))
+                .unwrap_or_else(|| format!("codex-search-asst:{line_count}")),
+        ),
+        "mcp_tool_call" => Some(
+            id.map(|id| format!("codex-mcp-asst:{id}"))
+                .unwrap_or_else(|| format!("codex-mcp-asst:{line_count}")),
+        ),
+        "todo_list" => Some(
+            id.map(|id| format!("codex-todo-msg:{id}"))
+                .unwrap_or_else(|| format!("codex-todo-msg:{line_count}")),
+        ),
+        "plan" => Some(
+            id.map(|id| format!("codex-plan:{id}"))
+                .unwrap_or_else(|| format!("codex-plan:{line_count}")),
+        ),
+        "image_generation" => Some(
+            id.map(|id| format!("codex-image:{id}"))
+                .unwrap_or_else(|| format!("codex-image:{line_count}")),
+        ),
+        "generic_card" => Some(
+            id.map(|id| format!("generic-card:{id}"))
+                .unwrap_or_else(|| format!("generic-card:{line_count}")),
+        ),
+        _ => None,
+    }
+}
+
 /// Route a normalized item value to the correct type handler.
 /// Route a normalized item to the correct type handler.
 fn dispatch_item(acc: &mut StreamAccumulator, raw_line: &str, value: &Value, persist: bool) {
@@ -303,11 +399,11 @@ fn dispatch_item(acc: &mut StreamAccumulator, raw_line: &str, value: &Value, per
         Some("image_generation") => {
             handle_image_generation(acc, raw_line, item, item_id.as_deref(), persist);
         }
+        Some("generic_card") => {
+            handle_generic_card(acc, raw_line, item, item_id.as_deref(), persist);
+        }
         Some("error") => {
             handle_error_item(acc, raw_line, item, persist);
-        }
-        Some("collab_agent_tool_call") => {
-            handle_collab_agent_tool_call(acc, raw_line, item, item_id.as_deref(), persist);
         }
         _ => {
             let label = format!("codex/item:{}", item_type.unwrap_or("<missing-item-type>"));
@@ -480,11 +576,7 @@ fn handle_file_change(
     );
 
     if let Some(s) = status {
-        let result_text = match s {
-            "completed" => "Patch applied".to_string(),
-            "failed" => "Patch failed".to_string(),
-            other => format!("Patch {other}"),
-        };
+        let result_text = file_change_result_text(item, s);
         let synthetic_result = serde_json::json!({
             "type": "user",
             "message": {
@@ -527,16 +619,23 @@ fn handle_reasoning(
     let intermediate_id = item_id
         .map(|id| format!("codex-reasoning:{id}"))
         .unwrap_or_else(|| format!("codex-reasoning:{}", acc.line_count));
+    let mut thinking_block = serde_json::json!({
+        "type": "thinking",
+        "thinking": text,
+        "__part_id": format!("{intermediate_id}:blk:0"),
+    });
+    if let Some(obj) = thinking_block.as_object_mut() {
+        obj.insert("__is_streaming".to_string(), Value::Bool(!persist));
+        if let Some(duration) = item.get("duration_ms").and_then(Value::as_u64) {
+            obj.insert("__duration_ms".to_string(), Value::from(duration));
+        }
+    }
     let synthetic_assistant = serde_json::json!({
         "type": "assistant",
         "message": {
             "type": "message",
             "role": "assistant",
-            "content": [{
-                "type": "thinking",
-                "thinking": text,
-                "__part_id": format!("{intermediate_id}:blk:0"),
-            }]
+            "content": [thinking_block]
         }
     });
     let sa_str = serde_json::to_string(&synthetic_assistant).unwrap_or_default();
@@ -651,12 +750,13 @@ fn handle_mcp_tool_call(
 ) {
     let server = item.get("server").and_then(Value::as_str).unwrap_or("");
     let tool = item.get("tool").and_then(Value::as_str).unwrap_or("");
-    let arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
+    let raw_arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
+    let arguments = normalize_pi_tool_args(server, tool, raw_arguments);
     let status = item.get("status").and_then(Value::as_str);
     let synthetic_id = item_id
         .map(|id| format!("codex-mcp-{id}"))
         .unwrap_or_else(|| format!("codex-mcp-{}", acc.line_count));
-    let tool_name = format!("mcp__{server}__{tool}");
+    let tool_name = canonical_pi_tool_name(server, tool);
 
     let mut tool_use = serde_json::json!({
         "type": "tool_use",
@@ -687,18 +787,7 @@ fn handle_mcp_tool_call(
     );
 
     if matches!(status, Some("completed") | Some("failed")) {
-        let result_text = if status == Some("failed") {
-            let msg = item
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("MCP tool failed");
-            format!("Error: {msg}")
-        } else {
-            item.get("result")
-                .and_then(|r| serde_json::to_string(r).ok())
-                .unwrap_or_else(|| "OK".to_string())
-        };
+        let result_text = mcp_result_text(server, tool, item, status == Some("failed"));
         let synthetic_result = serde_json::json!({
             "type": "user",
             "message": {
@@ -898,6 +987,32 @@ fn handle_image_generation(
     }
 }
 
+fn handle_generic_card(
+    acc: &mut StreamAccumulator,
+    raw_line: &str,
+    item: &Value,
+    item_id: Option<&str>,
+    persist: bool,
+) {
+    let envelope = serde_json::json!({
+        "type": "item.completed",
+        "item": item,
+    });
+    let s = serde_json::to_string(&envelope).unwrap_or_default();
+    let card_id = item_id
+        .map(|id| format!("generic-card:{id}"))
+        .unwrap_or_else(|| format!("generic-card:{}", acc.line_count));
+    acc.collect_or_replace(&s, &envelope, MessageRole::Assistant, Some(card_id.clone()));
+
+    if persist {
+        acc.turns.push(CollectedTurn {
+            id: card_id,
+            role: MessageRole::Assistant,
+            content_json: raw_line.to_string(),
+        });
+    }
+}
+
 pub(super) fn handle_thread_compacted(acc: &mut StreamAccumulator, _raw_line: &str, value: &Value) {
     let synthetic = serde_json::json!({
         "type": "system",
@@ -977,99 +1092,31 @@ pub(super) fn handle_turn_plan_updated(
     );
 }
 
-/// Synthesize a tool_use block for a `collabAgentToolCall`. The five
-/// `tool` variants (spawnAgent / sendInput / resumeAgent / wait /
-/// closeAgent) each become a distinct synthetic tool name so the
-/// frontend can dispatch on `toolName` like it does for other Codex
-/// tools (Bash, apply_patch, etc.).
-///
-/// `wait` carries the most signal: when status=completed,
-/// `agentsStates[threadId].message` is the sub-agent's final answer
-/// text. We emit it as a `tool_result` so the existing tool-result
-/// rendering path can surface it without any new MessagePart shape.
-fn handle_collab_agent_tool_call(
-    acc: &mut StreamAccumulator,
-    raw_line: &str,
-    item: &Value,
-    item_id: Option<&str>,
-    persist: bool,
-) {
-    let tool = item.get("tool").and_then(Value::as_str).unwrap_or("");
-    let status = item.get("status").and_then(Value::as_str);
-    let synthetic_tool_name = collab_synthetic_tool_name(tool);
-
-    let synthetic_id = item_id
-        .map(|id| format!("codex-collab-{id}"))
-        .unwrap_or_else(|| format!("codex-collab-{}", acc.line_count));
-
-    // Pass through every collab field — the frontend's spawn-agent renderer
-    // reads `prompt`, `senderThreadId`, `receiverThreadIds`, `agentsStates`,
-    // `model`, `reasoningEffort` directly. Cheaper to forward the whole item
-    // than to enumerate fields here (the adapter does the same).
-    let mut input = item.clone();
-    if let Some(obj) = input.as_object_mut() {
-        // Drop redundant identifiers — frontend uses the synthetic id.
-        obj.remove("type");
-        obj.remove("id");
+fn enrich_completed_item(mut item: Value, state: Option<&CodexItemState>) -> Value {
+    if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+        return item;
     }
 
-    let mut tool_use = serde_json::json!({
-        "type": "tool_use",
-        "id": synthetic_id,
-        "name": synthetic_tool_name,
-        "input": input,
-    });
-    if status == Some("in_progress") {
-        tool_use["__streaming_status"] = Value::String("running".to_string());
-    }
-
-    let synthetic_assistant = serde_json::json!({
-        "type": "assistant",
-        "message": {
-            "type": "message",
-            "role": "assistant",
-            "content": [tool_use],
+    if item
+        .get("text")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        if let Some(text) = state
+            .map(|state| state.reasoning_text.as_str())
+            .filter(|text| !text.is_empty())
+        {
+            item["text"] = Value::String(text.to_string());
         }
-    });
-    let sa_str = serde_json::to_string(&synthetic_assistant).unwrap_or_default();
-    let asst_id = item_id
-        .map(|id| format!("codex-collab-asst:{id}"))
-        .unwrap_or_else(|| format!("codex-collab-asst:{}", acc.line_count));
-    acc.collect_or_replace(
-        &sa_str,
-        &synthetic_assistant,
-        MessageRole::Assistant,
-        Some(asst_id.clone()),
-    );
-
-    // For terminal statuses synthesize a tool_result. `wait` carries the
-    // sub-agents' final answers in `agentsStates[*].message`; spawn / send /
-    // resume / close don't produce useful textual output beyond the request
-    // itself, so their result is just the status word.
-    if matches!(status, Some("completed") | Some("failed")) {
-        let result_text = build_collab_result_text(tool, status.unwrap_or(""), item);
-        let synthetic_result = serde_json::json!({
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": synthetic_id,
-                    "content": result_text,
-                }]
-            }
-        });
-        let sr_str = serde_json::to_string(&synthetic_result).unwrap_or_default();
-        let user_id = item_id.map(|id| format!("codex-collab-user:{id}"));
-        acc.collect_or_replace(&sr_str, &synthetic_result, MessageRole::User, user_id);
     }
 
-    if persist {
-        acc.turns.push(CollectedTurn {
-            id: asst_id,
-            role: MessageRole::Assistant,
-            content_json: raw_line.to_string(),
-        });
+    if item.get("duration_ms").and_then(Value::as_u64).is_none() {
+        if let Some(duration) = state.and_then(CodexItemState::duration_ms) {
+            item["duration_ms"] = Value::from(duration);
+        }
     }
+
+    item
 }
 
 fn handle_error_item(acc: &mut StreamAccumulator, raw_line: &str, item: &Value, persist: bool) {
@@ -1168,7 +1215,7 @@ fn normalize_item_type(t: &str) -> &str {
         "plan" => "plan",
         "contextCompaction" | "context_compaction" => "context_compaction",
         "imageGeneration" | "image_generation" => "image_generation",
-        "collabAgentToolCall" | "collab_agent_tool_call" => "collab_agent_tool_call",
+        "genericCard" | "generic_card" => "generic_card",
         "error" => "error",
         other => other,
     }
@@ -1184,10 +1231,6 @@ fn normalize_field_name(name: &str) -> String {
         "commandActions" => "command_actions".to_string(),
         "memoryCitation" => "memory_citation".to_string(),
         "savedPath" => "saved_path".to_string(),
-        // collabAgentToolCall fields — keep camelCase intact for the
-        // adapter (it inspects raw fields like `senderThreadId`,
-        // `receiverThreadIds`, `agentsStates`); rename only those that
-        // collide with snake_case rendering elsewhere.
         _ => name.to_string(),
     }
 }

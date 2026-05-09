@@ -1,12 +1,13 @@
 import type { WorkspaceSessionSummary } from "@/lib/api";
-import { isSessionRunningStatus } from "./session-running";
 
 export function shouldConfirmRunningSessionClose(
 	session: WorkspaceSessionSummary,
-	busySessionIds?: Set<string>,
+	sendingSessionIds?: Set<string>,
 ): boolean {
 	return (
-		busySessionIds?.has(session.id) === true ||
-		isSessionRunningStatus(session.status)
+		sendingSessionIds?.has(session.id) === true ||
+		session.status === "pending" ||
+		session.status === "streaming_input" ||
+		session.status === "running"
 	);
 }

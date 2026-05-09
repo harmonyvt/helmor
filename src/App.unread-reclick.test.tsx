@@ -4,7 +4,8 @@
 // early-return branch in handleSelectWorkspace previously swallowed this
 // case, leaving the dot stuck.
 //
-// Mirrors the mock pattern from App.unread.test.tsx (unread mocks).
+// Mirrors the mock pattern from App.create.test.tsx (creation flow) and
+// App.unread.test.tsx (unread mocks).
 
 import {
 	cleanup,
@@ -25,8 +26,6 @@ const apiMocks = vi.hoisted(() => ({
 	loadSessionThreadMessages: vi.fn(),
 	loadRepoScripts: vi.fn(),
 	listRepositories: vi.fn(),
-	listSessionDrafts: vi.fn(),
-	getClaudeRateLimits: vi.fn(),
 	prepareWorkspaceFromRepo: vi.fn(),
 	finalizeWorkspaceFromRepo: vi.fn(),
 	markSessionRead: vi.fn(),
@@ -58,8 +57,6 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		loadRepoScripts: apiMocks.loadRepoScripts,
 		listRepositories: apiMocks.listRepositories,
-		listSessionDrafts: apiMocks.listSessionDrafts,
-		getClaudeRateLimits: apiMocks.getClaudeRateLimits,
 		prepareWorkspaceFromRepo: apiMocks.prepareWorkspaceFromRepo,
 		finalizeWorkspaceFromRepo: apiMocks.finalizeWorkspaceFromRepo,
 		markSessionRead: apiMocks.markSessionRead,
@@ -92,8 +89,6 @@ describe("App unread — re-click selected workspace clears dot", () => {
 		apiMocks.loadArchivedWorkspaces.mockResolvedValue([]);
 		apiMocks.loadAgentModelSections.mockResolvedValue([]);
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
-		apiMocks.listSessionDrafts.mockResolvedValue([]);
-		apiMocks.getClaudeRateLimits.mockResolvedValue(null);
 		apiMocks.loadRepoScripts.mockResolvedValue({
 			setupScript: null,
 			runScript: null,
@@ -266,12 +261,16 @@ describe("App unread — re-click selected workspace clears dot", () => {
 		// already-selected workspace hit the early return and never
 		// re-triggered the mark-session-read effect, so the green dot stayed.
 		const user = userEvent.setup();
-		runtime.createdWorkspaceId = "ws-acamar";
-		runtime.createdSessionId = "session-acamar";
 
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
+		await user.click(screen.getByRole("button", { name: "New workspace" }));
+		await user.click(await screen.findByText("dosu-cli"));
+
+		await waitFor(() => {
+			expect(runtime.createdWorkspaceId).not.toBeNull();
+		});
 		const findRow = () =>
 			document.querySelector(
 				`[data-workspace-row-id="${runtime.createdWorkspaceId}"]`,
@@ -279,6 +278,9 @@ describe("App unread — re-click selected workspace clears dot", () => {
 		await waitFor(() => expect(findRow()).not.toBeNull());
 		await waitFor(() => {
 			expect(apiMocks.markSessionRead).toHaveBeenCalledWith("session-acamar");
+		});
+		await waitFor(() => {
+			expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalled();
 		});
 
 		// Mark the (already-selected) workspace unread via context menu.

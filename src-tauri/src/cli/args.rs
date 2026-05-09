@@ -54,6 +54,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: WorkspaceAction,
     },
+    /// Goal workspace orchestration.
+    Goal {
+        #[command(subcommand)]
+        action: GoalAction,
+    },
     /// Session CRUD and inspection.
     Session {
         #[command(subcommand)]
@@ -415,6 +420,62 @@ pub enum ReadState {
 }
 
 // ---------------------------------------------------------------------------
+// goal
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+pub enum GoalAction {
+    /// Create/finalize a child workspace under a Goal and optionally start a prompt.
+    Child {
+        #[command(subcommand)]
+        action: GoalChildAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum GoalChildAction {
+    /// Create a child workspace attached to a Goal board.
+    Create {
+        /// Goal workspace UUID or repo-name/directory-name.
+        #[arg(long)]
+        goal: String,
+        /// Child workspace title.
+        #[arg(long)]
+        title: String,
+        /// Optional child description/card details.
+        #[arg(long)]
+        description: Option<String>,
+        /// Initial Goal lane/status.
+        #[arg(long, value_enum)]
+        lane: Option<WorkspaceStatusValue>,
+        /// Start/target branch. Defaults to the Goal workspace branch.
+        #[arg(long)]
+        target_branch: Option<String>,
+        /// Optional assigned provider metadata (claude, codex, pi).
+        #[arg(long)]
+        provider: Option<String>,
+        /// Optional model id for the initial session/prompt.
+        #[arg(long)]
+        model: Option<String>,
+        /// Optional effort level metadata for the initial session.
+        #[arg(long)]
+        effort: Option<String>,
+        /// Permission mode for --prompt.
+        #[arg(long)]
+        permission_mode: Option<String>,
+        /// Shortcut for --permission-mode plan.
+        #[arg(long, conflicts_with = "permission_mode")]
+        plan: bool,
+        /// Prompt to start in the child workspace. Use '-' to read stdin.
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Only insert the initializing DB row; do not create the worktree.
+        #[arg(long)]
+        no_finalize: bool,
+    },
+}
+
+// ---------------------------------------------------------------------------
 // session
 // ---------------------------------------------------------------------------
 
@@ -585,11 +646,28 @@ pub enum ModelsAction {
 
 #[derive(Subcommand)]
 pub enum GithubAction {
+    /// Auth subsystem.
+    Auth {
+        #[command(subcommand)]
+        action: GithubAuthAction,
+    },
     /// Pull request operations for a workspace.
     Pr {
         #[command(subcommand)]
         action: GithubPrAction,
     },
+    /// List repositories the current GitHub identity can access.
+    Repos,
+    /// Report whether the `gh` CLI is installed and authenticated.
+    CliStatus,
+}
+
+#[derive(Subcommand)]
+pub enum GithubAuthAction {
+    /// Print the currently-connected GitHub identity, if any.
+    Status,
+    /// Log out — clears the stored tokens.
+    Logout,
 }
 
 #[derive(Subcommand)]

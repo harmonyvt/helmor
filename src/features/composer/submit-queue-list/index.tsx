@@ -1,22 +1,15 @@
 /** Queue overlay that sits above the composer without reserving layout space. */
 
 import { Clock, CornerDownLeft, Trash2 } from "lucide-react";
-import { useMemo } from "react";
 import { ActionRow } from "@/components/action-row";
-import { FileMentionBadge } from "@/components/file-mention-badge";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-	isFileMentionPart,
-	isTextPart,
-} from "@/features/panel/message-components/shared";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
-import { splitTextWithFiles } from "@/lib/workspace-helpers";
 
 export type SubmitQueueListProps = {
 	items: readonly QueuedSubmit[];
@@ -64,14 +57,7 @@ function QueueRow({
 	onRemove: () => void;
 	disabled?: boolean;
 }) {
-	const { prompt, imagePaths, filePaths } = item.payload;
-	// Reuse the chat-bubble splitter so attachment chips render the
-	// same way here as in the sent message.
-	const parts = useMemo(
-		() => splitTextWithFiles(prompt.trim(), filePaths, item.id, imagePaths),
-		[prompt, filePaths, imagePaths, item.id],
-	);
-
+	const preview = item.payload.prompt.trim();
 	return (
 		<ActionRow
 			className={cn(
@@ -85,28 +71,9 @@ function QueueRow({
 						strokeWidth={1.8}
 						aria-hidden
 					/>
-					<div className="flex min-w-0 items-center gap-0 overflow-hidden whitespace-nowrap text-[12px] font-medium tracking-[0.01em] text-foreground">
-						{parts.map((part, idx) => {
-							if (isTextPart(part)) {
-								return (
-									<span key={part.id ?? idx} className="shrink-0">
-										{part.text}
-									</span>
-								);
-							}
-							if (isFileMentionPart(part)) {
-								return (
-									<FileMentionBadge
-										key={part.id ?? idx}
-										path={part.path}
-										compact
-										className="shrink-0"
-									/>
-								);
-							}
-							return null;
-						})}
-					</div>
+					<span className="truncate text-[12px] font-medium tracking-[0.01em] text-foreground">
+						{preview}
+					</span>
 				</>
 			}
 			trailing={

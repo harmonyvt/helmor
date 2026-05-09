@@ -103,7 +103,7 @@ impl Serialize for CommandError {
             message: &'a str,
         }
         let code = extract_code(&self.0);
-        let message = outermost_message(&self.0);
+        let message = full_message(&self.0);
         Payload {
             code,
             message: &message,
@@ -114,10 +114,7 @@ impl Serialize for CommandError {
 
 impl From<anyhow::Error> for CommandError {
     fn from(error: anyhow::Error) -> Self {
-        // Full chain goes to BOTH logs and the user-facing toast — the
-        // outermost `.context(...)` label is usually too generic to be
-        // actionable on its own (e.g. "mergePullRequest failed" hides
-        // the actual "Merge commits are not allowed" reason underneath).
+        // Full chain goes to logs; user-facing message is just the outer context.
         let code = extract_code(&error);
         if code == ErrorCode::ForgeOnboarding {
             tracing::warn!(
@@ -146,22 +143,26 @@ pub fn extract_code(err: &anyhow::Error) -> ErrorCode {
         .unwrap_or(ErrorCode::Unknown)
 }
 
-/// Full error chain rendered as `outer: middle: root`, with `CodedError`
-/// marker layers stripped out. This is what the user sees in the toast —
-/// the outer `.context(...)` label alone is usually too vague to act on
-/// (e.g. "mergePullRequest failed" hides "Merge commits are not allowed
-/// on this repository"), so we surface the whole chain.
+/// Outermost non-marker layer's `Display`. What the user sees in the toast.
 pub fn outermost_message(err: &anyhow::Error) -> String {
+    err.chain()
+        .find(|e| e.downcast_ref::<CodedError>().is_none())
+        .map(|e| e.to_string())
+        .unwrap_or_else(|| "Unknown error".into())
+}
+
+/// Full non-marker chain joined with `: `. What the user sees in the toast —
+/// includes the root cause (e.g. git stderr) not just the outermost context.
+pub fn full_message(err: &anyhow::Error) -> String {
     let parts: Vec<String> = err
         .chain()
         .filter(|e| e.downcast_ref::<CodedError>().is_none())
         .map(|e| e.to_string())
         .collect();
     if parts.is_empty() {
-        "Unknown error".into()
-    } else {
-        parts.join(": ")
+        return "Unknown error".into();
     }
+    parts.join(": ")
 }
 
 #[cfg(test)]
@@ -169,13 +170,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn coded_then_context_joins_full_chain_skipping_marker() {
+    fn coded_then_context_is_found_in_chain() {
         let err: anyhow::Error = coded(ErrorCode::WorkspaceBroken)
             .context("outer message")
             .context("outermost");
         assert_eq!(extract_code(&err), ErrorCode::WorkspaceBroken);
-        // Marker is stripped; both context layers are joined.
-        assert_eq!(outermost_message(&err), "outermost: outer message");
+        assert_eq!(outermost_message(&err), "outermost");
     }
 
     #[test]
@@ -183,25 +183,7 @@ mod tests {
         let base: anyhow::Error = anyhow::anyhow!("io failed").context("while reading file");
         let tagged = base.with_code(ErrorCode::WorkspaceBroken);
         assert_eq!(extract_code(&tagged), ErrorCode::WorkspaceBroken);
-        // The marker now sits at the outermost layer. Strip it and join
-        // the rest — the user sees the full causal chain.
-        assert_eq!(outermost_message(&tagged), "while reading file: io failed");
-    }
-
-    /// Mirrors the real merge-PR failure: the outer `.context(...)` is a
-    /// generic label and the actionable detail lives in inner layers.
-    /// Toast users need to see the full chain, not just "mergePullRequest
-    /// failed".
-    #[test]
-    fn surfaces_inner_cause_through_generic_outer_context() {
-        let inner = anyhow::anyhow!(
-            "`gh api graphql` failed: gh: Merge commits are not allowed on this repository."
-        );
-        let err = inner.context("mergePullRequest failed");
-        assert_eq!(
-            outermost_message(&err),
-            "mergePullRequest failed: `gh api graphql` failed: gh: Merge commits are not allowed on this repository."
-        );
+        assert_eq!(outermost_message(&tagged), "while reading file");
     }
 
     #[test]
@@ -231,6 +213,35 @@ mod tests {
             json,
             r#"{"code":"WorkspaceNotFound","message":"Workspace not found: abc"}"#
         );
+    }
+
+    #[test]
+    fn serializes_full_chain_including_root_cause() {
+        // Simulates a worktree-creation failure: outer context + inner git stderr.
+        let inner = anyhow::anyhow!("fatal: branch already checked out");
+        let err: CommandError = inner
+            .context("Failed to create worktree at /tmp/foo for branch my-branch")
+            .with_code(ErrorCode::Unknown)
+            .into();
+        let json = serde_json::to_string(&err).unwrap();
+        assert_eq!(
+            json,
+            r#"{"code":"Unknown","message":"Failed to create worktree at /tmp/foo for branch my-branch: fatal: branch already checked out"}"#
+        );
+    }
+
+    #[test]
+    fn full_message_joins_non_marker_layers() {
+        let err = anyhow::anyhow!("root cause")
+            .context("mid layer")
+            .context("outer context");
+        assert_eq!(full_message(&err), "outer context: mid layer: root cause");
+    }
+
+    #[test]
+    fn full_message_skips_coded_error_markers() {
+        let err = coded(ErrorCode::WorkspaceBroken).context("dir missing at /foo");
+        assert_eq!(full_message(&err), "dir missing at /foo");
     }
 
     #[test]

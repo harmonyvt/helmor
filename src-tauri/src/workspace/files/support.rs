@@ -49,7 +49,9 @@ pub(super) fn path_is_inside_known_workspace(path: &Path) -> Result<bool> {
     let normalized_path = canonicalize_missing_path(path)?;
 
     for record in workspace_models::load_workspace_records()? {
-        let Ok(workspace_dir) = crate::workspace::helpers::workspace_path(&record) else {
+        let Ok(workspace_dir) =
+            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
+        else {
             continue;
         };
         let Ok(normalized_root) = canonicalize_missing_path(&workspace_dir) else {
@@ -67,7 +69,9 @@ pub(super) fn allowed_workspace_roots() -> Result<Vec<PathBuf>> {
     let mut workspace_roots = Vec::new();
 
     for record in workspace_models::load_workspace_records()? {
-        let Ok(workspace_dir) = crate::workspace::helpers::workspace_path(&record) else {
+        let Ok(workspace_dir) =
+            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
+        else {
             // Malformed repo/directory name — skip rather than nuke the whole
             // picker. Not user-actionable.
             continue;

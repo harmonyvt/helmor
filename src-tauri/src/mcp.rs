@@ -6,10 +6,19 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
+use std::sync::OnceLock;
+use tauri::AppHandle;
 
 use crate::agents::AgentStreamEvent;
+use crate::commands::browser_commands;
 use crate::pipeline::types::{ExtendedMessagePart, MessagePart};
 use crate::service;
+
+static MCP_APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+pub fn set_app_handle(app: AppHandle) {
+    let _ = MCP_APP_HANDLE.set(app);
+}
 
 pub fn run_mcp_server() -> Result<()> {
     // Bootstrap DB (same as CLI)
@@ -103,6 +112,32 @@ fn handle_tools_list(request: &Value) -> Value {
         tool_def("helmor_session_create", "Create a new session in a workspace", json!({
             "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" }
         }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["workspace"] })).unwrap()),
+        tool_def("helmor_goal_child_create", "Create/finalize a child workspace attached to a Goal board and optionally start an agent prompt", json!({
+            "goal_workspace": { "type": "string", "description": "Goal workspace UUID or repo-name/directory-name" },
+            "title": { "type": "string", "description": "Child workspace title" },
+            "description": { "type": "string", "description": "Optional child/card description" },
+            "lane": { "type": "string", "description": "backlog | in-progress | review | done | canceled" },
+            "target_branch": { "type": "string", "description": "Optional start/target branch (defaults to the Goal branch)" },
+            "assigned_provider": { "type": "string", "description": "Optional provider metadata: claude | codex | pi" },
+            "assigned_model_id": { "type": "string", "description": "Optional Helmor model id" },
+            "prompt": { "type": "string", "description": "Optional prompt to start in the child workspace" },
+            "permission_mode": { "type": "string", "description": "Optional permission mode for prompt" },
+            "finalize": { "type": "boolean", "description": "Create worktree now (default true)" }
+        }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["goal_workspace", "title"] })).unwrap()),
+        tool_def("helmor_browser_list_tabs", "List durable browser tabs for a workspace", json!({
+            "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" }
+        }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["workspace"] })).unwrap()),
+        tool_def("helmor_browser_open", "Create a durable browser tab in a workspace", json!({
+            "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" },
+            "url": { "type": "string", "description": "Initial http/https URL" }
+        }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["workspace"] })).unwrap()),
+        tool_def("helmor_browser_navigate", "Navigate an existing browser tab", json!({
+            "tab_id": { "type": "string", "description": "Browser tab UUID" },
+            "url": { "type": "string", "description": "Destination http/https URL" }
+        }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["tab_id", "url"] })).unwrap()),
+        tool_def("helmor_browser_close", "Close a durable browser tab", json!({
+            "tab_id": { "type": "string", "description": "Browser tab UUID" }
+        }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["tab_id"] })).unwrap()),
         tool_def("helmor_send", "Send a prompt to an AI agent in a workspace", json!({
             "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" },
             "prompt": { "type": "string", "description": "The prompt to send to the AI agent" },
@@ -198,13 +233,83 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                 .as_bool()
                 .and_then(|enabled| enabled.then_some("plan"));
             let ws_id = service::resolve_workspace_ref(ws_ref)?;
-            let resp = service::create_session(
-                &ws_id,
-                None,
-                permission_mode,
-                crate::models::sessions::CreateSessionOverrides::default(),
-            )?;
+            let resp = service::create_session(&ws_id, None, permission_mode)?;
             Ok(serde_json::to_string_pretty(&resp)?)
+        }
+        "helmor_goal_child_create" => {
+            let goal_workspace = args["goal_workspace"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing required param: goal_workspace"))?;
+            let title = args["title"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing required param: title"))?;
+            let lane = args["lane"].as_str().map(str::parse).transpose()?;
+            let params = crate::goal_orchestration::GoalChildWorkspaceCreateParams {
+                goal_workspace: goal_workspace.to_string(),
+                title: title.to_string(),
+                description: args["description"].as_str().map(String::from),
+                lane,
+                target_branch: args["target_branch"].as_str().map(String::from),
+                assigned_provider: args["assigned_provider"].as_str().map(String::from),
+                assigned_model_id: args["assigned_model_id"].as_str().map(String::from),
+                assigned_effort_level: args["assigned_effort_level"].as_str().map(String::from),
+                prompt: args["prompt"].as_str().map(String::from),
+                permission_mode: args["permission_mode"].as_str().map(String::from),
+                finalize: args["finalize"].as_bool(),
+            };
+            fn ignore_event(_: &crate::agents::AgentStreamEvent) {}
+            let mut on_event = ignore_event;
+            let result = crate::goal_orchestration::create_goal_child_workspace_and_start(
+                params,
+                &mut on_event,
+            )?;
+            Ok(serde_json::to_string_pretty(&result)?)
+        }
+        "helmor_browser_list_tabs" => {
+            let ws_ref = args["workspace"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing required param: workspace"))?;
+            let ws_id = service::resolve_workspace_ref(ws_ref)?;
+            let tabs = service::list_workspace_browser_tabs(&ws_id)?;
+            Ok(serde_json::to_string_pretty(&tabs)?)
+        }
+        "helmor_browser_open" => {
+            let ws_ref = args["workspace"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing required param: workspace"))?;
+            let ws_id = service::resolve_workspace_ref(ws_ref)?;
+            let url = args["url"].as_str();
+            let tab = if let Some(app) = MCP_APP_HANDLE.get() {
+                browser_commands::create_browser_tab_and_publish(app, &ws_id, url)?
+            } else {
+                service::create_browser_tab(&ws_id, url)?
+            };
+            Ok(serde_json::to_string_pretty(&tab)?)
+        }
+        "helmor_browser_navigate" => {
+            let tab_id = args["tab_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing required param: tab_id"))?;
+            let url = args["url"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing required param: url"))?;
+            let tab = if let Some(app) = MCP_APP_HANDLE.get() {
+                browser_commands::navigate_browser_tab_and_publish(app, tab_id, url)?
+            } else {
+                service::navigate_browser_tab(tab_id, url)?
+            };
+            Ok(serde_json::to_string_pretty(&tab)?)
+        }
+        "helmor_browser_close" => {
+            let tab_id = args["tab_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing required param: tab_id"))?;
+            let fallback = if let Some(app) = MCP_APP_HANDLE.get() {
+                browser_commands::close_browser_tab_and_publish(app, tab_id)?
+            } else {
+                service::close_browser_tab(tab_id)?
+            };
+            Ok(serde_json::to_string_pretty(&fallback)?)
         }
         "helmor_send" => {
             let ws_ref = args["workspace"]
@@ -228,6 +333,7 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                 model,
                 permission_mode,
                 linked_directories: Vec::new(),
+                delegate_to_running_app: true,
             };
 
             let mut output = String::new();

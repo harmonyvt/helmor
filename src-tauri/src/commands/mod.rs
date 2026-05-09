@@ -1,9 +1,12 @@
 pub(crate) mod agent_commands;
+pub(crate) mod browser_commands;
 mod common;
 pub(crate) mod conductor_commands;
 pub(crate) mod editor_commands;
 pub(crate) mod editors;
 pub(crate) mod forge_commands;
+pub(crate) mod github_commands;
+pub(crate) mod goal_commands;
 pub(crate) mod repository_commands;
 pub(crate) mod script_commands;
 pub(crate) mod session_commands;

@@ -8,8 +8,9 @@ use crate::{
     helpers,
     models::workspaces::{self as workspace_models, WorkspaceRecord},
     sessions,
+    workspace_kind::WorkspaceKind,
     workspace_pr_sync::PrSyncState,
-    workspace_state::{WorkspaceMode, WorkspaceState},
+    workspace_state::WorkspaceState,
     workspace_status::WorkspaceStatus,
 };
 
@@ -25,15 +26,23 @@ pub use super::branching::{
     PushWorkspaceToRemoteResponse, SyncWorkspaceTargetOutcome, SyncWorkspaceTargetResponse,
     UpdateIntendedTargetBranchInternal, UpdateIntendedTargetBranchResponse,
 };
+pub use super::goals::{
+    assign_workspace_to_goal, create_goal_child_workspace, finalize_goal_workspace,
+    link_goal_card_workspace, list_goal_cards, prepare_goal_workspace,
+    set_goal_child_workspace_status, upsert_goal_card, AssignWorkspaceToGoalRequest,
+    FinalizeGoalWorkspaceResponse, GoalCard, GoalChildWorkspaceRequest,
+    GoalChildWorkspaceStatusRequest, PrepareGoalWorkspaceRequest, PrepareGoalWorkspaceResponse,
+    UpsertGoalCardInput,
+};
 pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,
-    create_workspace_from_repo_impl, execute_archive_plan, finalize_workspace_from_repo_impl,
-    move_local_workspace_to_worktree_impl, prepare_archive_plan, prepare_local_workspace_impl,
-    prepare_workspace_from_repo_impl, restore_workspace_impl, validate_archive_workspace,
-    validate_restore_workspace, ArchivePreparedPlan, ArchiveWorkspaceResponse, BranchRename,
-    CreateWorkspaceResponse, FinalizeWorkspaceResponse, MoveLocalToWorktreeResponse,
-    PrepareWorkspaceResponse, RestoreWorkspaceResponse, TargetBranchConflict,
-    ValidateRestoreResponse,
+    create_workspace_from_repo_impl, finalize_workspace_from_repo_impl,
+    finalize_workspace_from_repo_with_options_impl, prepare_archive_plan,
+    prepare_workspace_from_repo_impl, prepare_workspace_from_source_impl, restore_workspace_impl,
+    validate_archive_workspace, validate_restore_workspace, ArchivePreparedPlan,
+    ArchiveWorkspaceResponse, BranchRename, CreateWorkspaceResponse, FinalizeWorkspaceOptions,
+    FinalizeWorkspaceResponse, PrepareWorkspaceResponse, RestoreWorkspaceResponse,
+    TargetBranchConflict, ValidateRestoreResponse, WorkspaceCreationSource,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,11 +52,12 @@ pub struct WorkspaceSidebarRow {
     pub title: String,
     pub avatar: String,
     pub directory_name: String,
+    pub workspace_kind: WorkspaceKind,
+    pub goal_workspace_id: Option<String>,
     pub repo_name: String,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
     pub state: WorkspaceState,
-    pub mode: WorkspaceMode,
     pub has_unread: bool,
     pub workspace_unread: i64,
     pub unread_session_count: i64,
@@ -63,6 +73,7 @@ pub struct WorkspaceSidebarRow {
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
+    pub intended_target_branch: Option<String>,
     pub pinned_at: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
@@ -86,11 +97,12 @@ pub struct WorkspaceSummary {
     pub id: String,
     pub title: String,
     pub directory_name: String,
+    pub workspace_kind: WorkspaceKind,
+    pub goal_workspace_id: Option<String>,
     pub repo_name: String,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
     pub state: WorkspaceState,
-    pub mode: WorkspaceMode,
     pub has_unread: bool,
     pub workspace_unread: i64,
     pub unread_session_count: i64,
@@ -128,6 +140,8 @@ pub struct WorkspaceDetail {
     pub default_branch: Option<String>,
     pub root_path: Option<String>,
     pub directory_name: String,
+    pub workspace_kind: WorkspaceKind,
+    pub goal_workspace_id: Option<String>,
     pub state: WorkspaceState,
     pub has_unread: bool,
     pub workspace_unread: i64,
@@ -140,7 +154,6 @@ pub struct WorkspaceDetail {
     pub branch: Option<String>,
     pub initialization_parent_branch: Option<String>,
     pub intended_target_branch: Option<String>,
-    pub mode: WorkspaceMode,
     pub pinned_at: Option<String>,
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
@@ -148,14 +161,10 @@ pub struct WorkspaceDetail {
     pub archive_commit: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
-    /// Cached forge classification ("github" / "gitlab" / "unknown") on
-    /// the parent repo. Drives whether the right-top "Connect" button
-    /// targets `gh auth login` or `glab auth login`.
-    pub forge_provider: Option<String>,
-    /// gh/glab account login bound to this repo. NULL when no account
-    /// has been bound (auto-detect didn't find one); the UI shows the
-    /// "Connect" prompt in that case.
-    pub forge_login: Option<String>,
+    /// User-editable title for goal workspaces. `None` if never set.
+    pub goal_title: Option<String>,
+    /// User-editable description for goal workspaces. `None` if never set.
+    pub goal_description: Option<String>,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -248,6 +257,14 @@ pub fn get_workspace(workspace_id: &str) -> Result<WorkspaceDetail> {
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
     Ok(record_to_detail(record))
+}
+
+/// Return all child workspaces that belong to a goal workspace, in
+/// creation order (oldest first — matches the natural card sort on the
+/// Kanban board).
+pub fn list_goal_child_workspaces(goal_workspace_id: &str) -> Result<Vec<WorkspaceDetail>> {
+    let records = workspace_models::load_goal_child_workspace_records(goal_workspace_id)?;
+    Ok(records.into_iter().map(record_to_detail).collect())
 }
 
 // ---- Read / unread ----
@@ -478,7 +495,8 @@ pub fn list_candidate_directories(
         }
         // `workspace_dir` needs the data dir to be set. A single
         // unresolvable row shouldn't hide the rest, so skip silently.
-        let Ok(path) = helpers::workspace_path(&record) else {
+        let Ok(path) = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
+        else {
             continue;
         };
         let title = helpers::display_title(&record);
@@ -725,11 +743,50 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         title,
         id: record.id,
         directory_name: record.directory_name,
+        workspace_kind: record.workspace_kind,
+        goal_workspace_id: record.goal_workspace_id,
         repo_name: record.repo_name,
         repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
         state: record.state,
-        mode: record.mode,
+        has_unread: record.has_unread,
+        workspace_unread: record.workspace_unread,
+        unread_session_count: record.unread_session_count,
+        status: record.status,
+        branch: record.branch,
+        active_session_id: record.active_session_id,
+        active_session_title: record.active_session_title,
+        active_session_agent_type: record.active_session_agent_type,
+        active_session_status: record.active_session_status,
+        primary_session_id: record.primary_session_id,
+        primary_session_title: record.primary_session_title,
+        primary_session_agent_type: record.primary_session_agent_type,
+        pr_title: record.pr_title,
+        pr_sync_state: record.pr_sync_state,
+        pr_url: record.pr_url,
+        intended_target_branch: record.intended_target_branch,
+        pinned_at: record.pinned_at,
+        session_count: record.session_count,
+        message_count: record.message_count,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+        last_user_message_at: record.last_user_message_at,
+    }
+}
+
+pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
+    let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
+
+    WorkspaceSummary {
+        title: helpers::display_title(&record),
+        id: record.id,
+        directory_name: record.directory_name,
+        workspace_kind: record.workspace_kind,
+        goal_workspace_id: record.goal_workspace_id,
+        repo_name: record.repo_name,
+        repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
+        repo_initials,
+        state: record.state,
         has_unread: record.has_unread,
         workspace_unread: record.workspace_unread,
         unread_session_count: record.unread_session_count,
@@ -754,64 +811,22 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
     }
 }
 
-pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
-    let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
-    // Local workspaces: replace the stored snapshot with the live HEAD
-    // so the sidebar/hover-card never shows a stale branch label.
-    let branch = helpers::live_branch_label(&record);
-
-    WorkspaceSummary {
-        title: helpers::display_title(&record),
-        id: record.id,
-        directory_name: record.directory_name,
-        repo_name: record.repo_name,
-        repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
-        repo_initials,
-        state: record.state,
-        mode: record.mode,
-        has_unread: record.has_unread,
-        workspace_unread: record.workspace_unread,
-        unread_session_count: record.unread_session_count,
-        status: record.status,
-        branch,
-        active_session_id: record.active_session_id,
-        active_session_title: record.active_session_title,
-        active_session_agent_type: record.active_session_agent_type,
-        active_session_status: record.active_session_status,
-        primary_session_id: record.primary_session_id,
-        primary_session_title: record.primary_session_title,
-        primary_session_agent_type: record.primary_session_agent_type,
-        pr_title: record.pr_title,
-        pr_sync_state: record.pr_sync_state,
-        pr_url: record.pr_url,
-        pinned_at: record.pinned_at,
-        session_count: record.session_count,
-        message_count: record.message_count,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
-        last_user_message_at: record.last_user_message_at,
-    }
-}
-
 pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
 
-    // Use the workspace path as root_path so Claude Code/Codex operate in the
-    // correct directory. For worktree workspaces this is the helmor data
-    // dir; for local it's the source repo's root. Archived workspaces have
-    // no on-disk path — return None so the frontend knows agent messaging
-    // is unavailable.
-    let worktree_path = helpers::workspace_path(&record).ok().and_then(|p| {
-        if p.is_dir() {
-            p.to_str().map(|s| s.to_string())
-        } else {
-            None
-        }
-    });
-    // Local workspaces: substitute the stored branch snapshot with the
-    // live HEAD so the header reflects whatever the user (or another
-    // local create) just checked out.
-    let branch = helpers::live_branch_label(&record);
+    // Use the worktree path as root_path so Claude Code/Codex operate in the
+    // correct workspace directory, not the source repository.
+    // Archived workspaces have no worktree — return None so the frontend
+    // knows agent messaging is unavailable.
+    let worktree_path = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
+        .ok()
+        .and_then(|p| {
+            if p.is_dir() {
+                p.to_str().map(|s| s.to_string())
+            } else {
+                None
+            }
+        });
 
     WorkspaceDetail {
         title: helpers::display_title(&record),
@@ -825,6 +840,8 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         default_branch: record.default_branch,
         root_path: worktree_path,
         directory_name: record.directory_name,
+        workspace_kind: record.workspace_kind,
+        goal_workspace_id: record.goal_workspace_id,
         state: record.state,
         has_unread: record.has_unread,
         workspace_unread: record.workspace_unread,
@@ -834,8 +851,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         active_session_title: record.active_session_title,
         active_session_agent_type: record.active_session_agent_type,
         active_session_status: record.active_session_status,
-        branch,
-        mode: record.mode,
+        branch: record.branch,
         initialization_parent_branch: record.initialization_parent_branch,
         intended_target_branch: record.intended_target_branch,
         pinned_at: record.pinned_at,
@@ -845,8 +861,8 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         archive_commit: record.archive_commit,
         session_count: record.session_count,
         message_count: record.message_count,
-        forge_provider: record.forge_provider,
-        forge_login: record.forge_login,
+        goal_title: record.goal_title,
+        goal_description: record.goal_description,
     }
 }
 
@@ -866,15 +882,11 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
 /// Returns the number of workspaces that were degraded.
 pub fn purge_orphaned_workspaces() -> Result<usize> {
     let connection = db::read_conn()?;
-    // Local workspaces' "directory" IS the user's repo root — we never
-    // consider those orphaned, even if `r.root_path` is currently
-    // missing (the user might be on a removable drive). Filter them out
-    // server-side via `w.mode = 'worktree'`.
     let mut stmt = connection.prepare(&format!(
         "SELECT w.id, r.name, w.directory_name, w.state
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id
-         WHERE w.state {} AND COALESCE(w.mode, 'worktree') = 'worktree'",
+         WHERE w.state {}",
         crate::workspace_state::OPERATIONAL_FILTER
     ))?;
     let orphans: Vec<(String, String, String, WorkspaceState)> = stmt
@@ -959,19 +971,12 @@ pub fn degrade_workspace_to_archived(workspace_id: &str) -> Result<bool> {
 pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     let mut connection = db::write_conn()?;
 
-    // Load workspace info for filesystem cleanup. Skips the dir delete
-    // step for local-mode rows (whose "dir" is the user's repo root).
-    let record: Option<(
-        String,
-        String,
-        WorkspaceState,
-        crate::workspace_state::WorkspaceMode,
-    )> = connection
+    // Load workspace info for filesystem cleanup
+    let record: Option<(String, String, WorkspaceState)> = connection
         .query_row(
-            "SELECT r.name, w.directory_name, w.state, COALESCE(w.mode, 'worktree')
-                 FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
+            "SELECT r.name, w.directory_name, w.state FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
             [workspace_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .ok();
 
@@ -992,6 +997,30 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
             [workspace_id],
         )
         .context("Failed to delete workspace sessions")?;
+    transaction
+        .execute(
+            "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete workspace browser tabs")?;
+    transaction
+        .execute(
+            "DELETE FROM goal_cards WHERE goal_workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete goal cards")?;
+    transaction
+        .execute(
+            "UPDATE goal_cards SET child_workspace_id = NULL, updated_at = datetime('now') WHERE child_workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to unlink goal card workspace")?;
+    transaction
+        .execute(
+            "UPDATE workspaces SET goal_workspace_id = NULL, updated_at = datetime('now') WHERE goal_workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to unlink goal child workspaces")?;
     let deleted_rows = transaction
         .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
         .context("Failed to delete workspace row")?;
@@ -1008,14 +1037,19 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     super::branching::clear_prefetch_rate_limit(workspace_id);
     db::remove_workspace_lock(workspace_id);
 
-    // Filesystem cleanup (best-effort). Local workspaces never own
-    // their directory — that's the user's repo, never delete it.
-    if let Some((repo_name, directory_name, _state, mode)) = record {
-        if mode == crate::workspace_state::WorkspaceMode::Worktree {
-            if let Ok(ws_dir) = crate::data_dir::workspace_dir(&repo_name, &directory_name) {
-                if ws_dir.is_dir() {
-                    std::fs::remove_dir_all(&ws_dir).ok();
-                }
+    // Filesystem browser profile cleanup is best-effort. WKWebView data stores
+    // are removed by the Tauri command path, where an AppHandle is available.
+    if let Err(error) = crate::browser_profile::remove_workspace_browser_profile_files(workspace_id)
+    {
+        tracing::warn!(workspace_id, error = %format!("{error:#}"), "Failed to remove browser profile files");
+    }
+
+    // Filesystem cleanup (best-effort)
+    if let Some((repo_name, directory_name, _state)) = record {
+        // Remove worktree directory
+        if let Ok(ws_dir) = crate::data_dir::workspace_dir(&repo_name, &directory_name) {
+            if ws_dir.is_dir() {
+                std::fs::remove_dir_all(&ws_dir).ok();
             }
         }
     }
@@ -1383,6 +1417,47 @@ mod tests {
 
         assert!(sync_workspace_pr_state("w-pr", None).unwrap());
         assert_eq!(workspace_pr_metadata(&env, "w-pr"), (None, None));
+    }
+
+    #[test]
+    fn permanently_delete_workspace_removes_browser_tabs_and_profile_files() {
+        let env = TestEnv::new("delete-browser-profile");
+        let conn = env.db_connection();
+        let workspace_id = "11111111-1111-4111-8111-111111111111";
+        insert_repo(&conn, "r1", "demo", None);
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: workspace_id,
+                repo_id: "r1",
+                directory_name: "alpha",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/alpha"),
+                intended_target_branch: None,
+            },
+        );
+        conn.execute(
+            "INSERT INTO workspace_browser_tabs (id, workspace_id, url, active) VALUES ('tab-1', ?1, 'https://example.com/', 1)",
+            [workspace_id],
+        )
+        .unwrap();
+        let profile_dir =
+            crate::browser_profile::workspace_browser_profile_dir(workspace_id).unwrap();
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::write(profile_dir.join("Cookies"), b"cookie-db").unwrap();
+
+        permanently_delete_workspace(workspace_id).unwrap();
+
+        let connection = env.db_connection();
+        let tab_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_browser_tabs WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tab_count, 0);
+        assert!(!profile_dir.exists());
     }
 
     fn workspace_statuses(env: &TestEnv, id: &str) -> (String, String) {
