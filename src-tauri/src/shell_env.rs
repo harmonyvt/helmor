@@ -51,6 +51,27 @@ mod unix {
         "HOMEBREW_PREFIX",
         "HOMEBREW_CELLAR",
         "HOMEBREW_REPOSITORY",
+        // Agent provider credentials and endpoints. GUI-launched apps do not
+        // inherit these from the user's shell unless we copy them explicitly.
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_BASE_URL",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_RESOURCE_NAME",
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_CLOUD_API_KEY",
+        "OPENROUTER_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "MISTRAL_API_KEY",
+        "GROQ_API_KEY",
+        "CEREBRAS_API_KEY",
+        "XAI_API_KEY",
+        "MOONSHOT_API_KEY",
+        "KIMI_API_KEY",
     ];
 
     pub fn inherit() {
