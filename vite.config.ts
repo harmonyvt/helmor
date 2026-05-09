@@ -165,6 +165,10 @@ export default defineConfig(async () => ({
 			"src-tauri/**",
 			"fixtures/**",
 			"e2e/**",
+			"dist-web/**",
+			"run/**",
+			"test-results/**",
+			"workspaces/**",
 		],
 	},
 }));

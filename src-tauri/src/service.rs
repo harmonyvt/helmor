@@ -616,7 +616,7 @@ pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
                    status, last_drained_at, started_at, created_at
             FROM pending_cli_sends
             WHERE status = 'queued'
-            ORDER BY datetime(created_at) ASC, id ASC
+            ORDER BY datetime(created_at) ASC, rowid ASC
             LIMIT 1
             "#,
         )?;
