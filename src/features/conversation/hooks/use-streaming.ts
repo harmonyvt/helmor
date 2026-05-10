@@ -21,6 +21,7 @@ import type {
 	AgentModelOption,
 	AgentSendRequest,
 	AgentStreamEvent,
+	DebugIngestStatus,
 	ThreadMessageLike,
 } from "@/lib/api";
 import {
@@ -184,6 +185,9 @@ type UseConversationStreamingArgs = {
 	buildSendRequestExtras?: (
 		context: SendRequestExtensionContext,
 	) => Partial<AgentSendRequest> | null | undefined;
+	ensureDebugIngestForSubmit?: (
+		workspaceId: string,
+	) => Promise<DebugIngestStatus | null>;
 	onKanbanToolCall?: (
 		event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
 	) => void;
@@ -207,6 +211,7 @@ export function useConversationStreaming({
 	onSessionCompleted,
 	onSessionAborted,
 	buildSendRequestExtras,
+	ensureDebugIngestForSubmit,
 	onKanbanToolCall,
 	onPiUiRequest,
 }: UseConversationStreamingArgs) {
@@ -1295,7 +1300,14 @@ export function useConversationStreaming({
 			// none appears in the chat bubble or DB. Context transfer goes first;
 			// turn-scoped debug guidance lands closest to the user's actual prompt.
 			const contextTransferTrimmed = contextTransferPrefix?.trim() || null;
-			const debugPromptPrefix = buildDebugPromptPrefix(debugMode);
+			const debugIngestStatus =
+				debugMode && targetWorkspaceId && ensureDebugIngestForSubmit
+					? await ensureDebugIngestForSubmit(targetWorkspaceId)
+					: null;
+			const debugPromptPrefix = buildDebugPromptPrefix(
+				debugMode,
+				debugIngestStatus,
+			);
 			const promptPrefix =
 				[contextTransferTrimmed, repoPreferencePrefix, debugPromptPrefix]
 					.filter(Boolean)
@@ -1697,6 +1709,7 @@ export function useConversationStreaming({
 			followUpBehavior,
 			submitQueue,
 			buildSendRequestExtras,
+			ensureDebugIngestForSubmit,
 			onKanbanToolCall,
 			onPiUiRequest,
 		],

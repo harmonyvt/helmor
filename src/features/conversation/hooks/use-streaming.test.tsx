@@ -196,6 +196,15 @@ describe("useConversationStreaming", () => {
 
 	it("adds hidden debug instructions when debug mode is enabled", async () => {
 		apiMocks.startAgentMessageStream.mockImplementation(async () => undefined);
+		const ensureDebugIngestForSubmit = vi.fn(async () => ({
+			workspaceId: "workspace-1",
+			running: true,
+			url: "http://127.0.0.1:4321",
+			ingestUrl: "http://127.0.0.1:4321/ingest",
+			host: "127.0.0.1",
+			port: 4321,
+			entryCount: 0,
+		}));
 
 		const { Wrapper } = createWrapper();
 		const { result } = renderHook(
@@ -208,6 +217,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					ensureDebugIngestForSubmit,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -231,6 +241,15 @@ describe("useConversationStreaming", () => {
 			expect.objectContaining({
 				prompt: "Fix the failing login flow",
 				promptPrefix: expect.stringContaining("[DEBUG MODE ACTIVE]"),
+			}),
+			expect.any(Function),
+		);
+		expect(ensureDebugIngestForSubmit).toHaveBeenCalledWith("workspace-1");
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"POST JSON evidence to http://127.0.0.1:4321/ingest",
+				),
 			}),
 			expect.any(Function),
 		);

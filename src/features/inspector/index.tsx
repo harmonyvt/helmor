@@ -14,6 +14,7 @@ import {
 import {
 	type ChangeRequestInfo,
 	createSession,
+	type DebugIngestStatus,
 	type PrComment,
 	type PrCommentData,
 	type WorkspaceDetail,
@@ -34,6 +35,7 @@ import { buildReviewAllPrompt } from "./pr-comments";
 import type { ScriptStatus } from "./script-store";
 import { ActionsSection } from "./sections/actions";
 import { ChangesSection } from "./sections/changes";
+import { IngestTab } from "./sections/ingest";
 import { OpenDevServerButton, RunTab } from "./sections/run";
 import { SetupTab } from "./sections/setup";
 import { TerminalInstancePanel } from "./sections/terminal";
@@ -81,6 +83,12 @@ type WorkspaceInspectorSidebarProps = {
 	onSelectSession?: (sessionId: string) => void;
 	/** Opens the full-viewport browser surface. */
 	onOpenBrowserMode?: () => void;
+	debugIngestState?: {
+		active: boolean;
+		starting: boolean;
+		status: DebugIngestStatus | null;
+		error: string | null;
+	} | null;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -103,6 +111,7 @@ export function WorkspaceInspectorSidebar({
 	forgeIsRefreshing = false,
 	onOpenSettings,
 	onOpenBrowserMode,
+	debugIngestState = null,
 }: WorkspaceInspectorSidebarProps) {
 	const {
 		actionsHeight,
@@ -144,6 +153,9 @@ export function WorkspaceInspectorSidebar({
 	const prCommentData = prCommentsQuery.data ?? EMPTY_PR_COMMENT_DATA;
 	const showCommentsTab =
 		prCommentData.comments.length > 0 || prCommentsQuery.isFetching;
+	const showIngestTab = Boolean(
+		debugIngestState?.active || debugIngestState?.error,
+	);
 	const hasUnresolvedComments = prCommentData.comments.some(
 		(c: { isThreadResolved: boolean }) => !c.isThreadResolved,
 	);
@@ -417,6 +429,11 @@ export function WorkspaceInspectorSidebar({
 	useEffect(() => {
 		if (activeTab === "setup" || activeTab === "run" || activeTab === "archive")
 			return;
+		if (activeTab === "ingest") {
+			if (showIngestTab) return;
+			setActiveTab("setup");
+			return;
+		}
 		if (activeTab === "comments") {
 			if (showCommentsTab) return;
 			setActiveTab("setup");
@@ -436,6 +453,7 @@ export function WorkspaceInspectorSidebar({
 		workspaceId,
 		setActiveTab,
 		showCommentsTab,
+		showIngestTab,
 	]);
 
 	// Only allow hover-to-zoom when the active tab has real terminal output.
@@ -448,11 +466,14 @@ export function WorkspaceInspectorSidebar({
 			: activeTab === "archive"
 				? archiveScriptState
 				: runScriptState;
-	const canHoverExpand = isTerminalTabActive
-		? true
-		: scriptTabState === "running" ||
-			scriptTabState === "success" ||
-			scriptTabState === "failure";
+	const canHoverExpand =
+		activeTab === "ingest"
+			? false
+			: isTerminalTabActive
+				? true
+				: scriptTabState === "running" ||
+					scriptTabState === "success" ||
+					scriptTabState === "failure";
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 
@@ -526,6 +547,7 @@ export function WorkspaceInspectorSidebar({
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
 				showCommentsTab={showCommentsTab}
+				showIngestTab={showIngestTab}
 				hasUnresolvedComments={hasUnresolvedComments}
 			>
 				<SetupTab
@@ -550,6 +572,11 @@ export function WorkspaceInspectorSidebar({
 					archiveScript={repoScripts?.archiveScript ?? null}
 					isActive={activeTab === "archive"}
 					onOpenSettings={handleOpenSettings}
+				/>
+				<IngestTab
+					workspaceId={workspaceId ?? null}
+					state={debugIngestState}
+					isActive={activeTab === "ingest"}
 				/>
 				<CommentsTab
 					workspaceId={workspaceId ?? null}

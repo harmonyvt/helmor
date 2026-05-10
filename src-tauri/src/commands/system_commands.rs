@@ -11,7 +11,7 @@ use tauri::{
 };
 
 use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
-use crate::{agents, git_watcher, models::db, service, sidecar};
+use crate::{agents, debug_ingest, git_watcher, models::db, service, sidecar};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -1068,6 +1068,7 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
 
     // 1. Stop filesystem watchers so no new events arrive.
     app.state::<git_watcher::GitWatcherManager>().shutdown();
+    app.state::<debug_ingest::DebugIngestManager>().stop_all();
 
     // 2. If tasks are in flight, gracefully stop every active stream.
     if force {
@@ -1104,6 +1105,7 @@ pub async fn restart_app(app: tauri::AppHandle, force: bool) {
     tracing::info!(force, "restart_app invoked from frontend");
 
     app.state::<git_watcher::GitWatcherManager>().shutdown();
+    app.state::<debug_ingest::DebugIngestManager>().stop_all();
 
     if force {
         let sidecar = app.state::<sidecar::ManagedSidecar>();
@@ -1161,6 +1163,7 @@ pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResu
         let manager = app.state::<git_watcher::GitWatcherManager>();
         manager.shutdown();
     }
+    app.state::<debug_ingest::DebugIngestManager>().stop_all();
 
     run_blocking(move || {
         use crate::data_dir;
