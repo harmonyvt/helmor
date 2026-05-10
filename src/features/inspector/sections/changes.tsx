@@ -52,6 +52,7 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 };
 
 type ChangesSectionProps = {
+	sectionRef?: React.RefObject<HTMLElement | null>;
 	bodyHeight: number;
 	workspaceId: string | null;
 	workspaceRootPath: string | null;
@@ -70,6 +71,7 @@ type ChangesSectionProps = {
 };
 
 export function ChangesSection({
+	sectionRef,
 	bodyHeight,
 	workspaceId,
 	workspaceRootPath,
@@ -351,6 +353,7 @@ export function ChangesSection({
 
 	return (
 		<section
+			ref={sectionRef}
 			aria-label="Inspector section Git"
 			className="flex min-h-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
 			style={{ height: `${bodyHeight}px` }}

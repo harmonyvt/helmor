@@ -122,6 +122,7 @@ export function WorkspaceInspectorSidebar({
 		activeTab,
 		changes,
 		changesHeight,
+		changesRef,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
@@ -470,13 +471,15 @@ export function WorkspaceInspectorSidebar({
 				? archiveScriptState
 				: runScriptState;
 	const canHoverExpand =
-		activeTab === "ingest"
-			? false
-			: isTerminalTabActive
-				? true
-				: scriptTabState === "running" ||
-					scriptTabState === "success" ||
-					scriptTabState === "failure";
+		activeTab === "comments"
+			? prCommentData.comments.length > 0
+			: activeTab === "ingest"
+				? false
+				: isTerminalTabActive
+					? true
+					: scriptTabState === "running" ||
+						scriptTabState === "success" ||
+						scriptTabState === "failure";
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 
@@ -489,6 +492,7 @@ export function WorkspaceInspectorSidebar({
 			)}
 		>
 			<ChangesSection
+				sectionRef={changesRef}
 				bodyHeight={changesHeight}
 				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}

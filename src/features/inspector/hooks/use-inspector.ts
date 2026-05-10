@@ -100,6 +100,7 @@ export function useWorkspaceInspectorSidebar({
 	);
 
 	const containerRef = useRef<HTMLDivElement>(null);
+	const changesRef = useRef<HTMLElement>(null);
 	const tabsWrapperRef = useRef<HTMLDivElement>(null);
 	const actionsRef = useRef<HTMLElement>(null);
 
@@ -270,20 +271,28 @@ export function useWorkspaceInspectorSidebar({
 			return;
 		}
 
-		let pendingChanges: number | null = null;
-		let pendingActions: number | null = null;
+		let latestChanges: number | null = null;
+		let latestActions: number | null = null;
 		let animationFrameId: number | null = null;
-		const flush = () => {
+		const getActionsBodyElement = () =>
+			actionsRef.current?.querySelector<HTMLElement>(
+				"[data-inspector-actions-body]",
+			) ?? null;
+		const applyResizePreview = () => {
 			animationFrameId = null;
-			if (pendingChanges !== null) {
-				const next = pendingChanges;
-				pendingChanges = null;
-				setChangesHeight(next);
+			// Keep the drag path out of React. Updating state every mousemove
+			// re-rendered the active tab body (notably markdown-heavy PR comments)
+			// and made the splitter feel sticky. Direct style writes keep the
+			// feedback at one layout pass per animation frame; state is committed
+			// once on mouseup below.
+			if (latestChanges !== null && changesRef.current) {
+				changesRef.current.style.height = `${latestChanges}px`;
 			}
-			if (pendingActions !== null) {
-				const next = pendingActions;
-				pendingActions = null;
-				setActionsHeight(next);
+			if (latestActions !== null && tabsOpen) {
+				const actionsBodyElement = getActionsBodyElement();
+				if (actionsBodyElement) {
+					actionsBodyElement.style.height = `${latestActions}px`;
+				}
 			}
 		};
 
@@ -300,26 +309,31 @@ export function useWorkspaceInspectorSidebar({
 					MIN_SECTION_HEIGHT,
 					resizeState.initialActionsHeight - actualDelta,
 				);
-				pendingChanges = nextChanges;
-				pendingActions = nextActions;
+				latestChanges = nextChanges;
+				latestActions = nextActions;
 			} else {
-				pendingActions = Math.max(
+				latestActions = Math.max(
 					MIN_SECTION_HEIGHT,
 					resizeState.initialActionsHeight + deltaY,
 				);
 			}
 
 			if (animationFrameId === null) {
-				animationFrameId = window.requestAnimationFrame(flush);
+				animationFrameId = window.requestAnimationFrame(applyResizePreview);
 			}
 		};
 
 		const handleMouseUp = () => {
 			if (animationFrameId !== null) {
 				window.cancelAnimationFrame(animationFrameId);
-				animationFrameId = null;
+				applyResizePreview();
 			}
-			flush();
+			if (latestChanges !== null) {
+				setChangesHeight(latestChanges);
+			}
+			if (latestActions !== null) {
+				setActionsHeight(latestActions);
+			}
 			setResizeState(null);
 		};
 
@@ -340,7 +354,7 @@ export function useWorkspaceInspectorSidebar({
 			window.removeEventListener("mousemove", handleMouseMove);
 			window.removeEventListener("mouseup", handleMouseUp);
 		};
-	}, [resizeState]);
+	}, [resizeState, tabsOpen]);
 
 	const handleResizeStart = useCallback(
 		(target: ResizeTarget) => (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -361,6 +375,7 @@ export function useWorkspaceInspectorSidebar({
 		activeTab,
 		changes,
 		changesHeight,
+		changesRef,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
