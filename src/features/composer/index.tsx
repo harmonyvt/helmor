@@ -149,7 +149,10 @@ type WorkspaceComposerProps = {
 	onDeferredToolResponse?: DeferredToolResponseHandler;
 	hasPlanReview?: boolean;
 	planReview?: PlanReviewPart | null;
-	onImplementPlanInCleanThread?: (plan: PlanReviewPart) => void | Promise<void>;
+	onImplementPlanInCleanThread?: (
+		plan: PlanReviewPart,
+		modelId?: string | null,
+	) => void | Promise<void>;
 	/** When true, the ring is always rendered next to the send button.
 	 *  When false (the default), the ring auto-reveals only after usage
 	 *  crosses the threshold defined inside the ring component. */
@@ -429,21 +432,29 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 	const handlePlanImplementCleanThread = useCallback(() => {
 		if (!planReview || !onImplementPlanInCleanThread) return;
-		void Promise.resolve(onImplementPlanInCleanThread(planReview)).catch(
-			(error) => {
-				console.error(
-					"[composer] failed to implement plan in clean thread:",
-					error,
-				);
-				toast.error("Could not implement plan in a clean thread", {
-					description:
-						error instanceof Error
-							? error.message
-							: "Check the logs for details.",
-				});
-			},
-		);
-	}, [onImplementPlanInCleanThread, planReview]);
+		void Promise.resolve(
+			onImplementPlanInCleanThread(
+				planReview,
+				selectedModel?.id ?? selectedModelId,
+			),
+		).catch((error) => {
+			console.error(
+				"[composer] failed to implement plan in clean thread:",
+				error,
+			);
+			toast.error("Could not implement plan in a clean thread", {
+				description:
+					error instanceof Error
+						? error.message
+						: "Check the logs for details.",
+			});
+		});
+	}, [
+		onImplementPlanInCleanThread,
+		planReview,
+		selectedModel?.id,
+		selectedModelId,
+	]);
 
 	const handlePlanRequestChanges = useCallback(() => {
 		if (!hasActivePlanReview) return;

@@ -17,10 +17,18 @@ interface PiEventState {
 	turnId: string | null;
 	turnIndex: number;
 	toolArgsById: Map<string, unknown>;
+	capturePlanReview: boolean;
+	planMessageItemId: string | null;
+	planText: string;
 }
+
+type PiEventStateOptions = {
+	capturePlanReview?: boolean;
+};
 
 export function createPiEventState(
 	requestId: string | null = null,
+	options: PiEventStateOptions = {},
 ): PiEventState {
 	return {
 		requestId,
@@ -29,6 +37,9 @@ export function createPiEventState(
 		turnId: null,
 		turnIndex: 0,
 		toolArgsById: new Map(),
+		capturePlanReview: options.capturePlanReview === true,
+		planMessageItemId: null,
+		planText: "",
 	};
 }
 
@@ -50,6 +61,12 @@ export function normalizePiEvent(
 			const message = asRecord(event.message);
 			if (message?.role !== "assistant") return [];
 			const id = piMessageId(message, state);
+			if (state.capturePlanReview) {
+				state.planMessageItemId = id;
+				state.planText = assistantText(message);
+				state.messageItemId = null;
+				return [];
+			}
 			state.messageItemId = id;
 			return [
 				{
@@ -69,7 +86,24 @@ export function normalizePiEvent(
 			if (message?.role !== "assistant") return [];
 			const errorMessage = assistantErrorMessage(message);
 			if (errorMessage) {
+				if (state.capturePlanReview) {
+					clearPlanCaptureState(state);
+				}
 				return [{ type: "error", message: errorMessage }];
+			}
+			if (state.capturePlanReview) {
+				const id = state.planMessageItemId ?? piMessageId(message, state);
+				const finalText = assistantText(message).trim();
+				const plan = (finalText || state.planText).trim();
+				clearPlanCaptureState(state);
+				if (!plan) return [];
+				return [
+					{
+						type: "planCaptured",
+						toolUseId: `pi-plan-${id}`,
+						plan,
+					},
+				];
 			}
 			const id = state.messageItemId ?? piMessageId(message, state);
 			state.messageItemId = null;
@@ -158,6 +192,11 @@ export function normalizePiEvent(
 	}
 }
 
+function clearPlanCaptureState(state: PiEventState): void {
+	state.planMessageItemId = null;
+	state.planText = "";
+}
+
 function normalizeAssistantMessageUpdate(
 	event: Extract<AgentSessionEvent, { type: "message_update" }>,
 	state: PiEventState,
@@ -168,6 +207,10 @@ function normalizeAssistantMessageUpdate(
 		const text =
 			typeof assistantEvent?.delta === "string" ? assistantEvent.delta : "";
 		if (!text) return [];
+		if (state.capturePlanReview) {
+			state.planText += text;
+			return [];
+		}
 		return [
 			{
 				type: "item/agentMessage/delta",

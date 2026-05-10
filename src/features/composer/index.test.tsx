@@ -1526,7 +1526,10 @@ describe("WorkspaceComposer", () => {
 			screen.getByRole("menuitem", { name: "Implement in Clean Thread" }),
 		);
 
-		expect(onImplementPlanInCleanThread).toHaveBeenCalledWith(planReview);
+		expect(onImplementPlanInCleanThread).toHaveBeenCalledWith(
+			planReview,
+			"opus-1m",
+		);
 	});
 
 	it("shows a toast when clean-thread implementation fails", async () => {
