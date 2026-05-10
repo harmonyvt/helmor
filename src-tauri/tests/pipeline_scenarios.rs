@@ -1359,6 +1359,45 @@ fn codex_pi_reasoning_item_renders_historical_collapsed_with_duration() {
 }
 
 #[test]
+fn codex_pi_legacy_text_before_reasoning_reorders_by_matching_turn_id() {
+    // Older Pi normalization reserved the agent_message row at message_start,
+    // then completed that row with final text before the matching reasoning
+    // item completed. Historical reload should still render the thinking
+    // before the text because the Pi session content order is
+    // reasoning -> text.
+    let text = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi-message-request-a-0",
+            "type": "agent_message",
+            "text": "Final answer."
+        }
+    });
+    let reasoning = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "pi-reasoning-request-a-0",
+            "type": "reasoning",
+            "text": "Thought first.",
+            "duration_ms": 1500
+        }
+    });
+    let msgs = vec![
+        make_record(
+            "codex-item:pi-message-request-a-0",
+            "assistant",
+            &serde_json::to_string(&text).unwrap(),
+        ),
+        make_record(
+            "codex-reasoning:pi-reasoning-request-a-0",
+            "assistant",
+            &serde_json::to_string(&reasoning).unwrap(),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn codex_pi_reasoning_lifecycle_end_to_end() {
     let events = vec![
         json!({"type": "turn/started", "turn": {"id": "pi-turn-request-a-0"}, "session_id": "session-1"}),

@@ -84,12 +84,15 @@ import {
 	ackPendingCliSendStarted,
 	createBrowserTab,
 	createSession,
+	type DebugIngestStatus,
 	drainPendingCliSends,
+	ensureDebugIngestServer,
 	markSessionRead,
 	markSessionUnread,
 	openWorkspaceInEditor,
 	openWorkspaceInFinder,
 	prewarmSlashCommandsForWorkspace,
+	stopDebugIngestServer,
 	syncWorkspaceWithTargetBranch,
 	triggerWorkspaceFetch,
 	unhideSession,
@@ -149,6 +152,20 @@ import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-f
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 const EMPTY_SENDING_SESSION_IDS = new Set<string>();
+
+type DebugIngestViewState = {
+	active: boolean;
+	starting: boolean;
+	status: DebugIngestStatus | null;
+	error: string | null;
+};
+
+const EMPTY_DEBUG_INGEST_STATE: DebugIngestViewState = {
+	active: false,
+	starting: false,
+	status: null,
+	error: null,
+};
 const MOBILE_SHELL_QUERY = "(max-width: 1023.98px)";
 
 function useMobileShellVisibility() {
@@ -504,6 +521,17 @@ function AppShell({
 	const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(
 		() => new Set(),
 	);
+	const [composerDebugModes, setComposerDebugModes] = useState<
+		Record<string, boolean>
+	>({});
+	const [debugContextWorkspaceIds, setDebugContextWorkspaceIds] = useState<
+		Record<string, string | null>
+	>({});
+	const [debugIngestStates, setDebugIngestStates] = useState<
+		Record<string, DebugIngestViewState>
+	>({});
+	const debugIngestStatesRef = useRef(debugIngestStates);
+	debugIngestStatesRef.current = debugIngestStates;
 	const [pendingComposerInserts, setPendingComposerInserts] = useState<
 		ResolvedComposerInsertRequest[]
 	>([]);
@@ -522,6 +550,112 @@ function AppShell({
 	);
 	const [interactionRequiredSessions, setInteractionRequiredSessions] =
 		useState<Map<string, string>>(() => new Map());
+	const activeDebugWorkspaceIds = useMemo(() => {
+		const ids = new Set<string>();
+		for (const [contextKey, enabled] of Object.entries(composerDebugModes)) {
+			if (!enabled) continue;
+			const workspaceId = debugContextWorkspaceIds[contextKey];
+			if (workspaceId) ids.add(workspaceId);
+		}
+		return ids;
+	}, [composerDebugModes, debugContextWorkspaceIds]);
+	const selectedDebugIngestState = selectedWorkspaceId
+		? (debugIngestStates[selectedWorkspaceId] ?? null)
+		: null;
+
+	const updateDebugIngestState = useCallback(
+		(
+			workspaceId: string,
+			updater: (current: DebugIngestViewState) => DebugIngestViewState,
+		) => {
+			setDebugIngestStates((current) => ({
+				...current,
+				[workspaceId]: updater(
+					current[workspaceId] ?? EMPTY_DEBUG_INGEST_STATE,
+				),
+			}));
+		},
+		[],
+	);
+
+	const ensureDebugIngestForSubmit = useCallback(
+		async (workspaceId: string): Promise<DebugIngestStatus | null> => {
+			updateDebugIngestState(workspaceId, (current) => ({
+				...current,
+				active: true,
+				starting: true,
+				error: null,
+			}));
+			try {
+				const status = await ensureDebugIngestServer(workspaceId);
+				updateDebugIngestState(workspaceId, (current) => ({
+					...current,
+					active: true,
+					starting: false,
+					status,
+					error: null,
+				}));
+				return status;
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				updateDebugIngestState(workspaceId, (current) => ({
+					...current,
+					active: true,
+					starting: false,
+					error: message,
+				}));
+				return null;
+			}
+		},
+		[updateDebugIngestState],
+	);
+
+	const handleChangeDebugMode = useCallback(
+		(
+			context: { contextKey: string; workspaceId: string | null },
+			enabled: boolean,
+		) => {
+			setComposerDebugModes((current) => ({
+				...current,
+				[context.contextKey]: enabled,
+			}));
+			setDebugContextWorkspaceIds((current) => ({
+				...current,
+				[context.contextKey]: context.workspaceId,
+			}));
+		},
+		[],
+	);
+
+	useEffect(() => {
+		for (const workspaceId of activeDebugWorkspaceIds) {
+			const state = debugIngestStates[workspaceId];
+			if (state?.status || state?.starting || state?.error) continue;
+			void ensureDebugIngestForSubmit(workspaceId);
+		}
+
+		for (const [workspaceId, state] of Object.entries(debugIngestStates)) {
+			const stillActive = activeDebugWorkspaceIds.has(workspaceId);
+			if (stillActive || (!state.status && !state.error)) continue;
+			void stopDebugIngestServer(workspaceId).catch((error) => {
+				console.warn("[debug-ingest] failed to stop server", error);
+			});
+			setDebugIngestStates((current) => {
+				const next = { ...current };
+				delete next[workspaceId];
+				return next;
+			});
+		}
+	}, [activeDebugWorkspaceIds, debugIngestStates, ensureDebugIngestForSubmit]);
+
+	useEffect(() => {
+		return () => {
+			for (const workspaceId of Object.keys(debugIngestStatesRef.current)) {
+				void stopDebugIngestServer(workspaceId);
+			}
+		};
+	}, []);
+
 	const interactionRequiredSessionIds = useMemo(
 		() => new Set(interactionRequiredSessions.keys()),
 		[interactionRequiredSessions],
@@ -2530,6 +2664,11 @@ function AppShell({
 														onResolveDisplayedSession={
 															handleResolveDisplayedSession
 														}
+														debugModes={composerDebugModes}
+														onChangeDebugMode={handleChangeDebugMode}
+														ensureDebugIngestForSubmit={
+															ensureDebugIngestForSubmit
+														}
 														onSendingWorkspacesChange={setSendingWorkspaceIds}
 														onSendingSessionsChange={setSendingSessionIds}
 														onInteractionSessionsChange={
@@ -2843,6 +2982,7 @@ function AppShell({
 															forgeIsRefreshing={workspaceForgeIsRefreshing}
 															onOpenSettings={handleOpenSettings}
 															onOpenBrowserMode={handleOpenBrowserMode}
+															debugIngestState={selectedDebugIngestState}
 															onOpenBrowserUrl={handleOpenBrowserUrl}
 														/>
 													</aside>

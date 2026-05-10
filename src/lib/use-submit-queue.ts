@@ -33,6 +33,7 @@ export type QueuedSubmitPayload = {
 	effortLevel: string;
 	permissionMode: string;
 	fastMode: boolean;
+	debugMode?: boolean;
 };
 
 /** Context captured at enqueue time so drain / Steer can replay

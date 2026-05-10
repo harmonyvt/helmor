@@ -126,6 +126,8 @@ type InspectorTabsSectionProps = {
 	canHoverExpand: boolean;
 	/** Show the Comments tab. True when the workspace has PR comment data. */
 	showCommentsTab: boolean;
+	/** Show the Ingest tab while Debug ingest is active or failed. */
+	showIngestTab: boolean;
 	/** Amber dot badge on the Comments tab when true. */
 	hasUnresolvedComments: boolean;
 	children?: React.ReactNode;
@@ -147,6 +149,7 @@ export function InspectorTabsSection({
 	canSpawnTerminal,
 	canHoverExpand,
 	showCommentsTab,
+	showIngestTab,
 	hasUnresolvedComments,
 	children,
 }: InspectorTabsSectionProps) {
@@ -654,6 +657,31 @@ export function InspectorTabsSection({
 										)}
 									/>
 								</button>
+								{showIngestTab && (
+									<button
+										type="button"
+										role="tab"
+										id="inspector-tab-ingest"
+										aria-controls="inspector-panel-ingest"
+										aria-selected={activeTab === "ingest"}
+										tabIndex={activeTab === "ingest" ? 0 : -1}
+										className={cn(
+											INSPECTOR_TAB_BUTTON_CLASS,
+											"shrink-0",
+											activeTab === "ingest" && "text-foreground",
+										)}
+										onClick={() => handleTabClick("ingest")}
+									>
+										Ingest
+										<span
+											aria-hidden="true"
+											className={cn(
+												"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+												activeTab === "ingest" && "opacity-100",
+											)}
+										/>
+									</button>
+								)}
 								{showCommentsTab && (
 									<button
 										type="button"

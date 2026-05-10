@@ -34,6 +34,7 @@ describe("InspectorTabsSection", () => {
 				canSpawnTerminal={false}
 				canHoverExpand
 				showCommentsTab={false}
+				showIngestTab={false}
 				hasUnresolvedComments={false}
 			>
 				<div>Terminal body</div>
@@ -82,6 +83,7 @@ describe("InspectorTabsSection", () => {
 				canSpawnTerminal={false}
 				canHoverExpand
 				showCommentsTab={false}
+				showIngestTab={false}
 				hasUnresolvedComments={false}
 			>
 				<div>Terminal body</div>
@@ -118,6 +120,7 @@ describe("InspectorTabsSection", () => {
 				canSpawnTerminal={false}
 				canHoverExpand={false}
 				showCommentsTab={false}
+				showIngestTab={false}
 				hasUnresolvedComments={false}
 			>
 				<div>Placeholder body</div>

@@ -164,11 +164,13 @@ type WorkspaceComposerContainerProps = {
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
 	fastModes: Record<string, boolean>;
+	debugModes?: Record<string, boolean>;
 	activeFastPreludes?: Record<string, boolean>;
 	onSelectModel: (contextKey: string, modelId: string) => void;
 	onSelectEffort: (contextKey: string, level: string) => void;
 	onChangePermissionMode: (contextKey: string, mode: string) => void;
 	onChangeFastMode: (contextKey: string, enabled: boolean) => void;
+	onChangeDebugMode?: (contextKey: string, enabled: boolean) => void;
 	onSwitchSession?: (sessionId: string) => void;
 	onSubmit: (payload: {
 		prompt: string;
@@ -180,6 +182,7 @@ type WorkspaceComposerContainerProps = {
 		effortLevel: string;
 		permissionMode: string;
 		fastMode: boolean;
+		debugMode?: boolean;
 		/** Force queue (bypass `followUpBehavior`) if a turn is streaming. */
 		forceQueue?: boolean;
 		/** When set, override the user's `followUpBehavior` setting for this
@@ -247,11 +250,13 @@ export const WorkspaceComposerContainer = memo(
 		effortLevels = {},
 		permissionModes = {},
 		fastModes = {},
+		debugModes = {},
 		activeFastPreludes = {},
 		onSelectModel,
 		onSelectEffort,
 		onChangePermissionMode,
 		onChangeFastMode,
+		onChangeDebugMode,
 		onSwitchSession,
 		onSubmit,
 		pendingPromptForSession = null,
@@ -509,6 +514,7 @@ export const WorkspaceComposerContainer = memo(
 		const fastMode = supportsFastMode
 			? (cachedFastMode ?? sessionFastMode ?? settings.defaultFastMode ?? false)
 			: false;
+		const debugMode = debugModes[composerContextKey] ?? false;
 		const showFastModePrelude = activeFastPreludes[composerContextKey] === true;
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
@@ -937,6 +943,7 @@ export const WorkspaceComposerContainer = memo(
 				effortLevel,
 				effectivePermissionMode,
 				fastMode,
+				debugMode,
 				supportsFastMode,
 				sessionsStatus: sessionsQuery.status,
 				sessionsCount: sessionsQuery.data?.length ?? 0,
@@ -951,6 +958,7 @@ export const WorkspaceComposerContainer = memo(
 			displayedWorkspaceId,
 			effectivePermissionMode,
 			effortLevel,
+			debugMode,
 			fastMode,
 			provider,
 			sessionsQuery.data?.length,
@@ -1014,6 +1022,7 @@ export const WorkspaceComposerContainer = memo(
 					permissionMode:
 						options?.permissionModeOverride ?? effectivePermissionMode,
 					fastMode: supportsFastMode ? fastMode : false,
+					debugMode,
 					promptLength: prompt.length,
 					imageCount: imagePaths.length,
 					fileCount: filePaths.length,
@@ -1031,6 +1040,7 @@ export const WorkspaceComposerContainer = memo(
 					permissionMode:
 						options?.permissionModeOverride ?? effectivePermissionMode,
 					fastMode: supportsFastMode ? fastMode : false,
+					debugMode,
 					followUpBehaviorOverride,
 					contextTransferPrefix,
 				});
@@ -1042,6 +1052,7 @@ export const WorkspaceComposerContainer = memo(
 				effortLevel,
 				effectivePermissionMode,
 				fastMode,
+				debugMode,
 				supportsFastMode,
 				settings.followUpBehavior,
 				displayedSessionId,
@@ -1107,6 +1118,7 @@ export const WorkspaceComposerContainer = memo(
 				permissionMode:
 					pendingPromptForSession.permissionMode ?? effectivePermissionMode,
 				fastMode: supportsFastMode ? fastMode : false,
+				debugMode,
 				forceQueue: pendingPromptForSession.forceQueue,
 			});
 			onPendingPromptConsumed?.(pendingPromptForSession.pendingSendId);
@@ -1115,6 +1127,7 @@ export const WorkspaceComposerContainer = memo(
 			effectiveModel,
 			effectivePermissionMode,
 			effortLevel,
+			debugMode,
 			fastMode,
 			onPendingPromptConsumed,
 			onSubmit,
@@ -1208,6 +1221,13 @@ export const WorkspaceComposerContainer = memo(
 				onChangeFastMode(composerContextKey, enabled);
 			},
 			[onChangeFastMode, composerContextKey],
+		);
+
+		const handleChangeDebugModeInner = useCallback(
+			(enabled: boolean) => {
+				onChangeDebugMode?.(composerContextKey, enabled);
+			},
+			[onChangeDebugMode, composerContextKey],
 		);
 		const autoCloseHelpText =
 			"When enabled, action sessions will close automatically when finished.";
@@ -1336,6 +1356,10 @@ export const WorkspaceComposerContainer = memo(
 							showFastModePrelude={showFastModePrelude}
 							onChangeFastMode={
 								supportsFastMode ? handleChangeFastModeInner : undefined
+							}
+							debugMode={debugMode}
+							onChangeDebugMode={
+								onChangeDebugMode ? handleChangeDebugModeInner : undefined
 							}
 							sendError={sendError}
 							restoreDraft={restoreDraft}

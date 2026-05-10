@@ -2,6 +2,7 @@ pub(crate) mod agent_commands;
 pub(crate) mod browser_commands;
 mod common;
 pub(crate) mod conductor_commands;
+pub(crate) mod debug_ingest_commands;
 pub(crate) mod editor_commands;
 pub(crate) mod editors;
 pub(crate) mod forge_commands;

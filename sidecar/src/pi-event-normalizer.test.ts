@@ -19,12 +19,7 @@ describe("Pi event normalization", () => {
 				} as unknown as AgentSessionEvent,
 				state,
 			),
-		).toEqual([
-			{
-				type: "item/started",
-				item: { id: "msg-1", type: "agent_message", text: "" },
-			},
-		]);
+		).toEqual([]);
 		expect(
 			normalizePiEvent(
 				{
@@ -35,6 +30,10 @@ describe("Pi event normalization", () => {
 				state,
 			),
 		).toEqual([
+			{
+				type: "item/started",
+				item: { id: "msg-1", type: "agent_message", text: "" },
+			},
 			{ type: "item/agentMessage/delta", itemId: "msg-1", text: "hello" },
 		]);
 		expect(
@@ -248,6 +247,49 @@ describe("Pi event normalization", () => {
 				},
 			},
 		]);
+	});
+
+	test("does not reserve an empty assistant text item before reasoning", () => {
+		const state = createPiEventState("request-a");
+		expect(
+			normalizePiEvent(
+				{ type: "turn_start", turnIndex: 0, timestamp: 1 } as AgentSessionEvent,
+				state,
+			),
+		).toEqual([{ type: "turn/started", turn: { id: "pi-turn-request-a-0" } }]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_start",
+					message: { role: "assistant", content: [] },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_update",
+					message: { role: "assistant", content: [] },
+					assistantMessageEvent: { type: "thinking_start" },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "item/started",
+				item: { id: "pi-reasoning-request-a-0", type: "reasoning", text: "" },
+			},
+		]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_end",
+					message: { role: "assistant", content: [] },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([]);
 	});
 
 	test("persists accumulated reasoning when thinking_end omits content", () => {
@@ -540,11 +582,19 @@ describe("Pi event normalization", () => {
 		const first = createPiEventState("request-a");
 		const second = createPiEventState("request-b");
 
+		normalizePiEvent(
+			{
+				type: "message_start",
+				message: { role: "assistant", content: [] },
+			} as unknown as AgentSessionEvent,
+			first,
+		);
 		expect(
 			normalizePiEvent(
 				{
-					type: "message_start",
+					type: "message_update",
 					message: { role: "assistant", content: [] },
+					assistantMessageEvent: { type: "text_delta", delta: "a" },
 				} as unknown as AgentSessionEvent,
 				first,
 			),
@@ -557,12 +607,25 @@ describe("Pi event normalization", () => {
 					text: "",
 				},
 			},
+			{
+				type: "item/agentMessage/delta",
+				itemId: "pi-message-request-a-0",
+				text: "a",
+			},
 		]);
+		normalizePiEvent(
+			{
+				type: "message_start",
+				message: { role: "assistant", content: [] },
+			} as unknown as AgentSessionEvent,
+			second,
+		);
 		expect(
 			normalizePiEvent(
 				{
-					type: "message_start",
+					type: "message_update",
 					message: { role: "assistant", content: [] },
+					assistantMessageEvent: { type: "text_delta", delta: "b" },
 				} as unknown as AgentSessionEvent,
 				second,
 			),
@@ -574,6 +637,11 @@ describe("Pi event normalization", () => {
 					type: "agent_message",
 					text: "",
 				},
+			},
+			{
+				type: "item/agentMessage/delta",
+				itemId: "pi-message-request-b-0",
+				text: "b",
 			},
 		]);
 	});

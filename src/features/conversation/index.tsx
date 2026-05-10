@@ -28,6 +28,7 @@ import {
 	type AgentStreamEvent,
 	type ChangeRequestInfo,
 	createSession,
+	type DebugIngestStatus,
 	type PlanReviewPart,
 } from "@/lib/api";
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
@@ -104,6 +105,14 @@ type WorkspaceConversationContainerProps = {
 		prompt: string;
 		model: AgentModelOption;
 	}) => Partial<AgentSendRequest> | null | undefined;
+	debugModes?: Record<string, boolean>;
+	onChangeDebugMode?: (
+		context: { contextKey: string; workspaceId: string | null },
+		enabled: boolean,
+	) => void;
+	ensureDebugIngestForSubmit?: (
+		workspaceId: string,
+	) => Promise<DebugIngestStatus | null>;
 	onKanbanToolCall?: (
 		event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
 	) => void;
@@ -147,6 +156,9 @@ export const WorkspaceConversationContainer = memo(
 		onOpenFileReference,
 		modelFilter,
 		buildSendRequestExtras,
+		debugModes: externalDebugModes,
+		onChangeDebugMode: onExternalChangeDebugMode,
+		ensureDebugIngestForSubmit,
 		onKanbanToolCall,
 		onPiUiRequest,
 		composerAccessory,
@@ -169,6 +181,10 @@ export const WorkspaceConversationContainer = memo(
 		const [composerFastModes, setComposerFastModes] = useState<
 			Record<string, boolean>
 		>({});
+		const [internalDebugModes, setInternalDebugModes] = useState<
+			Record<string, boolean>
+		>({});
+		const composerDebugModes = externalDebugModes ?? internalDebugModes;
 
 		const composerContextKey = getComposerContextKey(
 			displayedWorkspaceId,
@@ -230,6 +246,7 @@ export const WorkspaceConversationContainer = memo(
 			onSessionCompleted,
 			onSessionAborted,
 			buildSendRequestExtras,
+			ensureDebugIngestForSubmit,
 			onKanbanToolCall,
 			onPiUiRequest: handlePiUiRequest,
 		});
@@ -299,6 +316,23 @@ export const WorkspaceConversationContainer = memo(
 				}));
 			},
 			[],
+		);
+
+		const handleChangeDebugMode = useCallback(
+			(contextKey: string, enabled: boolean) => {
+				if (onExternalChangeDebugMode) {
+					onExternalChangeDebugMode(
+						{ contextKey, workspaceId: displayedWorkspaceId },
+						enabled,
+					);
+					return;
+				}
+				setInternalDebugModes((current) => ({
+					...current,
+					[contextKey]: enabled,
+				}));
+			},
+			[displayedWorkspaceId, onExternalChangeDebugMode],
 		);
 
 		const handleImplementPlanInCleanThread = useCallback(
@@ -454,11 +488,13 @@ export const WorkspaceConversationContainer = memo(
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}
 							fastModes={composerFastModes}
+							debugModes={composerDebugModes}
 							activeFastPreludes={activeFastPreludes}
 							onSelectModel={handleSelectModel}
 							onSelectEffort={handleSelectEffort}
 							onChangePermissionMode={handleChangePermissionMode}
 							onChangeFastMode={handleChangeFastMode}
+							onChangeDebugMode={handleChangeDebugMode}
 							onSwitchSession={onSelectSession}
 							onSubmit={handleComposerSubmitWrapper}
 							onStop={handleStopStream}
