@@ -38,7 +38,6 @@ pub struct DebugIngestEntry {
 #[serde(rename_all = "camelCase")]
 pub struct DebugIngestPublicForwardConfig {
     pub enabled: bool,
-    pub ngrok_authtoken: Option<String>,
     pub ngrok_domain: Option<String>,
 }
 
@@ -86,6 +85,7 @@ struct ServerHandle {
     shutdown: Option<oneshot::Sender<()>>,
     public_tunnel: Option<PublicTunnelHandle>,
     public_tunnel_error: Option<String>,
+    public_tunnel_config_key: Option<String>,
 }
 
 #[derive(Default)]
@@ -153,6 +153,7 @@ impl DebugIngestManager {
             shutdown: Some(shutdown_tx),
             public_tunnel: None,
             public_tunnel_error: None,
+            public_tunnel_config_key: None,
         };
 
         {
@@ -182,16 +183,25 @@ impl DebugIngestManager {
         workspace_id: &str,
         config: &DebugIngestPublicForwardConfig,
     ) -> Result<()> {
-        let addr = {
-            let servers = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+        let requested_config_key = public_tunnel_config_key(config);
+        let (addr, previous_tunnel) = {
+            let mut servers = self.servers.lock().unwrap_or_else(|e| e.into_inner());
             let handle = servers
-                .get(workspace_id)
+                .get_mut(workspace_id)
                 .context("Debug ingest server is not running")?;
-            if handle.public_tunnel.is_some() {
+            if handle.public_tunnel.is_some()
+                && handle.public_tunnel_config_key.as_deref() == Some(&requested_config_key)
+            {
                 return Ok(());
             }
-            handle.addr
+            handle.public_tunnel_error = None;
+            handle.public_tunnel_config_key = None;
+            (handle.addr, handle.public_tunnel.take())
         };
+
+        if let Some(tunnel) = previous_tunnel {
+            close_public_tunnel(tunnel);
+        }
 
         let mut tunnel = Some(start_ngrok_tunnel(addr, config).await?);
         {
@@ -200,6 +210,7 @@ impl DebugIngestManager {
                 if handle.public_tunnel.is_none() {
                     handle.public_tunnel = tunnel.take();
                     handle.public_tunnel_error = None;
+                    handle.public_tunnel_config_key = Some(requested_config_key);
                     return Ok(());
                 }
             }
@@ -225,6 +236,7 @@ impl DebugIngestManager {
                 return;
             };
             handle.public_tunnel_error = None;
+            handle.public_tunnel_config_key = None;
             handle.public_tunnel.take()
         };
         if let Some(tunnel) = tunnel {
@@ -463,23 +475,25 @@ fn require_debug_token(
     ))
 }
 
+fn public_tunnel_config_key(config: &DebugIngestPublicForwardConfig) -> String {
+    let domain = config
+        .ngrok_domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("dynamic");
+    format!("ngrok:{domain}")
+}
+
 async fn start_ngrok_tunnel(
     addr: SocketAddr,
     config: &DebugIngestPublicForwardConfig,
 ) -> Result<PublicTunnelHandle> {
-    let auth_token = config
-        .ngrok_authtoken
-        .as_deref()
-        .map(str::trim)
+    let auth_token = env::var("NGROK_AUTHTOKEN")
+        .ok()
+        .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| {
-            env::var("NGROK_AUTHTOKEN")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
-        .context("Public debug ingest requires an ngrok authtoken in Settings or NGROK_AUTHTOKEN in Helmor's environment")?;
+        .context("Public debug ingest requires NGROK_AUTHTOKEN in Helmor's environment")?;
     let local_url = Url::parse(&format!("http://{addr}"))
         .context("Failed to build local debug ingest URL for ngrok")?;
     let mut session_builder = ngrok::Session::builder();

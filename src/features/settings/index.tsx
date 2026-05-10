@@ -310,27 +310,12 @@ export const SettingsDialog = memo(function SettingsDialog({
 											Debug ingest ngrok
 										</div>
 										<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-											Configure the token and optional reserved domain used by
-											the public Debug ingest tunnel. If no token is saved here,
-											Helmor falls back to NGROK_AUTHTOKEN from its environment.
+											Configure an optional reserved domain for the public Debug
+											ingest tunnel. Set NGROK_AUTHTOKEN in Helmor's environment
+											to authorize ngrok without storing credentials in app
+											settings.
 										</div>
 										<div className="mt-4 grid gap-3">
-											<Field>
-												<FieldLabel>Authtoken</FieldLabel>
-												<FieldContent>
-													<Input
-														type="password"
-														value={settings.debugIngestNgrokAuthtoken}
-														onChange={(event) =>
-															updateSettings({
-																debugIngestNgrokAuthtoken: event.target.value,
-															})
-														}
-														placeholder="ngrok authtoken"
-														className="bg-muted/30 text-[13px] text-foreground placeholder:text-muted-foreground/50"
-													/>
-												</FieldContent>
-											</Field>
 											<Field>
 												<FieldLabel>Reserved domain (optional)</FieldLabel>
 												<FieldContent>

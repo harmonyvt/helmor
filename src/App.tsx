@@ -158,6 +158,7 @@ type DebugIngestViewState = {
 	starting: boolean;
 	status: DebugIngestStatus | null;
 	error: string | null;
+	publicForwardAttemptKey: string | null;
 };
 
 const EMPTY_DEBUG_INGEST_STATE: DebugIngestViewState = {
@@ -165,7 +166,14 @@ const EMPTY_DEBUG_INGEST_STATE: DebugIngestViewState = {
 	starting: false,
 	status: null,
 	error: null,
+	publicForwardAttemptKey: null,
 };
+
+function debugIngestPublicForwardAttemptKey(settings: AppSettings): string {
+	if (!settings.debugIngestPublicForward) return "local";
+	const domain = settings.debugIngestNgrokDomain.trim();
+	return `ngrok:${domain || "dynamic"}`;
+}
 const MOBILE_SHELL_QUERY = "(max-width: 1023.98px)";
 
 function useMobileShellVisibility() {
@@ -537,6 +545,10 @@ function AppShell({
 		isLoaded: areSettingsLoaded,
 		updateSettings,
 	} = useSettings();
+	const currentDebugIngestPublicForwardAttemptKey = useMemo(
+		() => debugIngestPublicForwardAttemptKey(appSettings),
+		[appSettings.debugIngestNgrokDomain, appSettings.debugIngestPublicForward],
+	);
 	const [pendingComposerInserts, setPendingComposerInserts] = useState<
 		ResolvedComposerInsertRequest[]
 	>([]);
@@ -590,12 +602,12 @@ function AppShell({
 				active: true,
 				starting: true,
 				error: null,
+				publicForwardAttemptKey: currentDebugIngestPublicForwardAttemptKey,
 			}));
 			try {
 				const status = await ensureDebugIngestServer(workspaceId, {
 					publicForward: {
 						enabled: appSettings.debugIngestPublicForward,
-						ngrokAuthtoken: appSettings.debugIngestNgrokAuthtoken || null,
 						ngrokDomain: appSettings.debugIngestNgrokDomain || null,
 					},
 				});
@@ -605,6 +617,7 @@ function AppShell({
 					starting: false,
 					status,
 					error: null,
+					publicForwardAttemptKey: currentDebugIngestPublicForwardAttemptKey,
 				}));
 				return status;
 			} catch (error) {
@@ -614,14 +627,15 @@ function AppShell({
 					active: true,
 					starting: false,
 					error: message,
+					publicForwardAttemptKey: currentDebugIngestPublicForwardAttemptKey,
 				}));
 				return null;
 			}
 		},
 		[
-			appSettings.debugIngestNgrokAuthtoken,
 			appSettings.debugIngestNgrokDomain,
 			appSettings.debugIngestPublicForward,
+			currentDebugIngestPublicForwardAttemptKey,
 			updateDebugIngestState,
 		],
 	);
@@ -647,13 +661,23 @@ function AppShell({
 		for (const workspaceId of activeDebugWorkspaceIds) {
 			const state = debugIngestStates[workspaceId];
 			const wantsPublicTunnel = appSettings.debugIngestPublicForward;
+			const attemptedCurrentPublicForward =
+				state?.publicForwardAttemptKey ===
+				currentDebugIngestPublicForwardAttemptKey;
 			const tunnelStateMatches = wantsPublicTunnel
-				? Boolean(state?.status?.publicIngestUrl || state?.status?.tunnelError)
-				: !state?.status?.publicIngestUrl && !state?.status?.tunnelError;
+				? Boolean(state?.status?.publicIngestUrl) &&
+					attemptedCurrentPublicForward
+				: !state?.status?.publicIngestUrl &&
+					!state?.status?.tunnelError &&
+					attemptedCurrentPublicForward;
+			const tunnelFailureAlreadyAttempted =
+				wantsPublicTunnel &&
+				Boolean(state?.status?.tunnelError) &&
+				attemptedCurrentPublicForward;
 			if (
 				state?.starting ||
 				state?.error ||
-				(state?.status && tunnelStateMatches)
+				(state?.status && (tunnelStateMatches || tunnelFailureAlreadyAttempted))
 			) {
 				continue;
 			}
@@ -675,6 +699,7 @@ function AppShell({
 	}, [
 		activeDebugWorkspaceIds,
 		appSettings.debugIngestPublicForward,
+		currentDebugIngestPublicForwardAttemptKey,
 		debugIngestStates,
 		ensureDebugIngestForSubmit,
 	]);

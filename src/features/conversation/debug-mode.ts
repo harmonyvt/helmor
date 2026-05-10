@@ -14,7 +14,7 @@ function buildIngestInstructions(status: DebugIngestStatus): string | null {
 	const publicNote = publicIngestUrl
 		? `\n- This is a public ${status.tunnelProvider ?? "tunnel"} URL forwarded to Helmor; use it for remote preview deployments such as Vercel/Netlify that cannot reach localhost.`
 		: status.tunnelError
-			? `\n- A public ngrok tunnel was requested but failed to start (${status.tunnelError}); localhost ingest is still available from this machine only.`
+			? "\n- A public ngrok tunnel was requested but failed to start; localhost ingest is still available from this machine only."
 			: "";
 	const localNote =
 		publicIngestUrl && localIngestUrl

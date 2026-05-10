@@ -149,7 +149,6 @@ export type WebDaemonStartConfig = {
 
 export type DebugIngestPublicForwardConfig = {
 	enabled: boolean;
-	ngrokAuthtoken?: string | null;
 	ngrokDomain?: string | null;
 };
 
