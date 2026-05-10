@@ -11,6 +11,15 @@ export type FollowUpBehavior = "steer" | "queue";
 
 export type ShortcutOverrides = Record<string, string | null>;
 
+export type AzureRealtimeConfig = {
+	/** e.g. https://my-resource.openai.azure.com */
+	endpoint: string;
+	/** Azure OpenAI deployment name, e.g. "helmor-realtime" */
+	deployment: string;
+	/** API key — TODO: move to OS keychain via Tauri stronghold in V2 */
+	apiKey?: string;
+};
+
 export type ClaudeCustomProviderSettings = {
 	builtinProviderApiKeys: Record<string, string>;
 	customBaseUrl: string;
@@ -40,6 +49,8 @@ export type AppSettings = {
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
+	/** Azure GPT Realtime provider configuration. Absent when not configured. */
+	azureRealtime?: AzureRealtimeConfig;
 	/** Use the libghostty terminal rendering library instead of xterm.js.
 	 *  Enables GPU-accelerated rendering and improved font shaping.
 	 *  Requires a restart to take effect. */
@@ -105,6 +116,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
+	azureRealtime: "app.azure_realtime",
 	libghosttyEnabled: "app.libghostty_enabled",
 	favoriteModelIds: "app.favorite_model_ids",
 	openActionLinksInHelmorBrowser: "app.open_action_links_in_helmor_browser",

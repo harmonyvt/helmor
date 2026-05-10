@@ -63,6 +63,7 @@ import { ConductorImportPanel } from "./panels/conductor-import";
 import { DataSourceSettingsRow } from "./panels/data-source";
 import { DevToolsPanel } from "./panels/dev-tools";
 import {
+	AzureRealtimePanel,
 	ClaudeCustomProvidersPanel,
 	PiModelsCheckPanel,
 } from "./panels/model-providers";
@@ -572,6 +573,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</SettingsRow>
 									<PiModelsCheckPanel />
 									<ClaudeCustomProvidersPanel />
+									<AzureRealtimePanel />
 								</SettingsGroup>
 							)}
 

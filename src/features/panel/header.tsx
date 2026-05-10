@@ -19,7 +19,7 @@ import {
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
-import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
+import { AzureRealtimeIcon, ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -984,6 +984,11 @@ function SessionProviderIcon({
 	}
 	if (agentType === "codex") {
 		return <OpenAIIcon className="size-3 shrink-0 text-muted-foreground" />;
+	}
+	if (agentType === "azure-realtime") {
+		return (
+			<AzureRealtimeIcon className="size-3 shrink-0 text-muted-foreground" />
+		);
 	}
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }

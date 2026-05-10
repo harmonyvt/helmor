@@ -1,7 +1,7 @@
-import type { AgentStreamEvent } from "@/lib/api";
+import type { AgentProvider, AgentStreamEvent } from "@/lib/api";
 
 export type PendingElicitation = {
-	provider: "claude" | "codex" | "pi";
+	provider: AgentProvider;
 	modelId: string;
 	resolvedModel: string;
 	providerSessionId?: string | null;

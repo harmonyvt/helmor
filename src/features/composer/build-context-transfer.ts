@@ -11,6 +11,7 @@ const PROVIDER_LABELS: Record<AgentProvider, string> = {
 	claude: "Claude",
 	codex: "OpenAI Codex",
 	pi: "Pi",
+	"azure-realtime": "Azure GPT Realtime",
 };
 
 /**
