@@ -311,6 +311,7 @@ pub fn run() {
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,
+            commands::session_commands::search_sessions,
             commands::session_commands::create_session,
             commands::session_commands::rename_session,
             commands::session_commands::hide_session,

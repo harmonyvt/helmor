@@ -1548,6 +1548,28 @@ export async function loadWorkspaceSessions(
 }
 
 /**
+ * Lightweight result for the Command+K session search. Contains only the
+ * fields needed to render a palette item and navigate to the session.
+ */
+export type SessionSearchResult = {
+	id: string;
+	workspaceId: string;
+	sessionTitle: string;
+	/** Raw directory name (e.g. "feat-auth-flow"). Humanise with
+	 * `humanizeBranch` or equivalent before display. */
+	workspaceDirectoryName: string;
+	workspaceBranch?: string | null;
+	workspaceRepoName?: string | null;
+};
+
+/** Cross-workspace fuzzy session search used by the Command+K palette. */
+export async function searchSessions(
+	query: string,
+): Promise<SessionSearchResult[]> {
+	return invoke<SessionSearchResult[]>("search_sessions", { query });
+}
+
+/**
  * Load session messages as pipeline-rendered ThreadMessageLike[].
  * The frontend can render these directly without any conversion.
  */

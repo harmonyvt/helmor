@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/tooltip";
 import { BrowserSurface } from "@/features/browser";
 import type { BrowserSessionState } from "@/features/browser/browser-session";
+import { CommandPalette } from "@/features/command-palette";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
@@ -493,6 +494,7 @@ function AppShell({
 		setSidebarCollapsed,
 	} = useShellPanels();
 	const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+	const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
 		null,
 	);
@@ -1992,6 +1994,11 @@ function AppShell({
 	const globalShortcutHandlers = useMemo<ShortcutHandler[]>(
 		() => [
 			{
+				id: "navigation.commandPalette" as const,
+				callback: () => setCommandPaletteOpen(true),
+				enabled: isIdentityConnected,
+			},
+			{
 				id: "settings.open" as const,
 				callback: handleOpenSettings,
 			},
@@ -2163,6 +2170,7 @@ function AppShell({
 			preferredEditor,
 			pullRequestUrl,
 			selectedWorkspaceId,
+			setCommandPaletteOpen,
 			setInspectorCollapsed,
 			setSidebarCollapsed,
 			updateSettings,
@@ -3002,6 +3010,18 @@ function AppShell({
 				</SendingSessionsProvider>
 			</WorkspaceToastProvider>
 			<QuitConfirmDialog sendingSessionIds={sendingSessionIds} />
+			<CommandPalette
+				open={commandPaletteOpen}
+				onOpenChange={setCommandPaletteOpen}
+				workspaceGroups={workspaceGroups}
+				archivedRows={archivedRows}
+				selectedWorkspaceId={selectedWorkspaceId}
+				onSelectWorkspace={handleSelectWorkspace}
+				onSelectSession={(workspaceId, sessionId) => {
+					handleSelectWorkspace(workspaceId);
+					handleSelectSession(sessionId);
+				}}
+			/>
 		</TooltipProvider>
 	);
 }
