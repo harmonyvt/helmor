@@ -719,6 +719,109 @@ body {
 	}
 }
 
+/* ─── Realtime surface animations ──────────────────────────────────────────── */
+
+/* Waveform bars — audio-reactive, driven by --rt-speaker-color */
+@keyframes pi-wave {
+	0%,
+	100% {
+		transform: scaleY(0.3);
+	}
+	50% {
+		transform: scaleY(1);
+	}
+}
+
+.pi-wave-bar {
+	display: inline-block;
+	width: 2px;
+	height: 14px;
+	border-radius: 99px;
+	background: var(--rt-speaker-color, var(--rt-accent));
+	transform-origin: center;
+	animation: pi-wave 1.1s ease-in-out infinite;
+}
+
+/* Ambient glow — breathes in/out while session is live */
+@keyframes pi-glow-breath {
+	0% {
+		opacity: 0.06;
+		transform: scale(0.92);
+	}
+	25% {
+		opacity: 0.18;
+		transform: scale(0.97);
+	}
+	50% {
+		opacity: 0.26;
+		transform: scale(1);
+	}
+	75% {
+		opacity: 0.18;
+		transform: scale(0.97);
+	}
+	100% {
+		opacity: 0.06;
+		transform: scale(0.92);
+	}
+}
+
+.pi-glow-breath {
+	animation: pi-glow-breath 2.4s ease-in-out infinite;
+}
+
+.pi-glow-breath-delay {
+	animation: pi-glow-breath 2.4s ease-in-out 1.2s infinite;
+}
+
+/* Dock row — animated gradient when session is live */
+@keyframes pi-dock-gradient {
+	0% {
+		background-position: 0% 50%;
+	}
+	50% {
+		background-position: 100% 50%;
+	}
+	100% {
+		background-position: 0% 50%;
+	}
+}
+
+.pi-dock-live {
+	background-image: linear-gradient(
+		115deg,
+		color-mix(in oklch, var(--rt-accent) 26%, var(--sidebar)) 0%,
+		color-mix(in oklch, var(--rt-accent) 10%, var(--sidebar)) 38%,
+		color-mix(in oklch, var(--rt-accent) 4%, var(--sidebar)) 64%,
+		color-mix(in oklch, var(--rt-accent) 18%, var(--sidebar)) 100%
+	) !important;
+	background-size: 220% 100% !important;
+	animation: pi-dock-gradient 7s ease-in-out infinite;
+	border-color: color-mix(
+		in oklch,
+		var(--rt-accent) 38%,
+		transparent
+	) !important;
+	box-shadow:
+		inset 0 1px 0 color-mix(in oklch, white 8%, transparent),
+		0 0 0 1px color-mix(in oklch, var(--rt-accent) 12%, transparent);
+}
+
+/* Status dot pulse */
+@keyframes pi-pulse {
+	0%,
+	100% {
+		opacity: 0.55;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+.pi-dot-pulse {
+	animation: pi-pulse 2.4s ease-in-out infinite;
+}
+
 /* Accessibility: respect prefers-reduced-motion (WCAG 2.3.3).
    Suppresses animations and transitions for users with vestibular
    disorders, motion sensitivity, or migraine triggers. Smooth

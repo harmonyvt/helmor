@@ -107,6 +107,11 @@
 	--terminal-bright-cyan: oklch(0.55 0.09 192);
 	--terminal-bright-white: oklch(0.95 0 0);
 	--radius: 0.625rem;
+	/* Realtime surface — Azure GPT-Realtime-2 accent */
+	--rt-accent: oklch(0.62 0.14 235);
+	--rt-user-color: #c96442;
+	--rt-agent-color: oklch(0.62 0.14 235);
+	--rt-speaker-color: var(--rt-agent-color);
 }
 
 .dark {
@@ -196,6 +201,11 @@
 		transparent
 	);
 	--plan: #48968c;
+	/* Realtime surface — slightly lighter accent in dark mode */
+	--rt-accent: oklch(0.7 0.12 235);
+	--rt-user-color: #e07a58;
+	--rt-agent-color: oklch(0.7 0.12 235);
+	--rt-speaker-color: var(--rt-agent-color);
 	/* Terminal (xterm.js) — only overrides that differ from :root */
 	--terminal-selection: oklch(0.35 0.03 250);
 	--terminal-black: oklch(0.21 0 0);
