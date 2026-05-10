@@ -99,7 +99,10 @@ vi.mock("./index", async () => {
 			addDirCandidates?: readonly unknown[];
 			onPickAddDir?: PickHandler;
 			planReview?: unknown;
-			onImplementPlanInCleanThread?: (plan: unknown) => void;
+			onImplementPlanInCleanThread?: (
+				plan: unknown,
+				modelId?: string | null,
+			) => void;
 			agentType?: "claude" | "codex" | "pi" | null;
 		}) => {
 			composerMockState.renders.push(props.contextKey);

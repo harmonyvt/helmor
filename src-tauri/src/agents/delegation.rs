@@ -417,18 +417,53 @@ fn finalize_child_error(
 
 fn resolve_session_working_directory(session_id: &str) -> Result<std::path::PathBuf> {
     let conn = crate::models::db::read_conn()?;
-    let path: String = conn.query_row(
+    let (repo_name, directory_name): (String, String) = conn.query_row(
         r#"
-        SELECT COALESCE(r.root_path || '/' || w.directory_name, w.directory_name)
+        SELECT r.name, w.directory_name
         FROM sessions s
         JOIN workspaces w ON w.id = s.workspace_id
-        LEFT JOIN repos r ON r.id = w.repository_id
+        JOIN repos r ON r.id = w.repository_id
         WHERE s.id = ?1
         "#,
         [session_id],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    Ok(std::path::PathBuf::from(path))
+    crate::data_dir::workspace_dir(&repo_name, &directory_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_session_working_directory_uses_helmor_workspace_dir() {
+        let _env = crate::testkit::TestEnv::new("delegation-workdir");
+        let conn = crate::models::db::write_conn().unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, default_branch, root_path) VALUES ('repo-1', 'demo-repo', 'main', '/source/demo-repo')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('workspace-1', 'repo-1', 'delegate-ws', 'ready', 'in-progress')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status) VALUES ('session-1', 'workspace-1', 'idle')",
+            [],
+        )
+        .unwrap();
+
+        let resolved = resolve_session_working_directory("session-1").unwrap();
+        let expected = crate::data_dir::workspace_dir("demo-repo", "delegate-ws").unwrap();
+
+        assert_eq!(resolved, expected);
+        assert_ne!(
+            resolved,
+            std::path::PathBuf::from("/source/demo-repo/delegate-ws")
+        );
+    }
 }
 
 fn parse_structured_json(text: &str) -> Result<Value> {

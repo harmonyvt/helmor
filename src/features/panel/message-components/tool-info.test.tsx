@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { getToolInfo } from "./tool-info";
 
+describe("getToolInfo — Pi delegate_agent", () => {
+	it("renders a dedicated delegation action and task detail", () => {
+		const info = getToolInfo("mcp__pi__delegate_agent", {
+			task: "Inspect the pipeline rendering path for delegation anchors",
+			provider: "claude",
+		});
+		expect(info.action).toBe("Delegate agent");
+		expect(info.detail).toBe(
+			"Inspect the pipeline rendering path for delegation anchors",
+		);
+		expect(info.icon).not.toBeNull();
+	});
+});
+
 describe("getToolInfo — Skill", () => {
 	it("renders a dedicated skill icon and name", () => {
 		const info = getToolInfo("Skill", {
