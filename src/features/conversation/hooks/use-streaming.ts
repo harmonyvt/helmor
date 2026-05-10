@@ -59,6 +59,7 @@ import {
 	findModelOption,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import { buildDebugPromptPrefix } from "../debug-mode";
 
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
@@ -131,6 +132,7 @@ type SubmitPayload = {
 	effortLevel: string;
 	permissionMode: string;
 	fastMode: boolean;
+	debugMode?: boolean;
 	/** When true, route to the follow-up queue instead of steering if a
 	 *  turn is already streaming — regardless of the user's
 	 *  `followUpBehavior` setting. Set by host-triggered submits (e.g.
@@ -1091,6 +1093,7 @@ export function useConversationStreaming({
 				effortLevel,
 				permissionMode,
 				fastMode,
+				debugMode = false,
 				forceQueue,
 				followUpBehaviorOverride,
 				contextTransferPrefix,
@@ -1169,6 +1172,7 @@ export function useConversationStreaming({
 							effortLevel,
 							permissionMode,
 							fastMode,
+							debugMode,
 						},
 					);
 					setComposerRestoreState(null);
@@ -1286,13 +1290,14 @@ export function useConversationStreaming({
 				isFirstUserMessage && !isCompactCommand
 					? resolveGeneralPreferencePrefix(repoPreferences)
 					: null;
-			// Combine the (optional) context-transfer history with the repo
-			// preference preamble. Both ride as `promptPrefix` — neither
-			// appears in the chat bubble or DB. Context transfer goes first so
-			// the general preferences land closest to the user's actual prompt.
+			// Combine the (optional) context-transfer history, repo preference
+			// preamble, and debug-mode guidance. All ride as `promptPrefix` —
+			// none appears in the chat bubble or DB. Context transfer goes first;
+			// turn-scoped debug guidance lands closest to the user's actual prompt.
 			const contextTransferTrimmed = contextTransferPrefix?.trim() || null;
+			const debugPromptPrefix = buildDebugPromptPrefix(debugMode);
 			const promptPrefix =
-				[contextTransferTrimmed, repoPreferencePrefix]
+				[contextTransferTrimmed, repoPreferencePrefix, debugPromptPrefix]
 					.filter(Boolean)
 					.join("\n\n") || null;
 			const now = new Date().toISOString();

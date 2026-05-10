@@ -169,6 +169,9 @@ export const WorkspaceConversationContainer = memo(
 		const [composerFastModes, setComposerFastModes] = useState<
 			Record<string, boolean>
 		>({});
+		const [composerDebugModes, setComposerDebugModes] = useState<
+			Record<string, boolean>
+		>({});
 
 		const composerContextKey = getComposerContextKey(
 			displayedWorkspaceId,
@@ -294,6 +297,16 @@ export const WorkspaceConversationContainer = memo(
 		const handleChangeFastMode = useCallback(
 			(contextKey: string, enabled: boolean) => {
 				setComposerFastModes((current) => ({
+					...current,
+					[contextKey]: enabled,
+				}));
+			},
+			[],
+		);
+
+		const handleChangeDebugMode = useCallback(
+			(contextKey: string, enabled: boolean) => {
+				setComposerDebugModes((current) => ({
 					...current,
 					[contextKey]: enabled,
 				}));
@@ -454,11 +467,13 @@ export const WorkspaceConversationContainer = memo(
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}
 							fastModes={composerFastModes}
+							debugModes={composerDebugModes}
 							activeFastPreludes={activeFastPreludes}
 							onSelectModel={handleSelectModel}
 							onSelectEffort={handleSelectEffort}
 							onChangePermissionMode={handleChangePermissionMode}
 							onChangeFastMode={handleChangeFastMode}
+							onChangeDebugMode={handleChangeDebugMode}
 							onSwitchSession={onSelectSession}
 							onSubmit={handleComposerSubmitWrapper}
 							onStop={handleStopStream}
