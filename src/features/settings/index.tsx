@@ -282,6 +282,19 @@ export const SettingsDialog = memo(function SettingsDialog({
 								<SettingsGroup>
 									<DataSourceSettingsRow />
 									<SettingsRow
+										title="Open actions in Helmor"
+										description="Open Vercel deployments and GitHub Actions links in the workspace browser instead of your system browser."
+									>
+										<Switch
+											checked={settings.openActionLinksInHelmorBrowser}
+											onCheckedChange={(checked) =>
+												updateSettings({
+													openActionLinksInHelmorBrowser: checked,
+												})
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
 										title="Desktop Notifications"
 										description="Show system notifications when sessions complete or need input"
 									>
