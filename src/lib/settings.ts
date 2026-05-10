@@ -46,6 +46,8 @@ export type AppSettings = {
 	libghosttyEnabled: boolean;
 	/** Model IDs the user has starred for quick access. */
 	favoriteModelIds: string[];
+	/** Open web links from forge action rows in Helmor's workspace browser. */
+	openActionLinksInHelmorBrowser: boolean;
 };
 
 /**
@@ -80,6 +82,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	},
 	libghosttyEnabled: false,
 	favoriteModelIds: [],
+	openActionLinksInHelmorBrowser: false,
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -104,6 +107,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	claudeCustomProviders: "app.claude_custom_providers",
 	libghosttyEnabled: "app.libghostty_enabled",
 	favoriteModelIds: "app.favorite_model_ids",
+	openActionLinksInHelmorBrowser: "app.open_action_links_in_helmor_browser",
 };
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
@@ -231,6 +235,10 @@ export async function loadSettings(): Promise<AppSettings> {
 			favoriteModelIds: parseFavoriteModelIds(
 				raw[SETTINGS_KEY_MAP.favoriteModelIds],
 			),
+			openActionLinksInHelmorBrowser:
+				raw[SETTINGS_KEY_MAP.openActionLinksInHelmorBrowser] !== undefined
+					? raw[SETTINGS_KEY_MAP.openActionLinksInHelmorBrowser] === "true"
+					: DEFAULT_SETTINGS.openActionLinksInHelmorBrowser,
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };

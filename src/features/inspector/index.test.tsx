@@ -10,6 +10,7 @@ import type { ComponentProps, MutableRefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForgeActionStatus, WorkspaceGitActionStatus } from "@/lib/api";
 import { ComposerInsertProvider } from "@/lib/composer-insert-context";
+import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { WorkspaceInspectorSidebar } from "./index";
 import { _resetTabsUiStateForTesting } from "./tabs-ui-state-store";
@@ -821,6 +822,57 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 				"https://github.com/acme/repo/actions/runs/1",
 			);
 		});
+	});
+
+	it("opens action links in Helmor browser when enabled", async () => {
+		const user = userEvent.setup();
+		const onOpenBrowserUrl = vi.fn();
+		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				deployments: [
+					{
+						id: "deployment-linked",
+						name: "preview",
+						provider: "vercel",
+						status: "success",
+						url: "https://preview.example.com",
+					},
+				],
+			}),
+		);
+
+		renderWithProviders(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						openActionLinksInHelmorBrowser: true,
+					},
+					isLoaded: true,
+					updateSettings: vi.fn(),
+				}}
+			>
+				<WorkspaceInspectorSidebar
+					workspaceId="workspace-1"
+					workspaceRootPath="/tmp/workspace"
+					workspaceBranch="feature/actions"
+					workspaceTargetBranch="main"
+					workspaceRemote="testuser"
+					editorMode={false}
+					onOpenEditorFile={vi.fn()}
+					onOpenBrowserUrl={onOpenBrowserUrl}
+				/>
+			</SettingsContext.Provider>,
+		);
+
+		await screen.findByText("preview");
+		await user.click(screen.getByRole("button", { name: "Open preview" }));
+
+		expect(onOpenBrowserUrl).toHaveBeenCalledWith(
+			"https://preview.example.com",
+		);
+		expect(openerMocks.openUrl).not.toHaveBeenCalled();
 	});
 
 	it("uses compact icon button chrome for append and open actions", async () => {

@@ -51,6 +51,7 @@ import {
 // for the review/PR rows (MR vs PR wording). Forge onboarding lives in
 // `GitSectionHeader` — see the top-right of the Changes section.
 import { resolveRepoPreferencePrompt } from "@/lib/repo-preferences-prompts";
+import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import {
 	INSPECTOR_SECTION_HEADER_CLASS,
@@ -124,6 +125,7 @@ type ActionsSectionProps = {
 	commitButtonState?: CommitButtonState;
 	changeRequest: ChangeRequestInfo | null;
 	onOpenBrowserMode?: () => void;
+	onOpenBrowserUrl?: (url: string) => Promise<void> | void;
 };
 
 function buildSyncResolutionPrompt(
@@ -166,8 +168,10 @@ export function ActionsSection({
 	commitButtonState,
 	changeRequest,
 	onOpenBrowserMode,
+	onOpenBrowserUrl,
 }: ActionsSectionProps) {
 	const queryClient = useQueryClient();
+	const { settings } = useSettings();
 	const [syncPending, setSyncPending] = useState(false);
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
@@ -204,6 +208,16 @@ export function ActionsSection({
 		? 0
 		: Math.max(0, Math.round(bodyHeight * 0.3));
 	const actionDisabled = commitButtonState === "busy";
+	const handleOpenActionUrl = useCallback(
+		async (url: string) => {
+			if (settings.openActionLinksInHelmorBrowser && onOpenBrowserUrl) {
+				await onOpenBrowserUrl(url);
+				return;
+			}
+			await openUrl(url);
+		},
+		[onOpenBrowserUrl, settings.openActionLinksInHelmorBrowser],
+	);
 	const queueSyncResolutionPrompt = useCallback(
 		async (result: SyncWorkspaceTargetResponse) => {
 			if (!currentSessionId || !onQueuePendingPromptForSession) {
@@ -457,6 +471,7 @@ export function ActionsSection({
 									key={item.id}
 									item={item}
 									onInsertToComposer={handleInsertDeployment}
+									onOpenUrl={handleOpenActionUrl}
 								/>
 							))
 						)}
@@ -484,6 +499,7 @@ export function ActionsSection({
 									key={item.id}
 									item={item}
 									onInsertToComposer={handleInsertCheck}
+									onOpenUrl={handleOpenActionUrl}
 								/>
 							))
 						)}
@@ -708,11 +724,13 @@ function buildReviewRows(
 function ActionStatusRow({
 	item,
 	onInsertToComposer,
+	onOpenUrl,
 }: {
 	item: ForgeActionItem;
 	onInsertToComposer?: (
 		item: ForgeActionItem,
 	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
+	onOpenUrl?: (url: string) => Promise<void> | void;
 }) {
 	const actionButtonClassName =
 		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5";
@@ -755,7 +773,7 @@ function ActionStatusRow({
 							if (!item.url) {
 								return;
 							}
-							void openUrl(item.url);
+							void onOpenUrl?.(item.url);
 						}}
 						className={cn("shrink-0", actionButtonClassName)}
 					>

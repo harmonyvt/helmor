@@ -82,6 +82,7 @@ import MobileShell from "@/shell/mobile-shell";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
 	ackPendingCliSendStarted,
+	createBrowserTab,
 	createSession,
 	drainPendingCliSends,
 	markSessionRead,
@@ -1131,6 +1132,16 @@ function AppShell({
 		setWorkspaceViewMode("browser");
 		setBrowserSession((prev) => prev ?? { activeTabId: null });
 	}, []);
+
+	const handleOpenBrowserUrl = useCallback(
+		async (url: string) => {
+			if (!selectedWorkspaceId) return;
+			const tab = await createBrowserTab(selectedWorkspaceId, url);
+			setWorkspaceViewMode("browser");
+			setBrowserSession({ activeTabId: tab.id });
+		},
+		[selectedWorkspaceId],
+	);
 
 	const handleExitBrowserMode = useCallback(() => {
 		setWorkspaceViewMode("conversation");
@@ -2832,6 +2843,7 @@ function AppShell({
 															forgeIsRefreshing={workspaceForgeIsRefreshing}
 															onOpenSettings={handleOpenSettings}
 															onOpenBrowserMode={handleOpenBrowserMode}
+															onOpenBrowserUrl={handleOpenBrowserUrl}
 														/>
 													</aside>
 												</>
