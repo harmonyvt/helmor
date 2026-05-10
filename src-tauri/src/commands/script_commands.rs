@@ -2,6 +2,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
 use crate::repos;
+use crate::ui_sync::{self, UiMutationEvent};
 use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
 
 use super::common::CmdResult;
@@ -89,6 +90,12 @@ pub async fn execute_repo_script(
                             &ts,
                         );
                     }
+                    ui_sync::publish(
+                        &app,
+                        UiMutationEvent::WorkspaceChanged {
+                            workspace_id: ws_id.clone(),
+                        },
+                    );
                     crate::git::watcher::notify_workspace_changed(&app);
                 }
             }

@@ -1,7 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
+import { useScriptStatus } from "@/features/inspector/hooks/use-script-status";
+import { useSetupAutoRun } from "@/features/inspector/hooks/use-setup-auto-run";
 import {
 	createGoalChildWorkspaceAndStart,
+	loadRepoScripts,
 	setGoalChildWorkspaceStatus,
 	updateGoalWorkspaceMeta,
 	type WorkspaceDetail,
@@ -46,6 +49,30 @@ export function GoalWorkspaceContainer({
 	const childQuery = useQuery(goalChildWorkspacesQueryOptions(workspaceId));
 	const workspace = detailQuery.data;
 	const childWorkspaces = childQuery.data ?? [];
+	const repoScriptsQuery = useQuery({
+		queryKey: helmorQueryKeys.repoScripts(
+			workspace?.repoId ?? "__none__",
+			workspaceId,
+		),
+		queryFn: () => loadRepoScripts(workspace!.repoId, workspaceId),
+		enabled: Boolean(workspace?.repoId),
+		staleTime: 0,
+	});
+	const setupScript = repoScriptsQuery.data?.setupScript ?? null;
+	const hasSetupScript = Boolean(setupScript?.trim());
+	const setupScriptState = useScriptStatus(
+		workspaceId,
+		"setup",
+		hasSetupScript,
+	);
+
+	useSetupAutoRun({
+		repoId: workspace?.repoId ?? null,
+		workspaceId,
+		workspaceState: workspace?.state ?? null,
+		setupScript,
+		scriptsLoaded: repoScriptsQuery.isSuccess,
+	});
 
 	const invalidateBoard = useCallback(async () => {
 		await Promise.all([
@@ -184,6 +211,13 @@ export function GoalWorkspaceContainer({
 				goalTitle={goalTitle}
 				goalDescription={goalDescription}
 				prUrl={workspace?.prUrl}
+				prSyncState={workspace?.prSyncState ?? null}
+				workspaceState={workspace?.state ?? null}
+				hasBranch={Boolean(workspace?.branch)}
+				hasTargetBranch={Boolean(workspace?.intendedTargetBranch)}
+				hasSetupScript={hasSetupScript}
+				setupScriptsLoaded={repoScriptsQuery.isSuccess}
+				setupScriptState={setupScriptState}
 				canCreateCards={isGoalReadyForChildren}
 				onEditGoal={() => setShowGoalSheet(true)}
 				onShowAi={() => {
