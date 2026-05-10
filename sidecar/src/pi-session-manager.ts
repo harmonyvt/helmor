@@ -70,10 +70,11 @@ export class PiSessionManager implements SessionManager {
 				params.prompt,
 				params.additionalDirectories,
 			);
-			const { text, imagePaths } = parseImageRefs(
+			const promptForMode = applyPermissionModePrompt(
 				promptWithContext,
-				params.images,
+				params.permissionMode,
 			);
+			const { text, imagePaths } = parseImageRefs(promptForMode, params.images);
 			const sessionManager = buildPiFileSessionManager(params);
 			const providerSessionId =
 				sessionManager.getSessionFile() ?? sessionManager.getSessionId();
@@ -153,7 +154,9 @@ export class PiSessionManager implements SessionManager {
 				trace.recordVisibleActivity("extension_card"),
 			);
 
-			const state = createPiEventState(requestId);
+			const state = createPiEventState(requestId, {
+				capturePlanReview: params.permissionMode === "plan",
+			});
 			live.unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 				trace.record(event);
 				for (const normalized of normalizePiEvent(event, state)) {
@@ -172,7 +175,7 @@ export class PiSessionManager implements SessionManager {
 			});
 
 			const images = await buildPiImages(imagePaths);
-			await session.prompt(text || params.prompt, {
+			await session.prompt(text || promptForMode, {
 				images,
 				source: "interactive",
 			});
@@ -634,6 +637,22 @@ function toolsForPermissionMode(
 	if (permissionMode === "plan") return ["read", "grep", "find", "ls"];
 	return undefined;
 }
+
+function applyPermissionModePrompt(
+	prompt: string,
+	permissionMode: string | undefined,
+): string {
+	if (permissionMode !== "plan") return prompt;
+	return `${PI_PLAN_MODE_PROMPT}\n\nUser request:\n${prompt}`;
+}
+
+const PI_PLAN_MODE_PROMPT = `<helmor_plan_mode>
+You are running inside Helmor plan mode for Pi.
+
+Plan mode is read-only. Use available read-only tools to inspect the workspace, but do not modify files, run write commands, install packages, or make commits. If you need to verify behavior, use safe inspection commands only.
+
+When you have enough context, finish with a concise implementation plan. Start the final answer with "Plan:" and use numbered steps. Do not implement the plan in this turn. Helmor will render your final answer as a reviewable plan card with Implement and Request Changes actions.
+</helmor_plan_mode>`;
 
 async function buildPiImages(
 	imagePaths: readonly string[],

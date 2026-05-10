@@ -13,22 +13,37 @@ interface ReasoningState {
 interface PiEventState {
 	requestId: string | null;
 	messageItemId: string | null;
+	messageItemStarted: boolean;
+	messageText: string;
 	reasoningByIndex: Map<number, ReasoningState>;
 	turnId: string | null;
 	turnIndex: number;
 	toolArgsById: Map<string, unknown>;
+	capturePlanReview: boolean;
+	planMessageItemId: string | null;
+	planText: string;
 }
+
+type PiEventStateOptions = {
+	capturePlanReview?: boolean;
+};
 
 export function createPiEventState(
 	requestId: string | null = null,
+	options: PiEventStateOptions = {},
 ): PiEventState {
 	return {
 		requestId,
 		messageItemId: null,
+		messageItemStarted: false,
+		messageText: "",
 		reasoningByIndex: new Map(),
 		turnId: null,
 		turnIndex: 0,
 		toolArgsById: new Map(),
+		capturePlanReview: options.capturePlanReview === true,
+		planMessageItemId: null,
+		planText: "",
 	};
 }
 
@@ -43,6 +58,7 @@ export function normalizePiEvent(
 			const turnId = piScopedId(state, "turn", turnIndex);
 			state.turnId = turnId;
 			state.turnIndex = turnIndex;
+			resetMessageItemState(state);
 			state.reasoningByIndex.clear();
 			return [{ type: "turn/started", turn: { id: turnId } }];
 		}
@@ -50,17 +66,18 @@ export function normalizePiEvent(
 			const message = asRecord(event.message);
 			if (message?.role !== "assistant") return [];
 			const id = piMessageId(message, state);
+			const text = assistantText(message);
+			if (state.capturePlanReview) {
+				state.planMessageItemId = id;
+				state.planText = text;
+				state.messageItemId = null;
+				return [];
+			}
 			state.messageItemId = id;
-			return [
-				{
-					type: "item/started",
-					item: {
-						id,
-						type: "agent_message",
-						text: assistantText(message),
-					},
-				},
-			];
+			state.messageText = text;
+			state.messageItemStarted = text.length > 0;
+			if (!state.messageItemStarted) return [];
+			return [agentMessageStarted(id, text)];
 		}
 		case "message_update":
 			return normalizeAssistantMessageUpdate(event, state);
@@ -69,17 +86,38 @@ export function normalizePiEvent(
 			if (message?.role !== "assistant") return [];
 			const errorMessage = assistantErrorMessage(message);
 			if (errorMessage) {
+				resetMessageItemState(state);
+				if (state.capturePlanReview) {
+					clearPlanCaptureState(state);
+				}
 				return [{ type: "error", message: errorMessage }];
 			}
+			if (state.capturePlanReview) {
+				const id = state.planMessageItemId ?? piMessageId(message, state);
+				const finalText = assistantText(message).trim();
+				const plan = (finalText || state.planText).trim();
+				clearPlanCaptureState(state);
+				if (!plan) return [];
+				return [
+					{
+						type: "planCaptured",
+						toolUseId: `pi-plan-${id}`,
+						plan,
+					},
+				];
+			}
 			const id = state.messageItemId ?? piMessageId(message, state);
-			state.messageItemId = null;
+			const text = assistantText(message) || state.messageText;
+			const wasStarted = state.messageItemStarted;
+			resetMessageItemState(state);
+			if (!text && !wasStarted) return [];
 			return [
 				{
 					type: "item/completed",
 					item: {
 						id,
 						type: "agent_message",
-						text: assistantText(message),
+						text,
 					},
 				},
 			];
@@ -133,6 +171,7 @@ export function normalizePiEvent(
 			const turnId = state.turnId ?? piScopedId(state, "turn", state.turnIndex);
 			const usage = asRecord(asRecord(event.message)?.usage);
 			state.turnId = null;
+			resetMessageItemState(state);
 			state.reasoningByIndex.clear();
 			state.turnIndex += 1;
 			return [
@@ -158,6 +197,11 @@ export function normalizePiEvent(
 	}
 }
 
+function clearPlanCaptureState(state: PiEventState): void {
+	state.planMessageItemId = null;
+	state.planText = "";
+}
+
 function normalizeAssistantMessageUpdate(
 	event: Extract<AgentSessionEvent, { type: "message_update" }>,
 	state: PiEventState,
@@ -168,14 +212,23 @@ function normalizeAssistantMessageUpdate(
 		const text =
 			typeof assistantEvent?.delta === "string" ? assistantEvent.delta : "";
 		if (!text) return [];
-		return [
-			{
-				type: "item/agentMessage/delta",
-				itemId:
-					state.messageItemId ?? piMessageId(asRecord(event.message), state),
-				text,
-			},
-		];
+		if (state.capturePlanReview) {
+			state.planText += text;
+			return [];
+		}
+		const itemId = ensureMessageItemId(asRecord(event.message), state);
+		const events: PiNormalizedEvent[] = [];
+		if (!state.messageItemStarted) {
+			state.messageItemStarted = true;
+			events.push(agentMessageStarted(itemId, state.messageText));
+		}
+		state.messageText += text;
+		events.push({
+			type: "item/agentMessage/delta",
+			itemId,
+			text,
+		});
+		return events;
 	}
 	if (eventType === "thinking_start") {
 		const contentIndex = assistantContentIndex(assistantEvent);
@@ -415,6 +468,33 @@ function assistantText(message: Record<string, unknown> | undefined): string {
 		.filter((item) => item?.type === "text" && typeof item.text === "string")
 		.map((item) => item?.text as string)
 		.join("");
+}
+
+function ensureMessageItemId(
+	message: Record<string, unknown> | undefined,
+	state: PiEventState,
+): string {
+	if (!state.messageItemId) {
+		state.messageItemId = piMessageId(message, state);
+	}
+	return state.messageItemId;
+}
+
+function resetMessageItemState(state: PiEventState) {
+	state.messageItemId = null;
+	state.messageItemStarted = false;
+	state.messageText = "";
+}
+
+function agentMessageStarted(id: string, text: string): PiNormalizedEvent {
+	return {
+		type: "item/started",
+		item: {
+			id,
+			type: "agent_message",
+			text,
+		},
+	};
 }
 
 function assistantErrorMessage(

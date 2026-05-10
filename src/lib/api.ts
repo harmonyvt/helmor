@@ -147,6 +147,27 @@ export type WebDaemonStartConfig = {
 	frontendDir?: string | null;
 };
 
+export type DebugIngestStatus = {
+	workspaceId: string;
+	running: boolean;
+	url: string | null;
+	ingestUrl: string | null;
+	host: string | null;
+	port: number | null;
+	entryCount: number;
+};
+
+export type DebugIngestEntry = {
+	id: string;
+	workspaceId: string;
+	receivedAt: string;
+	payload: Record<string, unknown>;
+};
+
+export type DebugIngestEvent =
+	| { type: "entry"; entry: DebugIngestEntry }
+	| { type: "cleared" };
+
 export type AgentProvider = "claude" | "codex" | "pi";
 
 export type AgentModelOption = {
@@ -917,6 +938,44 @@ export async function deleteWebDaemon(): Promise<WebDaemonStatus> {
 
 export async function cleanupWebDaemon(): Promise<WebDaemonStatus> {
 	return invoke<WebDaemonStatus>("cleanup_web_daemon");
+}
+
+export async function ensureDebugIngestServer(
+	workspaceId: string,
+): Promise<DebugIngestStatus> {
+	return invoke<DebugIngestStatus>("ensure_debug_ingest_server", {
+		workspaceId,
+	});
+}
+
+export async function stopDebugIngestServer(
+	workspaceId: string,
+): Promise<void> {
+	await invoke<void>("stop_debug_ingest_server", { workspaceId });
+}
+
+export async function readDebugIngestEntries(
+	workspaceId: string,
+): Promise<DebugIngestEntry[]> {
+	return invoke<DebugIngestEntry[]>("read_debug_ingest_entries", {
+		workspaceId,
+	});
+}
+
+export async function clearDebugIngestEntries(
+	workspaceId: string,
+): Promise<void> {
+	await invoke<void>("clear_debug_ingest_entries", { workspaceId });
+}
+
+export async function subscribeDebugIngest(
+	workspaceId: string,
+	channel: Channel<DebugIngestEvent>,
+): Promise<DebugIngestStatus> {
+	return invoke<DebugIngestStatus>("subscribe_debug_ingest", {
+		workspaceId,
+		channel,
+	});
 }
 
 export async function restartApp(force = false): Promise<void> {

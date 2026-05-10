@@ -3,6 +3,7 @@ pub mod browser_profile;
 pub mod cli;
 pub(crate) mod commands;
 pub mod data_dir;
+pub mod debug_ingest;
 pub mod error;
 pub mod forge;
 pub mod git;
@@ -77,6 +78,7 @@ pub fn run() {
         .manage(workspace::archive::ArchiveJobManager::new())
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
+        .manage(debug_ingest::DebugIngestManager::new())
         .manage(ui_sync::UiSyncManager::new())
         .manage(web_daemon::WebDaemonManager::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
@@ -295,6 +297,11 @@ pub fn run() {
             commands::browser_commands::browser_go_back,
             commands::browser_commands::browser_go_forward,
             commands::browser_commands::open_browser_devtools,
+            commands::debug_ingest_commands::ensure_debug_ingest_server,
+            commands::debug_ingest_commands::stop_debug_ingest_server,
+            commands::debug_ingest_commands::read_debug_ingest_entries,
+            commands::debug_ingest_commands::clear_debug_ingest_entries,
+            commands::debug_ingest_commands::subscribe_debug_ingest,
             commands::browser_commands::browser_snapshot,
             commands::browser_commands::browser_screenshot,
             commands::browser_commands::browser_click,

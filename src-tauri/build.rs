@@ -46,6 +46,12 @@ fn ensure_external_bin_placeholders() {
             .join("bundled")
             .join(format!("helmor-cli-{target}")),
     );
+    ensure_executable_placeholder(
+        manifest_dir
+            .join("target")
+            .join("bundled")
+            .join(format!("helmor-web-{target}")),
+    );
 
     if let Some(repo_root) = manifest_dir.parent() {
         ensure_executable_placeholder(

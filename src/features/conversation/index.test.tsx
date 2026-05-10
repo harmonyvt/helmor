@@ -19,7 +19,7 @@ const apiMockState = vi.hoisted(() => ({
 const composerMockState = vi.hoisted(() => ({
 	lastPlanReview: null as PlanReviewPart | null,
 	lastOnImplementPlanInCleanThread: null as
-		| ((plan: PlanReviewPart) => void | Promise<void>)
+		| ((plan: PlanReviewPart, modelId?: string | null) => void | Promise<void>)
 		| null,
 }));
 
@@ -99,6 +99,7 @@ vi.mock("@/features/composer/container", () => ({
 		planReview?: PlanReviewPart | null;
 		onImplementPlanInCleanThread?: (
 			plan: PlanReviewPart,
+			modelId?: string | null,
 		) => void | Promise<void>;
 	}) => {
 		composerMockState.lastPlanReview = props.planReview ?? null;
@@ -220,6 +221,7 @@ describe("WorkspaceConversationContainer", () => {
 		});
 		await composerMockState.lastOnImplementPlanInCleanThread?.(
 			composerMockState.lastPlanReview!,
+			"pi:azure-openai-responses/gpt-5.5",
 		);
 
 		expect(apiMockState.createSession).toHaveBeenCalledWith("workspace-1", {
@@ -230,6 +232,7 @@ describe("WorkspaceConversationContainer", () => {
 				sessionId: "session-clean",
 				prompt:
 					"Implement this plan in a clean thread:\n\nPlan file: /tmp/plan.md\n\n1. Update the UI",
+				modelId: "pi:azure-openai-responses/gpt-5.5",
 				permissionMode: "bypassPermissions",
 			});
 		});

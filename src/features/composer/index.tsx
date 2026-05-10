@@ -8,6 +8,7 @@ import type { LexicalEditor } from "lexical";
 import { $getRoot } from "lexical";
 import {
 	ArrowUp,
+	Bug,
 	Check,
 	ChevronDown,
 	ClipboardList,
@@ -122,6 +123,8 @@ type WorkspaceComposerProps = {
 	fastMode?: boolean;
 	showFastModePrelude?: boolean;
 	onChangeFastMode?: (enabled: boolean) => void;
+	debugMode?: boolean;
+	onChangeDebugMode?: (enabled: boolean) => void;
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
@@ -149,7 +152,10 @@ type WorkspaceComposerProps = {
 	onDeferredToolResponse?: DeferredToolResponseHandler;
 	hasPlanReview?: boolean;
 	planReview?: PlanReviewPart | null;
-	onImplementPlanInCleanThread?: (plan: PlanReviewPart) => void | Promise<void>;
+	onImplementPlanInCleanThread?: (
+		plan: PlanReviewPart,
+		modelId?: string | null,
+	) => void | Promise<void>;
 	/** When true, the ring is always rendered next to the send button.
 	 *  When false (the default), the ring auto-reveals only after usage
 	 *  crosses the threshold defined inside the ring component. */
@@ -215,6 +221,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	fastMode = false,
 	showFastModePrelude = false,
 	onChangeFastMode,
+	debugMode = false,
+	onChangeDebugMode,
 	sendError,
 	restoreDraft,
 	restoreImages = [],
@@ -429,21 +437,29 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 	const handlePlanImplementCleanThread = useCallback(() => {
 		if (!planReview || !onImplementPlanInCleanThread) return;
-		void Promise.resolve(onImplementPlanInCleanThread(planReview)).catch(
-			(error) => {
-				console.error(
-					"[composer] failed to implement plan in clean thread:",
-					error,
-				);
-				toast.error("Could not implement plan in a clean thread", {
-					description:
-						error instanceof Error
-							? error.message
-							: "Check the logs for details.",
-				});
-			},
-		);
-	}, [onImplementPlanInCleanThread, planReview]);
+		void Promise.resolve(
+			onImplementPlanInCleanThread(
+				planReview,
+				selectedModel?.id ?? selectedModelId,
+			),
+		).catch((error) => {
+			console.error(
+				"[composer] failed to implement plan in clean thread:",
+				error,
+			);
+			toast.error("Could not implement plan in a clean thread", {
+				description:
+					error instanceof Error
+						? error.message
+						: "Check the logs for details.",
+			});
+		});
+	}, [
+		onImplementPlanInCleanThread,
+		planReview,
+		selectedModel?.id,
+		selectedModelId,
+	]);
 
 	const handlePlanRequestChanges = useCallback(() => {
 		if (!hasActivePlanReview) return;
@@ -828,7 +844,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							</div>
 						</div>
 					) : (
-						/* Full toolbar: model picker, effort, fast mode, plan, send */
+						/* Full toolbar: model picker, effort, fast mode, plan/debug, send */
 						<div className="mt-2.5 flex items-end justify-between gap-3">
 							<div className="flex flex-wrap items-center gap-2">
 								{modelsLoading ? (
@@ -976,6 +992,33 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											/>
 											<span>Plan</span>
 										</ComposerButton>
+										{onChangeDebugMode ? (
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<ComposerButton
+														aria-label="Debug mode"
+														aria-pressed={debugMode}
+														disabled={toolbarDisabled}
+														className={cn(
+															`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
+															debugMode
+																? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
+																: "text-muted-foreground/70 hover:text-muted-foreground/70",
+														)}
+														onClick={() => onChangeDebugMode(!debugMode)}
+													>
+														<Bug className="size-[13px]" strokeWidth={1.8} />
+														<span>Debug</span>
+													</ComposerButton>
+												</TooltipTrigger>
+												<TooltipContent side="top" sideOffset={4}>
+													<span>
+														Debug mode{debugMode ? " (on)" : ""}: prefer logs,
+														reproduction, and verification
+													</span>
+												</TooltipContent>
+											</Tooltip>
+										) : null}
 									</>
 								)}
 								<ComposerButton

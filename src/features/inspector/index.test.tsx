@@ -10,6 +10,7 @@ import type { ComponentProps, MutableRefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForgeActionStatus, WorkspaceGitActionStatus } from "@/lib/api";
 import { ComposerInsertProvider } from "@/lib/composer-insert-context";
+import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { WorkspaceInspectorSidebar } from "./index";
 import { _resetTabsUiStateForTesting } from "./tabs-ui-state-store";
@@ -30,8 +31,21 @@ const openerMocks = vi.hoisted(() => ({
 	openUrl: vi.fn(),
 }));
 
+const toastMocks = vi.hoisted(() => ({
+	toast: vi.fn(),
+	error: vi.fn(),
+	success: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/plugin-opener", () => ({
 	openUrl: openerMocks.openUrl,
+}));
+
+vi.mock("sonner", () => ({
+	toast: Object.assign(toastMocks.toast, {
+		error: toastMocks.error,
+		success: toastMocks.success,
+	}),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -147,6 +161,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.getWorkspacePrComments.mockReset();
 		apiMocks.syncWorkspaceWithTargetBranch.mockReset();
 		openerMocks.openUrl.mockReset();
+		toastMocks.toast.mockReset();
+		toastMocks.error.mockReset();
+		toastMocks.success.mockReset();
 
 		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
 			items: [],
@@ -821,6 +838,138 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 				"https://github.com/acme/repo/actions/runs/1",
 			);
 		});
+	});
+
+	it("shows an error toast when the system opener fails", async () => {
+		const user = userEvent.setup();
+		openerMocks.openUrl.mockRejectedValueOnce(
+			new Error("Unable to launch URL"),
+		);
+		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				checks: [
+					{
+						id: "check-linked",
+						name: "linked-check",
+						provider: "github",
+						status: "success",
+						url: "https://github.com/acme/repo/actions/runs/1",
+					},
+				],
+			}),
+		);
+
+		renderInspector();
+
+		await screen.findByText("linked-check");
+		await user.click(screen.getByRole("button", { name: "Open linked-check" }));
+
+		await waitFor(() => {
+			expect(toastMocks.error).toHaveBeenCalledWith("Unable to launch URL");
+		});
+	});
+
+	it("opens action links in Helmor browser when enabled", async () => {
+		const user = userEvent.setup();
+		const onOpenBrowserUrl = vi.fn();
+		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				deployments: [
+					{
+						id: "deployment-linked",
+						name: "preview",
+						provider: "vercel",
+						status: "success",
+						url: "https://preview.example.com",
+					},
+				],
+			}),
+		);
+
+		renderWithProviders(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						openActionLinksInHelmorBrowser: true,
+					},
+					isLoaded: true,
+					updateSettings: vi.fn(),
+				}}
+			>
+				<WorkspaceInspectorSidebar
+					workspaceId="workspace-1"
+					workspaceRootPath="/tmp/workspace"
+					workspaceBranch="feature/actions"
+					workspaceTargetBranch="main"
+					workspaceRemote="testuser"
+					editorMode={false}
+					onOpenEditorFile={vi.fn()}
+					onOpenBrowserUrl={onOpenBrowserUrl}
+				/>
+			</SettingsContext.Provider>,
+		);
+
+		await screen.findByText("preview");
+		await user.click(screen.getByRole("button", { name: "Open preview" }));
+
+		expect(onOpenBrowserUrl).toHaveBeenCalledWith(
+			"https://preview.example.com",
+		);
+		expect(openerMocks.openUrl).not.toHaveBeenCalled();
+	});
+
+	it("shows an error toast when the Helmor browser opener fails", async () => {
+		const user = userEvent.setup();
+		const onOpenBrowserUrl = vi.fn().mockRejectedValueOnce("blocked");
+		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				deployments: [
+					{
+						id: "deployment-linked",
+						name: "preview",
+						provider: "vercel",
+						status: "success",
+						url: "https://preview.example.com",
+					},
+				],
+			}),
+		);
+
+		renderWithProviders(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						openActionLinksInHelmorBrowser: true,
+					},
+					isLoaded: true,
+					updateSettings: vi.fn(),
+				}}
+			>
+				<WorkspaceInspectorSidebar
+					workspaceId="workspace-1"
+					workspaceRootPath="/tmp/workspace"
+					workspaceBranch="feature/actions"
+					workspaceTargetBranch="main"
+					workspaceRemote="testuser"
+					editorMode={false}
+					onOpenEditorFile={vi.fn()}
+					onOpenBrowserUrl={onOpenBrowserUrl}
+				/>
+			</SettingsContext.Provider>,
+		);
+
+		await screen.findByText("preview");
+		await user.click(screen.getByRole("button", { name: "Open preview" }));
+
+		await waitFor(() => {
+			expect(toastMocks.error).toHaveBeenCalledWith("Unable to open link.");
+		});
+		expect(openerMocks.openUrl).not.toHaveBeenCalled();
 	});
 
 	it("uses compact icon button chrome for append and open actions", async () => {
