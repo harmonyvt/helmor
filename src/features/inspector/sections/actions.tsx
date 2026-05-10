@@ -371,6 +371,7 @@ export function ActionsSection({
 			</div>
 
 			<ScrollArea
+				data-inspector-actions-body=""
 				aria-label="Actions panel body"
 				className={cn(
 					"min-h-0 bg-muted/18 text-[11.5px]",

@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowUpRightIcon, FileIcon, LoaderCircleIcon } from "lucide-react";
-import { Suspense, useCallback, useState } from "react";
+import { memo, Suspense, useCallback, useState } from "react";
 import {
 	AppendContextButton,
 	type AppendContextPayloadResult,
@@ -37,7 +37,7 @@ function formatRelativeTime(dateString: string): string {
 	return `${Math.floor(months / 12)}y ago`;
 }
 
-export function CommentsTab({
+export const CommentsTab = memo(function CommentsTab({
 	workspaceId,
 	prCommentData,
 	isFetching,
@@ -158,9 +158,9 @@ export function CommentsTab({
 			</ScrollArea>
 		</div>
 	);
-}
+});
 
-function CommentEntry({
+const CommentEntry = memo(function CommentEntry({
 	comment,
 	onInsertComment,
 }: {
@@ -243,9 +243,9 @@ function CommentEntry({
 			</div>
 		</div>
 	);
-}
+});
 
-function CommentBody({
+const CommentBody = memo(function CommentBody({
 	body,
 	isResolved,
 }: {
@@ -279,4 +279,4 @@ function CommentBody({
 			</Suspense>
 		</div>
 	);
-}
+});

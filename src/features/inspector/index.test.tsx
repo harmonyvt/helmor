@@ -1,4 +1,5 @@
 import {
+	act,
 	cleanup,
 	fireEvent,
 	screen,
@@ -65,6 +66,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 vi.mock("@/components/terminal-output", () => ({
+	suspendTerminalFit: vi.fn(() => vi.fn()),
 	TerminalOutput: ({
 		className,
 		terminalRef,
@@ -192,6 +194,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 
 	afterEach(() => {
 		cleanup();
+		vi.useRealTimers();
 	});
 
 	it("hides deployments and checks when remote arrays are empty", async () => {
@@ -1269,6 +1272,41 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		fireEvent.mouseLeave(tabsSection.parentElement as HTMLElement);
 
 		expect(filterLayer).toHaveStyle({ filter: "none" });
+	});
+
+	it("allows PR comments to use the expanded tabs preview", async () => {
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			prNumber: 12,
+			prUrl: "https://github.com/acme/repo/pull/12",
+			comments: [
+				{
+					id: "comment-1",
+					author: "reviewer",
+					body: "Please fix this path.",
+					url: "https://github.com/acme/repo/pull/12#discussion_r1",
+					filePath: "src/problem.ts",
+					isThreadResolved: false,
+					createdAt: "2026-05-04T00:00:00Z",
+				},
+			],
+		});
+
+		renderInspector();
+
+		fireEvent.click(await screen.findByRole("tab", { name: /Comments/ }));
+		const tabsBody = await screen.findByLabelText("Inspector tabs body");
+		const filterLayer = tabsBody.parentElement;
+
+		expect(filterLayer).not.toBeNull();
+		expect(filterLayer).toHaveStyle({ filter: "none" });
+
+		vi.useFakeTimers();
+		fireEvent.mouseEnter(tabsBody);
+		await act(async () => {
+			vi.advanceTimersByTime(300);
+		});
+
+		expect(filterLayer).toHaveStyle({ filter: "blur(6px)" });
 	});
 
 	it("restores the open terminal tab when switching back to a workspace", async () => {
