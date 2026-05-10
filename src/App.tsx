@@ -532,6 +532,11 @@ function AppShell({
 	>({});
 	const debugIngestStatesRef = useRef(debugIngestStates);
 	debugIngestStatesRef.current = debugIngestStates;
+	const {
+		settings: appSettings,
+		isLoaded: areSettingsLoaded,
+		updateSettings,
+	} = useSettings();
 	const [pendingComposerInserts, setPendingComposerInserts] = useState<
 		ResolvedComposerInsertRequest[]
 	>([]);
@@ -587,7 +592,13 @@ function AppShell({
 				error: null,
 			}));
 			try {
-				const status = await ensureDebugIngestServer(workspaceId);
+				const status = await ensureDebugIngestServer(workspaceId, {
+					publicForward: {
+						enabled: appSettings.debugIngestPublicForward,
+						ngrokAuthtoken: appSettings.debugIngestNgrokAuthtoken || null,
+						ngrokDomain: appSettings.debugIngestNgrokDomain || null,
+					},
+				});
 				updateDebugIngestState(workspaceId, (current) => ({
 					...current,
 					active: true,
@@ -607,7 +618,12 @@ function AppShell({
 				return null;
 			}
 		},
-		[updateDebugIngestState],
+		[
+			appSettings.debugIngestNgrokAuthtoken,
+			appSettings.debugIngestNgrokDomain,
+			appSettings.debugIngestPublicForward,
+			updateDebugIngestState,
+		],
 	);
 
 	const handleChangeDebugMode = useCallback(
@@ -630,7 +646,17 @@ function AppShell({
 	useEffect(() => {
 		for (const workspaceId of activeDebugWorkspaceIds) {
 			const state = debugIngestStates[workspaceId];
-			if (state?.status || state?.starting || state?.error) continue;
+			const wantsPublicTunnel = appSettings.debugIngestPublicForward;
+			const tunnelStateMatches = wantsPublicTunnel
+				? Boolean(state?.status?.publicIngestUrl || state?.status?.tunnelError)
+				: !state?.status?.publicIngestUrl && !state?.status?.tunnelError;
+			if (
+				state?.starting ||
+				state?.error ||
+				(state?.status && tunnelStateMatches)
+			) {
+				continue;
+			}
 			void ensureDebugIngestForSubmit(workspaceId);
 		}
 
@@ -646,7 +672,12 @@ function AppShell({
 				return next;
 			});
 		}
-	}, [activeDebugWorkspaceIds, debugIngestStates, ensureDebugIngestForSubmit]);
+	}, [
+		activeDebugWorkspaceIds,
+		appSettings.debugIngestPublicForward,
+		debugIngestStates,
+		ensureDebugIngestForSubmit,
+	]);
 
 	useEffect(() => {
 		return () => {
@@ -796,11 +827,6 @@ function AppShell({
 		workspaceReselectTick,
 	]);
 
-	const {
-		settings: appSettings,
-		isLoaded: areSettingsLoaded,
-		updateSettings,
-	} = useSettings();
 	const appUpdateStatus = useAppUpdater();
 	useDockUnreadBadge();
 	useEnsureDefaultModel();

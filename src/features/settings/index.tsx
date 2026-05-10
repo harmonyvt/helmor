@@ -295,6 +295,61 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
+										title="Expose Debug ingest with ngrok"
+										description="When Debug mode is active, open an ngrok HTTPS tunnel to the workspace ingest server so preview deployments (Vercel, Netlify, etc.) can send evidence back to Helmor."
+									>
+										<Switch
+											checked={settings.debugIngestPublicForward}
+											onCheckedChange={(checked) =>
+												updateSettings({ debugIngestPublicForward: checked })
+											}
+										/>
+									</SettingsRow>
+									<div className="border-border/40 border-b py-5">
+										<div className="text-[13px] font-medium leading-snug text-foreground">
+											Debug ingest ngrok
+										</div>
+										<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+											Configure the token and optional reserved domain used by
+											the public Debug ingest tunnel. If no token is saved here,
+											Helmor falls back to NGROK_AUTHTOKEN from its environment.
+										</div>
+										<div className="mt-4 grid gap-3">
+											<Field>
+												<FieldLabel>Authtoken</FieldLabel>
+												<FieldContent>
+													<Input
+														type="password"
+														value={settings.debugIngestNgrokAuthtoken}
+														onChange={(event) =>
+															updateSettings({
+																debugIngestNgrokAuthtoken: event.target.value,
+															})
+														}
+														placeholder="ngrok authtoken"
+														className="bg-muted/30 text-[13px] text-foreground placeholder:text-muted-foreground/50"
+													/>
+												</FieldContent>
+											</Field>
+											<Field>
+												<FieldLabel>Reserved domain (optional)</FieldLabel>
+												<FieldContent>
+													<Input
+														type="text"
+														value={settings.debugIngestNgrokDomain}
+														onChange={(event) =>
+															updateSettings({
+																debugIngestNgrokDomain: event.target.value,
+															})
+														}
+														placeholder="debug.example.ngrok.app"
+														className="bg-muted/30 text-[13px] text-foreground placeholder:text-muted-foreground/50"
+													/>
+												</FieldContent>
+											</Field>
+										</div>
+									</div>
+									<SettingsRow
 										title="Desktop Notifications"
 										description="Show system notifications when sessions complete or need input"
 									>

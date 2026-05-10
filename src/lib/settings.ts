@@ -48,6 +48,12 @@ export type AppSettings = {
 	favoriteModelIds: string[];
 	/** Open web links from forge action rows in Helmor's workspace browser. */
 	openActionLinksInHelmorBrowser: boolean;
+	/** Expose Debug ingest through an ngrok HTTPS tunnel when Debug mode is active. */
+	debugIngestPublicForward: boolean;
+	/** ngrok authtoken used for the optional Debug ingest tunnel. */
+	debugIngestNgrokAuthtoken: string;
+	/** Optional reserved ngrok domain used for the Debug ingest tunnel. */
+	debugIngestNgrokDomain: string;
 };
 
 /**
@@ -83,6 +89,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	libghosttyEnabled: false,
 	favoriteModelIds: [],
 	openActionLinksInHelmorBrowser: false,
+	debugIngestPublicForward: false,
+	debugIngestNgrokAuthtoken: "",
+	debugIngestNgrokDomain: "",
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -108,6 +117,9 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	libghosttyEnabled: "app.libghostty_enabled",
 	favoriteModelIds: "app.favorite_model_ids",
 	openActionLinksInHelmorBrowser: "app.open_action_links_in_helmor_browser",
+	debugIngestPublicForward: "app.debug_ingest_public_forward",
+	debugIngestNgrokAuthtoken: "app.debug_ingest_ngrok_authtoken",
+	debugIngestNgrokDomain: "app.debug_ingest_ngrok_domain",
 };
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
@@ -239,6 +251,16 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.openActionLinksInHelmorBrowser] !== undefined
 					? raw[SETTINGS_KEY_MAP.openActionLinksInHelmorBrowser] === "true"
 					: DEFAULT_SETTINGS.openActionLinksInHelmorBrowser,
+			debugIngestPublicForward:
+				raw[SETTINGS_KEY_MAP.debugIngestPublicForward] !== undefined
+					? raw[SETTINGS_KEY_MAP.debugIngestPublicForward] === "true"
+					: DEFAULT_SETTINGS.debugIngestPublicForward,
+			debugIngestNgrokAuthtoken:
+				raw[SETTINGS_KEY_MAP.debugIngestNgrokAuthtoken] ??
+				DEFAULT_SETTINGS.debugIngestNgrokAuthtoken,
+			debugIngestNgrokDomain:
+				raw[SETTINGS_KEY_MAP.debugIngestNgrokDomain] ??
+				DEFAULT_SETTINGS.debugIngestNgrokDomain,
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };

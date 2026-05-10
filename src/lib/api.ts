@@ -147,11 +147,21 @@ export type WebDaemonStartConfig = {
 	frontendDir?: string | null;
 };
 
+export type DebugIngestPublicForwardConfig = {
+	enabled: boolean;
+	ngrokAuthtoken?: string | null;
+	ngrokDomain?: string | null;
+};
+
 export type DebugIngestStatus = {
 	workspaceId: string;
 	running: boolean;
 	url: string | null;
 	ingestUrl: string | null;
+	publicUrl: string | null;
+	publicIngestUrl: string | null;
+	tunnelProvider: "ngrok" | string | null;
+	tunnelError: string | null;
 	host: string | null;
 	port: number | null;
 	entryCount: number;
@@ -942,10 +952,16 @@ export async function cleanupWebDaemon(): Promise<WebDaemonStatus> {
 
 export async function ensureDebugIngestServer(
 	workspaceId: string,
+	options: { publicForward?: DebugIngestPublicForwardConfig } = {},
 ): Promise<DebugIngestStatus> {
-	return invoke<DebugIngestStatus>("ensure_debug_ingest_server", {
-		workspaceId,
-	});
+	const args: {
+		workspaceId: string;
+		publicForward?: DebugIngestPublicForwardConfig;
+	} = { workspaceId };
+	if (options.publicForward !== undefined) {
+		args.publicForward = options.publicForward;
+	}
+	return invoke<DebugIngestStatus>("ensure_debug_ingest_server", args);
 }
 
 export async function stopDebugIngestServer(
