@@ -113,6 +113,19 @@ function getPiToolInfo(
 		};
 	}
 
+	if (tool === "delegate_agent") {
+		const task = str(input?.task);
+		return {
+			action: "Delegate agent",
+			icon: <Bot className={neutralToolIconClassName} strokeWidth={1.8} />,
+			detail:
+				str(input?.title) ??
+				(task ? truncate(task, 60) : undefined) ??
+				str(input?.provider) ??
+				undefined,
+		};
+	}
+
 	return null;
 }
 
