@@ -1229,11 +1229,70 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
 			sessionId: "session-review",
 			prompt: expect.stringContaining(
-				"Please review and address all outstanding PR review comments.",
+				"Goal: address every actionable outstanding reviewer comment",
 			),
+			modelId: null,
 			forceQueue: true,
 		});
 		expect(onSelectSession).toHaveBeenCalledWith("session-review");
+	});
+
+	it("review all uses the configured PR comment review model", async () => {
+		const user = userEvent.setup();
+		const onQueuePendingPromptForSession = vi.fn();
+		apiMocks.getWorkspacePrComments.mockResolvedValue({
+			prNumber: 12,
+			prUrl: "https://github.com/acme/repo/pull/12",
+			comments: [
+				{
+					id: "comment-1",
+					author: "reviewer",
+					body: "Please fix this path.",
+					url: "https://github.com/acme/repo/pull/12#discussion_r1",
+					filePath: "src/problem.ts",
+					isThreadResolved: false,
+					createdAt: "2026-05-04T00:00:00Z",
+				},
+			],
+		});
+
+		renderWithProviders(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						prCommentReviewModelId: "gpt-5.4",
+					},
+					isLoaded: true,
+					updateSettings: vi.fn(),
+				}}
+			>
+				<WorkspaceInspectorSidebar
+					workspaceId="workspace-1"
+					workspaceRootPath="/tmp/workspace"
+					workspaceBranch="feature/actions"
+					workspaceTargetBranch="main"
+					workspaceRemote="testuser"
+					editorMode={false}
+					onOpenEditorFile={vi.fn()}
+					currentSessionId="session-1"
+					onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+				/>
+			</SettingsContext.Provider>,
+		);
+
+		await user.click(await screen.findByRole("tab", { name: /Comments/ }));
+		await user.click(
+			await screen.findByRole("button", { name: "Review all PR comments" }),
+		);
+
+		await waitFor(() => {
+			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith(
+				expect.objectContaining({
+					modelId: "gpt-5.4",
+				}),
+			);
+		});
 	});
 
 	it("uses the workspace remote when formatting sync target labels", async () => {
