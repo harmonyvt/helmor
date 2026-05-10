@@ -156,7 +156,10 @@ type WorkspaceComposerContainerProps = {
 	pendingDeferredTool?: PendingDeferredTool | null;
 	onDeferredToolResponse?: DeferredToolResponseHandler;
 	planReview?: PlanReviewPart | null;
-	onImplementPlanInCleanThread?: (plan: PlanReviewPart) => void | Promise<void>;
+	onImplementPlanInCleanThread?: (
+		plan: PlanReviewPart,
+		modelId?: string | null,
+	) => void | Promise<void>;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;

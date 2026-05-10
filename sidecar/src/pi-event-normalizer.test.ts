@@ -57,6 +57,58 @@ describe("Pi event normalization", () => {
 		]);
 	});
 
+	test("captures plan-mode assistant text as a Helmor plan review", () => {
+		const state = createPiEventState("request-a", { capturePlanReview: true });
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_start",
+					message: { role: "assistant", responseId: "msg-plan", content: [] },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_update",
+					message: { role: "assistant", responseId: "msg-plan", content: [] },
+					assistantMessageEvent: { type: "text_delta", delta: "Plan:\n" },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_update",
+					message: { role: "assistant", responseId: "msg-plan", content: [] },
+					assistantMessageEvent: { type: "text_delta", delta: "1. Read files" },
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([]);
+		expect(
+			normalizePiEvent(
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						responseId: "msg-plan",
+						content: [{ type: "text", text: "Plan:\n1. Read files" }],
+					},
+				} as unknown as AgentSessionEvent,
+				state,
+			),
+		).toEqual([
+			{
+				type: "planCaptured",
+				toolUseId: "pi-plan-msg-plan",
+				plan: "Plan:\n1. Read files",
+			},
+		]);
+	});
+
 	test("maps bash tool lifecycle to command execution items", () => {
 		const state = createPiEventState();
 		expect(

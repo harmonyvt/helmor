@@ -302,7 +302,7 @@ export const WorkspaceConversationContainer = memo(
 		);
 
 		const handleImplementPlanInCleanThread = useCallback(
-			async (plan: PlanReviewPart) => {
+			async (plan: PlanReviewPart, modelId?: string | null) => {
 				if (!displayedWorkspaceId || !onQueuePendingPromptForSession) return;
 				const { sessionId } = await createSession(displayedWorkspaceId, {
 					permissionMode: "bypassPermissions",
@@ -323,11 +323,13 @@ export const WorkspaceConversationContainer = memo(
 				onQueuePendingPromptForSession({
 					sessionId,
 					prompt,
+					modelId: modelId ?? displayedSelectedModelId,
 					permissionMode: "bypassPermissions",
 				});
 				onSelectSession(sessionId);
 			},
 			[
+				displayedSelectedModelId,
 				displayedWorkspaceId,
 				onQueuePendingPromptForSession,
 				onSelectSession,
