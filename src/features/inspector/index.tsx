@@ -89,6 +89,8 @@ type WorkspaceInspectorSidebarProps = {
 		status: DebugIngestStatus | null;
 		error: string | null;
 	} | null;
+	/** Opens a URL in a full-viewport Helmor browser tab. */
+	onOpenBrowserUrl?: (url: string) => Promise<void> | void;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -112,6 +114,7 @@ export function WorkspaceInspectorSidebar({
 	onOpenSettings,
 	onOpenBrowserMode,
 	debugIngestState = null,
+	onOpenBrowserUrl,
 }: WorkspaceInspectorSidebarProps) {
 	const {
 		actionsHeight,
@@ -522,6 +525,7 @@ export function WorkspaceInspectorSidebar({
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
 				onOpenBrowserMode={onOpenBrowserMode}
+				onOpenBrowserUrl={onOpenBrowserUrl}
 			/>
 
 			{tabsOpen && (
