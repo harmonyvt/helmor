@@ -72,6 +72,8 @@ mod unix {
         "XAI_API_KEY",
         "MOONSHOT_API_KEY",
         "KIMI_API_KEY",
+        "NGROK_AUTHTOKEN",
+        "HELMOR_DEBUG_INGEST_NGROK_DOMAIN",
     ];
 
     pub fn inherit() {

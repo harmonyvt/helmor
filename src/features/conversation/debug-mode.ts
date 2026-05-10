@@ -7,10 +7,21 @@ Use a debugging workflow for this turn.
 - Keep the visible reply concise: summarize the observed failure, the fix, and the verification.`;
 
 function buildIngestInstructions(status: DebugIngestStatus): string | null {
-	const ingestUrl = status.ingestUrl?.trim();
+	const localIngestUrl = status.ingestUrl?.trim();
+	const publicIngestUrl = status.publicIngestUrl?.trim();
+	const ingestUrl = publicIngestUrl || localIngestUrl;
 	if (!status.running || !ingestUrl) return null;
+	const publicNote = publicIngestUrl
+		? `\n- This is a public ${status.tunnelProvider ?? "tunnel"} URL forwarded to Helmor; use it for remote preview deployments such as Vercel/Netlify that cannot reach localhost.`
+		: status.tunnelError
+			? "\n- A public ngrok tunnel was requested but failed to start; localhost ingest is still available from this machine only."
+			: "";
+	const localNote =
+		publicIngestUrl && localIngestUrl
+			? `\n- Local-only fallback from this machine: ${localIngestUrl}.`
+			: "";
 	return `[DEBUG INGEST SERVER]
-A Helmor workspace-scoped localhost debug ingest server is available for this turn.
+A Helmor workspace-scoped debug ingest endpoint is available for this turn.${publicNote}${localNote}
 - POST JSON evidence to ${ingestUrl} with a JSON object body, for example: {"level":"info","source":"agent","message":"observed failure","details":{}}.
 - GET ${ingestUrl} to read the current buffered evidence before drawing conclusions.
 - DELETE ${ingestUrl} to clear stale evidence when it would confuse the investigation.

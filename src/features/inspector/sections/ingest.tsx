@@ -30,7 +30,10 @@ type IngestTabProps = {
 export function IngestTab({ workspaceId, state, isActive }: IngestTabProps) {
 	const [entries, setEntries] = useState<DebugIngestEntry[]>([]);
 	const [copied, setCopied] = useState<string | null>(null);
-	const ingestUrl = state?.status?.ingestUrl ?? null;
+	const localIngestUrl = state?.status?.ingestUrl ?? null;
+	const publicIngestUrl = state?.status?.publicIngestUrl ?? null;
+	const ingestUrl = publicIngestUrl ?? localIngestUrl;
+	const tunnelError = state?.status?.tunnelError ?? null;
 
 	useEffect(() => {
 		if (!workspaceId || !isActive || !state?.status) return;
@@ -97,9 +100,11 @@ export function IngestTab({ workspaceId, state, isActive }: IngestTabProps) {
 									? "Starting workspace ingest server…"
 									: state?.error
 										? "Startup failed"
-										: ingestUrl
-											? "Running on localhost"
-											: "Enable Debug mode to start ingest."}
+										: publicIngestUrl
+											? "Public ngrok tunnel active"
+											: ingestUrl
+												? "Running on localhost"
+												: "Enable Debug mode to start ingest."}
 							</p>
 						</div>
 						{ingestUrl ? (
@@ -119,14 +124,27 @@ export function IngestTab({ workspaceId, state, isActive }: IngestTabProps) {
 							{state.error}
 						</p>
 					) : null}
+					{tunnelError ? (
+						<p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-amber-700 dark:text-amber-300">
+							{tunnelError}
+						</p>
+					) : null}
 					{ingestUrl ? (
 						<div className="mt-3 space-y-2">
 							<CopyableLine
-								label="POST / GET / DELETE"
+								label={publicIngestUrl ? "Public" : "Local"}
 								value={ingestUrl}
 								copied={copied === "url"}
 								onCopy={() => copyText("url", ingestUrl)}
 							/>
+							{publicIngestUrl && localIngestUrl ? (
+								<CopyableLine
+									label="Local"
+									value={localIngestUrl}
+									copied={copied === "local-url"}
+									onCopy={() => copyText("local-url", localIngestUrl)}
+								/>
+							) : null}
 							{curlExamples.map((example, index) => (
 								<CopyableLine
 									key={example}

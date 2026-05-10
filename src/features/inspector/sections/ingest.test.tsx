@@ -35,6 +35,10 @@ describe("IngestTab", () => {
 			running: true,
 			url: "http://127.0.0.1:4321",
 			ingestUrl: "http://127.0.0.1:4321/ingest",
+			publicUrl: null,
+			publicIngestUrl: null,
+			tunnelProvider: null,
+			tunnelError: null,
 			host: "127.0.0.1",
 			port: 4321,
 			entryCount: 0,
@@ -72,6 +76,10 @@ describe("IngestTab", () => {
 						running: true,
 						url: "http://127.0.0.1:4321",
 						ingestUrl: "http://127.0.0.1:4321/ingest",
+						publicUrl: null,
+						publicIngestUrl: null,
+						tunnelProvider: null,
+						tunnelError: null,
 						host: "127.0.0.1",
 						port: 4321,
 						entryCount: 0,
@@ -82,7 +90,7 @@ describe("IngestTab", () => {
 		);
 
 		expect(screen.getByText("Running on localhost")).toBeInTheDocument();
-		expect(screen.getByText("POST / GET / DELETE")).toBeInTheDocument();
+		expect(screen.getByText("Local")).toBeInTheDocument();
 		await screen.findByText("Captured console failure");
 		fireEvent.click(screen.getByRole("button", { name: /clear/i }));
 		await waitFor(() =>
