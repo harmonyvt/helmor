@@ -210,11 +210,17 @@ export function ActionsSection({
 	const actionDisabled = commitButtonState === "busy";
 	const handleOpenActionUrl = useCallback(
 		async (url: string) => {
-			if (settings.openActionLinksInHelmorBrowser && onOpenBrowserUrl) {
-				await onOpenBrowserUrl(url);
-				return;
+			try {
+				if (settings.openActionLinksInHelmorBrowser && onOpenBrowserUrl) {
+					await onOpenBrowserUrl(url);
+					return;
+				}
+				await openUrl(url);
+			} catch (error) {
+				toast.error(
+					error instanceof Error ? error.message : "Unable to open link.",
+				);
 			}
-			await openUrl(url);
 		},
 		[onOpenBrowserUrl, settings.openActionLinksInHelmorBrowser],
 	);
