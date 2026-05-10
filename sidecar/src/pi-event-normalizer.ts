@@ -86,14 +86,16 @@ export function normalizePiEvent(
 			if (message?.role !== "assistant") return [];
 			const errorMessage = assistantErrorMessage(message);
 			if (errorMessage) {
+				if (state.capturePlanReview) {
+					clearPlanCaptureState(state);
+				}
 				return [{ type: "error", message: errorMessage }];
 			}
 			if (state.capturePlanReview) {
 				const id = state.planMessageItemId ?? piMessageId(message, state);
 				const finalText = assistantText(message).trim();
 				const plan = (finalText || state.planText).trim();
-				state.planMessageItemId = null;
-				state.planText = "";
+				clearPlanCaptureState(state);
 				if (!plan) return [];
 				return [
 					{
@@ -188,6 +190,11 @@ export function normalizePiEvent(
 		default:
 			return [unknownPiEventCard(event, state)];
 	}
+}
+
+function clearPlanCaptureState(state: PiEventState): void {
+	state.planMessageItemId = null;
+	state.planText = "";
 }
 
 function normalizeAssistantMessageUpdate(
