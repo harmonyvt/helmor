@@ -305,7 +305,10 @@ pub(super) fn merge_adjacent_assistants(msgs: Vec<ThreadMessageLike>) -> Vec<Thr
                 prev.status = msg.status;
                 prev.streaming = msg.streaming;
             } else {
-                prev.content.extend(msg.content);
+                let inserted_pi_reasoning = insert_pi_reasoning_before_matching_text(prev, &msg);
+                if !inserted_pi_reasoning {
+                    prev.content.extend(msg.content);
+                }
                 if msg.status.is_some() {
                     prev.status = msg.status;
                 }
@@ -319,6 +322,55 @@ pub(super) fn merge_adjacent_assistants(msgs: Vec<ThreadMessageLike>) -> Vec<Thr
     }
 
     out
+}
+
+/// Older Pi streams emitted an empty `agent_message` start before the first
+/// thinking block, then completed that message with final text before the
+/// corresponding reasoning item completed. The DB row order is therefore
+/// text → reasoning even though the Pi session content is reasoning → text.
+/// When the adjacent-assistant merge sees that Pi-specific pair, insert the
+/// reasoning before its matching text part so historical reloads and live
+/// finalization render in the semantic order.
+fn insert_pi_reasoning_before_matching_text(
+    prev: &mut ThreadMessageLike,
+    next: &ThreadMessageLike,
+) -> bool {
+    let Some(key) = pi_reasoning_message_key(next) else {
+        return false;
+    };
+    let text_prefix = format!("codex-item:pi-message-{key}:blk:");
+    let Some(index) = prev.content.iter().position(|part| {
+        matches!(
+            part,
+            ExtendedMessagePart::Basic(MessagePart::Text { id, .. }) if id.starts_with(&text_prefix)
+        )
+    }) else {
+        return false;
+    };
+    prev.content.splice(index..index, next.content.clone());
+    true
+}
+
+fn pi_reasoning_message_key(message: &ThreadMessageLike) -> Option<&str> {
+    if message.content.is_empty() {
+        return None;
+    }
+    let mut key: Option<&str> = None;
+    for part in &message.content {
+        let ExtendedMessagePart::Basic(MessagePart::Reasoning { id, .. }) = part else {
+            return None;
+        };
+        let rest = id.strip_prefix("codex-reasoning:pi-reasoning-")?;
+        let (candidate, _) = rest.split_once(":blk:")?;
+        if let Some(existing) = key {
+            if existing != candidate {
+                return None;
+            }
+        } else {
+            key = Some(candidate);
+        }
+    }
+    key
 }
 
 fn assistant_contains_plan_review(message: Option<&ThreadMessageLike>) -> bool {
