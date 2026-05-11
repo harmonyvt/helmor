@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useScriptStatus } from "@/features/inspector/hooks/use-script-status";
 import { useSetupAutoRun } from "@/features/inspector/hooks/use-setup-auto-run";
 import {
@@ -23,6 +23,29 @@ import { GoalMetaSheet } from "./metadata-sheet";
 import { AddWorkspacePanel, WorkspaceDetailPanel } from "./panels";
 import type { GoalAiSurfaceProps, GoalWorkspaceContainerProps } from "./types";
 
+const GOALS_AI_PANEL_WIDTH_KEY = "helmor.goalsAiPanelWidth";
+const GOALS_AI_PANEL_DEFAULT_WIDTH = 420;
+const GOALS_AI_PANEL_MIN_WIDTH = 320;
+const GOALS_AI_PANEL_MAX_WIDTH = 720;
+const GOALS_AI_PANEL_HIT_AREA = 20;
+
+function getInitialGoalsAiPanelWidth() {
+	if (typeof window === "undefined") return GOALS_AI_PANEL_DEFAULT_WIDTH;
+	try {
+		const stored = window.localStorage.getItem(GOALS_AI_PANEL_WIDTH_KEY);
+		if (!stored) return GOALS_AI_PANEL_DEFAULT_WIDTH;
+		const parsed = Number.parseInt(stored, 10);
+		return Number.isFinite(parsed)
+			? Math.min(
+					GOALS_AI_PANEL_MAX_WIDTH,
+					Math.max(GOALS_AI_PANEL_MIN_WIDTH, parsed),
+				)
+			: GOALS_AI_PANEL_DEFAULT_WIDTH;
+	} catch {
+		return GOALS_AI_PANEL_DEFAULT_WIDTH;
+	}
+}
+
 type DragState = {
 	workspaceId: string;
 	sourceLane: WorkspaceStatus;
@@ -44,6 +67,11 @@ export function GoalWorkspaceContainer({
 	const [dragOverLane, setDragOverLane] = useState<WorkspaceStatus | null>(
 		null,
 	);
+	const [aiPanelWidth, setAiPanelWidth] = useState(getInitialGoalsAiPanelWidth);
+	const [aiPanelResizeState, setAiPanelResizeState] = useState<{
+		pointerX: number;
+		startWidth: number;
+	} | null>(null);
 
 	const detailQuery = useQuery(workspaceDetailQueryOptions(workspaceId));
 	const childQuery = useQuery(goalChildWorkspacesQueryOptions(workspaceId));
@@ -73,6 +101,71 @@ export function GoalWorkspaceContainer({
 		setupScript,
 		scriptsLoaded: repoScriptsQuery.isSuccess,
 	});
+
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				GOALS_AI_PANEL_WIDTH_KEY,
+				String(aiPanelWidth),
+			);
+		} catch {
+			// ignore
+		}
+	}, [aiPanelWidth]);
+
+	useEffect(() => {
+		if (!aiPanelResizeState) return;
+		let pendingWidth: number | null = null;
+		let rafId: number | null = null;
+		const flush = () => {
+			rafId = null;
+			if (pendingWidth === null) return;
+			const next = pendingWidth;
+			pendingWidth = null;
+			setAiPanelWidth(next);
+		};
+		const handleMouseMove = (event: globalThis.MouseEvent) => {
+			const deltaX = event.clientX - aiPanelResizeState.pointerX;
+			const raw = aiPanelResizeState.startWidth - deltaX;
+			pendingWidth = Math.min(
+				GOALS_AI_PANEL_MAX_WIDTH,
+				Math.max(GOALS_AI_PANEL_MIN_WIDTH, raw),
+			);
+			if (rafId === null) rafId = window.requestAnimationFrame(flush);
+		};
+		const handleMouseUp = () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+				rafId = null;
+			}
+			flush();
+			setAiPanelResizeState(null);
+		};
+		const prevCursor = document.body.style.cursor;
+		const prevSelect = document.body.style.userSelect;
+		document.body.style.cursor = "ew-resize";
+		document.body.style.userSelect = "none";
+		window.addEventListener("mousemove", handleMouseMove);
+		window.addEventListener("mouseup", handleMouseUp);
+		return () => {
+			if (rafId !== null) window.cancelAnimationFrame(rafId);
+			document.body.style.cursor = prevCursor;
+			document.body.style.userSelect = prevSelect;
+			window.removeEventListener("mousemove", handleMouseMove);
+			window.removeEventListener("mouseup", handleMouseUp);
+		};
+	}, [aiPanelResizeState]);
+
+	const handleAiPanelResizeStart = useCallback(
+		(event: { clientX: number; preventDefault(): void }) => {
+			event.preventDefault();
+			setAiPanelResizeState({
+				pointerX: event.clientX,
+				startWidth: aiPanelWidth,
+			});
+		},
+		[aiPanelWidth],
+	);
 
 	const invalidateBoard = useCallback(async () => {
 		await Promise.all([
@@ -253,9 +346,29 @@ export function GoalWorkspaceContainer({
 				/>
 
 				{isPanelOpen ? (
-					<aside className="flex w-72 min-h-0 shrink-0 flex-col border-l border-border/70 bg-sidebar/70">
+					<aside
+						className="relative flex min-h-0 shrink-0 flex-col border-l border-border/70 bg-sidebar/70"
+						style={{ width: showAiPanel ? aiPanelWidth : 288 }}
+					>
 						{showAiPanel ? (
-							renderGoalAiSurface(aiSurfaceProps)
+							<>
+								<div
+									role="separator"
+									aria-orientation="vertical"
+									aria-label="Resize AI panel"
+									aria-valuemin={GOALS_AI_PANEL_MIN_WIDTH}
+									aria-valuemax={GOALS_AI_PANEL_MAX_WIDTH}
+									aria-valuenow={aiPanelWidth}
+									tabIndex={0}
+									onMouseDown={handleAiPanelResizeStart}
+									className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+									style={{
+										left: `${-(GOALS_AI_PANEL_HIT_AREA / 2)}px`,
+										width: `${GOALS_AI_PANEL_HIT_AREA}px`,
+									}}
+								/>
+								{renderGoalAiSurface(aiSurfaceProps)}
+							</>
 						) : selectedWorkspace ? (
 							<WorkspaceDetailPanel
 								workspace={selectedWorkspace}
