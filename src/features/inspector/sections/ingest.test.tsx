@@ -117,4 +117,100 @@ describe("IngestTab", () => {
 		expect(screen.getByText("Startup failed")).toBeInTheDocument();
 		expect(screen.getByText("port bind failed")).toBeInTheDocument();
 	});
+
+	it("clears workspace entries immediately when switching workspaces", async () => {
+		apiMocks.readDebugIngestEntries.mockResolvedValueOnce([
+			{
+				id: "entry-1",
+				workspaceId: "workspace-1",
+				receivedAt: "2026-05-10T00:00:00Z",
+				payload: { message: "Workspace one evidence" },
+			},
+		]);
+
+		const { rerender } = renderWithProviders(
+			<IngestTab
+				workspaceId="workspace-1"
+				isActive
+				state={{
+					active: true,
+					starting: false,
+					status: debugStatus("workspace-1"),
+					error: null,
+				}}
+			/>,
+		);
+
+		await screen.findByText("Workspace one evidence");
+		apiMocks.readDebugIngestEntries.mockResolvedValueOnce([]);
+
+		rerender(
+			<IngestTab
+				workspaceId="workspace-2"
+				isActive
+				state={{
+					active: true,
+					starting: false,
+					status: debugStatus("workspace-2"),
+					error: null,
+				}}
+			/>,
+		);
+
+		expect(
+			screen.queryByText("Workspace one evidence"),
+		).not.toBeInTheDocument();
+		expect(
+			screen.getByText("No debug evidence ingested yet."),
+		).toBeInTheDocument();
+	});
+
+	it("ignores stale entries returned for another workspace", async () => {
+		apiMocks.readDebugIngestEntries.mockResolvedValue([
+			{
+				id: "entry-1",
+				workspaceId: "workspace-1",
+				receivedAt: "2026-05-10T00:00:00Z",
+				payload: { message: "Wrong workspace evidence" },
+			},
+		]);
+
+		renderWithProviders(
+			<IngestTab
+				workspaceId="workspace-2"
+				isActive
+				state={{
+					active: true,
+					starting: false,
+					status: debugStatus("workspace-2"),
+					error: null,
+				}}
+			/>,
+		);
+
+		await waitFor(() =>
+			expect(
+				screen.queryByText("Wrong workspace evidence"),
+			).not.toBeInTheDocument(),
+		);
+		expect(
+			screen.getByText("No debug evidence ingested yet."),
+		).toBeInTheDocument();
+	});
 });
+
+function debugStatus(workspaceId: string) {
+	return {
+		workspaceId,
+		running: true,
+		url: "http://127.0.0.1:4321",
+		ingestUrl: "http://127.0.0.1:4321/ingest",
+		publicUrl: null,
+		publicIngestUrl: null,
+		tunnelProvider: null,
+		tunnelError: null,
+		host: "127.0.0.1",
+		port: 4321,
+		entryCount: 0,
+	} as const;
+}

@@ -298,6 +298,7 @@ pub fn run() {
             commands::browser_commands::browser_go_forward,
             commands::browser_commands::open_browser_devtools,
             commands::debug_ingest_commands::ensure_debug_ingest_server,
+            commands::debug_ingest_commands::get_debug_ingest_overview,
             commands::debug_ingest_commands::stop_debug_ingest_server,
             commands::debug_ingest_commands::read_debug_ingest_entries,
             commands::debug_ingest_commands::clear_debug_ingest_entries,

@@ -36,11 +36,17 @@ export function IngestTab({ workspaceId, state, isActive }: IngestTabProps) {
 	const tunnelError = state?.status?.tunnelError ?? null;
 
 	useEffect(() => {
+		setEntries([]);
+		setCopied(null);
+	}, [workspaceId]);
+
+	useEffect(() => {
 		if (!workspaceId || !isActive || !state?.status) return;
 		let cancelled = false;
 		const channel = new Channel<DebugIngestEvent>();
 		channel.onmessage = (event) => {
 			if (event.type === "entry") {
+				if (event.entry.workspaceId !== workspaceId) return;
 				setEntries((current) => [...current, event.entry]);
 			} else if (event.type === "cleared") {
 				setEntries([]);
@@ -48,7 +54,9 @@ export function IngestTab({ workspaceId, state, isActive }: IngestTabProps) {
 		};
 		void readDebugIngestEntries(workspaceId)
 			.then((next) => {
-				if (!cancelled) setEntries(next);
+				if (!cancelled) {
+					setEntries(next.filter((entry) => entry.workspaceId === workspaceId));
+				}
 			})
 			.catch((error) => console.warn("[debug-ingest] read failed", error));
 		void subscribeDebugIngest(workspaceId, channel).catch((error) => {
