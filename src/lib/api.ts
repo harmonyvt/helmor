@@ -997,6 +997,26 @@ export async function restartApp(force = false): Promise<void> {
 	await invoke("restart_app", { force });
 }
 
+export type HelmorAppInstallResult = {
+	repoRoot: string;
+	scriptPath: string;
+	installedAppPath: string;
+	pullStdout: string;
+	pullStderr: string;
+	stdout: string;
+	stderr: string;
+};
+
+export async function runHelmorAppInstall(): Promise<HelmorAppInstallResult> {
+	try {
+		return await invoke<HelmorAppInstallResult>("run_helmor_app_install");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to install and restart Helmor."),
+		);
+	}
+}
+
 export type CliStatus = {
 	installed: boolean;
 	installPath: string | null;

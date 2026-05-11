@@ -1,4 +1,5 @@
 pub(crate) mod agent_commands;
+pub(crate) mod app_install_commands;
 pub(crate) mod browser_commands;
 mod common;
 pub(crate) mod conductor_commands;
