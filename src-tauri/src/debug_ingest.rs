@@ -13,6 +13,7 @@ use chrono::Utc;
 use ngrok::forwarder::Forwarder;
 use ngrok::prelude::{EndpointInfo, ForwarderBuilder, TunnelCloser};
 use ngrok::tunnel::HttpTunnel;
+use ngrok::Session;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::ipc::Channel;
@@ -58,6 +59,22 @@ pub struct DebugIngestStatus {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NgrokAgentStatus {
+    pub connected: bool,
+    pub session_id: Option<String>,
+    pub active_tunnel_count: usize,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugIngestOverview {
+    pub ngrok_agent: NgrokAgentStatus,
+    pub instances: Vec<DebugIngestStatus>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum DebugIngestEvent {
     Entry { entry: DebugIngestEntry },
@@ -89,8 +106,24 @@ struct ServerHandle {
 }
 
 #[derive(Default)]
+struct NgrokAgentState {
+    session: Option<Session>,
+    auth_token: Option<String>,
+    last_error: Option<String>,
+}
+
 pub struct DebugIngestManager {
     servers: Mutex<HashMap<String, ServerHandle>>,
+    ngrok_agent: Arc<tokio::sync::Mutex<NgrokAgentState>>,
+}
+
+impl Default for DebugIngestManager {
+    fn default() -> Self {
+        Self {
+            servers: Mutex::new(HashMap::new()),
+            ngrok_agent: Arc::new(tokio::sync::Mutex::new(NgrokAgentState::default())),
+        }
+    }
 }
 
 impl DebugIngestManager {
@@ -203,7 +236,7 @@ impl DebugIngestManager {
             close_public_tunnel(tunnel);
         }
 
-        let mut tunnel = Some(start_ngrok_tunnel(addr, config).await?);
+        let mut tunnel = Some(self.start_ngrok_tunnel(addr, config).await?);
         {
             let mut servers = self.servers.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(handle) = servers.get_mut(workspace_id) {
@@ -220,6 +253,77 @@ impl DebugIngestManager {
             close_public_tunnel(tunnel);
         }
         Ok(())
+    }
+
+    async fn shared_ngrok_session(&self) -> Result<Session> {
+        let auth_token = env::var("NGROK_AUTHTOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .context("Public debug ingest requires NGROK_AUTHTOKEN in Helmor's environment")?;
+
+        let mut agent = self.ngrok_agent.lock().await;
+        if agent.auth_token.as_deref() == Some(auth_token.as_str()) {
+            if let Some(session) = &agent.session {
+                return Ok(session.clone());
+            }
+        }
+
+        let mut session_builder = Session::builder();
+        match session_builder
+            .authtoken(auth_token.clone())
+            .connect()
+            .await
+        {
+            Ok(session) => {
+                agent.auth_token = Some(auth_token);
+                agent.last_error = None;
+                agent.session = Some(session.clone());
+                tracing::info!(session_id = %session.id(), "Connected shared ngrok debug ingest agent session");
+                Ok(session)
+            }
+            Err(error) => {
+                let message = format!("Failed to connect ngrok session: {error:#}");
+                agent.last_error = Some(message.clone());
+                Err(anyhow::anyhow!(message))
+            }
+        }
+    }
+
+    async fn start_ngrok_tunnel(
+        &self,
+        addr: SocketAddr,
+        config: &DebugIngestPublicForwardConfig,
+    ) -> Result<PublicTunnelHandle> {
+        let session = self.shared_ngrok_session().await?;
+        let local_url = Url::parse(&format!("http://{addr}"))
+            .context("Failed to build local debug ingest URL for ngrok")?;
+        let mut endpoint = session.http_endpoint();
+        let configured_domain = config
+            .ngrok_domain
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .or_else(|| {
+                env::var(NGROK_DOMAIN_ENV)
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            });
+        if let Some(domain) = configured_domain {
+            endpoint.domain(domain);
+        }
+        let forwarder = endpoint
+            .listen_and_forward(local_url)
+            .await
+            .context("Failed to start ngrok debug ingest tunnel")?;
+        let public_url = forwarder.url().trim_end_matches('/').to_string();
+        tracing::info!(%public_url, session_id = %session.id(), "Started ngrok debug ingest tunnel");
+        Ok(PublicTunnelHandle {
+            public_url,
+            forwarder,
+        })
     }
 
     fn set_public_tunnel_error(&self, workspace_id: &str, error: Option<String>) {
@@ -242,6 +346,7 @@ impl DebugIngestManager {
         if let Some(tunnel) = tunnel {
             close_public_tunnel(tunnel);
         }
+        self.close_ngrok_agent_if_idle();
     }
 
     pub fn stop(&self, workspace_id: &str) {
@@ -257,6 +362,7 @@ impl DebugIngestManager {
             if let Some(shutdown) = handle.shutdown.take() {
                 let _ = shutdown.send(());
             }
+            self.close_ngrok_agent_if_idle();
         }
     }
 
@@ -271,6 +377,57 @@ impl DebugIngestManager {
         for key in keys {
             self.stop(&key);
         }
+    }
+
+    pub async fn overview(&self) -> DebugIngestOverview {
+        let mut instances: Vec<DebugIngestStatus> = self
+            .servers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(workspace_id, handle)| status_for(workspace_id, handle))
+            .collect();
+        instances.sort_by(|a, b| a.workspace_id.cmp(&b.workspace_id));
+        let active_tunnel_count = instances
+            .iter()
+            .filter(|status| status.tunnel_provider.as_deref() == Some("ngrok"))
+            .count();
+        let agent = self.ngrok_agent.lock().await;
+        DebugIngestOverview {
+            ngrok_agent: NgrokAgentStatus {
+                connected: agent.session.is_some(),
+                session_id: agent.session.as_ref().map(Session::id),
+                active_tunnel_count,
+                last_error: agent.last_error.clone(),
+            },
+            instances,
+        }
+    }
+
+    fn close_ngrok_agent_if_idle(&self) {
+        let has_public_tunnel = self
+            .servers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|handle| handle.public_tunnel.is_some());
+        if has_public_tunnel {
+            return;
+        }
+
+        let ngrok_agent = Arc::clone(&self.ngrok_agent);
+        tauri::async_runtime::spawn(async move {
+            let mut agent = ngrok_agent.lock().await;
+            let Some(mut session) = agent.session.take() else {
+                return;
+            };
+            agent.auth_token = None;
+            if let Err(error) = session.close().await {
+                tracing::warn!(%error, "Failed to close shared ngrok debug ingest agent session");
+            } else {
+                tracing::info!("Closed shared ngrok debug ingest agent session");
+            }
+        });
     }
 
     pub fn entries(&self, workspace_id: &str) -> Vec<DebugIngestEntry> {
@@ -483,51 +640,6 @@ fn public_tunnel_config_key(config: &DebugIngestPublicForwardConfig) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("dynamic");
     format!("ngrok:{domain}")
-}
-
-async fn start_ngrok_tunnel(
-    addr: SocketAddr,
-    config: &DebugIngestPublicForwardConfig,
-) -> Result<PublicTunnelHandle> {
-    let auth_token = env::var("NGROK_AUTHTOKEN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .context("Public debug ingest requires NGROK_AUTHTOKEN in Helmor's environment")?;
-    let local_url = Url::parse(&format!("http://{addr}"))
-        .context("Failed to build local debug ingest URL for ngrok")?;
-    let mut session_builder = ngrok::Session::builder();
-    let session = session_builder
-        .authtoken(auth_token)
-        .connect()
-        .await
-        .context("Failed to connect ngrok session")?;
-    let mut endpoint = session.http_endpoint();
-    let configured_domain = config
-        .ngrok_domain
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| {
-            env::var(NGROK_DOMAIN_ENV)
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        });
-    if let Some(domain) = configured_domain {
-        endpoint.domain(domain);
-    }
-    let forwarder = endpoint
-        .listen_and_forward(local_url)
-        .await
-        .context("Failed to start ngrok debug ingest tunnel")?;
-    let public_url = forwarder.url().trim_end_matches('/').to_string();
-    tracing::info!(%public_url, "Started ngrok debug ingest tunnel");
-    Ok(PublicTunnelHandle {
-        public_url,
-        forwarder,
-    })
 }
 
 fn close_public_tunnel(tunnel: PublicTunnelHandle) {

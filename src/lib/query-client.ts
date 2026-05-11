@@ -106,6 +106,7 @@ export const helmorQueryKeys = {
 	autoCloseActionKinds: ["autoCloseActionKinds"] as const,
 	autoCloseOptInAsked: ["autoCloseOptInAsked"] as const,
 	detectedEditors: ["detectedEditors"] as const,
+	debugIngestOverview: ["debugIngestOverview"] as const,
 	slashCommands: (
 		provider: AgentProvider,
 		workingDirectory: string | null,

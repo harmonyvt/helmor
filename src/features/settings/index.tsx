@@ -61,6 +61,7 @@ import { AppUpdatesPanel } from "./panels/app-updates";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DataSourceSettingsRow } from "./panels/data-source";
+import { DebugIngestNgrokPanel } from "./panels/debug-ingest-ngrok";
 import { DevToolsPanel } from "./panels/dev-tools";
 import {
 	ClaudeCustomProvidersPanel,
@@ -295,46 +296,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 											}
 										/>
 									</SettingsRow>
-									<SettingsRow
-										title="Expose Debug ingest with ngrok"
-										description="When Debug mode is active, open an ngrok HTTPS tunnel to the workspace ingest server so preview deployments (Vercel, Netlify, etc.) can send evidence back to Helmor."
-									>
-										<Switch
-											checked={settings.debugIngestPublicForward}
-											onCheckedChange={(checked) =>
-												updateSettings({ debugIngestPublicForward: checked })
-											}
-										/>
-									</SettingsRow>
-									<div className="border-border/40 border-b py-5">
-										<div className="text-[13px] font-medium leading-snug text-foreground">
-											Debug ingest ngrok
-										</div>
-										<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-											Configure an optional reserved domain for the public Debug
-											ingest tunnel. Set NGROK_AUTHTOKEN in Helmor's environment
-											to authorize ngrok without storing credentials in app
-											settings.
-										</div>
-										<div className="mt-4 grid gap-3">
-											<Field>
-												<FieldLabel>Reserved domain (optional)</FieldLabel>
-												<FieldContent>
-													<Input
-														type="text"
-														value={settings.debugIngestNgrokDomain}
-														onChange={(event) =>
-															updateSettings({
-																debugIngestNgrokDomain: event.target.value,
-															})
-														}
-														placeholder="debug.example.ngrok.app"
-														className="bg-muted/30 text-[13px] text-foreground placeholder:text-muted-foreground/50"
-													/>
-												</FieldContent>
-											</Field>
-										</div>
-									</div>
+									<DebugIngestNgrokPanel />
 									<SettingsRow
 										title="Desktop Notifications"
 										description="Show system notifications when sessions complete or need input"

@@ -2,8 +2,8 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::debug_ingest::{
-    DebugIngestEntry, DebugIngestEvent, DebugIngestManager, DebugIngestPublicForwardConfig,
-    DebugIngestStatus,
+    DebugIngestEntry, DebugIngestEvent, DebugIngestManager, DebugIngestOverview,
+    DebugIngestPublicForwardConfig, DebugIngestStatus,
 };
 
 use super::common::CmdResult;
@@ -15,6 +15,13 @@ pub async fn ensure_debug_ingest_server(
     public_forward: Option<DebugIngestPublicForwardConfig>,
 ) -> CmdResult<DebugIngestStatus> {
     Ok(manager.ensure(&workspace_id, public_forward).await?)
+}
+
+#[tauri::command]
+pub async fn get_debug_ingest_overview(
+    manager: State<'_, DebugIngestManager>,
+) -> CmdResult<DebugIngestOverview> {
+    Ok(manager.overview().await)
 }
 
 #[tauri::command]

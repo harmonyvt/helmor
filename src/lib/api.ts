@@ -166,6 +166,18 @@ export type DebugIngestStatus = {
 	entryCount: number;
 };
 
+export type NgrokAgentStatus = {
+	connected: boolean;
+	sessionId: string | null;
+	activeTunnelCount: number;
+	lastError: string | null;
+};
+
+export type DebugIngestOverview = {
+	ngrokAgent: NgrokAgentStatus;
+	instances: DebugIngestStatus[];
+};
+
 export type DebugIngestEntry = {
 	id: string;
 	workspaceId: string;
@@ -961,6 +973,10 @@ export async function ensureDebugIngestServer(
 		args.publicForward = options.publicForward;
 	}
 	return invoke<DebugIngestStatus>("ensure_debug_ingest_server", args);
+}
+
+export async function getDebugIngestOverview(): Promise<DebugIngestOverview> {
+	return invoke<DebugIngestOverview>("get_debug_ingest_overview");
 }
 
 export async function stopDebugIngestServer(
