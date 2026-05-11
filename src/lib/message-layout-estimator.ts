@@ -29,9 +29,9 @@ const REASONING_SUMMARY_HEIGHT = 24;
 const REASONING_EXPANDED_CHROME_HEIGHT = 50;
 const REASONING_EXPANDED_CONTENT_HORIZONTAL_PADDING = 24;
 const COLLAPSED_GROUP_HEIGHT = 24;
-// Delegated thread previews are capped in the UI so a long child prompt cannot
-// make the parent conversation row explode and yank the viewport upward.
-const DELEGATION_ANCHOR_HEIGHT = 260;
+// Delegated thread previews can render up to 520px plus header/chrome. Keep the
+// estimate as a safe upper bound so measured rows do not expand while streaming.
+const DELEGATION_ANCHOR_HEIGHT = 600;
 const USER_BUBBLE_VERTICAL_PADDING = 16;
 const USER_BUBBLE_HORIZONTAL_PADDING = 24;
 const USER_BUBBLE_WIDTH_RATIO = 0.75;

@@ -42,4 +42,34 @@ describe("estimateThreadRowHeights", () => {
 
 		expect(height).toBeGreaterThan(150);
 	});
+
+	it("uses a safe upper-bound estimate for delegation previews", () => {
+		const messages: ThreadMessageLike[] = [
+			{
+				id: "assistant-delegation",
+				role: "assistant",
+				streaming: true,
+				content: [
+					{
+						type: "delegation-anchor",
+						id: "delegation-1",
+						delegationId: "delegation-1",
+						parentSessionId: "parent-session",
+						childSessionId: "child-session",
+						title: "Working on the delegated task",
+						provider: "pi",
+						status: "running",
+						outputSchema: null,
+					},
+				],
+			},
+		];
+
+		const [height] = estimateThreadRowHeights(messages, {
+			fontSize: 14,
+			paneWidth: 960,
+		});
+
+		expect(height).toBeGreaterThanOrEqual(600);
+	});
 });
