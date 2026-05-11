@@ -120,7 +120,26 @@ pub async fn update_repo_preferences(
 }
 
 #[tauri::command]
-pub async fn delete_repository(repo_id: String) -> CmdResult<()> {
+pub async fn delete_repository(app: AppHandle, repo_id: String) -> CmdResult<()> {
     let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-    run_blocking(move || repos::delete_repository_cascade(&repo_id)).await
+    let deleted_repo_id = repo_id.clone();
+    run_blocking(move || repos::delete_repository_cascade(&repo_id)).await?;
+    remove_project_browser_data_store(&app, &deleted_repo_id).await;
+    if let Err(error) =
+        crate::browser_profile::remove_project_browser_profile_files(&deleted_repo_id)
+    {
+        tracing::warn!(repo_id = %deleted_repo_id, error = %format!("{error:#}"), "Failed to remove project browser profile files");
+    }
+    Ok(())
 }
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+async fn remove_project_browser_data_store(app: &AppHandle, repo_id: &str) {
+    let identifier = crate::browser_profile::project_data_store_identifier(repo_id);
+    if let Err(error) = app.remove_data_store(identifier).await {
+        tracing::warn!(repo_id, error = %format!("{error:#}"), "Failed to remove project browser data store");
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+async fn remove_project_browser_data_store(_app: &AppHandle, _repo_id: &str) {}

@@ -3,6 +3,7 @@ import {
 	Check,
 	ChevronDown,
 	GitBranch,
+	Globe,
 	HelpCircle,
 	Trash2,
 } from "lucide-react";
@@ -30,7 +31,10 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { BrowserSurface } from "@/features/browser";
+import type { BrowserSessionState } from "@/features/browser/browser-session";
 import {
+	createBrowserTab,
 	deleteRepository,
 	getForgeCliStatus,
 	listRemoteBranches,
@@ -63,11 +67,26 @@ export function RepositorySettingsPanel({
 	onRepoSettingsChanged: () => void;
 	onRepoDeleted: () => void;
 }) {
+	const [browserSession, setBrowserSession] =
+		useState<BrowserSessionState | null>(null);
 	const [branches, setBranches] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	const currentBranch = repo.defaultBranch ?? "main";
+
+	useEffect(() => {
+		setBrowserSession(null);
+	}, [repo.id, workspaceId]);
+
+	const handleOpenSharedLoginBrowser = useCallback(() => {
+		if (!workspaceId) return;
+		setBrowserSession({ activeTabId: null });
+		void createBrowserTab(workspaceId, browserLoginUrlForRepo(repo)).then(
+			(tab) => setBrowserSession({ activeTabId: tab.id }),
+			() => setBrowserSession({ activeTabId: null }),
+		);
+	}, [repo, workspaceId]);
 
 	const fetchBranches = useCallback(() => {
 		setLoading(true);
@@ -239,12 +258,85 @@ export function RepositorySettingsPanel({
 				onChanged={onRepoSettingsChanged}
 			/>
 
+			<SharedLoginBrowserSection
+				repo={repo}
+				workspaceId={workspaceId}
+				browserSession={browserSession}
+				onOpen={handleOpenSharedLoginBrowser}
+				onChangeSession={setBrowserSession}
+				onClose={() => setBrowserSession(null)}
+			/>
+
 			<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
 			<RepositoryPreferencesSection repoId={repo.id} />
 
 			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />
 		</SettingsGroup>
 	);
+}
+
+function SharedLoginBrowserSection({
+	repo,
+	workspaceId,
+	browserSession,
+	onOpen,
+	onChangeSession,
+	onClose,
+}: {
+	repo: RepositoryCreateOption;
+	workspaceId: string | null;
+	browserSession: BrowserSessionState | null;
+	onOpen: () => void;
+	onChangeSession: (session: BrowserSessionState) => void;
+	onClose: () => void;
+}) {
+	return (
+		<div className="py-5">
+			<div className="text-[13px] font-medium leading-snug text-foreground">
+				Shared browser login
+			</div>
+			<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+				Sign in here once to seed the browser state shared by all workspaces in
+				{` ${repo.name}`}. Other repositories keep separate browser data.
+			</div>
+			{browserSession && workspaceId ? (
+				<div className="mt-4 h-[360px] overflow-hidden rounded-xl border border-border/60 bg-background shadow-sm">
+					<BrowserSurface
+						workspaceId={workspaceId}
+						session={browserSession}
+						onChangeSession={onChangeSession}
+						onExit={onClose}
+					/>
+				</div>
+			) : (
+				<div className="mt-4 flex flex-wrap items-center gap-3">
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={onOpen}
+						disabled={!workspaceId}
+						className="gap-2"
+					>
+						<Globe className="size-3.5" strokeWidth={1.8} />
+						Open login browser
+					</Button>
+					{!workspaceId && (
+						<p className="text-[12px] text-muted-foreground">
+							Select a workspace in this repository first.
+						</p>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function browserLoginUrlForRepo(repo: RepositoryCreateOption): string {
+	const host = parseRemoteHost(repo.remoteUrl);
+	if (host) return `https://${host}`;
+	if (repo.forgeProvider === "gitlab") return "https://gitlab.com";
+	return "https://github.com";
 }
 
 function BranchPrefixSection({

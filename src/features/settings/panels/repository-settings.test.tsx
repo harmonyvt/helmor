@@ -6,6 +6,7 @@ import { renderWithProviders } from "@/test/render-with-providers";
 import { RepositorySettingsPanel } from "./repository-settings";
 
 const apiMocks = vi.hoisted(() => ({
+	createBrowserTab: vi.fn(),
 	getForgeCliStatus: vi.fn(),
 	listRemoteBranches: vi.fn(),
 	listRepoRemotes: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 	return {
 		...actual,
+		createBrowserTab: apiMocks.createBrowserTab,
 		getForgeCliStatus: apiMocks.getForgeCliStatus,
 		listRemoteBranches: apiMocks.listRemoteBranches,
 		listRepoRemotes: apiMocks.listRepoRemotes,
@@ -28,6 +30,16 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		updateRepositoryBranchPrefix: apiMocks.updateRepositoryBranchPrefix,
 	};
 });
+
+vi.mock("@/features/browser", () => ({
+	BrowserSurface: ({ onExit }: { onExit: () => void }) => (
+		<div data-testid="settings-browser-surface">
+			<button type="button" onClick={onExit}>
+				Close browser
+			</button>
+		</div>
+	),
+}));
 
 function repo(
 	overrides: Partial<RepositoryCreateOption>,
@@ -97,6 +109,16 @@ describe("RepositorySettingsPanel branch prefix", () => {
 		});
 		apiMocks.prefetchRemoteRefs.mockResolvedValue({ fetched: false });
 		apiMocks.updateRepositoryBranchPrefix.mockResolvedValue(undefined);
+		apiMocks.createBrowserTab.mockResolvedValue({
+			id: "tab-1",
+			workspaceId: "workspace-1",
+			url: "https://github.com/",
+			title: null,
+			displayOrder: 0,
+			active: true,
+			createdAt: "2026-01-01T00:00:00Z",
+			updatedAt: "2026-01-01T00:00:00Z",
+		});
 	});
 
 	afterEach(() => {
@@ -198,5 +220,40 @@ describe("RepositorySettingsPanel branch prefix", () => {
 
 		expect(screen.getByPlaceholderText("No prefix")).toBeInTheDocument();
 		expect(screen.queryByText(/Using global:/)).not.toBeInTheDocument();
+	});
+
+	it("opens a shared login browser for the active workspace", async () => {
+		vi.useRealTimers();
+		renderWithProviders(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						branchPrefixType: "custom",
+						branchPrefixCustom: "team/",
+					},
+					isLoaded: true,
+					updateSettings: vi.fn(),
+				}}
+			>
+				<RepositorySettingsPanel
+					repo={repo({})}
+					githubLogin="octo"
+					workspaceId="workspace-1"
+					onRepoSettingsChanged={vi.fn()}
+					onRepoDeleted={vi.fn()}
+				/>
+			</SettingsContext.Provider>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "Open login browser" }));
+
+		expect(apiMocks.createBrowserTab).toHaveBeenCalledWith(
+			"workspace-1",
+			"https://github.com",
+		);
+		expect(
+			await screen.findByTestId("settings-browser-surface"),
+		).toBeInTheDocument();
 	});
 });
