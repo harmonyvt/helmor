@@ -2,7 +2,14 @@ import type { ProviderModelInfo } from "./session-manager.js";
 
 const CODEX_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 
-const PI_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+const PI_EFFORT_LEVELS = ["minimal", "low", "medium", "high"] as const;
+const PI_EFFORT_LEVELS_WITH_XHIGH = [
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+] as const;
 
 const MODEL_CATALOG: Record<
 	"claude" | "codex" | "pi",
@@ -84,7 +91,7 @@ const MODEL_CATALOG: Record<
 			id: "pi:anthropic/claude-opus-4-7",
 			label: "Pi · Claude Opus 4.7",
 			cliModel: "anthropic/claude-opus-4-7",
-			effortLevels: PI_EFFORT_LEVELS,
+			effortLevels: PI_EFFORT_LEVELS_WITH_XHIGH,
 		},
 		{
 			id: "pi:anthropic/claude-sonnet-4-6",
@@ -96,29 +103,25 @@ const MODEL_CATALOG: Record<
 			id: "pi:azure-openai-responses/gpt-5.5",
 			label: "Pi · GPT-5.5",
 			cliModel: "azure-openai-responses/gpt-5.5",
-			effortLevels: PI_EFFORT_LEVELS,
-			supportsFastMode: true,
+			effortLevels: PI_EFFORT_LEVELS_WITH_XHIGH,
 		},
 		{
 			id: "pi:azure-openai-responses/gpt-5.4",
 			label: "Pi · GPT-5.4",
 			cliModel: "azure-openai-responses/gpt-5.4",
-			effortLevels: PI_EFFORT_LEVELS,
-			supportsFastMode: true,
+			effortLevels: PI_EFFORT_LEVELS_WITH_XHIGH,
 		},
 		{
 			id: "pi:azure-openai-responses/gpt-5.4-mini",
 			label: "Pi · GPT-5.4-Mini",
 			cliModel: "azure-openai-responses/gpt-5.4-mini",
-			effortLevels: PI_EFFORT_LEVELS,
-			supportsFastMode: true,
+			effortLevels: PI_EFFORT_LEVELS_WITH_XHIGH,
 		},
 		{
 			id: "pi:azure-openai-responses/gpt-5.3-codex",
 			label: "Pi · GPT-5.3-Codex",
 			cliModel: "azure-openai-responses/gpt-5.3-codex",
-			effortLevels: PI_EFFORT_LEVELS,
-			supportsFastMode: true,
+			effortLevels: PI_EFFORT_LEVELS_WITH_XHIGH,
 		},
 	],
 };

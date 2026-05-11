@@ -6,6 +6,7 @@ const registryState = {
 		name: string;
 		provider: string;
 		reasoning: boolean;
+		thinkingLevelMap?: Record<string, string | null>;
 	}>,
 	error: undefined as string | undefined,
 	bootstrapped: false,
@@ -13,6 +14,7 @@ const registryState = {
 
 const sessionState = {
 	createdSession: undefined as MockAgentSession | undefined,
+	createdSessionOptions: undefined as Record<string, unknown> | undefined,
 	promptBlocker: undefined as Promise<void> | undefined,
 	promptEvents: [] as unknown[],
 	extensionNotification: undefined as string | undefined,
@@ -126,9 +128,10 @@ mock.module("@mariozechner/pi-coding-agent", () => ({
 	getAgentDir: () => "/tmp/pi-agent",
 	ModelRegistry: MockModelRegistry,
 	SessionManager: MockSessionManager,
-	createAgentSession: async () => {
+	createAgentSession: async (options: Record<string, unknown>) => {
 		const session = new MockAgentSession();
 		sessionState.createdSession = session;
+		sessionState.createdSessionOptions = options;
 		return { session };
 	},
 }));
@@ -170,6 +173,7 @@ describe("PiSessionManager.listModels", () => {
 				name: "GPT-5.4",
 				provider: "azure-openai-responses",
 				reasoning: true,
+				thinkingLevelMap: { off: null, xhigh: "xhigh" },
 			},
 			{
 				id: "claude-sonnet-4-6",
@@ -196,8 +200,8 @@ describe("PiSessionManager.listModels", () => {
 				label: "Pi · GPT-5.4",
 				cliModel: "azure-openai-responses/gpt-5.4",
 				providerKey: "azure-openai-responses",
-				effortLevels: ["low", "medium", "high", "xhigh"],
-				supportsFastMode: true,
+				effortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+				supportsFastMode: false,
 			},
 		]);
 	});
@@ -216,9 +220,35 @@ describe("PiSessionManager.sendMessage", () => {
 		registryState.error = undefined;
 		registryState.bootstrapped = false;
 		sessionState.createdSession = undefined;
+		sessionState.createdSessionOptions = undefined;
 		sessionState.promptBlocker = undefined;
 		sessionState.promptEvents = [];
 		sessionState.extensionNotification = undefined;
+	});
+
+	test("forwards minimal thinking level to Pi sessions", async () => {
+		await new PiSessionManager().sendMessage(
+			"request-1",
+			{
+				sessionId: "session-1",
+				prompt: "Hi",
+				cwd: "/tmp",
+				model: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "minimal",
+				fastMode: undefined,
+				images: [],
+			},
+			{
+				passthrough: () => {},
+				end: () => {},
+				error: () => {},
+				aborted: () => {},
+			} as never,
+		);
+
+		expect(sessionState.createdSessionOptions?.thinkingLevel).toBe("minimal");
 	});
 
 	test("emits steer prompts in the persisted user_prompt shape after Pi accepts", async () => {
