@@ -635,6 +635,7 @@ function normalizeThinkingLevel(
 	level: string | undefined,
 ): ThinkingLevel | undefined {
 	if (
+		level === "minimal" ||
 		level === "low" ||
 		level === "medium" ||
 		level === "high" ||
