@@ -584,7 +584,7 @@ fn lookup_workspace_linked_directories_for_commands(workspace_id: Option<&str>) 
     }
 }
 
-/// Prewarm the slash-command cache for a single workspace (both providers).
+/// Prewarm the slash-command cache for a single workspace (all providers).
 /// Safe to call repeatedly — the cache's per-key refresh lock dedupes.
 pub fn prewarm_slash_command_cache_for_workspace(app: &AppHandle, workspace_id: &str) {
     let app = app.clone();
@@ -660,7 +660,7 @@ fn dispatch_prewarm_for(app: &AppHandle, workspace_id: &str, root_path: &str, re
     let cache: tauri::State<'_, super::slash_commands::SlashCommandCache> = app.state();
     let additional_directories =
         lookup_workspace_linked_directories_for_commands(Some(workspace_id));
-    for provider in ["claude", "codex"] {
+    for provider in ["claude", "codex", "pi"] {
         let request = ListSlashCommandsRequest {
             provider: provider.to_string(),
             working_directory: Some(root_path.to_string()),

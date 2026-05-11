@@ -478,7 +478,7 @@ describe("PiSessionManager.sendMessage", () => {
 });
 
 describe("normalizePiSlashCommands", () => {
-	test("maps executable Pi command sources and dedupes by name", () => {
+	test("keeps only Pi skill commands and dedupes by name", () => {
 		const commands = normalizePiSlashCommands([
 			{
 				name: "review",
@@ -514,11 +514,11 @@ describe("normalizePiSlashCommands", () => {
 				},
 			},
 			{
-				name: "review",
+				name: "skill:pdf",
 				description: "Duplicate",
-				source: "prompt",
+				source: "skill",
 				sourceInfo: {
-					path: "/tmp/review.md",
+					path: "/tmp/pdf-copy/SKILL.md",
 					source: "project",
 					scope: "project",
 					origin: "top-level",
@@ -527,30 +527,6 @@ describe("normalizePiSlashCommands", () => {
 		]);
 
 		expect(commands).toEqual([
-			{
-				name: "review",
-				description: "Review changes",
-				argumentHint: undefined,
-				source: "extension",
-				sourceInfo: {
-					path: "/tmp/review.ts",
-					source: "extension:review",
-					scope: "project",
-					origin: "top-level",
-				},
-			},
-			{
-				name: "deploy",
-				description: "Deploy app",
-				argumentHint: undefined,
-				source: "prompt",
-				sourceInfo: {
-					path: "/tmp/deploy.md",
-					source: "project",
-					scope: "project",
-					origin: "top-level",
-				},
-			},
 			{
 				name: "skill:pdf",
 				description: "Read PDFs",
