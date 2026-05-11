@@ -114,6 +114,63 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+/// Lightweight result returned by the cross-workspace session search used by
+/// the Command+K palette. Only the fields needed for display are included.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSearchResult {
+    pub id: String,
+    pub workspace_id: String,
+    pub session_title: String,
+    /// Raw directory name (e.g. "feat-auth-flow"). The frontend humanises this
+    /// into a display label using the same logic as `humanizeBranch`.
+    pub workspace_directory_name: String,
+    pub workspace_branch: Option<String>,
+    pub workspace_repo_name: Option<String>,
+}
+
+/// Search non-hidden, non-action sessions whose title matches `query`
+/// (case-insensitive substring). Only sessions in non-archived workspaces are
+/// returned. Results are ordered by recency and capped at 25.
+pub fn search_sessions(query: &str) -> Result<Vec<SessionSearchResult>> {
+    let connection = db::read_conn()?;
+    let pattern = format!("%{}%", query.to_lowercase());
+    let mut statement = connection.prepare(
+        r#"
+        SELECT
+          s.id,
+          s.workspace_id,
+          s.title,
+          w.directory_name,
+          w.branch,
+          r.name
+        FROM sessions s
+        JOIN workspaces w ON w.id = s.workspace_id
+        JOIN repos r ON r.id = w.repository_id
+        WHERE
+          COALESCE(s.is_hidden, 0) = 0
+          AND s.action_kind IS NULL
+          AND COALESCE(w.state, 'ready') != 'archived'
+          AND LOWER(s.title) LIKE ?1
+        ORDER BY s.updated_at DESC
+        LIMIT 25
+        "#,
+    )?;
+
+    let rows = statement.query_map([&pattern], |row| {
+        Ok(SessionSearchResult {
+            id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            session_title: row.get(2)?,
+            workspace_directory_name: row.get(3)?,
+            workspace_branch: row.get(4)?,
+            workspace_repo_name: row.get(5)?,
+        })
+    })?;
+
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
 pub fn list_session_historical_records(session_id: &str) -> Result<Vec<HistoricalRecord>> {
     let connection = db::read_conn()?;
     list_session_historical_records_with_connection(&connection, session_id)

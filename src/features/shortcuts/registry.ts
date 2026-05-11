@@ -308,6 +308,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		scopes: ["app"],
 		editable: true,
 	},
+	{
+		id: "navigation.commandPalette",
+		title: "Open command palette",
+		group: "Navigation",
+		defaultHotkey: "Mod+K",
+		scopes: ["app"],
+		editable: true,
+	},
 ];
 
 export const SHORTCUT_DEFINITION_BY_ID = new Map(

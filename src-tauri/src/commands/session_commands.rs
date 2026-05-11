@@ -81,6 +81,11 @@ pub async fn get_live_context_usage(
 }
 
 #[tauri::command]
+pub async fn search_sessions(query: String) -> CmdResult<Vec<sessions::SessionSearchResult>> {
+    run_blocking(move || sessions::search_sessions(&query)).await
+}
+
+#[tauri::command]
 pub async fn mark_session_read(session_id: String) -> CmdResult<()> {
     run_blocking(move || sessions::mark_session_read(&session_id)).await
 }
