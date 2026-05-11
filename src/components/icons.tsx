@@ -67,3 +67,27 @@ export function XiaomiMiMoIcon(props: SVGProps<SVGSVGElement>) {
 export function ZhipuIcon(props: SVGProps<SVGSVGElement>) {
 	return <ZhipuColor {...props} />;
 }
+
+/**
+ * Azure GPT Realtime provider icon — a stylised cloud bolt mark (16×16 viewBox).
+ * Uses currentColor so it inherits text color from its parent.
+ */
+export function AzureRealtimeIcon(props: SVGProps<SVGSVGElement>) {
+	return (
+		<svg
+			viewBox="0 0 16 16"
+			fill="none"
+			xmlns="http://www.w3.org/2000/svg"
+			{...props}
+		>
+			<path
+				fillRule="evenodd"
+				clipRule="evenodd"
+				d="M5.5 3.5A3.5 3.5 0 0 1 12.47 5H12.5a2.5 2.5 0 0 1 .5 4.95V10H3.5A2.5 2.5 0 0 1 3.5 5h.03A3.5 3.5 0 0 1 5.5 3.5Z"
+				fill="currentColor"
+				opacity="0.35"
+			/>
+			<path d="M8.75 6 7 10h1.5L7 14l5-6H9.5L10.75 6Z" fill="currentColor" />
+		</svg>
+	);
+}

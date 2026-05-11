@@ -48,6 +48,7 @@ import { AppOnboarding } from "@/features/onboarding";
 import MobileThreadView from "@/features/panel/mobile-thread-view";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
+import { RealtimeContainer } from "@/features/realtime";
 import {
 	SettingsButton,
 	SettingsDialog,
@@ -2563,6 +2564,11 @@ function AppShell({
 																</TooltipContent>
 															</Tooltip>
 														</div>
+														{/* ── Realtime dock — above settings row, separated by border ── */}
+														<div className="shrink-0 border-t border-border pt-1">
+															<RealtimeContainer />
+														</div>
+
 														<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
 															<SettingsButton
 																onClick={handleOpenSettings}

@@ -11,6 +11,7 @@ import {
 import type { SVGProps } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
+	AzureRealtimeIcon,
 	DeepSeekIcon,
 	KimiIcon,
 	MinimaxIcon,
@@ -41,7 +42,10 @@ import {
 	type PiModelProviderSummary,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
-import type { ClaudeCustomProviderSettings } from "@/lib/settings";
+import type {
+	AzureRealtimeConfig,
+	ClaudeCustomProviderSettings,
+} from "@/lib/settings";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { SettingsRow } from "../components/settings-row";
@@ -611,4 +615,285 @@ function BuiltinProviderIcon({
 		default:
 			return <MinimaxIcon {...props} />;
 	}
+}
+
+// ─── Azure GPT Realtime panel ─────────────────────────────────────────────────
+
+type AzureTestState =
+	| { status: "idle" }
+	| { status: "testing" }
+	| { status: "ok"; model: string }
+	| { status: "error"; message: string };
+
+type AzureDraft = {
+	endpoint: string;
+	deployment: string;
+	apiKey: string;
+};
+
+function draftFromAzureConfig(config?: AzureRealtimeConfig): AzureDraft {
+	return {
+		endpoint: config?.endpoint ?? "",
+		deployment: config?.deployment ?? "",
+		apiKey: config?.apiKey ?? "",
+	};
+}
+
+/**
+ * Settings panel for Azure GPT Realtime.
+ *
+ * Fields: Endpoint URL, Deployment name, API key.
+ * Test button opens a WebSocket to confirm the endpoint is reachable.
+ * Save/Remove persists to AppSettings.azureRealtime.
+ */
+export function AzureRealtimePanel() {
+	const { settings, updateSettings } = useSettings();
+	const config = settings.azureRealtime;
+	const isConfigured = Boolean(config?.endpoint && config?.deployment);
+
+	const [draft, setDraft] = useState<AzureDraft>(() =>
+		draftFromAzureConfig(config),
+	);
+	const [testState, setTestState] = useState<AzureTestState>({
+		status: "idle",
+	});
+	const [saving, setSaving] = useState(false);
+
+	function canSave() {
+		return (
+			draft.endpoint.trim().length > 0 &&
+			draft.deployment.trim().length > 0 &&
+			draft.apiKey.trim().length > 0
+		);
+	}
+
+	async function handleTest() {
+		if (!canSave()) return;
+		setTestState({ status: "testing" });
+
+		const endpoint = draft.endpoint.trim().replace(/\/$/, "");
+		const deployment = draft.deployment.trim();
+		const apiKey = draft.apiKey.trim();
+
+		// Normalise to wss://
+		const wsUrl = endpoint
+			.replace(/^https?:\/\//, (m) =>
+				m.startsWith("https") ? "wss://" : "ws://",
+			)
+			.concat(`/openai/v1/realtime?model=${encodeURIComponent(deployment)}`);
+
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const ws = new WebSocket(wsUrl, [
+					"realtime",
+					`openai-insecure-api-key.${apiKey}`,
+				]);
+				ws.onmessage = (ev) => {
+					try {
+						const msg = JSON.parse(ev.data as string) as {
+							type?: string;
+							session?: { model?: string };
+						};
+						if (msg.type === "session.created") {
+							const model = msg.session?.model ?? deployment;
+							setTestState({ status: "ok", model });
+							ws.close();
+							resolve();
+						}
+					} catch {
+						// ignore non-JSON frames
+					}
+				};
+				ws.onerror = () => reject(new Error("Connection failed"));
+				ws.onclose = (e) => {
+					if (!e.wasClean) reject(new Error("Connection closed unexpectedly"));
+				};
+				// Timeout after 8 seconds
+				setTimeout(() => {
+					ws.close();
+					reject(new Error("Connection timed out"));
+				}, 8000);
+			});
+		} catch (err) {
+			setTestState({
+				status: "error",
+				message: err instanceof Error ? err.message : "Connection failed",
+			});
+		}
+	}
+
+	async function handleSave() {
+		if (!canSave()) return;
+		setSaving(true);
+		try {
+			await updateSettings({
+				azureRealtime: {
+					endpoint: draft.endpoint.trim().replace(/\/$/, ""),
+					deployment: draft.deployment.trim(),
+					apiKey: draft.apiKey.trim(),
+				},
+			});
+			setTestState({ status: "idle" });
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	async function handleRemove() {
+		await updateSettings({ azureRealtime: undefined });
+		setDraft({ endpoint: "", deployment: "", apiKey: "" });
+		setTestState({ status: "idle" });
+	}
+
+	return (
+		<SettingsRow
+			title="Azure GPT Realtime"
+			description="Connect to Azure OpenAI gpt-realtime-2 for low-latency voice and text sessions."
+			align="start"
+			className="gap-8"
+		>
+			<div className="flex w-[360px] flex-col gap-3">
+				{/* Status badge */}
+				<div className="flex items-center gap-2">
+					<AzureRealtimeIcon className="size-4 shrink-0 text-muted-foreground" />
+					{testState.status === "ok" ? (
+						<span className="text-[12px] text-emerald-600 dark:text-emerald-400">
+							● Connected · {testState.model}
+						</span>
+					) : testState.status === "error" ? (
+						<span className="text-[12px] text-destructive">
+							✗ {testState.message}
+						</span>
+					) : isConfigured ? (
+						<span className="text-[12px] text-amber-600 dark:text-amber-400">
+							● Configured
+						</span>
+					) : (
+						<span className="text-[12px] text-muted-foreground">
+							Not configured
+						</span>
+					)}
+				</div>
+
+				{/* Endpoint URL */}
+				<div className="flex flex-col gap-1">
+					<label
+						htmlFor="azure-endpoint"
+						className="text-[11px] font-medium text-muted-foreground"
+					>
+						Endpoint URL
+					</label>
+					<input
+						id="azure-endpoint"
+						type="url"
+						placeholder="https://your-resource.openai.azure.com"
+						value={draft.endpoint}
+						onChange={(e) =>
+							setDraft((d) => ({ ...d, endpoint: e.target.value }))
+						}
+						className={cn(
+							"h-8 w-full rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
+							"placeholder:text-muted-foreground/50 focus:border-border focus:outline-none",
+						)}
+					/>
+				</div>
+
+				{/* Deployment name */}
+				<div className="flex flex-col gap-1">
+					<label
+						htmlFor="azure-deployment"
+						className="text-[11px] font-medium text-muted-foreground"
+					>
+						Deployment name
+					</label>
+					<input
+						id="azure-deployment"
+						type="text"
+						placeholder="helmor-realtime"
+						value={draft.deployment}
+						onChange={(e) =>
+							setDraft((d) => ({ ...d, deployment: e.target.value }))
+						}
+						className={cn(
+							"h-8 w-full rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
+							"placeholder:text-muted-foreground/50 focus:border-border focus:outline-none",
+						)}
+					/>
+				</div>
+
+				{/* API key */}
+				<div className="flex flex-col gap-1">
+					<div className="flex items-center justify-between">
+						<label
+							htmlFor="azure-api-key"
+							className="text-[11px] font-medium text-muted-foreground"
+						>
+							API key
+						</label>
+						<button
+							type="button"
+							onClick={() => void openUrl("https://portal.azure.com")}
+							className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+						>
+							Get Azure key
+							<ExternalLink className="size-2.5" />
+						</button>
+					</div>
+					<input
+						id="azure-api-key"
+						type="password"
+						placeholder="••••••••••••••••••••••••"
+						value={draft.apiKey}
+						onChange={(e) =>
+							setDraft((d) => ({ ...d, apiKey: e.target.value }))
+						}
+						className={cn(
+							"h-8 w-full rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
+							"placeholder:text-muted-foreground/50 focus:border-border focus:outline-none",
+						)}
+					/>
+				</div>
+
+				{/* Actions */}
+				<div className="flex items-center gap-2">
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => void handleTest()}
+						disabled={!canSave() || testState.status === "testing"}
+						className="gap-1.5"
+					>
+						<RefreshCw
+							className={cn(
+								"size-3.5",
+								testState.status === "testing" && "animate-spin",
+							)}
+						/>
+						{testState.status === "testing" ? "Testing…" : "Test connection"}
+					</Button>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => void handleSave()}
+						disabled={!canSave() || saving}
+					>
+						{saving ? "Saving…" : "Save"}
+					</Button>
+					{isConfigured && (
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							onClick={() => void handleRemove()}
+							className="ml-auto text-muted-foreground hover:text-destructive"
+						>
+							<Trash2 className="size-3.5" />
+						</Button>
+					)}
+				</div>
+			</div>
+		</SettingsRow>
+	);
 }

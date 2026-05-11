@@ -7,7 +7,7 @@
 
 import { ArrowRight, Box } from "lucide-react";
 import { useEffect, useState } from "react";
-import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
+import { AzureRealtimeIcon, ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -35,6 +35,7 @@ const PROVIDER_LABELS: Record<AgentProvider, string> = {
 	claude: "Claude",
 	codex: "OpenAI Codex",
 	pi: "Pi",
+	"azure-realtime": "Azure GPT Realtime",
 };
 
 function ProviderIcon({
@@ -51,6 +52,9 @@ function ProviderIcon({
 		return (
 			<Box className={cn("size-4 shrink-0", className)} strokeWidth={1.8} />
 		);
+	}
+	if (provider === "azure-realtime") {
+		return <AzureRealtimeIcon className={cn("size-4 shrink-0", className)} />;
 	}
 	return <ClaudeIcon className={cn("size-4 shrink-0", className)} />;
 }

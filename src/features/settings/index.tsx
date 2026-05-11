@@ -64,6 +64,7 @@ import { DataSourceSettingsRow } from "./panels/data-source";
 import { DebugIngestNgrokPanel } from "./panels/debug-ingest-ngrok";
 import { DevToolsPanel } from "./panels/dev-tools";
 import {
+	AzureRealtimePanel,
 	ClaudeCustomProvidersPanel,
 	PiModelsCheckPanel,
 } from "./panels/model-providers";
@@ -576,6 +577,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 									<PrCommentReviewModelRow />
 									<PiModelsCheckPanel />
 									<ClaudeCustomProvidersPanel />
+									<AzureRealtimePanel />
 								</SettingsGroup>
 							)}
 

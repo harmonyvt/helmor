@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Plus, Star } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AzureRealtimeIcon } from "@/components/icons";
 import { ModelIcon } from "@/components/model-icon";
 import {
 	Popover,
@@ -11,6 +12,7 @@ import {
 	getPiModelProviderLabel,
 } from "@/lib/agent-models";
 import type { AgentModelOption, AgentModelSection } from "@/lib/api";
+import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
 function logModelPickerDebug(
@@ -91,6 +93,11 @@ export function ModelPicker({
 	onOpenModelSettings,
 	triggerClassName,
 }: ModelPickerProps) {
+	const { settings } = useSettings();
+	const azureConfigured = Boolean(
+		settings.azureRealtime?.endpoint && settings.azureRealtime?.deployment,
+	);
+
 	const favoriteSet = useMemo(
 		() => new Set(favoriteModelIds),
 		[favoriteModelIds],
@@ -351,6 +358,45 @@ export function ModelPicker({
 							) : null}
 						</div>
 					))}
+
+					{/* Azure GPT Realtime section — frontend-only until backend wired */}
+					<Divider />
+					<SectionHeader>
+						<AzureRealtimeIcon className="size-3 shrink-0" aria-hidden="true" />
+						Azure GPT Realtime
+					</SectionHeader>
+					{azureConfigured ? (
+						<ModelRow
+							option={AZURE_REALTIME_OPTION}
+							displayLabel="GPT Realtime 2"
+							isSelected={currentId === AZURE_REALTIME_OPTION.id}
+							isFavourited={favoriteSet.has(AZURE_REALTIME_OPTION.id)}
+							flatIndex={-1}
+							focusIndex={focusIndex}
+							onSelect={handleSelectModel}
+							onToggleFavourite={onToggleFavorite}
+						/>
+					) : (
+						<>
+							<div
+								className={cn(
+									"flex w-full items-center gap-2 rounded-[6px] px-2 py-[5px]",
+									"cursor-not-allowed text-[12.5px] text-muted-foreground/40",
+									"pr-7",
+								)}
+								aria-disabled="true"
+							>
+								<span className="flex size-4 shrink-0 items-center justify-center">
+									<ModelIcon
+										model={AZURE_REALTIME_OPTION}
+										className="size-4 opacity-40"
+									/>
+								</span>
+								<span className="min-w-0 flex-1 truncate">GPT Realtime 2</span>
+							</div>
+							<ConfigureSettingsRow onClick={handleOpenSettings} />
+						</>
+					)}
 				</div>
 			</PopoverContent>
 		</Popover>
@@ -504,6 +550,34 @@ function ModelRow({
 				/>
 			</button>
 		</div>
+	);
+}
+
+/** Static model option for Azure GPT Realtime 2 (frontend-only; no backend section yet). */
+const AZURE_REALTIME_OPTION: AgentModelOption = {
+	id: "azure-realtime/gpt-realtime-2",
+	provider: "azure-realtime",
+	label: "GPT Realtime 2",
+	cliModel: "gpt-realtime-2",
+	effortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+	supportsFastMode: false,
+	supportsContextUsage: true,
+};
+
+function ConfigureSettingsRow({ onClick }: { onClick: () => void }) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className={cn(
+				"flex w-full cursor-pointer items-center gap-2 rounded-[6px] px-2 py-[5px] text-left",
+				"text-[12px] text-muted-foreground/60 transition-colors duration-100",
+				"hover:bg-accent/60 hover:text-muted-foreground",
+				"focus-visible:bg-accent/60 focus-visible:outline-none",
+			)}
+		>
+			Configure in Settings →
+		</button>
 	);
 }
 
