@@ -13,7 +13,10 @@ describe("model catalog", () => {
 			"pi:azure-openai-responses/gpt-5.4-mini",
 			"pi:azure-openai-responses/gpt-5.3-codex",
 		]);
-		expect(piModels.every((model) => model.supportsFastMode)).toBe(true);
+		expect(piModels.every((model) => model.supportsFastMode)).toBe(false);
+		expect(
+			piModels.every((model) => model.effortLevels?.includes("minimal")),
+		).toBe(true);
 		expect(piModels.map((model) => model.cliModel)).toEqual([
 			"azure-openai-responses/gpt-5.5",
 			"azure-openai-responses/gpt-5.4",

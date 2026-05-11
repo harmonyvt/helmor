@@ -101,37 +101,37 @@ fn pi_section() -> AgentModelSection {
                 "pi:anthropic/claude-opus-4-7",
                 "Pi · Claude Opus 4.7",
                 "anthropic/claude-opus-4-7",
-                false,
+                &pi_effort_levels(true),
             ),
             pi_model(
                 "pi:anthropic/claude-sonnet-4-6",
                 "Pi · Claude Sonnet 4.6",
                 "anthropic/claude-sonnet-4-6",
-                false,
+                &pi_effort_levels(false),
             ),
             pi_model(
                 "pi:azure-openai-responses/gpt-5.5",
                 "Pi · GPT-5.5",
                 "azure-openai-responses/gpt-5.5",
-                true,
+                &pi_effort_levels(true),
             ),
             pi_model(
                 "pi:azure-openai-responses/gpt-5.4",
                 "Pi · GPT-5.4",
                 "azure-openai-responses/gpt-5.4",
-                true,
+                &pi_effort_levels(true),
             ),
             pi_model(
                 "pi:azure-openai-responses/gpt-5.4-mini",
                 "Pi · GPT-5.4-Mini",
                 "azure-openai-responses/gpt-5.4-mini",
-                true,
+                &pi_effort_levels(true),
             ),
             pi_model(
                 "pi:azure-openai-responses/gpt-5.3-codex",
                 "Pi · GPT-5.3-Codex",
                 "azure-openai-responses/gpt-5.3-codex",
-                true,
+                &pi_effort_levels(true),
             ),
         ],
     }
@@ -192,19 +192,27 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
     }
 }
 
-fn pi_model(id: &str, label: &str, cli_model: &str, supports_fast_mode: bool) -> AgentModelOption {
+fn pi_model(id: &str, label: &str, cli_model: &str, effort_levels: &[&str]) -> AgentModelOption {
     AgentModelOption {
         id: id.to_string(),
         provider: "pi".to_string(),
         label: label.to_string(),
         cli_model: cli_model.to_string(),
         provider_key: None,
-        effort_levels: ["low", "medium", "high", "xhigh"]
-            .into_iter()
-            .map(str::to_string)
+        effort_levels: effort_levels
+            .iter()
+            .map(|level| (*level).to_string())
             .collect(),
-        supports_fast_mode,
+        supports_fast_mode: false,
         supports_context_usage: false,
+    }
+}
+
+fn pi_effort_levels(supports_xhigh: bool) -> Vec<&'static str> {
+    if supports_xhigh {
+        vec!["minimal", "low", "medium", "high", "xhigh"]
+    } else {
+        vec!["minimal", "low", "medium", "high"]
     }
 }
 
@@ -351,6 +359,10 @@ mod tests {
 
         assert_eq!(sections[2].id, "pi");
         assert_eq!(sections[2].status, AgentModelSectionStatus::Ready);
+        assert!(sections[2]
+            .options
+            .iter()
+            .all(|model| !model.supports_fast_mode));
         assert_eq!(
             sections[2]
                 .options
@@ -365,6 +377,14 @@ mod tests {
                 "pi:azure-openai-responses/gpt-5.4-mini",
                 "pi:azure-openai-responses/gpt-5.3-codex",
             ]
+        );
+        assert_eq!(
+            sections[2].options[1].effort_levels,
+            vec!["minimal", "low", "medium", "high"]
+        );
+        assert_eq!(
+            sections[2].options[2].effort_levels,
+            vec!["minimal", "low", "medium", "high", "xhigh"]
         );
     }
 

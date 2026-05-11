@@ -6,6 +6,7 @@ const registryState = {
 		name: string;
 		provider: string;
 		reasoning: boolean;
+		thinkingLevelMap?: Record<string, string | null>;
 	}>,
 	error: undefined as string | undefined,
 	bootstrapped: false,
@@ -170,6 +171,7 @@ describe("PiSessionManager.listModels", () => {
 				name: "GPT-5.4",
 				provider: "azure-openai-responses",
 				reasoning: true,
+				thinkingLevelMap: { off: null, xhigh: "xhigh" },
 			},
 			{
 				id: "claude-sonnet-4-6",
@@ -196,8 +198,8 @@ describe("PiSessionManager.listModels", () => {
 				label: "Pi · GPT-5.4",
 				cliModel: "azure-openai-responses/gpt-5.4",
 				providerKey: "azure-openai-responses",
-				effortLevels: ["low", "medium", "high", "xhigh"],
-				supportsFastMode: true,
+				effortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+				supportsFastMode: false,
 			},
 		]);
 	});

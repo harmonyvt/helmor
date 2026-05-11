@@ -1,4 +1,5 @@
 import { basename, extname } from "node:path";
+import { getSupportedThinkingLevels } from "@mariozechner/pi-ai";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
@@ -38,13 +39,21 @@ import {
 
 type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
 type PiImageContent = { type: "image"; data: string; mimeType: string };
-const PI_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+const PI_EFFORT_LEVELS = ["minimal", "low", "medium", "high"] as const;
+const PI_EFFORT_LEVELS_WITH_XHIGH = [
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+] as const;
 
 type PiModel = {
 	readonly id: string;
 	readonly name: string;
 	readonly provider: string;
 	readonly reasoning: boolean;
+	readonly thinkingLevelMap?: Record<string, string | null>;
 };
 
 interface LivePiSession {
@@ -522,16 +531,22 @@ function piModelInfo(model: PiModel): ProviderModelInfo {
 		label: `Pi · ${model.name || model.id}`,
 		cliModel: `${model.provider}/${model.id}`,
 		providerKey: model.provider,
-		effortLevels: model.reasoning ? PI_EFFORT_LEVELS : [],
-		supportsFastMode: piModelSupportsFastMode(model),
+		effortLevels: piModelEffortLevels(model),
+		supportsFastMode: false,
 	};
 }
 
-function piModelSupportsFastMode(model: PiModel): boolean {
-	return (
-		model.provider === "azure-openai-responses" ||
-		model.provider === "openai-codex"
-	);
+function piModelEffortLevels(model: PiModel): readonly string[] {
+	if (!model.reasoning) return [];
+	try {
+		return getSupportedThinkingLevels(model as never).filter(
+			(level) => level !== "off",
+		);
+	} catch {
+		return model.provider === "anthropic"
+			? PI_EFFORT_LEVELS
+			: PI_EFFORT_LEVELS_WITH_XHIGH;
+	}
 }
 
 export function normalizePiSlashCommands(
