@@ -66,6 +66,7 @@ import {
 	ClaudeCustomProvidersPanel,
 	PiModelsCheckPanel,
 } from "./panels/model-providers";
+import { PrCommentReviewModelRow } from "./panels/pr-comment-review-model";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 import { WebDaemonPanel } from "./panels/web-daemon";
 
@@ -610,6 +611,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</div>
 										</div>
 									</SettingsRow>
+									<PrCommentReviewModelRow />
 									<PiModelsCheckPanel />
 									<ClaudeCustomProvidersPanel />
 								</SettingsGroup>

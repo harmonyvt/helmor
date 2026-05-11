@@ -29,6 +29,8 @@ export type AppSettings = {
 	defaultModelId: string | null;
 	defaultEffort: string | null;
 	defaultFastMode: boolean;
+	/** Optional model override for PR comment Review all sessions. */
+	prCommentReviewModelId: string | null;
 	/** Webview zoom factor. 1.0 = 100%. Range 0.5–2.0. */
 	zoomLevel: number;
 	followUpBehavior: FollowUpBehavior;
@@ -72,6 +74,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	defaultModelId: null,
 	defaultEffort: "high",
 	defaultFastMode: false,
+	prCommentReviewModelId: null,
 	zoomLevel: 1.0,
 	followUpBehavior: "steer",
 	alwaysShowContextUsage: true,
@@ -104,6 +107,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	defaultModelId: "app.default_model_id",
 	defaultEffort: "app.default_effort",
 	defaultFastMode: "app.default_fast_mode",
+	prCommentReviewModelId: "app.pr_comment_review_model_id",
 	zoomLevel: "app.zoom_level",
 	followUpBehavior: "app.follow_up_behavior",
 	alwaysShowContextUsage: "app.always_show_context_usage",
@@ -211,6 +215,9 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.defaultFastMode] !== undefined
 					? raw[SETTINGS_KEY_MAP.defaultFastMode] === "true"
 					: DEFAULT_SETTINGS.defaultFastMode,
+			prCommentReviewModelId:
+				raw[SETTINGS_KEY_MAP.prCommentReviewModelId] ||
+				DEFAULT_SETTINGS.prCommentReviewModelId,
 			zoomLevel: raw[SETTINGS_KEY_MAP.zoomLevel]
 				? Number(raw[SETTINGS_KEY_MAP.zoomLevel])
 				: DEFAULT_SETTINGS.zoomLevel,

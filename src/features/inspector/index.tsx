@@ -141,6 +141,7 @@ export function WorkspaceInspectorSidebar({
 		repoId: repoId ?? null,
 	});
 	const queryClient = useQueryClient();
+	const { settings: appSettings } = useSettings();
 
 	// PR comments — fetched at sidebar level so the Comments tab badge and
 	// the CommentsTab body both share the same query instance.
@@ -223,14 +224,22 @@ export function WorkspaceInspectorSidebar({
 			});
 			onQueuePendingPromptForSession({
 				sessionId,
-				prompt: buildReviewAllPrompt(comments),
+				prompt: buildReviewAllPrompt(comments, prCommentData),
+				modelId: appSettings.prCommentReviewModelId,
 				// Force-queue so the prompt fires even if a turn is currently streaming.
 				forceQueue: true,
 			});
 			// Navigate to the new session so the pending prompt is consumed.
 			onSelectSession?.(sessionId);
 		},
-		[queryClient, workspaceId, onQueuePendingPromptForSession, onSelectSession],
+		[
+			appSettings.prCommentReviewModelId,
+			onQueuePendingPromptForSession,
+			onSelectSession,
+			prCommentData,
+			queryClient,
+			workspaceId,
+		],
 	);
 
 	// Live list of Terminal sub-tabs for the current workspace, observed at
@@ -294,7 +303,6 @@ export function WorkspaceInspectorSidebar({
 		},
 		[terminalInstances, activeTab, setActiveTab],
 	);
-	const { settings: appSettings } = useSettings();
 	// App-scoped smart toggle for the terminal panel.
 	//
 	// Target selection: if the user is already on a terminal tab (either
