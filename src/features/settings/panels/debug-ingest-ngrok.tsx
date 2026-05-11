@@ -50,9 +50,13 @@ export function DebugIngestNgrokPanel() {
 	);
 
 	const overview = overviewQuery.data;
+	const overviewError = overviewQuery.isError
+		? errorMessage(overviewQuery.error)
+		: null;
 	const instances = overview?.instances ?? [];
 	const activeTunnelCount = overview?.ngrokAgent.activeTunnelCount ?? 0;
-	const agentConnected = overview?.ngrokAgent.connected === true;
+	const agentConnected =
+		!overviewError && overview?.ngrokAgent.connected === true;
 	const sessionId = overview?.ngrokAgent.sessionId;
 
 	return (
@@ -83,16 +87,20 @@ export function DebugIngestNgrokPanel() {
 					</div>
 					<div className="flex shrink-0 items-center gap-2">
 						<Badge variant={agentConnected ? "default" : "outline"}>
-							{settings.debugIngestPublicForward
-								? agentConnected
-									? "Agent connected"
-									: "Agent idle"
-								: "Disabled"}
+							{overviewError
+								? "Status unavailable"
+								: settings.debugIngestPublicForward
+									? agentConnected
+										? "Agent connected"
+										: "Agent idle"
+									: "Disabled"}
 						</Badge>
 						<Button
 							type="button"
 							variant="outline"
 							size="sm"
+							aria-label="Refresh Debug ingest ngrok overview"
+							title="Refresh Debug ingest ngrok overview"
 							onClick={() => void refresh()}
 							disabled={overviewQuery.isFetching}
 						>
@@ -133,6 +141,7 @@ export function DebugIngestNgrokPanel() {
 						instances={instances}
 						lastError={overview?.ngrokAgent.lastError ?? null}
 						loading={overviewQuery.isPending}
+						overviewError={overviewError}
 						sessionId={sessionId ?? null}
 						stoppingWorkspaceId={stoppingWorkspaceId}
 						onStop={stopInstance}
@@ -148,6 +157,7 @@ function NgrokInstanceList({
 	instances,
 	lastError,
 	loading,
+	overviewError,
 	sessionId,
 	stoppingWorkspaceId,
 	onStop,
@@ -156,6 +166,7 @@ function NgrokInstanceList({
 	instances: DebugIngestStatus[];
 	lastError: string | null;
 	loading: boolean;
+	overviewError: string | null;
 	sessionId: string | null;
 	stoppingWorkspaceId: string | null;
 	onStop: (workspaceId: string) => Promise<void>;
@@ -166,11 +177,15 @@ function NgrokInstanceList({
 				<div className="min-w-0 text-[12px] leading-snug text-muted-foreground">
 					<div className="font-medium text-foreground">Managed instances</div>
 					<div className="mt-1">
-						{sessionId
-							? `Session ${sessionId}`
-							: "No ngrok agent session is active."}
+						{overviewError
+							? "Unable to load ngrok agent session."
+							: sessionId
+								? `Session ${sessionId}`
+								: "No ngrok agent session is active."}
 					</div>
-					<div>{activeTunnelCount} public endpoint(s) active.</div>
+					{overviewError ? null : (
+						<div>{activeTunnelCount} public endpoint(s) active.</div>
+					)}
 				</div>
 				<Button
 					type="button"
@@ -182,10 +197,14 @@ function NgrokInstanceList({
 					Dashboard
 				</Button>
 			</div>
-			{lastError ? (
+			{overviewError ? (
+				<SettingsNotice tone="error">
+					Could not load Debug ingest ngrok overview: {overviewError}
+				</SettingsNotice>
+			) : lastError ? (
 				<SettingsNotice tone="error">{lastError}</SettingsNotice>
 			) : null}
-			{loading ? (
+			{overviewError ? null : loading ? (
 				<div className="mt-3 flex items-center gap-2 text-[12px] text-muted-foreground">
 					<Loader2 className="size-3.5 animate-spin" />
 					Checking Debug ingest instances…
@@ -238,4 +257,11 @@ function NgrokInstanceList({
 			)}
 		</div>
 	);
+}
+
+function errorMessage(error: unknown) {
+	if (error instanceof Error && error.message.trim().length > 0) {
+		return error.message;
+	}
+	return "Unknown error";
 }

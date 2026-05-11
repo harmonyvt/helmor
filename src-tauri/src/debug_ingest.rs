@@ -113,14 +113,14 @@ struct NgrokAgentState {
 }
 
 pub struct DebugIngestManager {
-    servers: Mutex<HashMap<String, ServerHandle>>,
+    servers: Arc<Mutex<HashMap<String, ServerHandle>>>,
     ngrok_agent: Arc<tokio::sync::Mutex<NgrokAgentState>>,
 }
 
 impl Default for DebugIngestManager {
     fn default() -> Self {
         Self {
-            servers: Mutex::new(HashMap::new()),
+            servers: Arc::new(Mutex::new(HashMap::new())),
             ngrok_agent: Arc::new(tokio::sync::Mutex::new(NgrokAgentState::default())),
         }
     }
@@ -405,18 +405,18 @@ impl DebugIngestManager {
     }
 
     fn close_ngrok_agent_if_idle(&self) {
-        let has_public_tunnel = self
-            .servers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .values()
-            .any(|handle| handle.public_tunnel.is_some());
-        if has_public_tunnel {
-            return;
-        }
-
+        let servers = Arc::clone(&self.servers);
         let ngrok_agent = Arc::clone(&self.ngrok_agent);
         tauri::async_runtime::spawn(async move {
+            let has_public_tunnel = servers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .any(|handle| handle.public_tunnel.is_some());
+            if has_public_tunnel {
+                return;
+            }
+
             let mut agent = ngrok_agent.lock().await;
             let Some(mut session) = agent.session.take() else {
                 return;
