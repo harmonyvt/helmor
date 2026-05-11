@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { History, X } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkspaceConversationContainer } from "@/features/conversation";
@@ -7,6 +7,7 @@ import type {
 	AgentModelOption,
 	AgentStreamEvent,
 	WorkspaceDetail,
+	WorkspaceSessionSummary,
 	WorkspaceStatus,
 } from "@/lib/api";
 import {
@@ -19,6 +20,7 @@ import {
 	setGoalChildWorkspaceStatus,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { HistoryView } from "./history-view";
 
 type GoalsAiPanelProps = {
 	workspaceId: string;
@@ -53,6 +55,8 @@ export function GoalsAiPanel({
 	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
 		null,
 	);
+	const [showHistory, setShowHistory] = useState(false);
+
 	const handleSelectSession = useCallback((sessionId: string | null) => {
 		setSelectedSessionId(sessionId);
 		setDisplayedSessionId(sessionId);
@@ -65,6 +69,19 @@ export function GoalsAiPanel({
 		},
 		[],
 	);
+
+	const handleRestoreSession = useCallback(
+		(session: WorkspaceSessionSummary) => {
+			handleSelectSession(session.id);
+			setShowHistory(false);
+		},
+		[handleSelectSession],
+	);
+
+	const handleNewSession = useCallback(() => {
+		handleSelectSession(null);
+		setShowHistory(false);
+	}, [handleSelectSession]);
 
 	const handleKanbanToolCall = useCallback(
 		async (event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>) => {
@@ -183,7 +200,7 @@ export function GoalsAiPanel({
 	);
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col">
+		<div className="relative flex min-h-0 flex-1 flex-col">
 			<WorkspaceConversationContainer
 				selectedWorkspaceId={workspaceId}
 				displayedWorkspaceId={workspaceId}
@@ -205,18 +222,55 @@ export function GoalsAiPanel({
 					</span>
 				}
 				headerActions={
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon"
-						className="size-7 cursor-pointer"
-						onClick={onClose}
-						aria-label="Close Pi panel"
-					>
-						<X className="size-3.5" />
-					</Button>
+					<>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="size-7 cursor-pointer"
+							onClick={() => setShowHistory(true)}
+							aria-label="View conversation history"
+						>
+							<History className="size-3.5" />
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="size-7 cursor-pointer"
+							onClick={onClose}
+							aria-label="Close Pi panel"
+						>
+							<X className="size-3.5" />
+						</Button>
+					</>
 				}
 			/>
+			{showHistory && (
+				<div className="absolute inset-0 z-10 flex flex-col bg-background">
+					<div className="flex h-10 shrink-0 items-center justify-between border-b px-3">
+						<span className="text-[11px] font-medium tracking-[0.04em] text-muted-foreground/70">
+							Conversations
+						</span>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="size-7 cursor-pointer"
+							onClick={() => setShowHistory(false)}
+							aria-label="Back to conversation"
+						>
+							<X className="size-3.5" />
+						</Button>
+					</div>
+					<HistoryView
+						workspaceId={workspaceId}
+						activeSessionId={displayedSessionId}
+						onRestore={handleRestoreSession}
+						onNewSession={handleNewSession}
+					/>
+				</div>
+			)}
 		</div>
 	);
 }
