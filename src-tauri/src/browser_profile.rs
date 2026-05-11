@@ -9,6 +9,7 @@ use crate::models::browser_tabs;
 use crate::models::workspaces;
 
 const DATA_DIRECTORY_ROOT: &str = "workspace-browser";
+const PROJECT_DIRECTORY_ROOT: &str = "projects";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,26 +39,31 @@ pub fn profile_options_for_workspace_id(workspace_id: &str) -> Result<BrowserPro
 pub fn get_browser_tab_profile(tab_id: &str) -> Result<BrowserProfileOptions> {
     let tab = browser_tabs::get_browser_tab(tab_id)?
         .with_context(|| format!("Browser tab not found: {tab_id}"))?;
-    profile_options_for_tab_id(&tab.workspace_id, &tab.id)
+    let workspace = workspaces::load_workspace_record_by_id(&tab.workspace_id)?
+        .with_context(|| format!("Workspace not found: {}", tab.workspace_id))?;
+    profile_options_for_tab_id(&tab.workspace_id, &workspace.repo_id, &tab.id)
 }
 
 pub fn profile_options_for_tab_id(
     workspace_id: &str,
+    repository_id: &str,
     tab_id: &str,
 ) -> Result<BrowserProfileOptions> {
     parse_workspace_uuid(workspace_id)?;
-    let tab_uuid = parse_tab_uuid(tab_id)?;
+    parse_tab_uuid(tab_id)?;
     Ok(BrowserProfileOptions {
         workspace_id: workspace_id.to_string(),
         tab_id: Some(tab_id.to_string()),
-        data_directory: format!("{DATA_DIRECTORY_ROOT}/{workspace_id}/{tab_id}"),
-        data_store_identifier: tab_uuid.as_bytes().to_vec(),
+        data_directory: project_browser_data_directory(repository_id),
+        data_store_identifier: project_data_store_identifier(repository_id).to_vec(),
     })
 }
 
 pub fn workspace_browser_profile_dir(workspace_id: &str) -> Result<PathBuf> {
     parse_workspace_uuid(workspace_id)?;
-    Ok(crate::data_dir::browser_profiles_dir()?.join(workspace_id))
+    Ok(crate::data_dir::browser_profiles_dir()?
+        .join(DATA_DIRECTORY_ROOT)
+        .join(workspace_id))
 }
 
 pub fn remove_workspace_browser_profile_files(workspace_id: &str) -> Result<()> {
@@ -94,10 +100,60 @@ pub fn browser_tab_data_store_identifier(tab_id: &str) -> Result<[u8; 16]> {
     Ok(*parse_tab_uuid(tab_id)?.as_bytes())
 }
 
+pub fn project_data_store_identifier(repository_id: &str) -> [u8; 16] {
+    Uuid::parse_str(repository_id)
+        .map(|uuid| *uuid.as_bytes())
+        .unwrap_or_else(|_| stable_identifier_bytes("repository", repository_id))
+}
+
+pub fn project_browser_profile_dir(repository_id: &str) -> Result<PathBuf> {
+    Ok(crate::data_dir::browser_profiles_dir()?
+        .join(DATA_DIRECTORY_ROOT)
+        .join(PROJECT_DIRECTORY_ROOT)
+        .join(repository_id))
+}
+
+pub fn remove_project_browser_profile_files(repository_id: &str) -> Result<()> {
+    let profile_dir = project_browser_profile_dir(repository_id)?;
+    if profile_dir.exists() {
+        fs::remove_dir_all(&profile_dir).with_context(|| {
+            format!(
+                "Failed to remove project browser profile directory {}",
+                profile_dir.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn project_browser_data_directory(repository_id: &str) -> String {
+    format!("{DATA_DIRECTORY_ROOT}/{PROJECT_DIRECTORY_ROOT}/{repository_id}")
+}
+
+fn stable_identifier_bytes(namespace: &str, value: &str) -> [u8; 16] {
+    let first = fnv1a64(namespace.as_bytes(), value.as_bytes(), 0xcbf29ce484222325);
+    let second = fnv1a64(namespace.as_bytes(), value.as_bytes(), 0x84222325cbf29ce4);
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&first.to_be_bytes());
+    bytes[8..].copy_from_slice(&second.to_be_bytes());
+    bytes
+}
+
+fn fnv1a64(namespace: &[u8], value: &[u8], seed: u64) -> u64 {
+    const FNV_PRIME: u64 = 0x00000100000001b3;
+    let mut hash = seed;
+    for byte in namespace.iter().chain([0].iter()).chain(value.iter()) {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
 fn browser_tab_profile_dir(workspace_id: &str, tab_id: &str) -> Result<PathBuf> {
     parse_workspace_uuid(workspace_id)?;
     parse_tab_uuid(tab_id)?;
     Ok(crate::data_dir::browser_profiles_dir()?
+        .join(DATA_DIRECTORY_ROOT)
         .join(workspace_id)
         .join(tab_id))
 }
@@ -155,26 +211,38 @@ mod tests {
     }
 
     #[test]
-    fn tab_profile_options_are_isolated_per_tab_uuid() {
+    fn tab_profile_options_share_project_login_state() {
         let workspace_id = "11111111-1111-4111-8111-111111111111";
+        let repository_id = "44444444-4444-4444-8444-444444444444";
         let first_tab_id = "22222222-2222-4222-8222-222222222222";
         let second_tab_id = "33333333-3333-4333-8333-333333333333";
 
-        let first = profile_options_for_tab_id(workspace_id, first_tab_id).unwrap();
-        let second = profile_options_for_tab_id(workspace_id, second_tab_id).unwrap();
+        let first = profile_options_for_tab_id(workspace_id, repository_id, first_tab_id).unwrap();
+        let second =
+            profile_options_for_tab_id(workspace_id, repository_id, second_tab_id).unwrap();
 
         assert_eq!(first.workspace_id, workspace_id);
         assert_eq!(first.tab_id.as_deref(), Some(first_tab_id));
         assert_eq!(
             first.data_directory,
-            format!("workspace-browser/{workspace_id}/{first_tab_id}")
+            format!("workspace-browser/projects/{repository_id}")
         );
-        assert_ne!(first.data_directory, second.data_directory);
-        assert_ne!(first.data_store_identifier, second.data_store_identifier);
+        assert_eq!(first.data_directory, second.data_directory);
+        assert_eq!(first.data_store_identifier, second.data_store_identifier);
         assert_eq!(
             first.data_store_identifier,
-            Uuid::parse_str(first_tab_id).unwrap().as_bytes().to_vec()
+            Uuid::parse_str(repository_id).unwrap().as_bytes().to_vec()
         );
+    }
+
+    #[test]
+    fn project_identifiers_are_stable_for_non_uuid_repository_ids() {
+        let first = project_data_store_identifier("repo-1");
+        let second = project_data_store_identifier("repo-1");
+        let other = project_data_store_identifier("repo-2");
+
+        assert_eq!(first, second);
+        assert_ne!(first, other);
     }
 
     #[test]
@@ -248,5 +316,6 @@ mod tests {
         assert_eq!(profile.workspace_id, workspace_id);
         assert_eq!(profile.tab_id.as_deref(), Some(tab_id));
         assert_eq!(profile.data_store_identifier.len(), 16);
+        assert_eq!(profile.data_directory, "workspace-browser/projects/repo-1");
     }
 }
