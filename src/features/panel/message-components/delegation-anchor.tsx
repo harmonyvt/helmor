@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bot, CheckCircle2, ExternalLink, XCircle } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { Button } from "@/components/ui/button";
 import type { DelegationAnchorPart } from "@/lib/api";
@@ -62,8 +63,16 @@ export function DelegationAnchor({
 		sessionThreadMessagesQueryOptions(part.childSessionId),
 	);
 	const messages = query.isError ? [] : (query.data ?? []);
+	const previewRef = useRef<HTMLDivElement | null>(null);
+	const lastMessage = messages[messages.length - 1] ?? null;
 	const meta = statusMeta(part.status);
 	const StatusIcon = meta.icon;
+
+	useLayoutEffect(() => {
+		const preview = previewRef.current;
+		if (!preview) return;
+		preview.scrollTop = preview.scrollHeight;
+	}, [lastMessage, messages.length, part.status]);
 
 	return (
 		<div className="my-2 rounded-xl border border-border/70 bg-muted/15 p-3 shadow-sm">
@@ -117,7 +126,10 @@ export function DelegationAnchor({
 					Open
 				</Button>
 			</div>
-			<div className="mt-3 space-y-2 border-l border-border/60 pl-3">
+			<div
+				ref={previewRef}
+				className="scrollbar-stable mt-3 max-h-[min(42vh,520px)] space-y-2 overflow-y-auto overscroll-contain border-l border-border/60 pl-3 pr-1"
+			>
 				{query.isError ? (
 					<div className="text-xs text-destructive">
 						Failed to load delegated thread.

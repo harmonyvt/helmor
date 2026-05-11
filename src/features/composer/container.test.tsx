@@ -391,6 +391,97 @@ describe("WorkspaceComposerContainer", () => {
 		expect(composerMockState.lastAgentType).toBe("pi");
 	});
 
+	it("loads Pi slash commands when the active composer provider changes to Pi", async () => {
+		apiMockState.listSlashCommands.mockImplementation(
+			async ({ provider }: { provider: string }) => ({
+				commands:
+					provider === "pi"
+						? [
+								{
+									name: "skill:pi-only",
+									description: "Pi skill",
+									source: "skill",
+								},
+							]
+						: [
+								{
+									name: "claude-only",
+									description: "Claude command",
+									source: "builtin",
+								},
+							],
+			}),
+		);
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			...WORKSPACE_SESSIONS,
+			{
+				...WORKSPACE_SESSIONS[0],
+				id: "session-pi",
+				title: "Pi session",
+				agentType: "pi",
+				model: "pi-gpt-5.4",
+				active: false,
+			},
+		]);
+
+		const renderComposer = (displayedSessionId: string) => (
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId={displayedSessionId}
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>
+		);
+
+		const { rerender } = render(renderComposer("session-1"));
+		await waitFor(() => {
+			expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
+				"add-dir",
+				"claude-only",
+			]);
+		});
+
+		rerender(renderComposer("session-pi"));
+		await waitFor(() => {
+			expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
+				"add-dir",
+				"skill:pi-only",
+			]);
+		});
+		expect(composerMockState.lastAgentType).toBe("pi");
+		expect(apiMockState.listSlashCommands).toHaveBeenLastCalledWith({
+			provider: "pi",
+			workingDirectory: "/tmp/helmor",
+			repoId: "repo-1",
+			workspaceId: "workspace-1",
+		});
+	});
+
 	it("filters available models for specialized chat surfaces", () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(

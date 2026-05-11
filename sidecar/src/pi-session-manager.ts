@@ -540,6 +540,7 @@ export function normalizePiSlashCommands(
 	const seen = new Set<string>();
 	const out: SlashCommandInfo[] = [];
 	for (const command of commands) {
+		if (command.source !== "skill") continue;
 		if (!command.name || seen.has(command.name)) continue;
 		seen.add(command.name);
 		out.push({
