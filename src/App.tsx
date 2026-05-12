@@ -1700,6 +1700,24 @@ function AppShell({
 		[queryClient, rememberSessionSelection],
 	);
 
+	const handleSelectWorkspaceSession = useCallback(
+		(workspaceId: string, sessionId: string) => {
+			handleSelectWorkspace(workspaceId);
+			const requestId = sessionSelectionRequestRef.current + 1;
+			sessionSelectionRequestRef.current = requestId;
+			window.setTimeout(() => {
+				if (
+					sessionSelectionRequestRef.current !== requestId ||
+					selectedWorkspaceIdRef.current !== workspaceId
+				) {
+					return;
+				}
+				handleSelectSession(sessionId);
+			}, 0);
+		},
+		[handleSelectWorkspace, handleSelectSession],
+	);
+
 	const {
 		commitButtonMode,
 		commitButtonState,
@@ -2693,6 +2711,9 @@ function AppShell({
 															) : undefined
 														}
 														onSelectWorkspace={handleSelectWorkspace}
+														onSelectWorkspaceSession={
+															handleSelectWorkspaceSession
+														}
 													/>
 												) : null}
 												<div

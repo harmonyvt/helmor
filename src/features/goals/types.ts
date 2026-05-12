@@ -16,5 +16,6 @@ export type GoalWorkspaceContainerProps = {
 	workspaceId: string;
 	headerLeading?: React.ReactNode;
 	onSelectWorkspace?: (workspaceId: string) => void;
+	onSelectWorkspaceSession?: (workspaceId: string, sessionId: string) => void;
 	renderAiSurface?: (props: GoalAiSurfaceProps) => React.ReactNode;
 };

@@ -445,6 +445,8 @@ body {
 	--color-ring: var(--ring);
 	--color-input: var(--input);
 	--color-border: var(--border);
+	--color-success-foreground: var(--success-foreground);
+	--color-success: var(--success);
 	--color-destructive: var(--destructive);
 	--color-accent-foreground: var(--accent-foreground);
 	--color-accent: var(--accent);

@@ -12,12 +12,16 @@ import type {
 } from "@/lib/api";
 import {
 	createGoalChildWorkspaceAndStart,
+	listAssignees,
 	listGoalChildWorkspaces,
 	loadSessionThreadMessages,
 	loadWorkspaceSessions,
+	readAssigneeThread,
 	renameSession,
+	sendAssigneeMessage,
 	sendKanbanToolResult,
 	setGoalChildWorkspaceStatus,
+	summarizeAssigneeStatus,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { HistoryView } from "./history-view";
@@ -183,6 +187,39 @@ export function GoalsAiPanel({
 							String(args.workspaceId),
 						),
 					});
+				} else if (event.tool === "send_assignee_message") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					const message = String(args.message ?? "");
+					result = await sendAssigneeMessage({
+						goalWorkspaceId: workspaceId,
+						cardId,
+						message,
+						priority: typeof args.priority === "string" ? args.priority : null,
+					});
+					await queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(cardId),
+					});
+				} else if (event.tool === "read_assignee_thread") {
+					result = await readAssigneeThread({
+						goalWorkspaceId: workspaceId,
+						cardId: String(args.cardId ?? args.card_id ?? ""),
+						sinceMessageId:
+							typeof args.sinceMessageId === "string"
+								? args.sinceMessageId
+								: typeof args.since_message_id === "string"
+									? args.since_message_id
+									: null,
+					});
+				} else if (event.tool === "summarize_assignee_status") {
+					result = await summarizeAssigneeStatus(
+						workspaceId,
+						String(args.cardId ?? args.card_id ?? ""),
+					);
+				} else if (event.tool === "list_assignees") {
+					result = await listAssignees(
+						workspaceId,
+						typeof args.status === "string" ? args.status : null,
+					);
 				} else {
 					throw new Error(`Unknown Pi tool: ${event.tool}`);
 				}

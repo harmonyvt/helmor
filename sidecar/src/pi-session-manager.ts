@@ -13,6 +13,7 @@ import { readImageWithResize } from "./image-resize.js";
 import { parseImageRefs } from "./images.js";
 import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
 import { errorDetails, logger } from "./logger.js";
+import { createAssigneeTools } from "./pi-assignee-tools.js";
 import { createDelegationTools } from "./pi-delegation-tools.js";
 import { createPiEventState, normalizePiEvent } from "./pi-event-normalizer.js";
 import { bindPiExtensionsForHelmor } from "./pi-extension-host.js";
@@ -125,6 +126,10 @@ export class PiSessionManager implements SessionManager {
 				? createThreadTools(params.kanbanWorkspaceId, emitter, requestId)
 				: [];
 
+			const assigneeCustomTools = params.kanbanWorkspaceId
+				? createAssigneeTools(params.kanbanWorkspaceId, emitter, requestId)
+				: [];
+
 			const delegationCustomTools = params.helmorSessionId
 				? createDelegationTools(params.helmorSessionId, emitter, requestId)
 				: [];
@@ -146,6 +151,7 @@ export class PiSessionManager implements SessionManager {
 				customTools: [
 					...kanbanCustomTools,
 					...threadCustomTools,
+					...assigneeCustomTools,
 					...delegationCustomTools,
 				],
 			});

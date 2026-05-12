@@ -140,6 +140,43 @@ pub async fn create_goal_child_workspace_and_start(
 }
 
 #[tauri::command]
+pub async fn send_assignee_message(
+    app: AppHandle,
+    request: crate::goal_assignees::SendAssigneeMessageRequest,
+) -> CmdResult<crate::goal_assignees::SendAssigneeMessageResult> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
+    let result =
+        run_blocking(move || crate::goal_assignees::send_assignee_message(request)).await?;
+    publish_goal_child_workspace_changes(
+        &app,
+        goal_workspace_id,
+        Some(result.workspace_id.clone()),
+    );
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn read_assignee_thread(
+    request: crate::goal_assignees::ReadAssigneeThreadRequest,
+) -> CmdResult<crate::goal_assignees::AssigneeThreadResult> {
+    run_blocking(move || crate::goal_assignees::read_assignee_thread(request)).await
+}
+
+#[tauri::command]
+pub async fn summarize_assignee_status(
+    request: crate::goal_assignees::SummarizeAssigneeStatusRequest,
+) -> CmdResult<crate::goal_assignees::AssigneeStatusSummary> {
+    run_blocking(move || crate::goal_assignees::summarize_assignee_status(request)).await
+}
+
+#[tauri::command]
+pub async fn list_assignees(
+    request: crate::goal_assignees::ListAssigneesRequest,
+) -> CmdResult<Vec<crate::goal_assignees::AssigneeSummary>> {
+    run_blocking(move || crate::goal_assignees::list_assignees(request)).await
+}
+
+#[tauri::command]
 pub async fn set_goal_child_workspace_status(
     app: AppHandle,
     request: workspaces::GoalChildWorkspaceStatusRequest,
