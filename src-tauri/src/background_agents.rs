@@ -3,6 +3,7 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
+use serde::Serialize;
 use tauri::AppHandle;
 use uuid::Uuid;
 
@@ -24,7 +25,8 @@ struct QueuedSend {
     params: SendMessageParams,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BackgroundSendReceipt {
     pub task_id: String,
     pub started: bool,
