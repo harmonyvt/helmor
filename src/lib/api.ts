@@ -770,39 +770,6 @@ export type EditorFilesWithContentResponse = {
 	prefetched: EditorFilePrefetchItem[];
 };
 
-export type AppUpdateStage =
-	| "disabled"
-	| "idle"
-	| "checking"
-	| "downloading"
-	| "downloaded"
-	| "installing"
-	| "error";
-
-export type AppUpdateInfo = {
-	currentVersion: string;
-	version: string;
-	body?: string | null;
-	date?: string | null;
-	releaseUrl: string;
-};
-
-export type AppUpdateProgress = {
-	downloaded: number;
-	total?: number | null;
-};
-
-export type AppUpdateStatus = {
-	stage: AppUpdateStage;
-	configured: boolean;
-	autoUpdateEnabled: boolean;
-	update?: AppUpdateInfo | null;
-	lastError?: string | null;
-	lastAttemptAt?: string | null;
-	downloadedAt?: string | null;
-	progress?: AppUpdateProgress | null;
-};
-
 const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
 	{ id: "done", label: "Done", tone: "done", rows: [] },
 	{ id: "review", label: "In review", tone: "review", rows: [] },
@@ -1124,34 +1091,12 @@ export async function getHelmorSkillsStatus(): Promise<HelmorSkillsStatus> {
 	}
 }
 
-export async function getAppUpdateStatus(): Promise<AppUpdateStatus> {
-	return invoke<AppUpdateStatus>("get_app_update_status");
-}
-
-export async function checkForAppUpdate(
-	force = false,
-): Promise<AppUpdateStatus> {
-	return invoke<AppUpdateStatus>("check_for_app_update", { force });
-}
-
-export async function installDownloadedAppUpdate(): Promise<AppUpdateStatus> {
-	return invoke<AppUpdateStatus>("install_downloaded_app_update");
-}
-
 export async function syncGlobalHotkey(hotkey: string | null): Promise<void> {
 	try {
 		await invoke<void>("sync_global_hotkey", { hotkey });
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to set global hotkey."));
 	}
-}
-
-export async function listenAppUpdateStatus(
-	callback: (payload: AppUpdateStatus) => void,
-): Promise<UnlistenFn> {
-	return listen<AppUpdateStatus>("app-update-status", (event) =>
-		callback(event.payload),
-	);
 }
 
 export async function installCli(): Promise<CliStatus> {

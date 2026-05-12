@@ -1,8 +1,8 @@
-import { Download, Loader2, RotateCcw, Trash2 } from "lucide-react";
+import { Loader2, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { devResetAllData, loadDataInfo, runHelmorAppInstall } from "@/lib/api";
+import { devResetAllData, loadDataInfo } from "@/lib/api";
 import { saveSettings } from "@/lib/settings";
 import {
 	SettingsGroup,
@@ -14,9 +14,7 @@ export function DevToolsPanel() {
 	const [dataDir, setDataDir] = useState<string | null>(null);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [resetting, setResetting] = useState(false);
-	const [installingApp, setInstallingApp] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [appInstallError, setAppInstallError] = useState<string | null>(null);
 	const [onboardingReset, setOnboardingReset] = useState(false);
 
 	useEffect(() => {
@@ -46,69 +44,9 @@ export function DevToolsPanel() {
 		setOnboardingReset(true);
 	}, []);
 
-	const handleInstallApp = useCallback(async () => {
-		setInstallingApp(true);
-		setAppInstallError(null);
-		try {
-			await runHelmorAppInstall();
-		} catch (e) {
-			setAppInstallError(e instanceof Error ? e.message : String(e));
-			setInstallingApp(false);
-		}
-	}, []);
-
 	return (
 		<>
 			<SettingsGroup>
-				<SettingsRow
-					align="start"
-					title={
-						<span className="flex items-center gap-1.5">
-							<Download
-								className="size-3.5 text-muted-foreground"
-								strokeWidth={1.8}
-							/>
-							<span>Install Local App Update</span>
-						</span>
-					}
-					description={
-						<>
-							Pull the latest changes into
-							<code className="mx-1 rounded bg-muted px-1 py-0.5 text-[11px]">
-								~/helmor
-							</code>
-							then build the production macOS app and install it to
-							<code className="mx-1 rounded bg-muted px-1 py-0.5 text-[11px]">
-								/Applications/Helmor.app
-							</code>
-							using the bundled
-							<code className="mx-1 rounded bg-muted px-1 py-0.5 text-[11px]">
-								helmor-app-install
-							</code>
-							skill script, then restart Helmor.
-							{appInstallError ? (
-								<SettingsNotice tone="error">{appInstallError}</SettingsNotice>
-							) : null}
-						</>
-					}
-				>
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={handleInstallApp}
-						disabled={installingApp}
-					>
-						{installingApp ? (
-							<>
-								<Loader2 className="mr-1.5 size-3.5 animate-spin" />
-								Installing...
-							</>
-						) : (
-							"Install & Restart"
-						)}
-					</Button>
-				</SettingsRow>
-
 				<SettingsRow
 					align="start"
 					title={

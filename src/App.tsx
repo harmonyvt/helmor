@@ -60,8 +60,6 @@ import {
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
-import { AppUpdateButton } from "@/features/updater/app-update-button";
-import { useAppUpdater } from "@/features/updater/use-app-updater";
 import { EditorIcon } from "@/shell/editor-icon";
 import { GithubIdentityGate } from "@/shell/github-identity-gate";
 import { GithubStatusMenu } from "@/shell/github-status-menu";
@@ -854,7 +852,6 @@ function AppShell({
 		workspaceReselectTick,
 	]);
 
-	const appUpdateStatus = useAppUpdater();
 	useDockUnreadBadge();
 	useEnsureDefaultModel();
 	useRefreshPiModels();
@@ -2551,7 +2548,6 @@ function AppShell({
 															/>
 														</div>
 														<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
-															<AppUpdateButton status={appUpdateStatus} />
 															<Tooltip>
 																<TooltipTrigger asChild>
 																	<Button
@@ -2675,7 +2671,6 @@ function AppShell({
 																	{/* Spacer to avoid macOS traffic lights */}
 																	<div className="w-[52px] shrink-0" />
 																	<div className="flex items-center gap-[2px]">
-																		<AppUpdateButton status={appUpdateStatus} />
 																		<Tooltip>
 																			<TooltipTrigger asChild>
 																				<Button
@@ -2780,7 +2775,6 @@ function AppShell({
 																	{/* Spacer to avoid macOS traffic lights */}
 																	<div className="w-[52px] shrink-0" />
 																	<div className="flex items-center gap-[2px]">
-																		<AppUpdateButton status={appUpdateStatus} />
 																		<Tooltip>
 																			<TooltipTrigger asChild>
 																				<Button
