@@ -269,6 +269,7 @@ export type GoalRowActions = Pick<
 	| "onSelect"
 	| "onPrefetch"
 	| "onArchiveWorkspace"
+	| "onConvertWorkspaceToGoal"
 	| "onRestoreWorkspace"
 	| "onDeleteWorkspace"
 	| "onMarkWorkspaceUnread"
@@ -276,6 +277,7 @@ export type GoalRowActions = Pick<
 	| "onTogglePin"
 	| "onSetWorkspaceStatus"
 	| "archivingWorkspaceIds"
+	| "convertingGoalWorkspaceIds"
 	| "markingUnreadWorkspaceId"
 	| "restoringWorkspaceId"
 > & {

@@ -26,6 +26,7 @@ pub use super::branching::{
     PushWorkspaceToRemoteResponse, SyncWorkspaceTargetOutcome, SyncWorkspaceTargetResponse,
     UpdateIntendedTargetBranchInternal, UpdateIntendedTargetBranchResponse,
 };
+pub use super::goal_conversion::{convert_workspace_to_goal, ConvertWorkspaceToGoalResponse};
 pub use super::goals::{
     assign_workspace_to_goal, create_goal_child_workspace, finalize_goal_workspace,
     link_goal_card_workspace, list_goal_cards, prepare_goal_workspace,

@@ -732,6 +732,128 @@ fn prepare_goal_workspace_from_existing_pr_branch_copies_pr_metadata_to_new_goal
 }
 
 #[test]
+fn convert_workspace_to_goal_marks_existing_workspace_goal_and_creates_pr() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "remote",
+            "set-url",
+            "origin",
+            harness.root.join("origin.git").to_str().unwrap(),
+        ],
+        None,
+    )
+    .unwrap();
+    git_ops::run_git(
+        [
+            "clone",
+            "--bare",
+            harness.source_repo_root.to_str().unwrap(),
+            harness.root.join("origin.git").to_str().unwrap(),
+        ],
+        None,
+    )
+    .unwrap();
+
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+    fs::write(
+        harness
+            .workspace_dir(&prepared.directory_name)
+            .join("goal-work.txt"),
+        "goal work",
+    )
+    .unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            harness
+                .workspace_dir(&prepared.directory_name)
+                .to_str()
+                .unwrap(),
+            "add",
+            "goal-work.txt",
+        ],
+        None,
+    )
+    .unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            harness
+                .workspace_dir(&prepared.directory_name)
+                .to_str()
+                .unwrap(),
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Helmor",
+            "-c",
+            "user.email=helmor@example.com",
+            "commit",
+            "-m",
+            "goal work",
+        ],
+        None,
+    )
+    .unwrap();
+    install_mock_gh_for_create_pr(&harness);
+    let connection = Connection::open(harness.db_path()).unwrap();
+    connection
+        .execute(
+            "UPDATE repos SET remote_url = 'https://github.com/octocat/hello-world.git', forge_provider = 'github' WHERE id = ?1",
+            [&harness.repo_id],
+        )
+        .unwrap();
+
+    let converted = workspaces::convert_workspace_to_goal(&prepared.workspace_id).unwrap();
+
+    assert_eq!(converted.workspace_id, prepared.workspace_id);
+    assert_eq!(
+        converted.pr_url.as_deref(),
+        Some("https://github.com/octocat/hello-world/pull/99")
+    );
+    let (kind, status, pr_url, pr_sync_state, goal_title, goal_description): (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT workspace_kind, status, pr_url, pr_sync_state,
+              goal_title, goal_description
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&prepared.workspace_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(kind, "goal");
+    assert_eq!(status, "review");
+    assert_eq!(pr_url, "https://github.com/octocat/hello-world/pull/99");
+    assert_eq!(pr_sync_state, "open");
+    assert_eq!(goal_title, converted.pr_title);
+    assert!(goal_description.contains("Converted from workspace"));
+}
+
+#[test]
 fn finalize_pr_workspace_uses_existing_local_head_branch() {
     let _guard = TEST_LOCK
         .lock()
@@ -1563,4 +1685,54 @@ exit 1
         fs::set_permissions(&script, permissions).unwrap();
     }
     std::env::set_var("HELMOR_GH_BIN_PATH", script);
+}
+
+fn install_mock_gh_for_create_pr(harness: &CreateTestHarness) {
+    let script = harness.root.join("gh");
+    let response = serde_json::json!({
+        "data": {
+            "repository": {
+                "pullRequests": { "nodes": [] }
+            }
+        }
+    });
+    fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "gh version 2.0.0"
+  exit 0
+fi
+if [ "$1" = "auth" ]; then
+  echo '{{"hosts":{{"github.com":[{{"state":"success","active":true,"host":"github.com","login":"octocat"}}]}}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+  cat <<'JSON'
+{response}
+JSON
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+  echo "https://github.com/octocat/hello-world/pull/99"
+  exit 0
+fi
+echo "unexpected gh args: $@" >&2
+exit 1
+"#,
+            response = response
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+    }
+    std::env::set_var("HELMOR_GH_BIN_PATH", &script);
+    let path = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("PATH", format!("{}:{path}", harness.root.to_str().unwrap()));
 }

@@ -8,6 +8,7 @@ import {
 	Pin,
 	PinOff,
 	RotateCcw,
+	Target,
 	Trash2,
 } from "lucide-react";
 import { memo, useEffect, useState } from "react";
@@ -75,6 +76,7 @@ export type WorkspaceRowItemProps = {
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
+	onConvertWorkspaceToGoal?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onOpenInFinder?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
@@ -82,6 +84,7 @@ export type WorkspaceRowItemProps = {
 	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
 	archivingWorkspaceIds?: Set<string>;
+	convertingGoalWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 	workspaceActionsDisabled?: boolean;
@@ -125,6 +128,7 @@ export const WorkspaceRowItem = memo(
 		onSelect,
 		onPrefetch,
 		onArchiveWorkspace,
+		onConvertWorkspaceToGoal,
 		onMarkWorkspaceUnread: _onMarkWorkspaceUnread,
 		onOpenInFinder,
 		onRestoreWorkspace,
@@ -132,6 +136,7 @@ export const WorkspaceRowItem = memo(
 		onTogglePin,
 		onSetWorkspaceStatus,
 		archivingWorkspaceIds,
+		convertingGoalWorkspaceIds,
 		markingUnreadWorkspaceId,
 		restoringWorkspaceId,
 		workspaceActionsDisabled,
@@ -143,10 +148,12 @@ export const WorkspaceRowItem = memo(
 		const actionLabel =
 			row.state === "archived" ? "Restore workspace" : "Archive workspace";
 		const isArchiving = archivingWorkspaceIds?.has(row.id) ?? false;
+		const isConvertingGoal = convertingGoalWorkspaceIds?.has(row.id) ?? false;
 		const isMarkingUnread = markingUnreadWorkspaceId === row.id;
 		const isRestoring = restoringWorkspaceId === row.id;
 		const isRestoreAction = row.state === "archived";
-		const isBusy = isArchiving || isMarkingUnread || isRestoring;
+		const isBusy =
+			isArchiving || isConvertingGoal || isMarkingUnread || isRestoring;
 		const hasActionHandler = isRestoreAction
 			? Boolean(onRestoreWorkspace)
 			: Boolean(onArchiveWorkspace);
@@ -190,6 +197,10 @@ export const WorkspaceRowItem = memo(
 		const statusTone =
 			STATUS_OPTIONS.find((o) => o.value === effectiveStatus)?.tone ??
 			"backlog";
+		const canConvertToGoal =
+			Boolean(onConvertWorkspaceToGoal) &&
+			row.workspaceKind !== "goal" &&
+			row.state !== "archived";
 
 		const rowBody = (
 			<div
@@ -421,6 +432,16 @@ export const WorkspaceRowItem = memo(
 						</ContextMenuItem>
 					) : null}
 
+					{canConvertToGoal ? (
+						<ContextMenuItem
+							disabled={isBusy || Boolean(workspaceActionsDisabled)}
+							onClick={() => onConvertWorkspaceToGoal?.(row.id)}
+						>
+							<Target className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Convert to Goal</span>
+						</ContextMenuItem>
+					) : null}
+
 					<ContextMenuSeparator />
 
 					{isRestoreAction ? (
@@ -455,6 +476,7 @@ export const WorkspaceRowItem = memo(
 			previous.isInteractionRequired === next.isInteractionRequired &&
 			previous.isFlashing === next.isFlashing &&
 			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
+			previous.convertingGoalWorkspaceIds === next.convertingGoalWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&
 			previous.workspaceActionsDisabled === next.workspaceActionsDisabled

@@ -157,11 +157,13 @@ export type PrRowActions = Pick<
 	| "onSelect"
 	| "onPrefetch"
 	| "onArchiveWorkspace"
+	| "onConvertWorkspaceToGoal"
 	| "onMarkWorkspaceUnread"
 	| "onOpenInFinder"
 	| "onTogglePin"
 	| "onSetWorkspaceStatus"
 	| "archivingWorkspaceIds"
+	| "convertingGoalWorkspaceIds"
 	| "markingUnreadWorkspaceId"
 	| "restoringWorkspaceId"
 >;

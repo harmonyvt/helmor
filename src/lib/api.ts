@@ -601,6 +601,13 @@ export type FinalizeGoalWorkspaceResponse = {
 	prSyncState: PrSyncState;
 };
 
+export type ConvertWorkspaceToGoalResponse = {
+	workspaceId: string;
+	prTitle: string;
+	prUrl?: string | null;
+	prSyncState: PrSyncState;
+};
+
 export type GoalCard = {
 	id: string;
 	goalWorkspaceId: string;
@@ -2351,6 +2358,21 @@ export async function finalizeGoalWorkspace(
 		description,
 		sourceStartBranch: sourceStartBranch ?? null,
 	});
+}
+
+export async function convertWorkspaceToGoal(
+	workspaceId: string,
+): Promise<ConvertWorkspaceToGoalResponse> {
+	try {
+		return await invoke<ConvertWorkspaceToGoalResponse>(
+			"convert_workspace_to_goal",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to convert workspace to Goal."),
+		);
+	}
 }
 
 export async function listGoalCards(workspaceId: string): Promise<GoalCard[]> {

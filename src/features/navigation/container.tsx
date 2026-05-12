@@ -41,6 +41,7 @@ export const WorkspacesSidebarContainer = memo(
 			availableRepositories,
 			creatingWorkspaceRepoId,
 			cloneDefaultDirectory,
+			convertingGoalWorkspaceIds,
 			groups,
 			isWorkspacesFetching,
 			layoutMode,
@@ -51,6 +52,7 @@ export const WorkspacesSidebarContainer = memo(
 			handleArchiveWorkspace,
 			handleAssignWorkspaceToGoal,
 			handleCloneFromUrl,
+			handleConvertWorkspaceToGoal,
 			handleCreateWorkspaceFromRepo,
 			handleCreateGoalWorkspace,
 			handleDeleteWorkspace,
@@ -76,6 +78,7 @@ export const WorkspacesSidebarContainer = memo(
 				availableRepositories={availableRepositories}
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
+				convertingGoalWorkspaceIds={convertingGoalWorkspaceIds}
 				isPolling={isWorkspacesFetching}
 				layoutMode={layoutMode}
 				onSetLayoutMode={setLayoutMode}
@@ -102,6 +105,7 @@ export const WorkspacesSidebarContainer = memo(
 				}
 				onCreateGoalWorkspace={handleCreateGoalWorkspace}
 				onArchiveWorkspace={handleArchiveWorkspace}
+				onConvertWorkspaceToGoal={handleConvertWorkspaceToGoal}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}
 				onRestoreWorkspace={handleRestoreWorkspace}
 				onDeleteWorkspace={handleDeleteWorkspace}
