@@ -57,12 +57,12 @@ import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
 import { AccountPanel } from "./panels/account";
-import { AppUpdatesPanel } from "./panels/app-updates";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DataSourceSettingsRow } from "./panels/data-source";
 import { DebugIngestNgrokPanel } from "./panels/debug-ingest-ngrok";
 import { DevToolsPanel } from "./panels/dev-tools";
+import { LocalAppUpdatePanel } from "./panels/local-app-update";
 import {
 	ClaudeCustomProvidersPanel,
 	PiModelsCheckPanel,
@@ -383,7 +383,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>
-									<AppUpdatesPanel />
+									<LocalAppUpdatePanel />
 								</SettingsGroup>
 							)}
 

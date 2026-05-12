@@ -22,7 +22,6 @@ pub mod service;
 mod shell_env;
 pub mod sidecar;
 pub mod ui_sync;
-pub mod updater;
 pub mod web;
 pub mod web_daemon;
 pub mod workspace;
@@ -62,8 +61,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_opener::init());
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(
@@ -145,10 +143,6 @@ pub fn run() {
             shell_env::inherit_login_shell_env();
 
             forge::init_bundled_cli_paths();
-
-            updater::configure()?;
-            updater::spawn_startup_check(app.handle().clone());
-            updater::spawn_interval_worker(app.handle().clone());
 
             agents::prewarm_slash_command_cache(app.handle());
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
@@ -383,9 +377,6 @@ pub fn run() {
             commands::settings_commands::save_auto_close_opt_in_asked,
             global_hotkey::sync_global_hotkey,
             ui_sync::subscribe_ui_mutations,
-            commands::updater_commands::get_app_update_status,
-            commands::updater_commands::check_for_app_update,
-            commands::updater_commands::install_downloaded_app_update,
             commands::editor_commands::write_editor_file
         ])
         .build(tauri::generate_context!())
@@ -411,16 +402,6 @@ pub fn run() {
     // Dock-menu Quit or unexpected OS-level exit can't slip through
     // without confirmation on macOS.
     app.run(|app_handle, event| match event {
-        tauri::RunEvent::Resumed => {
-            updater::maybe_trigger_on_resume(app_handle.clone());
-        }
-        tauri::RunEvent::WindowEvent {
-            label,
-            event: tauri::WindowEvent::Focused(true),
-            ..
-        } if label == "main" => {
-            updater::maybe_trigger_on_focus(app_handle.clone());
-        }
         tauri::RunEvent::WindowEvent {
             label,
             event: tauri::WindowEvent::CloseRequested { api, .. },
@@ -435,12 +416,6 @@ pub fn run() {
         } => {
             api.prevent_exit();
             emit_quit_requested(app_handle);
-        }
-        // Install pending update on the way out so the next launch is the
-        // new version. By this point `request_quit` has stopped watchers
-        // and torn down the sidecar, so blocking briefly here is safe.
-        tauri::RunEvent::Exit => {
-            updater::install_pending_on_exit_blocking();
         }
         _ => {}
     });

@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import {
 	cleanup,
 	fireEvent,
@@ -231,53 +230,6 @@ describe("App", () => {
 		expect(
 			screen.getByRole("separator", { name: "Resize inspector sidebar" }),
 		).toHaveAttribute("aria-valuenow", "388");
-	});
-
-	it("shows the update button beside the sidebar toggle when an update is ready", async () => {
-		const invokeMock = vi.mocked(invoke);
-		const baseInvokeImpl = invokeMock.getMockImplementation();
-
-		invokeMock.mockImplementation(
-			async (command: string, ...args: unknown[]) => {
-				if (command === "get_app_update_status") {
-					return {
-						stage: "downloaded",
-						configured: true,
-						autoUpdateEnabled: true,
-						update: {
-							currentVersion: "1.0.0",
-							version: "1.1.0",
-							releaseUrl: "https://example.com/release",
-						},
-						lastError: null,
-						lastAttemptAt: null,
-						downloadedAt: "2026-04-23T00:00:00Z",
-					};
-				}
-
-				return baseInvokeImpl?.(command, args[0] as undefined);
-			},
-		);
-
-		try {
-			const user = userEvent.setup();
-			render(<App />);
-			await screen.findByRole("main", { name: "Application shell" });
-
-			expect(
-				screen.getByRole("button", { name: "Update Helmor to 1.1.0" }),
-			).toBeInTheDocument();
-
-			await user.click(
-				screen.getByRole("button", { name: "Collapse left sidebar" }),
-			);
-
-			expect(
-				screen.getByRole("button", { name: "Update Helmor to 1.1.0" }),
-			).toBeInTheDocument();
-		} finally {
-			invokeMock.mockImplementation(baseInvokeImpl ?? (async () => undefined));
-		}
 	});
 
 	it("falls back to repo-name initials when a workspace has no icon", () => {
