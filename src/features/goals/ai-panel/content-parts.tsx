@@ -139,6 +139,34 @@ const KANBAN_TOOL_LABELS: Record<string, string> = {
 	list_assignees: "List assignees",
 };
 
+/**
+ * Extract a short human-readable detail from tool arguments for the
+ * collapsed tool-call summary. Returns null when nothing useful is available.
+ */
+function getToolCallDetail(
+	toolName: string,
+	args: Record<string, unknown>,
+): string | null {
+	function s(v: unknown): string | null {
+		return typeof v === "string" && v.trim() ? v.trim() : null;
+	}
+	const cardId = s(args.cardId) ?? s(args.card_id);
+	switch (toolName) {
+		case "send_assignee_message": {
+			const msg = s(args.message);
+			if (msg) return msg.length > 48 ? `${msg.slice(0, 48)}…` : msg;
+			return cardId;
+		}
+		case "read_assignee_thread":
+		case "summarize_assignee_status":
+			return cardId;
+		case "list_assignees":
+			return s(args.status);
+		default:
+			return null;
+	}
+}
+
 function toolStatusIcon(status?: string, isError?: boolean) {
 	if (isError) return <span className="text-destructive">✕</span>;
 	if (!status || status === "done")
@@ -155,6 +183,7 @@ function toolStatusIcon(status?: string, isError?: boolean) {
 function ToolCallBlock({ part }: { part: ToolCallPart }) {
 	const [open, setOpen] = useState(false);
 	const label = KANBAN_TOOL_LABELS[part.toolName] ?? part.toolName;
+	const detail = getToolCallDetail(part.toolName, part.args);
 	const isRunning =
 		part.streamingStatus === "running" ||
 		part.streamingStatus === "streaming_input" ||
@@ -168,15 +197,19 @@ function ToolCallBlock({ part }: { part: ToolCallPart }) {
 				onClick={() => setOpen((o) => !o)}
 			>
 				<Wrench className="size-3 shrink-0 text-muted-foreground/60" />
-				<span className="flex-1 min-w-0">
+				<span className="flex min-w-0 flex-1 flex-col">
 					<span className="truncate text-[11.5px] font-medium text-foreground/80">
 						{label}
 					</span>
-					{part.toolName !== label && (
-						<span className="ml-1.5 font-mono text-[9.5px] text-muted-foreground/50">
+					{detail ? (
+						<span className="truncate text-[10px] text-muted-foreground/50">
+							{detail}
+						</span>
+					) : part.toolName !== label ? (
+						<span className="font-mono text-[9.5px] text-muted-foreground/50">
 							{part.toolName}
 						</span>
-					)}
+					) : null}
 				</span>
 				<span className="shrink-0 text-[11px]">
 					{toolStatusIcon(part.streamingStatus, part.isError)}

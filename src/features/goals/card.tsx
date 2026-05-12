@@ -1,4 +1,4 @@
-import { Bot, Circle, GitBranch } from "lucide-react";
+import { AlertTriangle, Bot, GitBranch } from "lucide-react";
 import type { AssigneeReportMarker, WorkspaceDetail } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -23,17 +23,26 @@ function assigneeStatus(
 	return "idle";
 }
 
-function statusClass(status: string) {
-	switch (status) {
-		case "running":
-			return "fill-blue-500 text-blue-500";
-		case "blocked":
-			return "fill-destructive text-destructive";
-		case "completed":
-			return "fill-emerald-500 text-emerald-500";
-		default:
-			return "fill-muted-foreground/50 text-muted-foreground/50";
+/** Sonar-ping dot for running, filled dot for other statuses. */
+function AgentStatusDot({ status }: { status: string }) {
+	if (status === "running") {
+		return (
+			<span className="relative flex size-1.5 shrink-0">
+				<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+				<span className="relative inline-flex size-1.5 rounded-full bg-blue-500" />
+			</span>
+		);
 	}
+	return (
+		<span
+			className={cn(
+				"size-1.5 shrink-0 rounded-full",
+				status === "blocked" && "bg-destructive",
+				status === "completed" && "bg-emerald-500",
+				(status === "idle" || !status) && "bg-muted-foreground/30",
+			)}
+		/>
+	);
 }
 
 export function WorkspaceCard({
@@ -48,6 +57,9 @@ export function WorkspaceCard({
 }: WorkspaceCardProps) {
 	const agentType = ws.activeSessionAgentType;
 	const status = assigneeStatus(ws, latestReport);
+	const isBlocked = status === "blocked";
+	const isRunning = status === "running";
+	const isCompleted = status === "completed";
 
 	return (
 		<article
@@ -59,8 +71,12 @@ export function WorkspaceCard({
 				"cursor-pointer select-none rounded-lg border bg-background p-3 shadow-sm transition-all duration-150",
 				isSelected
 					? "border-ring/60 shadow-[0_0_0_3px_color-mix(in_oklch,var(--ring)_20%,transparent)]"
-					: "border-border/70 hover:border-border hover:shadow-md",
-				isDragging && "opacity-40 scale-[0.97]",
+					: isBlocked
+						? "border-destructive/40 hover:border-destructive/60 hover:shadow-md"
+						: isRunning
+							? "border-blue-500/30 hover:border-blue-500/50 hover:shadow-md"
+							: "border-border/70 hover:border-border hover:shadow-md",
+				isDragging && "scale-[0.97] opacity-40",
 			)}
 		>
 			<h3 className="line-clamp-2 text-sm font-medium leading-5">{ws.title}</h3>
@@ -74,7 +90,14 @@ export function WorkspaceCard({
 				{agentType ? (
 					<button
 						type="button"
-						className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-medium capitalize text-accent-foreground hover:bg-accent/80"
+						className={cn(
+							"inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium capitalize transition-opacity hover:opacity-75",
+							isBlocked
+								? "bg-destructive/15 text-destructive"
+								: isCompleted
+									? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+									: "bg-accent text-accent-foreground",
+						)}
 						onClick={(event) => {
 							if (!onAssigneeClick) return;
 							event.stopPropagation();
@@ -82,9 +105,9 @@ export function WorkspaceCard({
 						}}
 						title={`Open ${agentType} assignee thread`}
 					>
-						<Bot className="size-2.5" />
+						<Bot className="size-2.5 shrink-0" />
 						<span>{agentType}</span>
-						<Circle className={cn("size-1.5", statusClass(status))} />
+						<AgentStatusDot status={status} />
 					</button>
 				) : null}
 				{ws.prUrl ? (
@@ -101,17 +124,32 @@ export function WorkspaceCard({
 			{latestReport ? (
 				<div
 					className={cn(
-						"mt-2 line-clamp-2 rounded-md px-1.5 py-1 text-[10px] leading-snug",
-						latestReport.reportType === "blocked"
+						"mt-2 flex overflow-hidden rounded text-[10px] leading-snug",
+						isBlocked
 							? "bg-destructive/10 text-destructive"
-							: "bg-muted text-muted-foreground",
+							: isCompleted
+								? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+								: "bg-muted/60 text-muted-foreground",
 					)}
+					title={latestReport.excerpt}
 				>
-					<span className="font-medium capitalize">
-						{latestReport.reportType}
-					</span>
-					{": "}
-					{latestReport.excerpt}
+					{/* Left-bar accent */}
+					<span
+						className={cn(
+							"w-0.5 shrink-0 self-stretch",
+							isBlocked
+								? "bg-destructive"
+								: isCompleted
+									? "bg-emerald-500"
+									: "bg-muted-foreground/30",
+						)}
+					/>
+					<div className="flex min-w-0 flex-1 items-start gap-1.5 px-2 py-1">
+						{isBlocked && (
+							<AlertTriangle className="mt-px size-2.5 shrink-0 opacity-80" />
+						)}
+						<span className="line-clamp-2">{latestReport.excerpt}</span>
+					</div>
 				</div>
 			) : null}
 		</article>

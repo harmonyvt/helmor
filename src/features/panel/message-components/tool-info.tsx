@@ -14,6 +14,7 @@ import {
 	Search,
 	Sparkles,
 	Terminal,
+	Users,
 } from "lucide-react";
 import type { ToolInfo } from "./shared";
 import { basename, isObj, str, truncate } from "./shared";
@@ -99,10 +100,6 @@ function getPiToolInfo(
 		create_thread: "Create thread",
 		get_thread: "Read thread",
 		update_thread: "Update thread",
-		send_assignee_message: "Message assignee",
-		read_assignee_thread: "Read assignee",
-		summarize_assignee_status: "Summarize assignee",
-		list_assignees: "List assignees",
 	};
 	if (threadLabels[tool]) {
 		return {
@@ -114,6 +111,49 @@ function getPiToolInfo(
 				/>
 			),
 			detail: str(input?.title) ?? str(input?.threadId) ?? undefined,
+		};
+	}
+
+	// Assignee coordination tools — richer detail extraction
+	if (tool === "send_assignee_message") {
+		const msg = str(input?.message);
+		return {
+			action: "Message assignee",
+			icon: (
+				<MessageSquareText
+					className={neutralToolIconClassName}
+					strokeWidth={1.8}
+				/>
+			),
+			detail: msg
+				? truncate(msg, 48)
+				: (str(input?.cardId) ?? str(input?.card_id) ?? undefined),
+		};
+	}
+	if (tool === "read_assignee_thread") {
+		return {
+			action: "Read assignee thread",
+			icon: (
+				<MessageSquareText
+					className={neutralToolIconClassName}
+					strokeWidth={1.8}
+				/>
+			),
+			detail: str(input?.cardId) ?? str(input?.card_id) ?? undefined,
+		};
+	}
+	if (tool === "summarize_assignee_status") {
+		return {
+			action: "Summarize assignee",
+			icon: <Sparkles className={neutralToolIconClassName} strokeWidth={1.8} />,
+			detail: str(input?.cardId) ?? str(input?.card_id) ?? undefined,
+		};
+	}
+	if (tool === "list_assignees") {
+		return {
+			action: "List assignees",
+			icon: <Users className={neutralToolIconClassName} strokeWidth={1.8} />,
+			detail: str(input?.status) ?? undefined,
 		};
 	}
 
