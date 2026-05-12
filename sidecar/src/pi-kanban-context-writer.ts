@@ -47,6 +47,10 @@ export default function (pi: ExtensionAPI) {
         branch?: string | null;
         prUrl?: string | null;
         sessionCount?: number;
+        activeSessionId?: string | null;
+        activeSessionStatus?: string | null;
+        activeSessionAgentType?: string | null;
+        assigneeName?: string | null;
       }>;
 
       // Build context block — start with goal meta if available.
@@ -72,10 +76,39 @@ export default function (pi: ExtensionAPI) {
         // goal-meta.json not present — no goal context to inject.
       }
 
+      contextLines.push(
+        "## Goal Orchestration Role",
+        "You are Pi, the goal supervisor for this Helmor goal board. Your job is to turn the overarching goal into an executable plan, maintain the Kanban board as the source of truth, and coordinate child-workspace assignees without losing sight of the user's desired outcome.",
+        "",
+        "Operate in this loop:",
+        "1. Understand the goal, success criteria, constraints, and current board state before acting.",
+        "2. Break the goal into independent workstreams and create one child workspace card per concrete deliverable or investigation.",
+        "3. Start work by using create_kanban_card with a clear prompt when a new assignee should begin, or send_assignee_message when an existing card needs direction.",
+        "4. Keep lanes meaningful: backlog = planned/not started, in-progress = assignee actively working or queued to work, review = needs supervisor/user review, done = completed and verified, canceled = intentionally dropped.",
+        "5. Read/summarize assignee threads before reporting status, changing priorities, or marking cards done.",
+        "6. Give the user a concise supervisor-level answer: what exists, what is running, what is blocked, what you changed, and the next recommended orchestration step.",
+        "",
+        "Capabilities and limits:",
+        "- You can inspect and mutate the goal board with Kanban tools; each card is a real child workspace.",
+        "- You can start child workspace agents by creating a card with a prompt, or coordinate existing assignees with assignee tools.",
+        "- You can inspect threads and assignee status, but lane movement alone does not execute work.",
+        "- Do not invent progress. If a card has no report, read the thread or say that status is unknown.",
+        "- Prefer parallel child workspaces for separable tasks, but keep sequencing explicit for dependent tasks.",
+        "",
+        "## Goal Board Tools",
+        "Use list_kanban_cards, create_kanban_card, move_kanban_card, update_kanban_card to inspect and manage child workspace cards.",
+        "Use list_threads(workspace_id), create_thread(workspace_id), get_thread(workspace_id, thread_id), update_thread(workspace_id, thread_id, title) to inspect threads inside a child workspace.",
+        "Use explicit assignee communication tools: send_assignee_message(card_id, message, priority?), read_assignee_thread(card_id, since_message_id?), summarize_assignee_status(card_id), and list_assignees(status?).",
+        "Do not treat lane movement as execution. Moving a card only changes planning status; queue an assignee message when you want work, context, or a check-in.",
+        "Before reporting global status to the user, poll/read the relevant assignee threads. Queue extra context instead of interrupting running work.",
+        "Assignees report blockers and completion in their own threads using clear headings: Progress, Blocked, Completed, Handoff. Do not assume you saw their work until they write a milestone report.",
+        "",
+      );
+
       if (cards.length === 0) {
         contextLines.push(
           "## Kanban Board",
-          "The board is currently empty. Use create_kanban_card to create a workspace card.",
+          "The board is currently empty. If the user asks for planning or execution, propose a small work breakdown and use create_kanban_card to create child workspace cards. Include a prompt on cards that should immediately start an assignee.",
         );
         return {
           systemPrompt:
@@ -99,19 +132,15 @@ export default function (pi: ExtensionAPI) {
           const branchTag = c.branch ? \` [\${c.branch}]\` : "";
           const prTag = c.prUrl ? " [PR open]" : "";
           const threadsTag = c.sessionCount ? \` [\${c.sessionCount} thread\${c.sessionCount === 1 ? "" : "s"}]\` : "";
-          contextLines.push(\`- [workspace:\${c.id}] \${c.title}\${branchTag}\${prTag}\${threadsTag}\`);
+          const assigneeTag = c.assigneeName ? \` [assignee: \${c.assigneeName}]\` : "";
+          const activeStatusTag = c.activeSessionStatus ? \` [active: \${c.activeSessionStatus}\${c.activeSessionAgentType ? \`/\${c.activeSessionAgentType}\` : ""}]\` : "";
+          contextLines.push(\`- [workspace:\${c.id}] \${c.title}\${branchTag}\${prTag}\${threadsTag}\${assigneeTag}\${activeStatusTag}\`);
           if (c.description) contextLines.push(\`  Description: \${c.description}\`);
         }
         contextLines.push("");
       }
       contextLines.push(
         "Each card is a child workspace. The workspace id shown in [workspace:<id>] is the id to pass as card_id to move_kanban_card/update_kanban_card and as workspace_id to thread tools.",
-        "Use list_kanban_cards, create_kanban_card, move_kanban_card, update_kanban_card to manage child workspace cards.",
-        "Use list_threads(workspace_id), create_thread(workspace_id), get_thread(workspace_id, thread_id), update_thread(workspace_id, thread_id, title) to inspect threads inside a child workspace.",
-        "Use explicit assignee communication tools: send_assignee_message(card_id, message, priority?), read_assignee_thread(card_id, since_message_id?), summarize_assignee_status(card_id), and list_assignees(status?).",
-        "Do not treat lane movement as execution. Moving a card only changes planning status; queue an assignee message when you want work, context, or a check-in.",
-        "Before reporting global status to the user, poll/read the relevant assignee threads. Queue extra context instead of interrupting running work.",
-        "Assignees report blockers and completion in their own threads using clear headings: Progress, Blocked, Completed, Handoff. Do not assume you saw their work until they write a milestone report.",
       );
 
       return { systemPrompt: event.systemPrompt + "\\n\\n" + contextLines.join("\\n") };

@@ -7,6 +7,37 @@ import {
 	writeKanbanContext,
 } from "./pi-kanban-context-writer.js";
 
+type BeforeAgentStartHandler = (
+	event: { systemPrompt: string },
+	ctx: { cwd: string },
+) => Promise<{ systemPrompt?: string }>;
+
+async function loadGeneratedSystemPrompt(cwd: string): Promise<string> {
+	const extensionPath = join(cwd, ".pi", "extensions", "helmor-kanban.ts");
+	const extensionModule = (await import(
+		`${extensionPath}?t=${Date.now()}`
+	)) as {
+		default: (pi: {
+			on: (event: string, handler: BeforeAgentStartHandler) => void;
+			registerCommand: () => void;
+		}) => void;
+	};
+
+	let beforeAgentStart: BeforeAgentStartHandler | undefined;
+	extensionModule.default({
+		on(event, handler) {
+			if (event === "before_agent_start") beforeAgentStart = handler;
+		},
+		registerCommand() {},
+	});
+
+	const result = await beforeAgentStart?.(
+		{ systemPrompt: "Base prompt" },
+		{ cwd },
+	);
+	return result?.systemPrompt ?? "";
+}
+
 describe("normalizeKanbanContextCards", () => {
 	test("uses child workspace ids from current board snapshots", () => {
 		expect(
@@ -82,6 +113,9 @@ describe("writeKanbanContext", () => {
 					childWorkspaceId: "workspace-3",
 					title: "Ship goals board",
 					lane: "review",
+					assigneeName: "Mina",
+					activeSessionStatus: "running",
+					activeSessionAgentType: "codex",
 				},
 			],
 			{ title: "Launch Goals", description: "Coordinate the release" },
@@ -103,6 +137,9 @@ describe("writeKanbanContext", () => {
 				id: "workspace-3",
 				title: "Ship goals board",
 				lane: "review",
+				assigneeName: "Mina",
+				activeSessionStatus: "running",
+				activeSessionAgentType: "codex",
 			},
 		]);
 		expect(meta).toEqual({
@@ -110,5 +147,26 @@ describe("writeKanbanContext", () => {
 			description: "Coordinate the release",
 		});
 		expect(extension).toContain("Each card is a child workspace");
+		expect(extension).toContain("## Goal Orchestration Role");
+		expect(extension).toContain("## Goal Board Tools");
+		expect(extension).toContain("create_kanban_card with a clear prompt");
+
+		const systemPrompt = await loadGeneratedSystemPrompt(cwd);
+		expect(systemPrompt).toContain(
+			"- [workspace:workspace-3] Ship goals board [assignee: Mina] [active: running/codex]",
+		);
+	});
+
+	test("injects explicit guidance when the board is empty", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "helmor-pi-empty-context-"));
+
+		await writeKanbanContext(cwd, []);
+
+		const systemPrompt = await loadGeneratedSystemPrompt(cwd);
+		expect(systemPrompt).toContain("## Kanban Board");
+		expect(systemPrompt).toContain("The board is currently empty.");
+		expect(systemPrompt).toContain(
+			"use create_kanban_card to create child workspace cards",
+		);
 	});
 });
