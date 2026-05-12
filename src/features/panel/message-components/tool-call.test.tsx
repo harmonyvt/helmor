@@ -47,6 +47,29 @@ describe("AssistantToolCall apply_patch", () => {
 	});
 });
 
+describe("AssistantToolCall goal audit", () => {
+	it("renders the exact assignee update from a Pi Goals tool result", () => {
+		render(
+			<AssistantToolCall
+				toolName="send_assignee_message"
+				args={{ cardId: "workspace-child", message: "Please continue" }}
+				result={JSON.stringify({
+					workspaceId: "workspace-child",
+					message:
+						"Supervisor update from Goals Pi (priority: high):\n\nPlease continue",
+				})}
+			/>,
+		);
+
+		expect(
+			screen.getByText("Audit: sent assignee update to workspace-child"),
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(/Supervisor update from Goals Pi \(priority: high\)/),
+		).toBeInTheDocument();
+	});
+});
+
 describe("AssistantToolCall default-collapsed", () => {
 	it("keeps a streaming Read collapsed until the user opens it", () => {
 		const { container } = render(

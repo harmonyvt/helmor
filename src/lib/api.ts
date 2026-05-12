@@ -674,6 +674,8 @@ export type GoalChildWorkspaceCreateResult = {
 	promptQueued: boolean;
 	agentStarted: boolean;
 	pendingSendId?: string | null;
+	backgroundSendId?: string | null;
+	assigneePrompt?: string | null;
 	provider?: string | null;
 	model?: string | null;
 };
@@ -698,6 +700,7 @@ export type SendAssigneeMessageResult = {
 	sessionId: string;
 	workspaceId: string;
 	pendingSendId: string;
+	message?: string | null;
 };
 
 export type ReadAssigneeThreadRequest = {

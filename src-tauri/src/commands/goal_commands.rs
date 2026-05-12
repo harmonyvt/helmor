@@ -122,12 +122,17 @@ pub async fn create_goal_child_workspace_and_start(
     request: crate::goal_orchestration::GoalChildWorkspaceCreateParams,
 ) -> CmdResult<crate::goal_orchestration::GoalChildWorkspaceCreateResult> {
     let goal_workspace_ref = request.goal_workspace.clone();
-    let result = run_blocking(move || {
-        fn ignore_event(_: &crate::agents::AgentStreamEvent) {}
-        let mut on_event = ignore_event;
-        crate::goal_orchestration::create_goal_child_workspace_and_start(request, &mut on_event)
+    let prepared = run_blocking(move || {
+        crate::goal_orchestration::prepare_goal_child_workspace_start(request)
     })
     .await?;
+    let mut result = prepared.result;
+    if let Some(send_params) = prepared.send_params {
+        let receipt = crate::background_agents::enqueue(app.clone(), send_params)?;
+        result.agent_started = receipt.started;
+        result.prompt_queued = true;
+        result.background_send_id = Some(receipt.task_id);
+    }
     let goal_workspace_id =
         crate::service::resolve_workspace_ref(&goal_workspace_ref).unwrap_or(goal_workspace_ref);
     publish_goal_child_workspace_changes(
@@ -145,8 +150,12 @@ pub async fn send_assignee_message(
     request: crate::goal_assignees::SendAssigneeMessageRequest,
 ) -> CmdResult<crate::goal_assignees::SendAssigneeMessageResult> {
     let goal_workspace_id = request.goal_workspace_id.clone();
-    let result =
-        run_blocking(move || crate::goal_assignees::send_assignee_message(request)).await?;
+    let prepared =
+        run_blocking(move || crate::goal_assignees::prepare_assignee_message(request)).await?;
+    let mut result = prepared.result;
+    let receipt = crate::background_agents::enqueue(app.clone(), prepared.send_params)?;
+    result.started = receipt.started;
+    result.pending_send_id = receipt.task_id;
     publish_goal_child_workspace_changes(
         &app,
         goal_workspace_id,
