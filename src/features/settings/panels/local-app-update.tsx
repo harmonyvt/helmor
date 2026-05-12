@@ -1,23 +1,48 @@
 import { Download, Loader2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { runHelmorAppInstall } from "@/lib/api";
+import { restartApp, runHelmorAppInstall } from "@/lib/api";
+import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { SettingsNotice, SettingsRow } from "../components/settings-row";
 
 export function LocalAppUpdatePanel() {
 	const [installingApp, setInstallingApp] = useState(false);
 	const [appInstallError, setAppInstallError] = useState<string | null>(null);
+	const pushToast = useWorkspaceToast();
 
 	const handleInstallApp = useCallback(async () => {
 		setInstallingApp(true);
 		setAppInstallError(null);
 		try {
-			await runHelmorAppInstall();
+			const result = await runHelmorAppInstall();
+			setInstallingApp(false);
+			if (result.restartRequired) {
+				pushToast(
+					"The new app has been installed. Restart Helmor to start using it.",
+					"Restart required",
+					"default",
+					{
+						persistent: true,
+						action: {
+							label: "Restart now",
+							onClick: () => {
+								void restartApp(true).catch((error) => {
+									pushToast(
+										error instanceof Error ? error.message : String(error),
+										"Unable to restart Helmor",
+										"destructive",
+									);
+								});
+							},
+						},
+					},
+				);
+			}
 		} catch (e) {
 			setAppInstallError(e instanceof Error ? e.message : String(e));
 			setInstallingApp(false);
 		}
-	}, []);
+	}, [pushToast]);
 
 	return (
 		<SettingsRow
@@ -41,7 +66,7 @@ export function LocalAppUpdatePanel() {
 					<code className="mx-1 rounded bg-muted px-1 py-0.5 text-[11px]">
 						/Applications/Helmor.app
 					</code>
-					, then restart Helmor.
+					. Helmor will ask you to restart when installation finishes.
 					{appInstallError ? (
 						<SettingsNotice tone="error">{appInstallError}</SettingsNotice>
 					) : null}
@@ -60,7 +85,7 @@ export function LocalAppUpdatePanel() {
 						Installing...
 					</>
 				) : (
-					"Install & Restart"
+					"Install Update"
 				)}
 			</Button>
 		</SettingsRow>
