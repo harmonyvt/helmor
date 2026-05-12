@@ -353,9 +353,13 @@ function SharedLoginBrowserSection({
 
 function browserLoginUrlForRepo(repo: RepositoryCreateOption): string {
 	const host = parseRemoteHost(repo.remoteUrl);
-	if (host) return `https://${host}`;
-	if (repo.forgeProvider === "gitlab") return "https://gitlab.com";
-	return "https://github.com";
+	const isGitLab = repo.forgeProvider === "gitlab" || host?.includes("gitlab");
+	if (host) {
+		const loginPath = isGitLab ? "/users/sign_in" : "/login";
+		return `https://${host}${loginPath}`;
+	}
+	if (isGitLab) return "https://gitlab.com/users/sign_in";
+	return "https://github.com/login";
 }
 
 function BranchPrefixSection({
