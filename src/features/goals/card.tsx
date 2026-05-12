@@ -28,8 +28,8 @@ function AgentStatusDot({ status }: { status: string }) {
 	if (status === "running") {
 		return (
 			<span className="relative flex size-1.5 shrink-0">
-				<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
-				<span className="relative inline-flex size-1.5 rounded-full bg-blue-500" />
+				<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent-foreground opacity-50" />
+				<span className="relative inline-flex size-1.5 rounded-full bg-accent-foreground" />
 			</span>
 		);
 	}
@@ -38,7 +38,7 @@ function AgentStatusDot({ status }: { status: string }) {
 			className={cn(
 				"size-1.5 shrink-0 rounded-full",
 				status === "blocked" && "bg-destructive",
-				status === "completed" && "bg-emerald-500",
+				status === "completed" && "bg-success",
 				(status === "idle" || !status) && "bg-muted-foreground/30",
 			)}
 		/>
@@ -74,7 +74,7 @@ export function WorkspaceCard({
 					: isBlocked
 						? "border-destructive/40 hover:border-destructive/60 hover:shadow-md"
 						: isRunning
-							? "border-blue-500/30 hover:border-blue-500/50 hover:shadow-md"
+							? "border-accent-foreground/20 hover:border-accent-foreground/35 hover:shadow-md"
 							: "border-border/70 hover:border-border hover:shadow-md",
 				isDragging && "scale-[0.97] opacity-40",
 			)}
@@ -95,7 +95,7 @@ export function WorkspaceCard({
 							isBlocked
 								? "bg-destructive/15 text-destructive"
 								: isCompleted
-									? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+									? "bg-success/15 text-success"
 									: "bg-accent text-accent-foreground",
 						)}
 						onClick={(event) => {
@@ -128,7 +128,7 @@ export function WorkspaceCard({
 						isBlocked
 							? "bg-destructive/10 text-destructive"
 							: isCompleted
-								? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+								? "bg-success/10 text-success"
 								: "bg-muted/60 text-muted-foreground",
 					)}
 					title={latestReport.excerpt}
@@ -140,7 +140,7 @@ export function WorkspaceCard({
 							isBlocked
 								? "bg-destructive"
 								: isCompleted
-									? "bg-emerald-500"
+									? "bg-success"
 									: "bg-muted-foreground/30",
 						)}
 					/>
