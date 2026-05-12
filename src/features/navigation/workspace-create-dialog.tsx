@@ -2,11 +2,12 @@ import {
 	Flag,
 	GitBranch,
 	GitPullRequest,
+	Info,
 	LoaderCircle,
 	Plus,
 } from "lucide-react";
 import type { RefObject } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Command,
@@ -25,7 +26,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { WorkspaceAvatar } from "@/features/navigation/avatar";
-import { PullRequestPicker } from "@/features/navigation/pull-request-picker";
+import {
+	computeStackGroups,
+	GoalPullRequestPicker,
+	PullRequestPicker,
+} from "@/features/navigation/pull-request-picker";
 import {
 	type GithubPullRequestSummary,
 	listGithubPullRequestsForRepo,
@@ -269,9 +274,29 @@ export function WorkspaceCreateDialog({
 		]),
 	).sort((left, right) => left.localeCompare(right));
 
-	const selectedGoalPr = goalPullRequests.find(
-		(pr) => pr.number === selectedGoalPrNumber,
-	);
+	// Derive stack context for the currently selected Goal PR so we can warn
+	// the user when they've picked a non-root PR and offer a one-click jump to
+	// the stack root.
+	const goalStackContext = useMemo(() => {
+		if (!selectedGoalPrNumber || goalPullRequests.length === 0) return null;
+		const groups = computeStackGroups(goalPullRequests);
+		for (const group of groups) {
+			if (!group.isStack) continue;
+			const index = group.prs.findIndex(
+				(pr) => pr.number === selectedGoalPrNumber,
+			);
+			if (index < 0) continue;
+			const rootPr = group.prs[0];
+			if (!rootPr) continue;
+			return {
+				stackSize: group.prs.length,
+				position: index + 1,
+				isRoot: index === 0,
+				rootPr,
+			};
+		}
+		return null;
+	}, [selectedGoalPrNumber, goalPullRequests]);
 
 	const handleSelectGoalPr = useCallback(
 		(prNumber: number) => {
@@ -565,48 +590,37 @@ export function WorkspaceCreateDialog({
 									automatically.
 								</p>
 							</div>
-							<div className="flex flex-col gap-1">
-								<Label
-									htmlFor="workspace-create-goal-pr"
-									className="text-[12px] font-medium tracking-[-0.01em]"
-								>
-									Pull request
-								</Label>
-								<select
-									id="workspace-create-goal-pr"
-									value={selectedGoalPrNumber?.toString() ?? ""}
-									onChange={(event) => {
-										const value = event.target.value;
-										if (!value) {
-											setSelectedGoalPrNumber(null);
-											setGoalBranch("");
-											return;
-										}
-										handleSelectGoalPr(Number(value));
-									}}
-									disabled={
-										busy || goalLoading || goalPullRequests.length === 0
-									}
-									className="h-8 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60"
-								>
-									<option value="">
-										{goalPullRequests.length === 0
-											? "No open pull requests"
-											: "Select by pull request"}
-									</option>
-									{goalPullRequests.map((pr) => (
-										<option key={pr.number} value={pr.number.toString()}>
-											#{pr.number} {pr.title} — {pr.headBranch} →{" "}
-											{pr.baseBranch}
-										</option>
-									))}
-								</select>
-								<p className="text-[11px] text-app-muted-foreground">
-									{selectedGoalPr
-										? `Using PR #${selectedGoalPr.number}: ${selectedGoalPr.url}`
-										: "Select a PR to reverse-fill its branch and Goal details."}
-								</p>
-							</div>
+							<GoalPullRequestPicker
+								pullRequests={goalPullRequests}
+								loading={goalLoading}
+								selectedPrNumber={selectedGoalPrNumber}
+								disabled={busy}
+								onSelect={handleSelectGoalPr}
+							/>
+							{/* Stack root banner — shown when a non-root PR is selected */}
+							{goalStackContext && !goalStackContext.isRoot && (
+								<div className="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-[11.5px] text-primary">
+									<Info className="mt-px size-3.5 shrink-0" />
+									<span className="min-w-0">
+										PR #{selectedGoalPrNumber} is{" "}
+										<span className="font-medium">
+											#{goalStackContext.position} of{" "}
+											{goalStackContext.stackSize}
+										</span>{" "}
+										in this stack.{" "}
+										<button
+											type="button"
+											disabled={busy}
+											className="cursor-pointer font-medium underline underline-offset-2 disabled:cursor-not-allowed"
+											onClick={() =>
+												handleSelectGoalPr(goalStackContext.rootPr.number)
+											}
+										>
+											Use root (#{goalStackContext.rootPr.number}) instead
+										</button>
+									</span>
+								</div>
+							)}
 							<div className="flex flex-col gap-1">
 								<Label
 									htmlFor="workspace-create-goal-title"
