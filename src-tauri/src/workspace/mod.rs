@@ -1,6 +1,7 @@
 pub(crate) mod archive;
 pub(crate) mod branching;
 pub mod files;
+pub(crate) mod goal_conversion;
 pub mod goals;
 pub mod helpers;
 pub mod kind;

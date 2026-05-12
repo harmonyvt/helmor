@@ -247,6 +247,7 @@ pub fn run() {
             commands::forge_commands::get_workspace_pr_comments,
             commands::goal_commands::prepare_goal_workspace,
             commands::goal_commands::finalize_goal_workspace,
+            commands::goal_commands::convert_workspace_to_goal,
             commands::goal_commands::list_goal_cards,
             commands::goal_commands::upsert_goal_card,
             commands::goal_commands::link_goal_card_workspace,

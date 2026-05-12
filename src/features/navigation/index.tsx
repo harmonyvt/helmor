@@ -133,6 +133,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onCreateWorkspace,
 	onCreateGoalWorkspace,
 	onArchiveWorkspace,
+	onConvertWorkspaceToGoal,
 	onMarkWorkspaceUnread,
 	onRestoreWorkspace,
 	onDeleteWorkspace,
@@ -141,6 +142,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSetWorkspaceStatus,
 	onAssignWorkspaceToGoal,
 	archivingWorkspaceIds,
+	convertingGoalWorkspaceIds,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
 	layoutMode,
@@ -182,6 +184,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		sourceBranch?: string | null,
 	) => Promise<void> | void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
+	onConvertWorkspaceToGoal?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
 	onDeleteWorkspace?: (workspaceId: string) => void;
@@ -194,6 +197,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		status: WorkspaceStatus,
 	) => void;
 	archivingWorkspaceIds?: Set<string>;
+	convertingGoalWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 	layoutMode?: SidebarLayoutMode;
@@ -694,11 +698,13 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						onSelect={onSelectWorkspace}
 						onPrefetch={onPrefetchWorkspace}
 						onArchiveWorkspace={onArchiveWorkspace}
+						onConvertWorkspaceToGoal={onConvertWorkspaceToGoal}
 						onMarkWorkspaceUnread={onMarkWorkspaceUnread}
 						onOpenInFinder={onOpenInFinder}
 						onTogglePin={onTogglePin}
 						onSetWorkspaceStatus={onSetWorkspaceStatus}
 						archivingWorkspaceIds={archivingWorkspaceIds}
+						convertingGoalWorkspaceIds={convertingGoalWorkspaceIds}
 						markingUnreadWorkspaceId={markingUnreadWorkspaceId}
 						restoringWorkspaceId={restoringWorkspaceId}
 						workspaceActionsDisabled={Boolean(
@@ -724,12 +730,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			onSelectWorkspace,
 			onPrefetchWorkspace,
 			onArchiveWorkspace,
+			onConvertWorkspaceToGoal,
 			onMarkWorkspaceUnread,
 			onRestoreWorkspace,
 			onDeleteWorkspace,
 			onTogglePin,
 			onSetWorkspaceStatus,
 			archivingWorkspaceIds,
+			convertingGoalWorkspaceIds,
 			markingUnreadWorkspaceId,
 			restoringWorkspaceId,
 			creatingWorkspaceRepoId,
@@ -1005,11 +1013,13 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										onSelect: onSelectWorkspace,
 										onPrefetch: onPrefetchWorkspace,
 										onArchiveWorkspace,
+										onConvertWorkspaceToGoal,
 										onMarkWorkspaceUnread,
 										onOpenInFinder,
 										onTogglePin,
 										onSetWorkspaceStatus,
 										archivingWorkspaceIds,
+										convertingGoalWorkspaceIds,
 										markingUnreadWorkspaceId,
 										restoringWorkspaceId,
 									}}
@@ -1028,6 +1038,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										onSelect: onSelectWorkspace,
 										onPrefetch: onPrefetchWorkspace,
 										onArchiveWorkspace,
+										onConvertWorkspaceToGoal,
 										onRestoreWorkspace,
 										onDeleteWorkspace,
 										onMarkWorkspaceUnread,
@@ -1038,6 +1049,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										onDragStartWorkspace: handleDragStartWorkspace,
 										onDragEndWorkspace: handleDragEndWorkspace,
 										archivingWorkspaceIds,
+										convertingGoalWorkspaceIds,
 										markingUnreadWorkspaceId,
 										restoringWorkspaceId,
 									}}

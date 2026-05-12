@@ -64,6 +64,23 @@ pub async fn finalize_goal_workspace(
 }
 
 #[tauri::command]
+pub async fn convert_workspace_to_goal(
+    app: AppHandle,
+    workspace_id: String,
+) -> CmdResult<workspaces::ConvertWorkspaceToGoalResponse> {
+    let result = run_blocking(move || workspaces::convert_workspace_to_goal(&workspace_id)).await?;
+    ui_sync::publish(&app, UiMutationEvent::WorkspaceListChanged);
+    ui_sync::publish(
+        &app,
+        UiMutationEvent::WorkspaceChanged {
+            workspace_id: result.workspace_id.clone(),
+        },
+    );
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
+#[tauri::command]
 pub async fn list_goal_cards(workspace_id: String) -> CmdResult<Vec<workspaces::GoalCard>> {
     run_blocking(move || workspaces::list_goal_cards(&workspace_id)).await
 }

@@ -7,6 +7,7 @@ import {
 	addRepositoryFromLocalPath,
 	assignWorkspaceToGoal,
 	cloneRepositoryFromUrl,
+	convertWorkspaceToGoal,
 	finalizeGoalWorkspace,
 	finalizeWorkspaceFromRepo,
 	listenArchiveExecutionFailed,
@@ -123,6 +124,9 @@ export function useWorkspacesSidebarController({
 	const [archivingWorkspaceIds, setArchivingWorkspaceIds] = useState<
 		Set<string>
 	>(() => new Set());
+	const [convertingGoalWorkspaceIds, setConvertingGoalWorkspaceIds] = useState<
+		Set<string>
+	>(() => new Set());
 	const [pendingArchives, setPendingArchives] = useState<
 		Map<string, PendingArchiveEntry>
 	>(() => new Map());
@@ -216,6 +220,21 @@ export function useWorkspacesSidebarController({
 	const updateArchivingWorkspaceId = useCallback(
 		(workspaceId: string, active: boolean) => {
 			setArchivingWorkspaceIds((current) => {
+				const next = new Set(current);
+				if (active) {
+					next.add(workspaceId);
+				} else {
+					next.delete(workspaceId);
+				}
+				return next;
+			});
+		},
+		[],
+	);
+
+	const updateConvertingGoalWorkspaceId = useCallback(
+		(workspaceId: string, active: boolean) => {
+			setConvertingGoalWorkspaceIds((current) => {
 				const next = new Set(current);
 				if (active) {
 					next.add(workspaceId);
@@ -726,6 +745,48 @@ export function useWorkspacesSidebarController({
 			}
 		},
 		[flushSidebarLists, pushWorkspaceToast],
+	);
+
+	const handleConvertWorkspaceToGoal = useCallback(
+		(workspaceId: string) => {
+			if (convertingGoalWorkspaceIds.has(workspaceId)) return;
+			updateConvertingGoalWorkspaceId(workspaceId, true);
+			void convertWorkspaceToGoal(workspaceId)
+				.then(async () => {
+					await Promise.all([
+						queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceGroups,
+						}),
+						queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+						}),
+					]);
+					setLayoutMode("goal");
+					onSelectWorkspace(workspaceId);
+					pushWorkspaceToast(
+						"Workspace converted to a Goal and linked to a draft PR.",
+						"Goal created",
+					);
+				})
+				.catch((error) => {
+					pushWorkspaceToast(
+						describeUnknownError(error, "Unable to convert workspace to Goal."),
+						"Goal conversion failed",
+						"destructive",
+					);
+				})
+				.finally(() => {
+					updateConvertingGoalWorkspaceId(workspaceId, false);
+				});
+		},
+		[
+			convertingGoalWorkspaceIds,
+			onSelectWorkspace,
+			pushWorkspaceToast,
+			queryClient,
+			setLayoutMode,
+			updateConvertingGoalWorkspaceId,
+		],
 	);
 
 	// Stable ref so the conflict-recovery toast can call back into the latest
@@ -1713,6 +1774,7 @@ export function useWorkspacesSidebarController({
 		handleArchiveWorkspace,
 		handleAssignWorkspaceToGoal,
 		handleCloneFromUrl,
+		handleConvertWorkspaceToGoal,
 		handleCreateWorkspaceFromRepo,
 		handleCreateGoalWorkspace,
 		handleDeleteWorkspace,
@@ -1723,6 +1785,7 @@ export function useWorkspacesSidebarController({
 		handleSetWorkspaceStatus,
 		handleTogglePin,
 		isCloneDialogOpen,
+		convertingGoalWorkspaceIds,
 		prefetchWorkspace,
 		setIsCloneDialogOpen,
 	};
