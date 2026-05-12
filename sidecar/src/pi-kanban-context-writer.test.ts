@@ -110,5 +110,8 @@ describe("writeKanbanContext", () => {
 			description: "Coordinate the release",
 		});
 		expect(extension).toContain("Each card is a child workspace");
+		expect(extension).toContain("## Goal Orchestration Role");
+		expect(extension).toContain("## Goal Board Tools");
+		expect(extension).toContain("create_kanban_card with a clear prompt");
 	});
 });
