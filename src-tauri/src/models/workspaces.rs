@@ -411,6 +411,24 @@ pub(crate) fn delete_workspace_and_session_rows(workspace_id: &str) -> Result<()
         )
         .context("Failed to delete create-flow browser tabs")?;
     transaction
+        .execute(
+            "DELETE FROM goal_cards WHERE goal_workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete create-flow goal cards")?;
+    transaction
+        .execute(
+            "UPDATE goal_cards SET child_workspace_id = NULL, updated_at = datetime('now') WHERE child_workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to unlink create-flow goal card workspace")?;
+    transaction
+        .execute(
+            "UPDATE workspaces SET goal_workspace_id = NULL, updated_at = datetime('now') WHERE goal_workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to unlink create-flow goal child workspaces")?;
+    transaction
         .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
         .context("Failed to delete create-flow workspace")?;
 
@@ -648,4 +666,96 @@ pub(crate) fn assign_workspace_to_goal(
         bail!("assign_workspace_to_goal affected {updated_rows} rows for {workspace_id}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testkit::TestEnv;
+
+    #[test]
+    fn delete_workspace_and_session_rows_cleans_goal_relationships() {
+        let env = TestEnv::new("create-cleanup-goal-links");
+        let connection = env.db_connection();
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, default_branch) VALUES ('repo-1', 'fluffy', 'main')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, workspace_kind) VALUES ('goal-1', 'repo-1', 'goal-root', 'ready', 'goal')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, workspace_kind, goal_workspace_id) VALUES ('child-1', 'repo-1', 'child-root', 'initializing', 'code', 'goal-1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO goal_cards (id, goal_workspace_id, title, child_workspace_id) VALUES ('card-1', 'goal-1', 'Child', 'child-1')",
+                [],
+            )
+            .unwrap();
+
+        delete_workspace_and_session_rows("child-1").unwrap();
+
+        let child_link: Option<String> = connection
+            .query_row(
+                "SELECT child_workspace_id FROM goal_cards WHERE id = 'card-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(child_link, None);
+    }
+
+    #[test]
+    fn delete_workspace_and_session_rows_cleans_goal_owned_rows() {
+        let env = TestEnv::new("create-cleanup-goal-owned-rows");
+        let connection = env.db_connection();
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, default_branch) VALUES ('repo-1', 'fluffy', 'main')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, workspace_kind) VALUES ('goal-1', 'repo-1', 'goal-root', 'initializing', 'goal')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, workspace_kind, goal_workspace_id) VALUES ('child-1', 'repo-1', 'child-root', 'ready', 'code', 'goal-1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO goal_cards (id, goal_workspace_id, title, child_workspace_id) VALUES ('card-1', 'goal-1', 'Child', 'child-1')",
+                [],
+            )
+            .unwrap();
+
+        delete_workspace_and_session_rows("goal-1").unwrap();
+
+        let card_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM goal_cards", [], |row| row.get(0))
+            .unwrap();
+        let child_goal: Option<String> = connection
+            .query_row(
+                "SELECT goal_workspace_id FROM workspaces WHERE id = 'child-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(card_count, 0);
+        assert_eq!(child_goal, None);
+    }
 }

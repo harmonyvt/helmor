@@ -146,7 +146,7 @@ pub fn prepare_goal_workspace(
         .map(ToOwned::to_owned)
         .or_else(|| source_branch.clone())
         .unwrap_or_else(|| default_branch.clone());
-    let directory_name = allocate_goal_directory_name(&request.repo_id, &title)?;
+    let directory_name = allocate_goal_directory_name(&request.repo_id, &repository.name, &title)?;
     let branch = helpers::next_available_branch_name(
         &repo_root,
         &format!("helmor/goal/{}", slugify(&title)),
@@ -364,7 +364,7 @@ pub fn create_goal_child_workspace(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|title| allocate_goal_directory_name(&repository.id, title))
+        .map(|title| allocate_goal_directory_name(&repository.id, &repository.name, title))
         .transpose()?
         .unwrap_or_else(|| {
             helpers::allocate_directory_name_for_repo(&repository.id)
@@ -724,7 +724,7 @@ fn build_goal_pr_body(description: &str) -> String {
     )
 }
 
-fn allocate_goal_directory_name(repo_id: &str, title: &str) -> Result<String> {
+fn allocate_goal_directory_name(repo_id: &str, repo_name: &str, title: &str) -> Result<String> {
     let base = format!("goal-{}", slugify(title));
     let connection = db::read_conn()?;
     for suffix in 0..=999 {
@@ -738,7 +738,8 @@ fn allocate_goal_directory_name(repo_id: &str, title: &str) -> Result<String> {
             (repo_id, &candidate),
             |row| row.get(0),
         )?;
-        if !exists {
+        let path_exists = crate::data_dir::workspace_dir(repo_name, &candidate)?.exists();
+        if !exists && !path_exists {
             return Ok(candidate);
         }
     }
@@ -794,4 +795,35 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testkit::{insert_repo, TestEnv};
+
+    #[test]
+    fn allocate_goal_directory_name_skips_stale_filesystem_directory() {
+        let env = TestEnv::new("goal-stale-dir-allocation");
+        let connection = env.db_connection();
+        insert_repo(&connection, "repo-1", "fluffy", Some("origin"));
+        let stale_dir = crate::data_dir::workspace_dir(
+            "fluffy",
+            "goal-implement-stripe-connect-standard-onboarding-for",
+        )
+        .unwrap();
+        std::fs::create_dir_all(&stale_dir).unwrap();
+
+        let allocated = allocate_goal_directory_name(
+            "repo-1",
+            "fluffy",
+            "implement stripe connect standard onboarding for",
+        )
+        .unwrap();
+
+        assert_eq!(
+            allocated,
+            "goal-implement-stripe-connect-standard-onboarding-for-1"
+        );
+    }
 }
