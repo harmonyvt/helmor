@@ -112,6 +112,7 @@ fn looks_like_uuid(s: &str) -> bool {
 // Agent streaming — `helmor send`
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone)]
 pub struct SendMessageParams {
     pub workspace_ref: String,
     pub session_id: Option<String>,

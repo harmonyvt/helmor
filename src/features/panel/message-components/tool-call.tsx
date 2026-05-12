@@ -78,6 +78,83 @@ export function assistantToolCallPropsEqual(
 	);
 }
 
+type GoalToolAudit = {
+	label: string;
+	body: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function parseToolResultObject(
+	result: unknown,
+): Record<string, unknown> | null {
+	if (typeof result === "string") {
+		try {
+			return asRecord(JSON.parse(result));
+		} catch {
+			return null;
+		}
+	}
+	return asRecord(result);
+}
+
+function extractGoalToolAudit(
+	toolName: string,
+	result: unknown,
+): GoalToolAudit | null {
+	const parsed = parseToolResultObject(result);
+	if (!parsed) return null;
+
+	if (toolName === "send_assignee_message") {
+		const message = typeof parsed.message === "string" ? parsed.message : null;
+		if (!message?.trim()) return null;
+		const workspaceId =
+			typeof parsed.workspaceId === "string" ? parsed.workspaceId : null;
+		return {
+			label: workspaceId
+				? `Audit: sent assignee update to ${workspaceId}`
+				: "Audit: sent assignee update",
+			body: message,
+		};
+	}
+
+	if (toolName === "create_kanban_card") {
+		const prompt =
+			typeof parsed.assigneePrompt === "string" ? parsed.assigneePrompt : null;
+		if (!prompt?.trim()) return null;
+		const workspaceId =
+			typeof parsed.workspaceId === "string" ? parsed.workspaceId : null;
+		return {
+			label: workspaceId
+				? `Audit: assigned new workspace ${workspaceId}`
+				: "Audit: assigned new workspace",
+			body: prompt,
+		};
+	}
+
+	return null;
+}
+
+function GoalToolAuditBlock({ audit }: { audit: GoalToolAudit }) {
+	return (
+		<details
+			open
+			className="ml-5 max-w-full rounded-md border border-border/35 bg-accent/25 text-[11px] leading-5"
+		>
+			<summary className="cursor-pointer px-2 py-1 font-medium text-muted-foreground [&::-webkit-details-marker]:hidden">
+				{audit.label}
+			</summary>
+			<pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words border-t border-border/20 p-2 text-muted-foreground/80">
+				{audit.body}
+			</pre>
+		</details>
+	);
+}
+
 // --- AssistantToolCall ---
 
 export const AssistantToolCall = memo(function AssistantToolCall({
@@ -114,9 +191,15 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 				: null,
 		[result],
 	);
+	const goalAudit = useMemo(
+		() => extractGoalToolAudit(toolName, result),
+		[toolName, result],
+	);
 	const hasChildren = (childParts?.length ?? 0) > 0;
 	const resultText =
-		hasChildren || suppressGenericPatchResult ? null : (info.body ?? resultStr);
+		hasChildren || suppressGenericPatchResult || goalAudit
+			? null
+			: (info.body ?? resultStr);
 	const hasOutput = resultText != null && resultText.length > 5;
 	const canExpand = hasOutput || hasFiles;
 	const isLiveTool = isLiveStreamingStatus(streamingStatus);
@@ -320,6 +403,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 					</div>
 				) : null}
 			</details>
+			{goalAudit ? <GoalToolAuditBlock audit={goalAudit} /> : null}
 			{isError === true ? <ToolCallErrorRow result={result} /> : null}
 		</>
 	);

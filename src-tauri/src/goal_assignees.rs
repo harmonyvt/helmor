@@ -27,6 +27,12 @@ pub struct SendAssigneeMessageResult {
     pub session_id: String,
     pub workspace_id: String,
     pub pending_send_id: String,
+    pub message: String,
+}
+
+pub(crate) struct PreparedAssigneeMessage {
+    pub result: SendAssigneeMessageResult,
+    pub send_params: service::SendMessageParams,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,7 +129,7 @@ pub fn send_assignee_message(
         pending_send_id: pending_send_id.clone(),
         workspace_id: assignee.workspace_id.clone(),
         session_id: assignee.session.id.clone(),
-        prompt: message,
+        prompt: message.clone(),
         model_id: assignee.session.model.clone(),
         permission_mode: Some(assignee.session.permission_mode.clone()),
     });
@@ -134,6 +140,37 @@ pub fn send_assignee_message(
         session_id: assignee.session.id,
         workspace_id: assignee.workspace_id,
         pending_send_id,
+        message,
+    })
+}
+
+pub(crate) fn prepare_assignee_message(
+    request: SendAssigneeMessageRequest,
+) -> Result<PreparedAssigneeMessage> {
+    let assignee = resolve_assignee(&request.goal_workspace_id, &request.card_id)?;
+    let message = format_supervisor_update(&request.message, request.priority.as_deref())?;
+    let task_id = Uuid::new_v4().to_string();
+    let result = SendAssigneeMessageResult {
+        queued: true,
+        started: assignee.session.status != "streaming",
+        session_id: assignee.session.id.clone(),
+        workspace_id: assignee.workspace_id.clone(),
+        pending_send_id: task_id,
+        message: message.clone(),
+    };
+    let send_params = service::SendMessageParams {
+        workspace_ref: assignee.workspace_id,
+        session_id: Some(assignee.session.id),
+        prompt: message,
+        model: assignee.session.model,
+        permission_mode: Some(assignee.session.permission_mode),
+        linked_directories: Vec::new(),
+        delegate_to_running_app: false,
+    };
+
+    Ok(PreparedAssigneeMessage {
+        result,
+        send_params,
     })
 }
 

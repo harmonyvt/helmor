@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod background_agents;
 pub mod browser_profile;
 pub mod cli;
 pub(crate) mod commands;

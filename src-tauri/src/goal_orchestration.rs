@@ -38,14 +38,20 @@ pub struct GoalChildWorkspaceCreateResult {
     pub prompt_queued: bool,
     pub agent_started: bool,
     pub pending_send_id: Option<String>,
+    pub background_send_id: Option<String>,
+    pub assignee_prompt: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
 }
 
-pub fn create_goal_child_workspace_and_start(
+pub(crate) struct PreparedGoalChildStart {
+    pub result: GoalChildWorkspaceCreateResult,
+    pub send_params: Option<SendMessageParams>,
+}
+
+pub(crate) fn prepare_goal_child_workspace_start(
     params: GoalChildWorkspaceCreateParams,
-    on_event: &mut dyn FnMut(&AgentStreamEvent),
-) -> Result<GoalChildWorkspaceCreateResult> {
+) -> Result<PreparedGoalChildStart> {
     let goal_workspace_id = service::resolve_workspace_ref(&params.goal_workspace)?;
     let title = params.title.trim();
     if title.is_empty() {
@@ -89,13 +95,25 @@ pub fn create_goal_child_workspace_and_start(
     }
 
     let detail = service::get_workspace(&prepared.workspace_id)?;
-    let mut prompt_queued = false;
-    let mut agent_started = false;
-    let mut pending_send_id = None;
-    let mut provider = None;
-    let mut model = params.assigned_model_id.clone();
+    let mut result = GoalChildWorkspaceCreateResult {
+        workspace_id: prepared.workspace_id.clone(),
+        directory_name: prepared.directory_name.clone(),
+        directory: detail.root_path,
+        branch: prepared.branch.clone(),
+        session_id: prepared.initial_session_id.clone(),
+        state,
+        status: prepared.status,
+        intended_target_branch: prepared.intended_target_branch.clone(),
+        prompt_queued: prompt.is_some(),
+        agent_started: false,
+        pending_send_id: None,
+        background_send_id: None,
+        assignee_prompt: None,
+        provider: params.assigned_provider.clone(),
+        model: params.assigned_model_id.clone(),
+    };
 
-    if let Some(prompt) = prompt {
+    let send_params = prompt.map(|prompt| {
         let assigned_name = params
             .assigned_provider
             .as_deref()
@@ -112,38 +130,45 @@ pub fn create_goal_child_workspace_and_start(
                 initial_task: prompt,
             },
         );
-        let send_result = service::send_message(
-            SendMessageParams {
-                workspace_ref: prepared.workspace_id.clone(),
-                session_id: Some(prepared.initial_session_id.clone()),
-                prompt,
-                model: params.assigned_model_id.clone(),
-                permission_mode: params.permission_mode.clone(),
-                linked_directories: Vec::new(),
-                delegate_to_running_app: true,
-            },
-            on_event,
-        )?;
-        prompt_queued = send_result.queued;
-        agent_started = send_result.agent_started;
-        pending_send_id = send_result.pending_send_id;
-        provider = Some(send_result.provider);
-        model = Some(send_result.model);
+        result.assignee_prompt = Some(prompt.clone());
+        SendMessageParams {
+            workspace_ref: prepared.workspace_id,
+            session_id: Some(prepared.initial_session_id),
+            prompt,
+            model: params.assigned_model_id.clone(),
+            permission_mode: params.permission_mode.clone(),
+            linked_directories: Vec::new(),
+            delegate_to_running_app: true,
+        }
+    });
+
+    if send_params.is_none() {
+        result.prompt_queued = false;
     }
 
-    Ok(GoalChildWorkspaceCreateResult {
-        workspace_id: prepared.workspace_id,
-        directory_name: prepared.directory_name,
-        directory: detail.root_path,
-        branch: prepared.branch,
-        session_id: prepared.initial_session_id,
-        state,
-        status: prepared.status,
-        intended_target_branch: prepared.intended_target_branch,
-        prompt_queued,
-        agent_started,
-        pending_send_id,
-        provider,
-        model,
+    Ok(PreparedGoalChildStart {
+        result,
+        send_params,
     })
+}
+
+pub fn create_goal_child_workspace_and_start(
+    params: GoalChildWorkspaceCreateParams,
+    on_event: &mut dyn FnMut(&AgentStreamEvent),
+) -> Result<GoalChildWorkspaceCreateResult> {
+    let PreparedGoalChildStart {
+        mut result,
+        send_params,
+    } = prepare_goal_child_workspace_start(params)?;
+
+    if let Some(send_params) = send_params {
+        let send_result = service::send_message(send_params, on_event)?;
+        result.prompt_queued = send_result.queued;
+        result.agent_started = send_result.agent_started;
+        result.pending_send_id = send_result.pending_send_id;
+        result.provider = Some(send_result.provider);
+        result.model = Some(send_result.model);
+    }
+
+    Ok(result)
 }

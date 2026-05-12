@@ -121,6 +121,10 @@ export function GoalsAiPanel({
 							typeof args.assignedModelId === "string"
 								? args.assignedModelId
 								: null,
+						assignedEffortLevel:
+							typeof args.assignedEffortLevel === "string"
+								? args.assignedEffortLevel
+								: null,
 						prompt: typeof args.prompt === "string" ? args.prompt : null,
 						permissionMode:
 							typeof args.permissionMode === "string"
@@ -233,7 +237,7 @@ export function GoalsAiPanel({
 				);
 			}
 		},
-		[workspaceId, queryClient, onCardCreated],
+		[workspaceId, queryClient, onCardCreated, canCreateCards],
 	);
 
 	return (
