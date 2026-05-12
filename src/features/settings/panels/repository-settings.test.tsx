@@ -250,7 +250,7 @@ describe("RepositorySettingsPanel branch prefix", () => {
 
 		expect(apiMocks.createBrowserTab).toHaveBeenCalledWith(
 			"workspace-1",
-			"https://github.com",
+			"https://github.com/login",
 		);
 		expect(
 			await screen.findByTestId("settings-browser-surface"),
