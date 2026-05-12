@@ -206,7 +206,9 @@ export function GoalsAiPanel({
 						sinceMessageId:
 							typeof args.sinceMessageId === "string"
 								? args.sinceMessageId
-								: null,
+								: typeof args.since_message_id === "string"
+									? args.since_message_id
+									: null,
 					});
 				} else if (event.tool === "summarize_assignee_status") {
 					result = await summarizeAssigneeStatus(

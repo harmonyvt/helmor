@@ -275,11 +275,11 @@ export function GoalWorkspaceContainer({
 	const handleSelectAssignee = useCallback(
 		(childWorkspace: WorkspaceDetail) => {
 			const sessionId = childWorkspace.activeSessionId;
-			if (!sessionId) {
+			if (!sessionId || !onSelectWorkspaceSession) {
 				handleSelectChildWorkspace(childWorkspace);
 				return;
 			}
-			onSelectWorkspaceSession?.(childWorkspace.id, sessionId);
+			onSelectWorkspaceSession(childWorkspace.id, sessionId);
 		},
 		[handleSelectChildWorkspace, onSelectWorkspaceSession],
 	);

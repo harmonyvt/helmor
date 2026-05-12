@@ -93,6 +93,47 @@ fn send_assignee_message_queues_follow_up_without_changing_lane() {
 }
 
 #[test]
+fn send_assignee_message_rolls_back_prompt_when_queue_insert_fails() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+    connection
+        .execute_batch(
+            r#"
+            CREATE TRIGGER reject_pending_assignee_send
+            BEFORE INSERT ON pending_cli_sends
+            BEGIN
+              SELECT RAISE(ABORT, 'pending send blocked');
+            END;
+            "#,
+        )
+        .unwrap();
+
+    let error = goal_assignees::send_assignee_message(SendAssigneeMessageRequest {
+        goal_workspace_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        card_id: "00000000-0000-0000-0000-000000000002".to_string(),
+        message: "This should not persist without a queue row.".to_string(),
+        priority: None,
+    })
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("Failed to insert pending CLI send"));
+
+    let message_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM session_messages WHERE session_id = 'session-assignee'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(message_count, 0);
+}
+
+#[test]
 fn read_assignee_thread_is_limited_to_assigned_session_and_reports_marker() {
     let _guard = TEST_LOCK
         .lock()

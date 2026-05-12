@@ -76,8 +76,9 @@ export function WorkspaceCard({
 						type="button"
 						className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-medium capitalize text-accent-foreground hover:bg-accent/80"
 						onClick={(event) => {
+							if (!onAssigneeClick) return;
 							event.stopPropagation();
-							onAssigneeClick?.();
+							onAssigneeClick();
 						}}
 						title={`Open ${agentType} assignee thread`}
 					>

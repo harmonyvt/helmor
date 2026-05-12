@@ -270,18 +270,24 @@ fn resolve_child_workspace_id(goal_workspace_id: &str, card_id: &str) -> Result<
 }
 
 fn queue_assignee_prompt(assignee: &ResolvedAssignee, message: &str) -> Result<String> {
-    persist_user_prompt(&assignee.session.id, message)?;
-    service::insert_pending_cli_send(
-        &assignee.workspace_id,
-        &assignee.session.id,
-        message,
-        assignee.session.model.as_deref(),
-        Some(assignee.session.permission_mode.as_str()),
-    )
+    db::write_transaction(|tx| {
+        persist_user_prompt_on(tx, &assignee.session.id, message)?;
+        service::insert_pending_cli_send_on(
+            tx,
+            &assignee.workspace_id,
+            &assignee.session.id,
+            message,
+            assignee.session.model.as_deref(),
+            Some(assignee.session.permission_mode.as_str()),
+        )
+    })
 }
 
-fn persist_user_prompt(session_id: &str, message: &str) -> Result<()> {
-    let conn = db::write_conn()?;
+fn persist_user_prompt_on(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    message: &str,
+) -> Result<()> {
     let timestamp = db::current_timestamp()?;
     let user_msg_id = Uuid::new_v4().to_string();
     let user_content = serde_json::json!({
@@ -378,10 +384,11 @@ fn message_text(message: &pipeline::types::ThreadMessageLike) -> String {
 fn excerpt(text: &str) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     const MAX_LEN: usize = 220;
-    if compact.len() <= MAX_LEN {
+    if compact.chars().count() <= MAX_LEN {
         compact
     } else {
-        format!("{}…", &compact[..MAX_LEN])
+        let truncated = compact.chars().take(MAX_LEN).collect::<String>();
+        format!("{truncated}…")
     }
 }
 
@@ -455,5 +462,14 @@ mod tests {
         assert!(message.starts_with("Supervisor update from Goals Pi"));
         assert!(message.contains("priority: high"));
         assert!(message.contains("Use clear headings: Progress, Blocked, Completed, Handoff"));
+    }
+
+    #[test]
+    fn excerpt_truncates_on_utf8_character_boundaries() {
+        let text = "é".repeat(221);
+        let result = excerpt(&text);
+
+        assert_eq!(result.chars().count(), 221);
+        assert!(result.ends_with('…'));
     }
 }

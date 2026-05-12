@@ -577,6 +577,24 @@ pub fn insert_pending_cli_send(
     permission_mode: Option<&str>,
 ) -> Result<String> {
     let conn = crate::models::db::write_conn()?;
+    insert_pending_cli_send_on(
+        &conn,
+        workspace_id,
+        session_id,
+        prompt,
+        model_id,
+        permission_mode,
+    )
+}
+
+pub(crate) fn insert_pending_cli_send_on(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    session_id: &str,
+    prompt: &str,
+    model_id: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<String> {
     let id = Uuid::new_v4().to_string();
     conn.execute(
         r#"INSERT INTO pending_cli_sends (id, workspace_id, session_id, prompt, model_id, permission_mode)

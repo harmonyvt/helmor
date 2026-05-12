@@ -1703,7 +1703,15 @@ function AppShell({
 	const handleSelectWorkspaceSession = useCallback(
 		(workspaceId: string, sessionId: string) => {
 			handleSelectWorkspace(workspaceId);
-			setTimeout(() => {
+			const requestId = sessionSelectionRequestRef.current + 1;
+			sessionSelectionRequestRef.current = requestId;
+			window.setTimeout(() => {
+				if (
+					sessionSelectionRequestRef.current !== requestId ||
+					selectedWorkspaceIdRef.current !== workspaceId
+				) {
+					return;
+				}
 				handleSelectSession(sessionId);
 			}, 0);
 		},
