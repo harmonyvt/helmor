@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
 	TooltipContent,
+	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { browserWebviewLabel } from "@/features/browser-tabs/ids";
@@ -55,35 +56,37 @@ export function BrowserSurface({
 	const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
 	return (
-		<section
-			aria-label="Browser surface"
-			data-focus-scope="browser"
-			className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
-		>
-			<BrowserChrome
-				tabs={tabs}
-				activeTabId={activeTabId}
-				activeUrl={activeTab?.url ?? ""}
-				onSelectTab={handleSelectTab}
-				onCloseTab={handleCloseTab}
-				onAddTab={handleAddTab}
-				onExit={onExit}
-			/>
-			<div className="relative flex min-h-0 flex-1 bg-background">
-				{tabs.length === 0 ? (
-					<BrowserEmptyState onAddTab={handleAddTab} />
-				) : (
-					tabs.map((tab) => (
-						<BrowserTabPanel
-							key={tab.id}
-							tabId={tab.id}
-							url={tab.url}
-							isActive={tab.id === activeTabId}
-						/>
-					))
-				)}
-			</div>
-		</section>
+		<TooltipProvider delayDuration={0}>
+			<section
+				aria-label="Browser surface"
+				data-focus-scope="browser"
+				className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+			>
+				<BrowserChrome
+					tabs={tabs}
+					activeTabId={activeTabId}
+					activeUrl={activeTab?.url ?? ""}
+					onSelectTab={handleSelectTab}
+					onCloseTab={handleCloseTab}
+					onAddTab={handleAddTab}
+					onExit={onExit}
+				/>
+				<div className="relative flex min-h-0 flex-1 bg-background">
+					{tabs.length === 0 ? (
+						<BrowserEmptyState onAddTab={handleAddTab} />
+					) : (
+						tabs.map((tab) => (
+							<BrowserTabPanel
+								key={tab.id}
+								tabId={tab.id}
+								url={tab.url}
+								isActive={tab.id === activeTabId}
+							/>
+						))
+					)}
+				</div>
+			</section>
+		</TooltipProvider>
 	);
 }
 
