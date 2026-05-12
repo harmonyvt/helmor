@@ -17,6 +17,7 @@ import {
 	CommandList,
 } from "@/components/ui/command";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
 	Popover,
@@ -67,26 +68,11 @@ export function RepositorySettingsPanel({
 	onRepoSettingsChanged: () => void;
 	onRepoDeleted: () => void;
 }) {
-	const [browserSession, setBrowserSession] =
-		useState<BrowserSessionState | null>(null);
 	const [branches, setBranches] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	const currentBranch = repo.defaultBranch ?? "main";
-
-	useEffect(() => {
-		setBrowserSession(null);
-	}, [repo.id, workspaceId]);
-
-	const handleOpenSharedLoginBrowser = useCallback(() => {
-		if (!workspaceId) return;
-		setBrowserSession({ activeTabId: null });
-		void createBrowserTab(workspaceId, browserLoginUrlForRepo(repo)).then(
-			(tab) => setBrowserSession({ activeTabId: tab.id }),
-			() => setBrowserSession({ activeTabId: null }),
-		);
-	}, [repo, workspaceId]);
 
 	const fetchBranches = useCallback(() => {
 		setLoading(true);
@@ -258,14 +244,7 @@ export function RepositorySettingsPanel({
 				onChanged={onRepoSettingsChanged}
 			/>
 
-			<SharedLoginBrowserSection
-				repo={repo}
-				workspaceId={workspaceId}
-				browserSession={browserSession}
-				onOpen={handleOpenSharedLoginBrowser}
-				onChangeSession={setBrowserSession}
-				onClose={() => setBrowserSession(null)}
-			/>
+			<SharedLoginBrowserSection repo={repo} workspaceId={workspaceId} />
 
 			<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
 			<RepositoryPreferencesSection repoId={repo.id} />
@@ -278,18 +257,34 @@ export function RepositorySettingsPanel({
 function SharedLoginBrowserSection({
 	repo,
 	workspaceId,
-	browserSession,
-	onOpen,
-	onChangeSession,
-	onClose,
 }: {
 	repo: RepositoryCreateOption;
 	workspaceId: string | null;
-	browserSession: BrowserSessionState | null;
-	onOpen: () => void;
-	onChangeSession: (session: BrowserSessionState) => void;
-	onClose: () => void;
 }) {
+	const [dialogOpen, setDialogOpen] = useState(false);
+	const [browserSession, setBrowserSession] =
+		useState<BrowserSessionState | null>(null);
+
+	useEffect(() => {
+		setBrowserSession(null);
+		setDialogOpen(false);
+	}, [repo.id, workspaceId]);
+
+	const handleOpen = useCallback(() => {
+		if (!workspaceId) return;
+		setDialogOpen(true);
+		setBrowserSession({ activeTabId: null });
+		void createBrowserTab(workspaceId, browserLoginUrlForRepo(repo)).then(
+			(tab) => setBrowserSession({ activeTabId: tab.id }),
+			() => setBrowserSession({ activeTabId: null }),
+		);
+	}, [repo, workspaceId]);
+
+	const handleClose = useCallback(() => {
+		setDialogOpen(false);
+		setBrowserSession(null);
+	}, []);
+
 	return (
 		<div className="py-5">
 			<div className="text-[13px] font-medium leading-snug text-foreground">
@@ -299,35 +294,59 @@ function SharedLoginBrowserSection({
 				Sign in here once to seed the browser state shared by all workspaces in
 				{` ${repo.name}`}. Other repositories keep separate browser data.
 			</div>
-			{browserSession && workspaceId ? (
-				<div className="mt-4 h-[360px] overflow-hidden rounded-xl border border-border/60 bg-background shadow-sm">
-					<BrowserSurface
-						workspaceId={workspaceId}
-						session={browserSession}
-						onChangeSession={onChangeSession}
-						onExit={onClose}
-					/>
-				</div>
-			) : (
-				<div className="mt-4 flex flex-wrap items-center gap-3">
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={onOpen}
-						disabled={!workspaceId}
-						className="gap-2"
-					>
-						<Globe className="size-3.5" strokeWidth={1.8} />
-						Open login browser
-					</Button>
-					{!workspaceId && (
-						<p className="text-[12px] text-muted-foreground">
-							Select a workspace in this repository first.
+			<div className="mt-4 flex flex-wrap items-center gap-3">
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={handleOpen}
+					disabled={!workspaceId}
+					className="gap-2"
+				>
+					<Globe className="size-3.5" strokeWidth={1.8} />
+					Open login browser
+				</Button>
+				{!workspaceId && (
+					<p className="text-[12px] text-muted-foreground">
+						Select a workspace in this repository first.
+					</p>
+				)}
+			</div>
+
+			<Dialog open={dialogOpen} onOpenChange={(open) => !open && handleClose()}>
+				<DialogContent className="w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] sm:w-[min(80vw,920px)] sm:max-w-[920px] rounded-2xl border-border/60 bg-background p-0 shadow-2xl">
+					<div className="px-6 pt-5 pb-4">
+						<DialogTitle className="text-[18px] font-semibold text-foreground">
+							Shared browser login
+						</DialogTitle>
+						<p className="mt-1 text-[12px] text-muted-foreground">
+							Sign in once to seed the shared browser session for{" "}
+							<strong className="font-medium text-foreground/80">
+								{repo.name}
+							</strong>
+							.
 						</p>
-					)}
-				</div>
-			)}
+					</div>
+					<div className="px-6 pb-6">
+						{browserSession && workspaceId ? (
+							<div className="h-[60vh] overflow-hidden rounded-xl border border-border/60 bg-background shadow-sm">
+								<BrowserSurface
+									workspaceId={workspaceId}
+									session={browserSession}
+									onChangeSession={setBrowserSession}
+									onExit={handleClose}
+								/>
+							</div>
+						) : (
+							<div className="flex h-[60vh] items-center justify-center rounded-xl border border-border/60 bg-app-base/20">
+								<p className="text-[12px] text-muted-foreground">
+									Opening browser…
+								</p>
+							</div>
+						)}
+					</div>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
