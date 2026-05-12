@@ -1047,6 +1047,7 @@ export type HelmorAppInstallResult = {
 	repoRoot: string;
 	scriptPath: string;
 	installedAppPath: string;
+	restartRequired: boolean;
 	pullStdout: string;
 	pullStderr: string;
 	stdout: string;
@@ -1057,9 +1058,7 @@ export async function runHelmorAppInstall(): Promise<HelmorAppInstallResult> {
 	try {
 		return await invoke<HelmorAppInstallResult>("run_helmor_app_install");
 	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to install and restart Helmor."),
-		);
+		throw new Error(describeInvokeError(error, "Unable to install Helmor."));
 	}
 }
 

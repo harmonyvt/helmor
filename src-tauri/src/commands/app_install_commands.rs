@@ -1,11 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::common::{run_blocking, CmdResult};
 use anyhow::Context;
 use serde::Serialize;
-use tauri::AppHandle;
-
-use super::common::{run_blocking, CmdResult};
 
 const APP_INSTALL_REPO_ENV: &str = "HELMOR_APP_INSTALL_REPO";
 const APP_INSTALL_FORCE_ENV: &str = "HELMOR_INSTALL_FORCE";
@@ -19,6 +17,7 @@ pub struct HelmorAppInstallResult {
     pub repo_root: String,
     pub script_path: String,
     pub installed_app_path: String,
+    pub restart_required: bool,
     pub pull_stdout: String,
     pub pull_stderr: String,
     pub stdout: String,
@@ -26,10 +25,8 @@ pub struct HelmorAppInstallResult {
 }
 
 #[tauri::command]
-pub async fn run_helmor_app_install(app: AppHandle) -> CmdResult<HelmorAppInstallResult> {
-    let result = run_blocking(run_helmor_app_install_impl).await?;
-    app.request_restart();
-    Ok(result)
+pub async fn run_helmor_app_install() -> CmdResult<HelmorAppInstallResult> {
+    run_blocking(run_helmor_app_install_impl).await
 }
 
 fn run_helmor_app_install_impl() -> anyhow::Result<HelmorAppInstallResult> {
@@ -69,6 +66,7 @@ fn run_helmor_app_install_impl() -> anyhow::Result<HelmorAppInstallResult> {
         repo_root: repo_root.display().to_string(),
         script_path: script_path.display().to_string(),
         installed_app_path: INSTALLED_APP_PATH.to_string(),
+        restart_required: true,
         pull_stdout,
         pull_stderr,
         stdout,
