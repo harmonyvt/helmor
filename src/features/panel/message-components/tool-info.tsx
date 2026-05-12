@@ -99,6 +99,10 @@ function getPiToolInfo(
 		create_thread: "Create thread",
 		get_thread: "Read thread",
 		update_thread: "Update thread",
+		send_assignee_message: "Message assignee",
+		read_assignee_thread: "Read assignee",
+		summarize_assignee_status: "Summarize assignee",
+		list_assignees: "List assignees",
 	};
 	if (threadLabels[tool]) {
 		return {

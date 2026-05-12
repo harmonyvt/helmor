@@ -678,6 +678,62 @@ export type GoalChildWorkspaceCreateResult = {
 	model?: string | null;
 };
 
+export type AssigneeReportMarker = {
+	reportType: "progress" | "blocked" | "completed" | "handoff" | string;
+	messageId?: string | null;
+	createdAt?: string | null;
+	excerpt: string;
+};
+
+export type SendAssigneeMessageRequest = {
+	goalWorkspaceId: string;
+	cardId: string;
+	message: string;
+	priority?: string | null;
+};
+
+export type SendAssigneeMessageResult = {
+	queued: boolean;
+	started: boolean;
+	sessionId: string;
+	workspaceId: string;
+	pendingSendId: string;
+};
+
+export type ReadAssigneeThreadRequest = {
+	goalWorkspaceId: string;
+	cardId: string;
+	sinceMessageId?: string | null;
+};
+
+export type AssigneeThreadResult = {
+	cardId: string;
+	workspaceId: string;
+	sessionId: string;
+	messages: ThreadMessageLike[];
+	latestReport?: AssigneeReportMarker | null;
+};
+
+export type AssigneeStatusSummary = {
+	cardId: string;
+	workspaceId: string;
+	sessionId: string;
+	assigneeName: string;
+	sessionStatus: string;
+	latestReport?: AssigneeReportMarker | null;
+	summary: string;
+};
+
+export type AssigneeSummary = {
+	cardId: string;
+	workspaceId: string;
+	sessionId: string;
+	title: string;
+	assigneeName: string;
+	sessionStatus: string;
+	latestReport?: AssigneeReportMarker | null;
+};
+
 export type WorkspaceCreationSource =
 	| { type: "defaultBranch" }
 	| { type: "remoteBranch"; branch: string }
@@ -2410,6 +2466,38 @@ export async function createGoalChildWorkspaceAndStart(
 		"create_goal_child_workspace_and_start",
 		{ request },
 	);
+}
+
+export async function sendAssigneeMessage(
+	request: SendAssigneeMessageRequest,
+): Promise<SendAssigneeMessageResult> {
+	return invoke<SendAssigneeMessageResult>("send_assignee_message", {
+		request,
+	});
+}
+
+export async function readAssigneeThread(
+	request: ReadAssigneeThreadRequest,
+): Promise<AssigneeThreadResult> {
+	return invoke<AssigneeThreadResult>("read_assignee_thread", { request });
+}
+
+export async function summarizeAssigneeStatus(
+	goalWorkspaceId: string,
+	cardId: string,
+): Promise<AssigneeStatusSummary> {
+	return invoke<AssigneeStatusSummary>("summarize_assignee_status", {
+		request: { goalWorkspaceId, cardId },
+	});
+}
+
+export async function listAssignees(
+	goalWorkspaceId: string,
+	status?: string | null,
+): Promise<AssigneeSummary[]> {
+	return invoke<AssigneeSummary[]>("list_assignees", {
+		request: { goalWorkspaceId, status: status ?? null },
+	});
 }
 
 // ---------------------------------------------------------------------------

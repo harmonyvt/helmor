@@ -1700,6 +1700,16 @@ function AppShell({
 		[queryClient, rememberSessionSelection],
 	);
 
+	const handleSelectWorkspaceSession = useCallback(
+		(workspaceId: string, sessionId: string) => {
+			handleSelectWorkspace(workspaceId);
+			setTimeout(() => {
+				handleSelectSession(sessionId);
+			}, 0);
+		},
+		[handleSelectWorkspace, handleSelectSession],
+	);
+
 	const {
 		commitButtonMode,
 		commitButtonState,
@@ -2693,6 +2703,9 @@ function AppShell({
 															) : undefined
 														}
 														onSelectWorkspace={handleSelectWorkspace}
+														onSelectWorkspaceSession={
+															handleSelectWorkspaceSession
+														}
 													/>
 												) : null}
 												<div

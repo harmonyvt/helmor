@@ -3,7 +3,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useScriptStatus } from "@/features/inspector/hooks/use-script-status";
 import { useSetupAutoRun } from "@/features/inspector/hooks/use-setup-auto-run";
 import {
+	type AssigneeReportMarker,
 	createGoalChildWorkspaceAndStart,
+	listAssignees,
 	loadRepoScripts,
 	setGoalChildWorkspaceStatus,
 	updateGoalWorkspaceMeta,
@@ -55,6 +57,7 @@ export function GoalWorkspaceContainer({
 	workspaceId,
 	headerLeading,
 	onSelectWorkspace,
+	onSelectWorkspaceSession,
 	renderAiSurface,
 }: GoalWorkspaceContainerProps) {
 	const queryClient = useQueryClient();
@@ -75,8 +78,26 @@ export function GoalWorkspaceContainer({
 
 	const detailQuery = useQuery(workspaceDetailQueryOptions(workspaceId));
 	const childQuery = useQuery(goalChildWorkspacesQueryOptions(workspaceId));
+	const assigneesQuery = useQuery({
+		queryKey: [
+			...helmorQueryKeys.goalChildWorkspaces(workspaceId),
+			"assignees",
+		],
+		queryFn: () => listAssignees(workspaceId),
+		enabled: childQuery.isSuccess,
+		staleTime: 5_000,
+	});
 	const workspace = detailQuery.data;
 	const childWorkspaces = childQuery.data ?? [];
+	const reportByWorkspaceId = useMemo(() => {
+		const reports = new Map<string, AssigneeReportMarker>();
+		for (const assignee of assigneesQuery.data ?? []) {
+			if (assignee.latestReport) {
+				reports.set(assignee.workspaceId, assignee.latestReport);
+			}
+		}
+		return reports;
+	}, [assigneesQuery.data]);
 	const repoScriptsQuery = useQuery({
 		queryKey: helmorQueryKeys.repoScripts(
 			workspace?.repoId ?? "__none__",
@@ -251,6 +272,18 @@ export function GoalWorkspaceContainer({
 		[],
 	);
 
+	const handleSelectAssignee = useCallback(
+		(childWorkspace: WorkspaceDetail) => {
+			const sessionId = childWorkspace.activeSessionId;
+			if (!sessionId) {
+				handleSelectChildWorkspace(childWorkspace);
+				return;
+			}
+			onSelectWorkspaceSession?.(childWorkspace.id, sessionId);
+		},
+		[handleSelectChildWorkspace, onSelectWorkspaceSession],
+	);
+
 	const isPanelOpen = selectedWorkspace !== null || showAddPanel || showAiPanel;
 	const goalTitle = workspace?.goalTitle ?? workspace?.title ?? "Goal";
 	const goalDescription = workspace?.goalDescription ?? null;
@@ -334,6 +367,8 @@ export function GoalWorkspaceContainer({
 					dragState={dragState}
 					dragOverLane={dragOverLane}
 					onSelectWorkspace={handleSelectChildWorkspace}
+					onSelectAssignee={handleSelectAssignee}
+					reportByWorkspaceId={reportByWorkspaceId}
 					onMoveWorkspace={handleMoveWorkspace}
 					onDragStart={(childWorkspaceId, sourceLane) => {
 						setDragState({ workspaceId: childWorkspaceId, sourceLane });

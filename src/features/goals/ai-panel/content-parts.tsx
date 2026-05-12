@@ -133,6 +133,10 @@ const KANBAN_TOOL_LABELS: Record<string, string> = {
 	create_kanban_card: "Create card",
 	move_kanban_card: "Move card",
 	update_kanban_card: "Update card",
+	send_assignee_message: "Message assignee",
+	read_assignee_thread: "Read assignee",
+	summarize_assignee_status: "Summarize assignee",
+	list_assignees: "List assignees",
 };
 
 function toolStatusIcon(status?: string, isError?: boolean) {

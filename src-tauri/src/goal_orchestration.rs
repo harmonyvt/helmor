@@ -59,10 +59,11 @@ pub fn create_goal_child_workspace_and_start(
     if prompt.is_some() && params.finalize == Some(false) {
         bail!("Cannot start a Goal child prompt without finalizing the worktree");
     }
+    let goal_detail = service::get_workspace(&goal_workspace_id)?;
 
     let prepared = crate::workspaces::create_goal_child_workspace(
         crate::workspaces::GoalChildWorkspaceRequest {
-            goal_workspace_id,
+            goal_workspace_id: goal_workspace_id.clone(),
             goal_card_id: None,
             title: Some(title.to_string()),
             description: params.description.clone(),
@@ -95,11 +96,27 @@ pub fn create_goal_child_workspace_and_start(
     let mut model = params.assigned_model_id.clone();
 
     if let Some(prompt) = prompt {
+        let assigned_name = params
+            .assigned_provider
+            .as_deref()
+            .or(params.assigned_model_id.as_deref());
+        let prompt = crate::goal_assignees::assignee_bootstrap_prompt(
+            crate::goal_assignees::AssigneeBootstrapPromptInput {
+                goal_title: goal_detail.goal_title.as_deref(),
+                goal_description: goal_detail.goal_description.as_deref(),
+                card_title: title,
+                card_description: params.description.as_deref(),
+                assigned_name,
+                workspace_id: &prepared.workspace_id,
+                branch: &prepared.branch,
+                initial_task: prompt,
+            },
+        );
         let send_result = service::send_message(
             SendMessageParams {
                 workspace_ref: prepared.workspace_id.clone(),
                 session_id: Some(prepared.initial_session_id.clone()),
-                prompt: prompt.to_string(),
+                prompt,
                 model: params.assigned_model_id.clone(),
                 permission_mode: params.permission_mode.clone(),
                 linked_directories: Vec::new(),

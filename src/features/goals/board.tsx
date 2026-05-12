@@ -1,5 +1,9 @@
 import type React from "react";
-import type { WorkspaceDetail, WorkspaceStatus } from "@/lib/api";
+import type {
+	AssigneeReportMarker,
+	WorkspaceDetail,
+	WorkspaceStatus,
+} from "@/lib/api";
 import { GOAL_LANES, groupGoalChildWorkspacesByLane } from "./board-model";
 import { GoalLane } from "./lane";
 
@@ -14,6 +18,8 @@ type GoalBoardProps = {
 	dragState: DragState;
 	dragOverLane: WorkspaceStatus | null;
 	onSelectWorkspace: (workspace: WorkspaceDetail) => void;
+	onSelectAssignee?: (workspace: WorkspaceDetail) => void;
+	reportByWorkspaceId?: Map<string, AssigneeReportMarker>;
 	onMoveWorkspace: (
 		workspace: WorkspaceDetail,
 		status: WorkspaceStatus,
@@ -29,6 +35,8 @@ export function GoalBoard({
 	dragState,
 	dragOverLane,
 	onSelectWorkspace,
+	onSelectAssignee,
+	reportByWorkspaceId,
 	onMoveWorkspace,
 	onDragStart,
 	onDragEnd,
@@ -75,6 +83,8 @@ export function GoalBoard({
 						draggedId={dragState?.workspaceId ?? null}
 						selectedId={selectedId}
 						onCardClick={onSelectWorkspace}
+						onAssigneeClick={onSelectAssignee}
+						reportByWorkspaceId={reportByWorkspaceId}
 						onDragStart={onDragStart}
 						onDragEnd={onDragEnd}
 						onDragOver={(event) => handleDragOver(lane.id, event)}

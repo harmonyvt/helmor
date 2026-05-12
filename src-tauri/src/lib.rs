@@ -8,6 +8,7 @@ pub mod error;
 pub mod forge;
 pub mod git;
 pub mod global_hotkey;
+pub mod goal_assignees;
 pub mod goal_orchestration;
 pub mod image_store;
 mod import;
@@ -253,6 +254,10 @@ pub fn run() {
             commands::goal_commands::link_goal_card_workspace,
             commands::goal_commands::create_goal_child_workspace,
             commands::goal_commands::create_goal_child_workspace_and_start,
+            commands::goal_commands::send_assignee_message,
+            commands::goal_commands::read_assignee_thread,
+            commands::goal_commands::summarize_assignee_status,
+            commands::goal_commands::list_assignees,
             commands::goal_commands::set_goal_child_workspace_status,
             commands::goal_commands::assign_workspace_to_goal,
             commands::forge_commands::get_workspace_pr_comment_insert_text,

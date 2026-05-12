@@ -108,6 +108,10 @@ export default function (pi: ExtensionAPI) {
         "Each card is a child workspace. The workspace id shown in [workspace:<id>] is the id to pass as card_id to move_kanban_card/update_kanban_card and as workspace_id to thread tools.",
         "Use list_kanban_cards, create_kanban_card, move_kanban_card, update_kanban_card to manage child workspace cards.",
         "Use list_threads(workspace_id), create_thread(workspace_id), get_thread(workspace_id, thread_id), update_thread(workspace_id, thread_id, title) to inspect threads inside a child workspace.",
+        "Use explicit assignee communication tools: send_assignee_message(card_id, message, priority?), read_assignee_thread(card_id, since_message_id?), summarize_assignee_status(card_id), and list_assignees(status?).",
+        "Do not treat lane movement as execution. Moving a card only changes planning status; queue an assignee message when you want work, context, or a check-in.",
+        "Before reporting global status to the user, poll/read the relevant assignee threads. Queue extra context instead of interrupting running work.",
+        "Assignees report blockers and completion in their own threads using clear headings: Progress, Blocked, Completed, Handoff. Do not assume you saw their work until they write a milestone report.",
       );
 
       return { systemPrompt: event.systemPrompt + "\\n\\n" + contextLines.join("\\n") };
@@ -179,6 +183,10 @@ export type KanbanContextCard = {
 	branch?: string | null;
 	prUrl?: string | null;
 	sessionCount?: number;
+	activeSessionId?: string | null;
+	activeSessionStatus?: string | null;
+	activeSessionAgentType?: string | null;
+	assigneeName?: string | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -224,6 +232,10 @@ export function normalizeKanbanContextCards(
 			branch: optionalString(card.branch) ?? optionalString(card.branchName),
 			prUrl: optionalString(card.prUrl),
 			sessionCount: optionalNumber(card.sessionCount),
+			activeSessionId: optionalString(card.activeSessionId),
+			activeSessionStatus: optionalString(card.activeSessionStatus),
+			activeSessionAgentType: optionalString(card.activeSessionAgentType),
+			assigneeName: optionalString(card.assigneeName),
 		});
 	}
 	return normalized;

@@ -21,6 +21,10 @@ export type GoalKanbanSnapshotItem = {
 	branch?: string | null;
 	prUrl?: string | null;
 	sessionCount: number;
+	activeSessionId?: string | null;
+	activeSessionStatus?: string | null;
+	activeSessionAgentType?: string | null;
+	assigneeName?: string | null;
 };
 
 export function groupGoalChildWorkspacesByLane(
@@ -45,6 +49,10 @@ export function createGoalKanbanSnapshot(
 		branch: workspace.branch,
 		prUrl: workspace.prUrl,
 		sessionCount: workspace.sessionCount,
+		activeSessionId: workspace.activeSessionId,
+		activeSessionStatus: workspace.activeSessionStatus,
+		activeSessionAgentType: workspace.activeSessionAgentType,
+		assigneeName: workspace.activeSessionAgentType,
 	}));
 
 	return JSON.stringify(snapshot);
