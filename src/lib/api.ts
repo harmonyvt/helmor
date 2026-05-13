@@ -2836,6 +2836,13 @@ export type ThreadMessageLike = {
 	streaming?: boolean;
 };
 
+export type StreamingTextDelta = {
+	messageId: string;
+	partId: string;
+	partType: "text" | "reasoning";
+	textDelta: string;
+};
+
 // ---------------------------------------------------------------------------
 // Agent stream events
 // ---------------------------------------------------------------------------
@@ -2848,6 +2855,10 @@ export type AgentStreamEvent =
 	| {
 			kind: "streamingPartial";
 			message: ThreadMessageLike;
+	  }
+	| {
+			kind: "streamingDelta";
+			delta: StreamingTextDelta;
 	  }
 	| {
 			kind: "done";

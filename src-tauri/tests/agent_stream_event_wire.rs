@@ -12,6 +12,7 @@
 
 use helmor_lib::agents::AgentStreamEvent;
 use helmor_lib::pipeline::types::ThreadMessageLike;
+use helmor_lib::pipeline::{StreamingTextDelta, StreamingTextDeltaPartType};
 use insta::assert_yaml_snapshot;
 use serde_json::{json, Value};
 
@@ -39,6 +40,18 @@ fn wire_format_update() {
 fn wire_format_streaming_partial() {
     assert_yaml_snapshot!(to_value(AgentStreamEvent::StreamingPartial {
         message: empty_message(),
+    }));
+}
+
+#[test]
+fn wire_format_streaming_delta() {
+    assert_yaml_snapshot!(to_value(AgentStreamEvent::StreamingDelta {
+        delta: StreamingTextDelta {
+            message_id: "msg-1".into(),
+            part_id: "part-1".into(),
+            part_type: StreamingTextDeltaPartType::Text,
+            text_delta: " world".into(),
+        },
     }));
 }
 

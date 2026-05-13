@@ -159,6 +159,14 @@ pub enum StableStreamEmission {
         event_type: String,
         message: StableNormThreadMessage,
     },
+    Delta {
+        line_index: usize,
+        event_type: String,
+        message_id: String,
+        part_id: String,
+        part_type: String,
+        text_delta: String,
+    },
     Full {
         line_index: usize,
         event_type: String,
@@ -231,6 +239,18 @@ pub fn normalize_stream_fingerprint(
                 line_index: *line_index,
                 event_type: event_type.clone(),
                 messages: messages.iter().map(|m| ids.stabilize_message(m)).collect(),
+            },
+            RawStreamEmission::Delta {
+                line_index,
+                event_type,
+                delta,
+            } => StableStreamEmission::Delta {
+                line_index: *line_index,
+                event_type: event_type.clone(),
+                message_id: ids.stabilize(&delta.message_id),
+                part_id: ids.stabilize(&delta.part_id),
+                part_type: format!("{:?}", delta.part_type),
+                text_delta: delta.text_delta.clone(),
             },
         })
         .collect();

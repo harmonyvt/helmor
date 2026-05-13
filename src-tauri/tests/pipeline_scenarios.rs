@@ -32,6 +32,7 @@
 mod common;
 
 use common::*;
+use helmor_lib::pipeline::types::{ExtendedMessagePart, MessagePart, ThreadMessageLike};
 use helmor_lib::pipeline::PipelineEmit;
 use insta::assert_yaml_snapshot;
 use serde::Serialize;
@@ -1650,6 +1651,7 @@ fn pi_file_change_live_and_historical_reload_match() {
     let live = match pipeline.push_event(&event, &line) {
         PipelineEmit::Full(messages) => normalize_all(&messages),
         PipelineEmit::Partial(message) => normalize_all(&[message]),
+        PipelineEmit::Delta(delta) => normalize_all(&[delta_to_message(delta)]),
         PipelineEmit::None => Vec::new(),
     };
     pipeline.accumulator.flush_pending();
@@ -1668,6 +1670,29 @@ fn pi_file_change_live_and_historical_reload_match() {
     let historical = normalize_all(&MessagePipeline::convert_historical(&historical_records));
 
     assert_yaml_snapshot!(FileChangeRenderPair { live, historical });
+}
+
+fn delta_to_message(delta: helmor_lib::pipeline::StreamingTextDelta) -> ThreadMessageLike {
+    let part = match delta.part_type {
+        helmor_lib::pipeline::StreamingTextDeltaPartType::Text => MessagePart::Text {
+            id: delta.part_id,
+            text: delta.text_delta,
+        },
+        helmor_lib::pipeline::StreamingTextDeltaPartType::Reasoning => MessagePart::Reasoning {
+            id: delta.part_id,
+            text: delta.text_delta,
+            streaming: Some(true),
+            duration_ms: None,
+        },
+    };
+    ThreadMessageLike {
+        role: helmor_lib::pipeline::types::MessageRole::Assistant,
+        id: Some(delta.message_id),
+        created_at: None,
+        content: vec![ExtendedMessagePart::Basic(part)],
+        status: None,
+        streaming: Some(true),
+    }
 }
 
 #[test]

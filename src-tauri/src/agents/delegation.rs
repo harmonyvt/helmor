@@ -369,7 +369,7 @@ fn run_child_turn(
                     continue;
                 }
                 match pipeline.push_event(&event.raw, &line) {
-                    PipelineEmit::Full(_) | PipelineEmit::Partial(_) => {
+                    PipelineEmit::Full(_) | PipelineEmit::Partial(_) | PipelineEmit::Delta(_) => {
                         publish_delegation_updates(
                             app,
                             &created.workspace_id,

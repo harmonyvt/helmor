@@ -22,6 +22,7 @@ import type {
 	AgentSendRequest,
 	AgentStreamEvent,
 	DebugIngestStatus,
+	StreamingTextDelta,
 	ThreadMessageLike,
 } from "@/lib/api";
 import {
@@ -102,6 +103,38 @@ function hasAssistantProgress(messages: ThreadMessageLike[]): boolean {
 			message.role === "assistant" &&
 			(message.streaming === true || message.content.length > 0),
 	);
+}
+
+function applyStreamingDelta(
+	message: ThreadMessageLike | null,
+	delta: StreamingTextDelta,
+): ThreadMessageLike | null {
+	if (!message || message.id !== delta.messageId) return null;
+
+	let applied = false;
+	const content = message.content.map((part) => {
+		if (
+			delta.partType === "text" &&
+			part.type === "text" &&
+			part.id === delta.partId
+		) {
+			applied = true;
+			return { ...part, text: `${part.text}${delta.textDelta}` };
+		}
+
+		if (
+			delta.partType === "reasoning" &&
+			part.type === "reasoning" &&
+			part.id === delta.partId
+		) {
+			applied = true;
+			return { ...part, text: `${part.text}${delta.textDelta}` };
+		}
+
+		return part;
+	});
+
+	return applied ? { ...message, content } : null;
 }
 
 export type PendingPermission = {
@@ -887,6 +920,18 @@ export function useConversationStreaming({
 							return;
 						}
 
+						if (event.kind === "streamingDelta") {
+							const nextPartial = applyStreamingDelta(
+								pendingPartial,
+								event.delta,
+							);
+							if (nextPartial) {
+								pendingPartial = nextPartial;
+								scheduleFlush();
+							}
+							return;
+						}
+
 						if (event.kind === "kanbanToolCall") {
 							onKanbanToolCall?.(event);
 							return;
@@ -1490,6 +1535,18 @@ export function useConversationStreaming({
 						if (event.kind === "streamingPartial") {
 							pendingPartial = event.message;
 							scheduleFlush();
+							return;
+						}
+
+						if (event.kind === "streamingDelta") {
+							const nextPartial = applyStreamingDelta(
+								pendingPartial,
+								event.delta,
+							);
+							if (nextPartial) {
+								pendingPartial = nextPartial;
+								scheduleFlush();
+							}
 							return;
 						}
 

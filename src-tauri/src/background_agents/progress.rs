@@ -20,7 +20,9 @@ pub(super) fn should_publish_event(session_id: &str, event: &AgentStreamEvent) -
             remember_live_progress_publish(session_id);
             true
         }
-        AgentStreamEvent::StreamingPartial { .. } => should_publish_throttled_progress(session_id),
+        AgentStreamEvent::StreamingPartial { .. } | AgentStreamEvent::StreamingDelta { .. } => {
+            should_publish_throttled_progress(session_id)
+        }
         _ => false,
     }
 }

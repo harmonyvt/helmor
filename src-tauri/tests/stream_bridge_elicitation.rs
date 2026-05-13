@@ -45,6 +45,7 @@ fn replay_stream(lines: &[Value]) -> StreamBridgeSnapshot {
             PipelineEmit::Partial(message) => {
                 latest_messages.push(message);
             }
+            PipelineEmit::Delta(_) => {}
             PipelineEmit::None => {}
         }
     }

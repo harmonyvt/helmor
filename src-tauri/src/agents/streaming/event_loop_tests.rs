@@ -58,6 +58,10 @@ enum EmittedEvent {
     StreamingPartial {
         message: MessageFingerprint,
     },
+    StreamingDelta {
+        part_type: String,
+        text_delta_len: usize,
+    },
     PermissionRequest {
         permission_id: String,
         tool_name: String,
@@ -138,6 +142,10 @@ fn convert_action(action: Action) -> Result<EmittedEvent, String> {
             },
             AgentStreamEvent::StreamingPartial { message } => EmittedEvent::StreamingPartial {
                 message: fingerprint_message(&message),
+            },
+            AgentStreamEvent::StreamingDelta { delta } => EmittedEvent::StreamingDelta {
+                part_type: format!("{:?}", delta.part_type),
+                text_delta_len: delta.text_delta.len(),
             },
             AgentStreamEvent::PermissionRequest {
                 permission_id,

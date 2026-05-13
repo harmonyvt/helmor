@@ -82,6 +82,12 @@ pub enum AgentStreamEvent {
     StreamingPartial {
         message: crate::pipeline::types::ThreadMessageLike,
     },
+    /// Append-only text growth inside the current streaming partial.
+    /// The frontend patches the matching text/reasoning part locally and
+    /// falls back to `StreamingPartial` for structural changes.
+    StreamingDelta {
+        delta: crate::pipeline::StreamingTextDelta,
+    },
     Done {
         provider: String,
         model_id: String,

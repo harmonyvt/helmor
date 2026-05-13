@@ -344,6 +344,10 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                             output.push_str(text);
                         }
                     }
+                } else if let AgentStreamEvent::StreamingDelta { delta } = event {
+                    if delta.part_type == crate::pipeline::StreamingTextDeltaPartType::Text {
+                        output.push_str(&delta.text_delta);
+                    }
                 }
             })?;
 
