@@ -31,6 +31,8 @@ export type AppSettings = {
 	defaultFastMode: boolean;
 	/** Optional model override for PR comment Review all sessions. */
 	prCommentReviewModelId: string | null;
+	/** Pi model ids allowed for Goals handoffs. Empty means unrestricted. */
+	piHandoffModelIds: string[];
 	/** Webview zoom factor. 1.0 = 100%. Range 0.5–2.0. */
 	zoomLevel: number;
 	followUpBehavior: FollowUpBehavior;
@@ -75,6 +77,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	defaultEffort: "high",
 	defaultFastMode: false,
 	prCommentReviewModelId: null,
+	piHandoffModelIds: [],
 	zoomLevel: 1.0,
 	followUpBehavior: "steer",
 	alwaysShowContextUsage: true,
@@ -108,6 +111,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	defaultEffort: "app.default_effort",
 	defaultFastMode: "app.default_fast_mode",
 	prCommentReviewModelId: "app.pr_comment_review_model_id",
+	piHandoffModelIds: "app.pi_handoff_model_ids",
 	zoomLevel: "app.zoom_level",
 	followUpBehavior: "app.follow_up_behavior",
 	alwaysShowContextUsage: "app.always_show_context_usage",
@@ -139,14 +143,17 @@ function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
 	}
 }
 
-function parseFavoriteModelIds(raw: string | undefined): string[] {
-	if (!raw) return DEFAULT_SETTINGS.favoriteModelIds;
+function parseStringArray(
+	raw: string | undefined,
+	fallback: string[],
+): string[] {
+	if (!raw) return fallback;
 	try {
 		const parsed = JSON.parse(raw) as unknown;
-		if (!Array.isArray(parsed)) return DEFAULT_SETTINGS.favoriteModelIds;
+		if (!Array.isArray(parsed)) return fallback;
 		return parsed.filter((item): item is string => typeof item === "string");
 	} catch {
-		return DEFAULT_SETTINGS.favoriteModelIds;
+		return fallback;
 	}
 }
 
@@ -218,6 +225,10 @@ export async function loadSettings(): Promise<AppSettings> {
 			prCommentReviewModelId:
 				raw[SETTINGS_KEY_MAP.prCommentReviewModelId] ||
 				DEFAULT_SETTINGS.prCommentReviewModelId,
+			piHandoffModelIds: parseStringArray(
+				raw[SETTINGS_KEY_MAP.piHandoffModelIds],
+				DEFAULT_SETTINGS.piHandoffModelIds,
+			),
 			zoomLevel: raw[SETTINGS_KEY_MAP.zoomLevel]
 				? Number(raw[SETTINGS_KEY_MAP.zoomLevel])
 				: DEFAULT_SETTINGS.zoomLevel,
@@ -247,8 +258,9 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.libghosttyEnabled] !== undefined
 					? raw[SETTINGS_KEY_MAP.libghosttyEnabled] === "true"
 					: DEFAULT_SETTINGS.libghosttyEnabled,
-			favoriteModelIds: parseFavoriteModelIds(
+			favoriteModelIds: parseStringArray(
 				raw[SETTINGS_KEY_MAP.favoriteModelIds],
+				DEFAULT_SETTINGS.favoriteModelIds,
 			),
 			openActionLinksInHelmorBrowser:
 				raw[SETTINGS_KEY_MAP.openActionLinksInHelmorBrowser] !== undefined
@@ -286,7 +298,8 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 			settings[dbKey] =
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
-				key === "favoriteModelIds"
+				key === "favoriteModelIds" ||
+				key === "piHandoffModelIds"
 					? JSON.stringify(value)
 					: value === null
 						? ""
