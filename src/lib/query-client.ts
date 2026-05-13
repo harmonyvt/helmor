@@ -166,9 +166,58 @@ export function createHelmorQueryClient() {
 	});
 }
 
-// Surface persister write failures (quota exceeded, security errors) instead
-// of letting them silently disable persistence.
-const loggingLocalStorage: Storage = {
+const QUERY_CACHE_STORAGE_KEY = "helmor-query-cache";
+
+export function isStorageQuotaError(error: unknown): boolean {
+	return (
+		error instanceof DOMException &&
+		(error.name === "QuotaExceededError" ||
+			error.name === "NS_ERROR_DOM_QUOTA_REACHED")
+	);
+}
+
+let warnedQueryCacheWriteFailure = false;
+
+export function resetQueryCacheWriteFailureWarningForTests() {
+	warnedQueryCacheWriteFailure = false;
+}
+
+type PersistCandidateQuery = {
+	queryKey: readonly unknown[];
+	state: { status: string };
+};
+
+export function shouldDehydrateHelmorQuery(query: PersistCandidateQuery) {
+	const key = query.queryKey;
+	// Never persist session thread messages — they must always be loaded fresh
+	// from the DB. Stale streaming snapshots surviving app restart was a root
+	// cause of cross-session message contamination.
+	if (key[0] === "sessionMessages" && key.length >= 3 && key[2] === "thread") {
+		return false;
+	}
+	if (key[0] === "slashCommands") {
+		return false;
+	}
+	if (key[0] === "agentModelSections") {
+		return false;
+	}
+	// Debug mode state is ephemeral and can refresh while the user is actively
+	// debugging; persisting it only increases localStorage pressure.
+	if (key[0] === "debugIngestOverview") {
+		return false;
+	}
+	// Workspace lists are fast local DB queries — always load fresh to avoid
+	// "ghost workspace" errors on startup.
+	if (key[0] === "workspaceGroups" || key[0] === "archivedWorkspaces") {
+		return false;
+	}
+	if (key[0] === "workspaceChanges" || key[0] === "workspaceFiles") {
+		return false;
+	}
+	return query.state.status === "success";
+}
+
+const resilientQueryCacheStorage: Storage = {
 	get length() {
 		return window.localStorage.length;
 	},
@@ -180,19 +229,31 @@ const loggingLocalStorage: Storage = {
 		try {
 			window.localStorage.setItem(k, v);
 		} catch (error) {
-			const sizeKb = (v.length / 1024).toFixed(1);
-			console.error(
-				`[helmor] localStorage.setItem failed for "${k}" (${sizeKb} KB)`,
-				error,
-			);
-			throw error;
+			if (k === QUERY_CACHE_STORAGE_KEY) {
+				try {
+					window.localStorage.removeItem(k);
+				} catch {
+					// Ignore cleanup failures: query persistence is a startup optimisation.
+				}
+			}
+
+			if (!warnedQueryCacheWriteFailure) {
+				warnedQueryCacheWriteFailure = true;
+				const sizeKb = (v.length / 1024).toFixed(1);
+				const reason = isStorageQuotaError(error)
+					? "localStorage quota exceeded"
+					: "localStorage write failed";
+				console.warn(
+					`[helmor] Query cache persistence skipped: ${reason} (${sizeKb} KB).`,
+				);
+			}
 		}
 	},
 };
 
 export const helmorQueryPersister = createAsyncStoragePersister({
-	storage: loggingLocalStorage,
-	key: "helmor-query-cache",
+	storage: resilientQueryCacheStorage,
+	key: QUERY_CACHE_STORAGE_KEY,
 });
 
 // On desktop, workspace list changes arrive instantly via UiMutationEvent push.
