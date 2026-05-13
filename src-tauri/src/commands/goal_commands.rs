@@ -210,6 +210,13 @@ pub async fn read_assignee_thread(
 }
 
 #[tauri::command]
+pub async fn get_thread_runtime_status(
+    request: crate::goal_assignees::ThreadRuntimeStatusRequest,
+) -> CmdResult<crate::goal_assignees::ThreadRuntimeStatus> {
+    run_blocking(move || crate::goal_assignees::get_thread_runtime_status(request)).await
+}
+
+#[tauri::command]
 pub async fn summarize_assignee_status(
     request: crate::goal_assignees::SummarizeAssigneeStatusRequest,
 ) -> CmdResult<crate::goal_assignees::AssigneeStatusSummary> {

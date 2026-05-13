@@ -1028,6 +1028,41 @@ fn subagent_task_started_renders_as_notice_with_child_id() {
 }
 
 #[test]
+fn agent_starting_system_event_renders_as_runtime_notice() {
+    let messages = vec![im(
+        "runtime1",
+        "system",
+        json!({
+            "type": "system",
+            "subtype": "agent_starting",
+            "model": "pi:azure-openai-responses/gpt-5.5",
+            "provider": "pi",
+            "permissionMode": "auto",
+            "message": "Agent process spawned. Waiting for first model output.",
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].role, MessageRole::System);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::SystemNotice {
+            severity,
+            label,
+            body,
+            ..
+        }) => {
+            assert_eq!(*severity, NoticeSeverity::Info);
+            assert_eq!(label, "Agent starting");
+            assert_eq!(
+                body.as_deref(),
+                Some("Agent process spawned. Waiting for first model output."),
+            );
+        }
+        other => panic!("expected SystemNotice, got {other:?}"),
+    }
+}
+
+#[test]
 fn local_bash_task_events_are_dropped() {
     // `task_type: local_bash` wraps a single Bash command — the Bash
     // tool call already renders the command, so dropping the notice

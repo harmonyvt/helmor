@@ -711,6 +711,12 @@ export type SendThreadMessageRequest = {
 	permissionMode?: string | null;
 };
 
+export type ThreadRuntimeStatusRequest = {
+	goalWorkspaceId: string;
+	workspaceId: string;
+	threadId: string;
+};
+
 export type SendAssigneeMessageResult = {
 	queued: boolean;
 	started: boolean;
@@ -742,6 +748,23 @@ export type AssigneeThreadResult = {
 	sessionId: string;
 	messages: ThreadMessageLike[];
 	latestReport?: AssigneeReportMarker | null;
+};
+
+export type ThreadRuntimeStatus = {
+	threadId: string;
+	workspaceId: string;
+	status: string;
+	model?: string | null;
+	permissionMode: string;
+	pendingSendId?: string | null;
+	providerSessionId?: string | null;
+	providerSessionPath?: string | null;
+	processState: string;
+	lastSidecarEventAt?: string | null;
+	lastPersistedMessageAt?: string | null;
+	lastError?: string | null;
+	firstEventReceived: boolean;
+	stalledSeconds?: number | null;
 };
 
 export type AssigneeStatusSummary = {
@@ -2553,6 +2576,12 @@ export async function readAssigneeThread(
 	request: ReadAssigneeThreadRequest,
 ): Promise<AssigneeThreadResult> {
 	return invoke<AssigneeThreadResult>("read_assignee_thread", { request });
+}
+
+export async function getThreadRuntimeStatus(
+	request: ThreadRuntimeStatusRequest,
+): Promise<ThreadRuntimeStatus> {
+	return invoke<ThreadRuntimeStatus>("get_thread_runtime_status", { request });
 }
 
 export async function summarizeAssigneeStatus(

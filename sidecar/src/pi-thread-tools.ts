@@ -14,6 +14,7 @@
  *  - update_thread  — rename a thread
  *  - delete_thread  — delete a thread
  *  - send_thread_message — send a supervisor prompt to a specific thread
+ *  - get_thread_runtime_status — inspect active runtime telemetry
  */
 
 import { defineTool } from "@mariozechner/pi-coding-agent";
@@ -114,6 +115,36 @@ export function createThreadTools(
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const result = await callPiTool(
 				"get_thread",
+				goalWorkspaceId,
+				{
+					workspaceId: params.workspace_id,
+					threadId: params.thread_id,
+				},
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
+	const getThreadRuntimeStatus = defineTool({
+		name: "get_thread_runtime_status",
+		label: "Get Thread Runtime Status",
+		description:
+			"Inspect runtime telemetry for a specific thread, especially when a thread is marked streaming but has no visible assistant output.",
+		promptSnippet:
+			"get_thread_runtime_status({ workspace_id, thread_id }) → runtime telemetry including model, process state, last event, and stall seconds",
+		parameters: Type.Object({
+			workspace_id: Type.String({
+				description: "The child workspace UUID (card.id)",
+			}),
+			thread_id: Type.String({
+				description: "The session UUID to inspect",
+			}),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const result = await callPiTool(
+				"get_thread_runtime_status",
 				goalWorkspaceId,
 				{
 					workspaceId: params.workspace_id,
@@ -244,6 +275,7 @@ export function createThreadTools(
 		listThreads,
 		createThread,
 		getThread,
+		getThreadRuntimeStatus,
 		updateThread,
 		deleteThread,
 		sendThreadMessage,
