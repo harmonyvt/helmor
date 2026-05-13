@@ -1056,20 +1056,60 @@ export async function restartApp(force = false): Promise<void> {
 
 export type HelmorAppInstallResult = {
 	repoRoot: string;
-	scriptPath: string;
 	installedAppPath: string;
 	restartRequired: boolean;
 	pullStdout: string;
 	pullStderr: string;
 	stdout: string;
 	stderr: string;
+	version: string | null;
+	bundleId: string | null;
+	size: string | null;
+	signingWarning: string | null;
 };
 
-export async function runHelmorAppInstall(): Promise<HelmorAppInstallResult> {
+export type AppInstallStepStatus = "ok" | "warning" | "skipped";
+export type AppInstallOutputStream = "stdout" | "stderr";
+
+export type AppInstallEvent =
+	| { type: "started"; repoRoot: string; installedAppPath: string }
+	| { type: "stepStarted"; stepId: string; label: string }
+	| {
+			type: "output";
+			stepId: string;
+			stream: AppInstallOutputStream;
+			data: string;
+	  }
+	| {
+			type: "stepFinished";
+			stepId: string;
+			status: AppInstallStepStatus;
+			message: string | null;
+	  }
+	| { type: "completed"; result: HelmorAppInstallResult }
+	| { type: "error"; stepId: string | null; message: string };
+
+export async function runHelmorAppInstall(
+	onEvent: (event: AppInstallEvent) => void,
+): Promise<HelmorAppInstallResult> {
+	const channel = new Channel<AppInstallEvent>();
+	channel.onmessage = onEvent;
 	try {
-		return await invoke<HelmorAppInstallResult>("run_helmor_app_install");
+		return await invoke<HelmorAppInstallResult>("run_helmor_app_install", {
+			channel,
+		});
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to install Helmor."));
+	}
+}
+
+export async function cancelHelmorAppInstall(): Promise<boolean> {
+	try {
+		return await invoke<boolean>("cancel_helmor_app_install");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to cancel Helmor update."),
+		);
 	}
 }
 

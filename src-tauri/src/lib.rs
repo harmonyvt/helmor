@@ -78,6 +78,7 @@ pub fn run() {
         .manage(workspace::archive::ArchiveJobManager::new())
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
+        .manage(commands::app_install_commands::AppInstallManager::new())
         .manage(debug_ingest::DebugIngestManager::new())
         .manage(ui_sync::UiSyncManager::new())
         .manage(web_daemon::WebDaemonManager::new())
@@ -369,6 +370,7 @@ pub fn run() {
             commands::system_commands::request_quit,
             commands::system_commands::restart_app,
             commands::app_install_commands::run_helmor_app_install,
+            commands::app_install_commands::cancel_helmor_app_install,
             commands::system_commands::dev_reset_all_data,
             commands::settings_commands::update_app_settings,
             commands::session_commands::update_session_settings,
