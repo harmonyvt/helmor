@@ -26,6 +26,10 @@ import type {
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
 import {
+	type FileDiffScope,
+	useFileDiffHover,
+} from "@/features/inspector/sections/file-diff-hover";
+import {
 	type ChangeRequestInfo,
 	continueWorkspaceFromTargetBranch,
 	discardWorkspaceFile,
@@ -43,7 +47,6 @@ import {
 import { cn } from "@/lib/utils";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
-import { type FileDiffScope, useFileDiffHover } from "./file-diff-hover";
 import { GitSectionHeader } from "./git-section-header";
 
 const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {

@@ -12,9 +12,9 @@ export type FileDiffScope =
 	| { kind: "branch"; fromRef: string; toRef: string };
 
 type PopoverPos = {
-	// Anchor right edge of popover to left edge of trigger
-	right: number;
+	left: number;
 	top: number;
+	width: number;
 	maxHeight: number;
 };
 
@@ -66,9 +66,20 @@ export function useFileDiffHover(
 			const rect = triggerRef.current.getBoundingClientRect();
 			const viewportHeight = window.innerHeight;
 			const viewportWidth = window.innerWidth;
+			const width = Math.min(
+				POPOVER_WIDTH,
+				Math.max(0, viewportWidth - VIEWPORT_PADDING * 2),
+			);
+			const leftCandidate = rect.left - TRIGGER_GAP - width;
+			const rightCandidate = rect.right + TRIGGER_GAP;
+			const maxLeft = viewportWidth - VIEWPORT_PADDING - width;
+			const left =
+				leftCandidate >= VIEWPORT_PADDING
+					? leftCandidate
+					: rightCandidate + width <= viewportWidth - VIEWPORT_PADDING
+						? rightCandidate
+						: Math.max(VIEWPORT_PADDING, Math.min(leftCandidate, maxLeft));
 
-			// Right edge of popover = left edge of trigger minus gap
-			const right = viewportWidth - rect.left + TRIGGER_GAP;
 			// Align popover top with row top, clamped to viewport
 			const top = Math.max(
 				VIEWPORT_PADDING,
@@ -76,7 +87,7 @@ export function useFileDiffHover(
 			);
 			const maxHeight = viewportHeight - top - VIEWPORT_PADDING;
 
-			setPos({ right, top, maxHeight });
+			setPos({ left, top, width, maxHeight });
 		}
 
 		// Cache key: don't re-fetch for the same path + scope
@@ -115,9 +126,9 @@ export function useFileDiffHover(
 						onMouseLeave={hide}
 						className="fixed z-[100] flex flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-xl"
 						style={{
-							right: pos.right,
+							left: pos.left,
 							top: pos.top,
-							width: POPOVER_WIDTH,
+							width: pos.width,
 							maxHeight: pos.maxHeight,
 						}}
 					>
