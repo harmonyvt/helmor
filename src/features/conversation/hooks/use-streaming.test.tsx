@@ -6,6 +6,7 @@ import type { PendingDeferredTool } from "@/features/conversation/pending-deferr
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import type {
 	AgentModelOption,
+	DebugIngestStatus,
 	ThreadMessageLike,
 	ToolCallPart,
 } from "@/lib/api";
@@ -262,6 +263,87 @@ describe("useConversationStreaming", () => {
 				promptPrefix: expect.stringContaining(
 					"create temporary instrumentation that points back to this ingest endpoint",
 				),
+			}),
+			expect.any(Function),
+		);
+	});
+
+	it("shows the submitted debug message before debug ingest finishes starting", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(async () => undefined);
+		let resolveIngest!: (status: DebugIngestStatus) => void;
+		const ingestPromise = new Promise<DebugIngestStatus>((resolve) => {
+			resolveIngest = resolve;
+		});
+		const ensureDebugIngestForSubmit = vi.fn(() => ingestPromise);
+
+		const { Wrapper, queryClient } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					ensureDebugIngestForSubmit,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		let submitPromise!: Promise<void>;
+		await act(async () => {
+			submitPromise = result.current.handleComposerSubmit({
+				prompt: "Debug the missing send bubble",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+				debugMode: true,
+			});
+			await Promise.resolve();
+		});
+
+		const optimistic = queryClient.getQueryData<ThreadMessageLike[]>(
+			sessionThreadCacheKey("session-1"),
+		);
+		expect(optimistic).toHaveLength(2);
+		expect(optimistic?.[0]?.role).toBe("user");
+		expect(optimistic?.[0]?.content).toEqual([
+			expect.objectContaining({
+				type: "text",
+				text: "Debug the missing send bubble",
+			}),
+		]);
+		expect(optimistic?.[1]?.role).toBe("assistant");
+		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+		resolveIngest({
+			workspaceId: "workspace-1",
+			running: true,
+			url: "http://127.0.0.1:4321",
+			ingestUrl: "http://127.0.0.1:4321/ingest",
+			publicUrl: null,
+			publicIngestUrl: null,
+			tunnelProvider: null,
+			tunnelError: null,
+			host: "127.0.0.1",
+			port: 4321,
+			entryCount: 0,
+		});
+		await act(async () => {
+			await submitPromise;
+		});
+
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Debug the missing send bubble",
+				promptPrefix: expect.stringContaining("[DEBUG MODE ACTIVE]"),
 			}),
 			expect.any(Function),
 		);
