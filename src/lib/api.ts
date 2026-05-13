@@ -1865,6 +1865,22 @@ export async function readFileAtRef(
 	});
 }
 
+export async function getFileUnifiedDiff(
+	workspaceRootPath: string,
+	relativePath: string,
+	fromRef?: string | null,
+	toRef?: string | null,
+	cached?: boolean,
+): Promise<string | null> {
+	return await invoke<string | null>("get_file_unified_diff", {
+		workspaceRootPath,
+		relativePath,
+		fromRef: fromRef ?? null,
+		toRef: toRef ?? null,
+		cached: cached ?? false,
+	});
+}
+
 export async function writeEditorFile(
 	path: string,
 	content: string,

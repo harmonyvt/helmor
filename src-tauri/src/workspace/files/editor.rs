@@ -196,6 +196,46 @@ pub fn list_editor_files_with_content(
     Ok(EditorFilesWithContentResponse { items, prefetched })
 }
 
+/// Return the unified diff for a single file in the workspace.
+///
+/// Scope selection:
+/// - `cached = true`  → staged diff (`git diff --cached -- <file>`)
+/// - `from_ref` only  → branch-vs-working-tree (`git diff <from_ref> -- <file>`)
+/// - both `from_ref` and `to_ref` → `git diff <from_ref> <to_ref> -- <file>`
+/// - neither, `cached = false` → unstaged diff (`git diff -- <file>`)
+///
+/// Returns `None` when the workspace is gone or the diff is empty.
+pub fn get_file_unified_diff(
+    workspace_root_path: &str,
+    relative_path: &str,
+    from_ref: Option<&str>,
+    to_ref: Option<&str>,
+    cached: bool,
+) -> Result<Option<String>> {
+    let Some(workspace_root) = resolve_workspace_root_optional(workspace_root_path)? else {
+        return Ok(None);
+    };
+
+    let mut args: Vec<String> = vec!["diff".into(), "--unified=5".into()];
+    if cached {
+        args.push("--cached".into());
+    }
+    if let Some(from) = from_ref {
+        args.push(from.into());
+    }
+    if let Some(to) = to_ref {
+        args.push(to.into());
+    }
+    args.push("--".into());
+    args.push(relative_path.into());
+
+    match crate::git_ops::run_git(args, Some(&workspace_root)) {
+        Ok(output) if output.is_empty() => Ok(None),
+        Ok(output) => Ok(Some(output)),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Best-effort variant for read-only listers. Returns `None` if the
 /// workspace directory has vanished (deleted externally, archived, etc.)
 /// so callers surface an empty list instead of a red toast. Real errors
