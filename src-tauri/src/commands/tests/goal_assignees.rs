@@ -188,6 +188,43 @@ fn read_assignee_thread_is_limited_to_assigned_session_and_reports_marker() {
 }
 
 #[test]
+fn read_assignee_thread_resolves_goal_card_child_workspace() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+    let card_sql = r###"
+        INSERT INTO goal_cards (id, goal_workspace_id, title, lane, child_workspace_id)
+        VALUES ('goal-card-assignee', '00000000-0000-0000-0000-000000000001', 'Build API', 'in-progress', '00000000-0000-0000-0000-000000000002');
+        INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at)
+        VALUES (
+          'card-thread-message',
+          'session-assignee',
+          'assistant',
+          '{"type":"assistant","message":{"id":"turn-card","role":"assistant","content":[{"type":"text","text":"## Progress\nWorking from the linked card."}]}}',
+          '2026-01-01T00:00:00',
+          '2026-01-01T00:00:00'
+        );
+        "###;
+    connection.execute_batch(card_sql).unwrap();
+
+    let result =
+        goal_assignees::read_assignee_thread(crate::goal_assignees::ReadAssigneeThreadRequest {
+            goal_workspace_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            card_id: "goal-card-assignee".to_string(),
+            thread_id: Some("session-assignee".to_string()),
+            since_message_id: None,
+        })
+        .unwrap();
+
+    assert_eq!(result.session_id, "session-assignee");
+    assert_eq!(result.workspace_id, "00000000-0000-0000-0000-000000000002");
+    assert_eq!(result.messages.len(), 1);
+}
+
+#[test]
 fn can_target_retry_thread_and_make_it_active_assignee() {
     let _guard = TEST_LOCK
         .lock()

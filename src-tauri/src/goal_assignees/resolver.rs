@@ -82,7 +82,7 @@ fn resolve_child_workspace_id(goal_workspace_id: &str, card_id: &str) -> Result<
     let connection = db::read_conn()?;
     let linked: Option<String> = connection
         .query_row(
-            "SELECT child_workspace_id FROM goal_cards WHERE id = ?1 AND workspace_id = ?2",
+            "SELECT child_workspace_id FROM goal_cards WHERE id = ?1 AND goal_workspace_id = ?2",
             [card_id, goal_workspace_id],
             |row| row.get(0),
         )
