@@ -9,7 +9,7 @@ Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **R
 ## Commands
 
 ```bash
-bun install                  # Install deps (bun 1.3+). Also runs `bun install` in sidecar/ via postinstall.
+sfw bun install              # Install deps (bun 1.3+). Also runs `sfw bun install` in sidecar/ via postinstall.
 bun run dev                  # Full desktop app: Tauri + Vite (localhost:1420 in webview)
 bun run dev:preview          # Secondary worktree preview with isolated data, ports, app identity, and MCP range
 bun run dev:analyze          # Same as dev, with perf HUD (VITE_HELMOR_PERF_HUD=1)

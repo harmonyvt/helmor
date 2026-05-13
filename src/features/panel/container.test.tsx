@@ -246,7 +246,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			skipped: true,
 		});
 		apiMocks.loadRepoScripts.mockResolvedValue({
-			setupScript: "bun install",
+			setupScript: "sfw bun install",
 			runScript: "bun run dev",
 			archiveScript: "true",
 			setupFromProject: false,

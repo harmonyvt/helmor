@@ -649,7 +649,7 @@ function ScriptsSection({
 				<ScriptField
 					label="Setup script"
 					description="Available from the Setup tab in any workspace"
-					placeholder="e.g., npm install"
+					placeholder="e.g., sfw npm install"
 					value={setupScript}
 					locked={setupLocked}
 					lockedMessage="Set by this workspace's helmor.json — edit it there"

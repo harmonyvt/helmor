@@ -134,7 +134,7 @@ describe("stabilizeStreamingMessages", () => {
 	it("does not collapse when the second command is not read-only", () => {
 		const messages = stabilizeStreamingMessages([
 			assistant("a1", [toolCall("cmd1", "cat src/App.tsx")], true),
-			assistant("a2", [toolCall("cmd2", "bun install")], true),
+			assistant("a2", [toolCall("cmd2", "sfw bun install")], true),
 		]);
 
 		expect(messages).toHaveLength(1);
