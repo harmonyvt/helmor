@@ -99,6 +99,7 @@ function getPiToolInfo(
 		list_threads: "List threads",
 		create_thread: "Create thread",
 		get_thread: "Read thread",
+		get_thread_runtime_status: "Check thread runtime",
 		update_thread: "Update thread",
 	};
 	if (threadLabels[tool]) {

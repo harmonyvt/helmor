@@ -13,6 +13,7 @@ describe("createThreadTools", () => {
 			"list_threads",
 			"create_thread",
 			"get_thread",
+			"get_thread_runtime_status",
 			"update_thread",
 			"delete_thread",
 			"send_thread_message",

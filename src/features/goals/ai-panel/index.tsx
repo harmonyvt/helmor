@@ -13,6 +13,7 @@ import type {
 import {
 	createGoalChildWorkspaceAndStart,
 	deleteSession,
+	getThreadRuntimeStatus,
 	listAssignees,
 	listGoalChildWorkspaces,
 	loadSessionThreadMessages,
@@ -226,6 +227,12 @@ export function GoalsAiPanel({
 					});
 				} else if (event.tool === "get_thread") {
 					result = await loadSessionThreadMessages(String(args.threadId));
+				} else if (event.tool === "get_thread_runtime_status") {
+					result = await getThreadRuntimeStatus({
+						goalWorkspaceId: workspaceId,
+						workspaceId: String(args.workspaceId ?? args.workspace_id ?? ""),
+						threadId: String(args.threadId ?? args.thread_id ?? ""),
+					});
 				} else if (event.tool === "update_thread") {
 					await renameSession(String(args.threadId), String(args.title));
 					result = { threadId: args.threadId, title: args.title };

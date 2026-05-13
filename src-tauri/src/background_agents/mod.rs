@@ -16,6 +16,7 @@ use crate::{
 static SESSION_QUEUES: OnceLock<Mutex<HashMap<String, VecDeque<QueuedSend>>>> = OnceLock::new();
 static SESSION_RUNNING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static SESSION_WAITING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static SESSION_RUNTIME: OnceLock<Mutex<HashMap<String, RuntimeTelemetry>>> = OnceLock::new();
 mod progress;
 
 #[derive(Debug, Clone)]
@@ -32,6 +33,25 @@ pub struct BackgroundSendReceipt {
     pub task_id: String,
     pub started: bool,
     pub execution_state: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundRuntimeStatus {
+    pub pending_send_id: Option<String>,
+    pub process_state: String,
+    pub last_sidecar_event_at: Option<String>,
+    pub first_event_received: bool,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeTelemetry {
+    pending_send_id: Option<String>,
+    process_state: String,
+    last_sidecar_event_at: Option<String>,
+    first_event_received: bool,
+    last_error: Option<String>,
 }
 
 pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSendReceipt> {
@@ -69,6 +89,17 @@ pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSe
         }
         should_start
     };
+
+    remember_runtime(
+        &session_id,
+        RuntimeTelemetry {
+            pending_send_id: Some(task_id.clone()),
+            process_state: if should_start { "spawned" } else { "queued" }.to_string(),
+            last_sidecar_event_at: None,
+            first_event_received: false,
+            last_error: None,
+        },
+    );
 
     if should_start {
         spawn_next(app, task_id.clone());
@@ -144,15 +175,28 @@ fn spawn_next(app: AppHandle, expected_task_id: String) {
             return;
         };
 
+        remember_runtime(
+            &send.session_id,
+            RuntimeTelemetry {
+                pending_send_id: Some(send.task_id.clone()),
+                process_state: "running".to_string(),
+                last_sidecar_event_at: None,
+                first_event_received: false,
+                last_error: None,
+            },
+        );
+
         publish_session_changed(&app, &send.workspace_id, &send.session_id);
 
         let workspace_id = send.workspace_id.clone();
         let session_id = send.session_id.clone();
         let mut on_event = |event: &AgentStreamEvent| {
+            remember_runtime_event(&session_id, event);
             publish_event(&app, &workspace_id, &session_id, event);
         };
 
         if let Err(error) = service::send_message(send.params, &mut on_event) {
+            remember_runtime_error(&session_id, &error.to_string());
             tracing::error!(
                 task_id = %send.task_id,
                 workspace_id = %workspace_id,
@@ -205,6 +249,97 @@ fn maybe_spawn_followup(app: AppHandle, session_id: String) {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         running.remove(&session_id);
+        update_runtime_process_state(&session_id, "idle");
+    }
+}
+
+pub fn get_runtime_status(session_id: &str) -> BackgroundRuntimeStatus {
+    let runtime = SESSION_RUNTIME.get_or_init(|| Mutex::new(HashMap::new()));
+    let telemetry = runtime
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(session_id)
+        .cloned();
+    let process_state = telemetry
+        .as_ref()
+        .map(|status| status.process_state.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    BackgroundRuntimeStatus {
+        pending_send_id: telemetry
+            .as_ref()
+            .and_then(|status| status.pending_send_id.clone()),
+        process_state,
+        last_sidecar_event_at: telemetry
+            .as_ref()
+            .and_then(|status| status.last_sidecar_event_at.clone()),
+        first_event_received: telemetry
+            .as_ref()
+            .is_some_and(|status| status.first_event_received),
+        last_error: telemetry.and_then(|status| status.last_error),
+    }
+}
+
+fn remember_runtime(session_id: &str, telemetry: RuntimeTelemetry) {
+    let runtime = SESSION_RUNTIME.get_or_init(|| Mutex::new(HashMap::new()));
+    runtime
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(session_id.to_string(), telemetry);
+}
+
+fn remember_runtime_event(session_id: &str, event: &AgentStreamEvent) {
+    let runtime = SESSION_RUNTIME.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut runtime = runtime
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let telemetry = runtime
+        .entry(session_id.to_string())
+        .or_insert_with(|| RuntimeTelemetry {
+            pending_send_id: None,
+            process_state: "running".to_string(),
+            last_sidecar_event_at: None,
+            first_event_received: false,
+            last_error: None,
+        });
+    telemetry.last_sidecar_event_at = crate::models::db::current_timestamp().ok();
+    telemetry.first_event_received = true;
+    match event {
+        AgentStreamEvent::Done { .. } => telemetry.process_state = "completed".to_string(),
+        AgentStreamEvent::Aborted { .. } => telemetry.process_state = "aborted".to_string(),
+        AgentStreamEvent::Error { message, .. } => {
+            telemetry.process_state = "failed".to_string();
+            telemetry.last_error = Some(message.clone());
+        }
+        _ => telemetry.process_state = "running".to_string(),
+    }
+}
+
+fn remember_runtime_error(session_id: &str, error: &str) {
+    let runtime = SESSION_RUNTIME.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut runtime = runtime
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let telemetry = runtime
+        .entry(session_id.to_string())
+        .or_insert_with(|| RuntimeTelemetry {
+            pending_send_id: None,
+            process_state: "failed".to_string(),
+            last_sidecar_event_at: None,
+            first_event_received: false,
+            last_error: None,
+        });
+    telemetry.process_state = "failed".to_string();
+    telemetry.last_error = Some(error.to_string());
+}
+
+fn update_runtime_process_state(session_id: &str, process_state: &str) {
+    let runtime = SESSION_RUNTIME.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(telemetry) = runtime
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get_mut(session_id)
+    {
+        telemetry.process_state = process_state.to_string();
     }
 }
 

@@ -67,6 +67,14 @@ pub struct ReadAssigneeThreadRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ThreadRuntimeStatusRequest {
+    pub goal_workspace_id: String,
+    pub workspace_id: String,
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetCardAssigneeThreadRequest {
     pub goal_workspace_id: String,
     pub card_id: String,
@@ -97,6 +105,25 @@ pub struct AssigneeThreadResult {
     pub session_id: String,
     pub messages: Vec<pipeline::types::ThreadMessageLike>,
     pub latest_report: Option<AssigneeReportMarker>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRuntimeStatus {
+    pub thread_id: String,
+    pub workspace_id: String,
+    pub status: String,
+    pub model: Option<String>,
+    pub permission_mode: String,
+    pub pending_send_id: Option<String>,
+    pub provider_session_id: Option<String>,
+    pub provider_session_path: Option<String>,
+    pub process_state: String,
+    pub last_sidecar_event_at: Option<String>,
+    pub last_persisted_message_at: Option<String>,
+    pub last_error: Option<String>,
+    pub first_event_received: bool,
+    pub stalled_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,6 +312,51 @@ pub fn read_assignee_thread(request: ReadAssigneeThreadRequest) -> Result<Assign
     })
 }
 
+pub fn get_thread_runtime_status(
+    request: ThreadRuntimeStatusRequest,
+) -> Result<ThreadRuntimeStatus> {
+    let assignee = resolve_thread_assignee(
+        &request.goal_workspace_id,
+        &request.workspace_id,
+        &request.thread_id,
+    )?;
+    let runtime = crate::background_agents::get_runtime_status(&assignee.session.id);
+    let conn = crate::models::db::read_conn()?;
+    let last_persisted_message_at: Option<String> = conn
+        .query_row(
+            "SELECT MAX(created_at) FROM session_messages WHERE session_id = ?1",
+            rusqlite::params![assignee.session.id],
+            |row| row.get(0),
+        )
+        .unwrap_or(None);
+    let stalled_seconds = streaming_stall_seconds(
+        &assignee.session,
+        runtime.last_sidecar_event_at.as_deref(),
+        last_persisted_message_at.as_deref(),
+    );
+
+    Ok(ThreadRuntimeStatus {
+        thread_id: assignee.session.id,
+        workspace_id: assignee.workspace_id,
+        status: assignee.session.status,
+        model: assignee.session.model,
+        permission_mode: assignee.session.permission_mode,
+        pending_send_id: runtime.pending_send_id,
+        provider_session_id: assignee.session.provider_session_id.clone(),
+        provider_session_path: assignee
+            .session
+            .provider_session_id
+            .as_ref()
+            .map(|id| format!("~/.pi/agent/sessions/.../{id}.jsonl")),
+        process_state: runtime.process_state,
+        last_sidecar_event_at: runtime.last_sidecar_event_at,
+        last_persisted_message_at,
+        last_error: runtime.last_error,
+        first_event_received: runtime.first_event_received,
+        stalled_seconds,
+    })
+}
+
 pub fn set_card_assignee_thread(
     request: SetCardAssigneeThreadRequest,
 ) -> Result<SetCardAssigneeThreadResult> {
@@ -452,6 +524,25 @@ fn load_assignee_messages(
         }
     }
     Ok(messages)
+}
+
+fn streaming_stall_seconds(
+    session: &sessions::WorkspaceSessionSummary,
+    last_sidecar_event_at: Option<&str>,
+    last_persisted_message_at: Option<&str>,
+) -> Option<i64> {
+    if session.status != "streaming" || last_sidecar_event_at.is_some() {
+        return None;
+    }
+    let started_at = session
+        .last_user_message_at
+        .as_deref()
+        .or(last_persisted_message_at)
+        .or(Some(session.updated_at.as_str()))?;
+    let started_at = chrono::DateTime::parse_from_rfc3339(started_at)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))?;
+    Some((chrono::Utc::now() - started_at).num_seconds().max(0))
 }
 
 fn detect_stale_threads(

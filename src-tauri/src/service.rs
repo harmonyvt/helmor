@@ -200,30 +200,43 @@ pub fn send_message(
     // and streams through its shared sidecar so the frontend sees live
     // updates. The CLI prints a short confirmation instead of streaming.
     if params.delegate_to_running_app && is_app_running() {
-        // Persist user message so the app's conversation container
-        // shows the optimistic user bubble right away.
-        let conn = crate::models::db::write_conn()?;
+        // Persist the visible handoff and selected runtime metadata before
+        // notifying the app so the UI never shows an active thread with
+        // model = NULL / permissionMode = default while work is queued.
+        let mut conn = crate::models::db::write_conn()?;
+        let tx = conn.transaction()?;
         let timestamp = crate::models::db::current_timestamp()?;
-        let user_msg_id = Uuid::new_v4().to_string();
-        let user_content = serde_json::json!({
-            "type": "user_prompt",
-            "text": params.prompt,
-        })
-        .to_string();
-        conn.execute(
-            r#"INSERT INTO session_messages
-               (id, session_id, role, content, created_at, sent_at)
-               VALUES (?1, ?2, 'user', ?3, ?4, ?4)"#,
-            params![user_msg_id, session_id, user_content, timestamp],
+        persist_send_start_on(
+            &tx,
+            &session_id,
+            model_id,
+            &model.provider,
+            params.permission_mode.as_deref(),
+            &params.prompt,
+            &timestamp,
         )?;
-
-        let pending_send_id = insert_pending_cli_send(
+        let pending_send_id = insert_pending_cli_send_on(
+            &tx,
             &workspace_id,
             &session_id,
             &params.prompt,
             Some(model_id),
             params.permission_mode.as_deref(),
         )?;
+        persist_runtime_notice_on(
+            &tx,
+            &session_id,
+            RuntimeNoticeInput {
+                subtype: "agent_starting",
+                model_id,
+                provider: &model.provider,
+                permission_mode: params.permission_mode.as_deref(),
+                pending_send_id: Some(&pending_send_id),
+                provider_session_id: None,
+                message: Some("Queued for the running Helmor app. Waiting for first model output."),
+            },
+        )?;
+        tx.commit()?;
 
         let _ = crate::ui_sync::notify_running_app(
             crate::ui_sync::UiMutationEvent::PendingCliSendQueued {
@@ -298,36 +311,60 @@ pub fn send_message(
     };
 
     let rx = sidecar.subscribe(&request_id);
-    sidecar
-        .send(&sidecar_req)
-        .context("Failed to send request to sidecar")?;
-
-    // 6. Persist user message + set session streaming
+    // 6. Persist user message + set session streaming before starting the
+    // provider. This makes a just-spawned background handoff visible even if
+    // the model takes a long time to emit its first assistant/tool event.
     let conn = crate::models::db::write_conn()?;
     let timestamp = crate::models::db::current_timestamp()?;
-    let user_msg_id = Uuid::new_v4().to_string();
-
-    let user_content = serde_json::json!({
-        "type": "user_prompt",
-        "text": params.prompt,
-    })
-    .to_string();
-
-    conn.execute(
-        "UPDATE sessions SET status = 'streaming', updated_at = ?1 WHERE id = ?2",
-        params![timestamp, session_id],
+    persist_send_start_on(
+        &conn,
+        &session_id,
+        model_id,
+        &model.provider,
+        params.permission_mode.as_deref(),
+        &params.prompt,
+        &timestamp,
     )?;
-    conn.execute(
-        r#"INSERT INTO session_messages
-           (id, session_id, role, content, created_at, sent_at)
-           VALUES (?1, ?2, 'user', ?3, ?4, ?4)"#,
-        params![user_msg_id, session_id, user_content, timestamp],
+    persist_runtime_notice_on(
+        &conn,
+        &session_id,
+        RuntimeNoticeInput {
+            subtype: "agent_starting",
+            model_id,
+            provider: &model.provider,
+            permission_mode: params.permission_mode.as_deref(),
+            pending_send_id: Some(&request_id),
+            provider_session_id: None,
+            message: Some("Agent process spawned. Waiting for first model output."),
+        },
     )?;
 
     if let Ok(historical) = crate::sessions::list_session_historical_records(&session_id) {
         on_event(&AgentStreamEvent::Update {
             messages: crate::pipeline::MessagePipeline::convert_historical(&historical),
         });
+    }
+
+    if let Err(error) = sidecar.send(&sidecar_req) {
+        let error_text = error.to_string();
+        let _ = persist_runtime_notice_on(
+            &conn,
+            &session_id,
+            RuntimeNoticeInput {
+                subtype: "agent_start_failed",
+                model_id,
+                provider: &model.provider,
+                permission_mode: params.permission_mode.as_deref(),
+                pending_send_id: Some(&request_id),
+                provider_session_id: None,
+                message: Some(&error_text),
+            },
+        );
+        let _ = conn.execute(
+            "UPDATE sessions SET status = 'idle', updated_at = datetime('now') WHERE id = ?1",
+            params![session_id],
+        );
+        return Err(error).context("Failed to send request to sidecar");
     }
 
     // 7. Event loop
@@ -356,6 +393,19 @@ pub fn send_message(
                     let _ = conn.execute(
                         "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
                         params![session_id, sid, model.provider],
+                    );
+                    let _ = persist_runtime_notice_on(
+                        &conn,
+                        &session_id,
+                        RuntimeNoticeInput {
+                            subtype: "provider_session_opened",
+                            model_id,
+                            provider: &model.provider,
+                            permission_mode: params.permission_mode.as_deref(),
+                            pending_send_id: Some(&request_id),
+                            provider_session_id: Some(sid),
+                            message: Some("Provider session opened; streaming is active."),
+                        },
                     );
                 }
             }
@@ -515,6 +565,81 @@ pub fn send_message(
         pending_send_id: None,
         agent_started: true,
     })
+}
+
+fn persist_send_start_on(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    model_id: &str,
+    provider: &str,
+    permission_mode: Option<&str>,
+    prompt: &str,
+    timestamp: &str,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE sessions
+        SET status = 'streaming',
+            model = ?2,
+            agent_type = ?3,
+            permission_mode = COALESCE(?4, permission_mode),
+            last_user_message_at = ?5,
+            updated_at = ?5
+        WHERE id = ?1
+        "#,
+        params![session_id, model_id, provider, permission_mode, timestamp],
+    )?;
+
+    let user_msg_id = Uuid::new_v4().to_string();
+    let user_content = serde_json::json!({
+        "type": "user_prompt",
+        "text": prompt,
+    })
+    .to_string();
+    conn.execute(
+        r#"INSERT INTO session_messages
+           (id, session_id, role, content, created_at, sent_at)
+           VALUES (?1, ?2, 'user', ?3, ?4, ?4)"#,
+        params![user_msg_id, session_id, user_content, timestamp],
+    )?;
+    Ok(())
+}
+
+struct RuntimeNoticeInput<'a> {
+    subtype: &'a str,
+    model_id: &'a str,
+    provider: &'a str,
+    permission_mode: Option<&'a str>,
+    pending_send_id: Option<&'a str>,
+    provider_session_id: Option<&'a str>,
+    message: Option<&'a str>,
+}
+
+fn persist_runtime_notice_on(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    input: RuntimeNoticeInput<'_>,
+) -> Result<String> {
+    let timestamp = crate::models::db::current_timestamp()?;
+    let notice_id = Uuid::new_v4().to_string();
+    let content = serde_json::json!({
+        "type": "system",
+        "subtype": input.subtype,
+        "model": input.model_id,
+        "provider": input.provider,
+        "permissionMode": input.permission_mode,
+        "pendingSendId": input.pending_send_id,
+        "providerSessionId": input.provider_session_id,
+        "message": input.message,
+    })
+    .to_string();
+    conn.execute(
+        r#"INSERT INTO session_messages
+           (id, session_id, role, content, created_at, sent_at)
+           VALUES (?1, ?2, 'system', ?3, ?4, ?4)"#,
+        params![notice_id, session_id, content, timestamp],
+    )?;
+    Ok(notice_id)
 }
 
 fn persist_turn(
@@ -832,6 +957,115 @@ mod tests {
         assert_eq!(sends.len(), 1);
         assert!(sends[0].model_id.is_none());
         assert!(sends[0].permission_mode.is_none());
+    }
+
+    #[test]
+    fn persist_send_start_updates_visible_session_metadata() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("send-start-metadata");
+
+        let db_path = crate::data_dir::db_path().unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('r1', 'test-repo', '/tmp/test-repo')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title, permission_mode) VALUES ('s1', 'w1', 'idle', 'Untitled', 'default')",
+            [],
+        )
+        .unwrap();
+
+        persist_send_start_on(
+            &conn,
+            "s1",
+            "pi:azure-openai-responses/gpt-5.5",
+            "pi",
+            Some("auto"),
+            "do the task",
+            "2026-05-13T00:00:00.000Z",
+        )
+        .unwrap();
+
+        let row: (String, String, String, String) = conn
+            .query_row(
+                "SELECT status, model, agent_type, permission_mode FROM sessions WHERE id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "streaming");
+        assert_eq!(row.1, "pi:azure-openai-responses/gpt-5.5");
+        assert_eq!(row.2, "pi");
+        assert_eq!(row.3, "auto");
+
+        let message_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_messages WHERE session_id = 's1' AND role = 'user'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(message_count, 1);
+    }
+
+    #[test]
+    fn persist_runtime_notice_writes_visible_system_row() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("runtime-notice");
+
+        let db_path = crate::data_dir::db_path().unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('r1', 'test-repo', '/tmp/test-repo')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title, permission_mode) VALUES ('s1', 'w1', 'idle', 'Untitled', 'default')",
+            [],
+        )
+        .unwrap();
+
+        persist_runtime_notice_on(
+            &conn,
+            "s1",
+            RuntimeNoticeInput {
+                subtype: "agent_starting",
+                model_id: "pi:azure-openai-responses/gpt-5.5",
+                provider: "pi",
+                permission_mode: Some("auto"),
+                pending_send_id: Some("send-1"),
+                provider_session_id: None,
+                message: Some("Waiting for first model output."),
+            },
+        )
+        .unwrap();
+
+        let content: String = conn
+            .query_row(
+                "SELECT content FROM session_messages WHERE session_id = 's1' AND role = 'system'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["type"], "system");
+        assert_eq!(parsed["subtype"], "agent_starting");
+        assert_eq!(parsed["model"], "pi:azure-openai-responses/gpt-5.5");
+        assert_eq!(parsed["permissionMode"], "auto");
+        assert_eq!(parsed["pendingSendId"], "send-1");
     }
 
     #[test]
