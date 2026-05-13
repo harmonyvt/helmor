@@ -1285,33 +1285,7 @@ export function useConversationStreaming({
 			const isFirstUserMessage =
 				(currentThread ?? []).every((message) => message.role !== "user") &&
 				(currentTitle == null || currentTitle === "Untitled");
-			const repoPreferences = repoId ? await loadRepoPreferences(repoId) : null;
-			// The general-preference preamble is prepended ONLY on the wire
-			// to the agent (Rust side stitches it onto `prompt_prefix`).
-			// `trimmedPrompt` is what the user typed — that's what we
-			// optimistically render in the chat bubble and what the Rust
-			// side persists to `session_messages` as the user_prompt body.
-			const repoPreferencePrefix =
-				isFirstUserMessage && !isCompactCommand
-					? resolveGeneralPreferencePrefix(repoPreferences)
-					: null;
-			// Combine the (optional) context-transfer history, repo preference
-			// preamble, and debug-mode guidance. All ride as `promptPrefix` —
-			// none appears in the chat bubble or DB. Context transfer goes first;
-			// turn-scoped debug guidance lands closest to the user's actual prompt.
 			const contextTransferTrimmed = contextTransferPrefix?.trim() || null;
-			const debugIngestStatus =
-				debugMode && targetWorkspaceId && ensureDebugIngestForSubmit
-					? await ensureDebugIngestForSubmit(targetWorkspaceId)
-					: null;
-			const debugPromptPrefix = buildDebugPromptPrefix(
-				debugMode,
-				debugIngestStatus,
-			);
-			const promptPrefix =
-				[contextTransferTrimmed, repoPreferencePrefix, debugPromptPrefix]
-					.filter(Boolean)
-					.join("\n\n") || null;
 			const now = new Date().toISOString();
 			const userMessageId = crypto.randomUUID();
 			const streamStartPlaceholderId = crypto.randomUUID();
@@ -1461,6 +1435,35 @@ export function useConversationStreaming({
 						prompt: trimmedPrompt,
 						model,
 					}) ?? {};
+
+				const repoPreferences = repoId
+					? await loadRepoPreferences(repoId)
+					: null;
+				// The general-preference preamble is prepended ONLY on the wire
+				// to the agent (Rust side stitches it onto `prompt_prefix`).
+				// `trimmedPrompt` is what the user typed — that's what we
+				// optimistically render in the chat bubble and what the Rust
+				// side persists to `session_messages` as the user_prompt body.
+				const repoPreferencePrefix =
+					isFirstUserMessage && !isCompactCommand
+						? resolveGeneralPreferencePrefix(repoPreferences)
+						: null;
+				const debugIngestStatus =
+					debugMode && targetWorkspaceId && ensureDebugIngestForSubmit
+						? await ensureDebugIngestForSubmit(targetWorkspaceId)
+						: null;
+				const debugPromptPrefix = buildDebugPromptPrefix(
+					debugMode,
+					debugIngestStatus,
+				);
+				// Combine the (optional) context-transfer history, repo preference
+				// preamble, and debug-mode guidance. All ride as `promptPrefix` —
+				// none appears in the chat bubble or DB. Context transfer goes first;
+				// turn-scoped debug guidance lands closest to the user's actual prompt.
+				const promptPrefix =
+					[contextTransferTrimmed, repoPreferencePrefix, debugPromptPrefix]
+						.filter(Boolean)
+						.join("\n\n") || null;
 
 				await startAgentMessageStream(
 					{
