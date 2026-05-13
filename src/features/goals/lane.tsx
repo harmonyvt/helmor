@@ -6,7 +6,7 @@ import type {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { GoalLaneDefinition } from "./board-model";
-import { WorkspaceCard } from "./card";
+import { WorkspaceCardWithHover } from "./card";
 
 type GoalLaneProps = {
 	lane: GoalLaneDefinition;
@@ -67,7 +67,7 @@ export function GoalLane({
 
 			<div className="flex flex-col gap-2 overflow-y-auto p-2">
 				{workspaces.map((workspace) => (
-					<WorkspaceCard
+					<WorkspaceCardWithHover
 						key={workspace.id}
 						workspace={workspace}
 						isSelected={selectedId === workspace.id}
