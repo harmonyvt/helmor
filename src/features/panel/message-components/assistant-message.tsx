@@ -16,6 +16,7 @@ import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useCompactThread } from "../compact-thread-context";
 import { ImageBlock, PlanReviewCard, TodoList } from "./content-parts";
+import { CopyMessageButton } from "./copy-message";
 import { DelegationAnchor } from "./delegation-anchor";
 import { GenericCard } from "./generic-card";
 import type { RenderedMessage, StreamdownMode } from "./shared";
@@ -155,7 +156,7 @@ export function ChatAssistantMessage({
 		<div
 			data-message-id={message.id}
 			data-message-role="assistant"
-			className="flex min-w-0 max-w-full flex-col gap-1"
+			className="group/assistant flex min-w-0 max-w-full flex-col gap-1"
 		>
 			{parts.map((part) => {
 				const key = partKey(part);
@@ -229,6 +230,14 @@ export function ChatAssistantMessage({
 			{!streaming && message.status?.type === "incomplete" ? (
 				<MessageStatusBadge reason={message.status.reason} />
 			) : null}
+			{!streaming && (
+				<div className="flex items-center opacity-0 transition-opacity group-hover/assistant:opacity-100">
+					<CopyMessageButton
+						message={message}
+						className="size-5 shrink-0 text-muted-foreground/30 hover:text-muted-foreground"
+					/>
+				</div>
+			)}
 		</div>
 	);
 }
