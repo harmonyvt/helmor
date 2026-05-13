@@ -697,6 +697,14 @@ export type SendAssigneeMessageRequest = {
 export type SendAssigneeMessageResult = {
 	queued: boolean;
 	started: boolean;
+	executionState?:
+		| "queued"
+		| "spawned"
+		| "session_streaming"
+		| "first_assistant_event_seen"
+		| "completed"
+		| "failed"
+		| string;
 	sessionId: string;
 	workspaceId: string;
 	pendingSendId: string;

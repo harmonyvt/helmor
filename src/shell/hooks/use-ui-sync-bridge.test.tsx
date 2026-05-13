@@ -107,6 +107,37 @@ describe("useUiSyncBridge", () => {
 		});
 	});
 
+	it("invalidates goal assignee lists when session messages change", async () => {
+		const queryClient = makeClient();
+		const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+
+		renderHook(() =>
+			useUiSyncBridge({
+				queryClient,
+				processPendingCliSends: vi.fn(),
+				reloadSettings: vi.fn(),
+				refreshGithubIdentity: vi.fn(),
+			}),
+		);
+
+		act(() => {
+			capturedSubscription?.({
+				type: "sessionMessagesChanged",
+				workspaceId: "child-workspace-1",
+				sessionId: "session-1",
+			});
+		});
+
+		await waitFor(() => {
+			expect(invalidateQueries).toHaveBeenCalledWith({
+				predicate: expect.any(Function),
+			});
+			expect(invalidateQueries).toHaveBeenCalledWith({
+				queryKey: [...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			});
+		});
+	});
+
 	it("invalidates forge detection when forge state changes", async () => {
 		const queryClient = makeClient();
 		const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");

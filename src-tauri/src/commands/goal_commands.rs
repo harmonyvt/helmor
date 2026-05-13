@@ -156,6 +156,7 @@ pub async fn send_assignee_message(
     let receipt = crate::background_agents::enqueue(app.clone(), prepared.send_params)?;
     result.started = receipt.started;
     result.pending_send_id = receipt.task_id;
+    result.execution_state = receipt.execution_state.to_string();
     publish_goal_child_workspace_changes(
         &app,
         goal_workspace_id,

@@ -324,6 +324,12 @@ pub fn send_message(
         params![user_msg_id, session_id, user_content, timestamp],
     )?;
 
+    if let Ok(historical) = crate::sessions::list_session_historical_records(&session_id) {
+        on_event(&AgentStreamEvent::Update {
+            messages: crate::pipeline::MessagePipeline::convert_historical(&historical),
+        });
+    }
+
     // 7. Event loop
     let mut pipeline = crate::pipeline::MessagePipeline::new(
         &model.provider,
