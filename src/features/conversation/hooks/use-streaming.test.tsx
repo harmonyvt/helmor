@@ -257,6 +257,14 @@ describe("useConversationStreaming", () => {
 			}),
 			expect.any(Function),
 		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"create temporary instrumentation that points back to this ingest endpoint",
+				),
+			}),
+			expect.any(Function),
+		);
 	});
 
 	it("keeps approval requests scoped to their session context", async () => {
