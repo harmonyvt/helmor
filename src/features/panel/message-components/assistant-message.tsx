@@ -6,6 +6,7 @@ import {
 	ReasoningTrigger,
 } from "@/components/ai/reasoning";
 import { LazyStreamdown } from "@/components/streamdown-loader";
+import { useSmoothStreamContent } from "@/features/conversation/hooks/use-smooth-stream-content";
 import {
 	type ExtendedMessagePart,
 	partKey,
@@ -34,14 +35,6 @@ import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
 
 // --- AssistantText ---
 
-const STREAMING_ANIMATED = {
-	animation: "blurIn" as const,
-	duration: 150,
-	easing: "linear" as const,
-	sep: "word" as const,
-	stagger: 30,
-};
-
 const AssistantText = memo(function AssistantText({
 	text,
 	streaming,
@@ -51,21 +44,22 @@ const AssistantText = memo(function AssistantText({
 }) {
 	const mode: StreamdownMode = streaming ? "streaming" : "static";
 	const { settings } = useSettings();
+	const smoothedText = useSmoothStreamContent(text, { enabled: streaming });
 
 	return (
 		<div
 			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-foreground"
 			style={{ fontSize: `${settings.fontSize}px` }}
 		>
-			<Suspense fallback={<AssistantTextFallback text={text} />}>
+			<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
 				<LazyStreamdown
-					animated={streaming ? STREAMING_ANIMATED : false}
+					animated={false}
 					caret={undefined}
 					className="conversation-streamdown"
-					isAnimating={streaming}
+					isAnimating={false}
 					mode={mode}
 				>
-					{text}
+					{smoothedText}
 				</LazyStreamdown>
 			</Suspense>
 		</div>
