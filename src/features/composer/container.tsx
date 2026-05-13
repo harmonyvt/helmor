@@ -61,6 +61,7 @@ import {
 	type ProviderSwapChoice,
 	ProviderSwapDialog,
 } from "./provider-swap-dialog";
+import { storeProviderSwitchParent } from "./provider-switch-parents";
 import { SubmitQueueList } from "./submit-queue-list";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
@@ -755,6 +756,16 @@ export const WorkspaceComposerContainer = memo(
 								newSessionId,
 								contextPrefix,
 							);
+						}
+
+						if (choice === "bring-history") {
+							// Record the parent session so the panel can show the old
+							// conversation history above a visual divider in the new thread.
+							storeProviderSwitchParent(newSessionId, {
+								parentSessionId: displayedSessionId,
+								fromProvider: currentProvider as AgentProvider,
+								toProvider: newProvider as AgentProvider,
+							});
 						}
 
 						setProviderSwitchStatus("Switching composer to new provider…");

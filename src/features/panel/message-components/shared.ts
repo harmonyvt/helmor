@@ -7,6 +7,7 @@ import type {
 	MessagePart,
 	PlanReviewPart,
 	PromptSuggestionPart,
+	ProviderSwitchDividerPart,
 	SystemNoticePart,
 	ThreadMessageLike,
 	TodoListPart,
@@ -136,6 +137,12 @@ export function isGenericCardPart(part: unknown): part is GenericCardPart {
 		part.type === "generic-card" &&
 		typeof part.title === "string"
 	);
+}
+
+export function isProviderSwitchDividerPart(
+	part: unknown,
+): part is ProviderSwitchDividerPart {
+	return isObj(part) && part.type === "provider-switch-divider";
 }
 
 // --- tiny utils ---

@@ -193,6 +193,10 @@ export function partStructurallyEqual(
 					JSON.stringify(db.structuredResult ?? null)
 			);
 		}
+		case "provider-switch-divider":
+			// Frontend-only synthetic part — structurally stable (only ever one
+			// per thread boundary, same providers). Reference equality suffices.
+			return a === b;
 		default: {
 			const _exhaustive: never = a;
 			return _exhaustive === b;
