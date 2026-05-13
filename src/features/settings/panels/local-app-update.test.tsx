@@ -21,6 +21,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 import { LocalAppUpdatePanel } from "./local-app-update";
+import { resetLocalAppInstallStoreForTests } from "./local-app-update-store";
 
 const installResult = (): HelmorAppInstallResult => ({
 	repoRoot: "/Users/harmony/helmor",
@@ -45,6 +46,7 @@ describe("LocalAppUpdatePanel", () => {
 
 	afterEach(() => {
 		cleanup();
+		resetLocalAppInstallStoreForTests();
 		vi.clearAllMocks();
 	});
 
@@ -205,5 +207,68 @@ describe("LocalAppUpdatePanel", () => {
 
 		expect(deferred.resolve).toBeDefined();
 		deferred.resolve?.(installResult());
+	});
+
+	it("keeps in-flight progress visible after the settings panel remounts", async () => {
+		const user = userEvent.setup();
+		const pushToast = vi.fn();
+		const deferred: {
+			resolve?: (result: HelmorAppInstallResult) => void;
+		} = {};
+		let emitInstallEvent: ((event: AppInstallEvent) => void) | undefined;
+		apiMocks.runHelmorAppInstall.mockImplementation(
+			(onEvent: (event: AppInstallEvent) => void) => {
+				emitInstallEvent = onEvent;
+				onEvent({
+					type: "stepStarted",
+					stepId: "buildApp",
+					label: "Building production app",
+				});
+				onEvent({
+					type: "output",
+					stepId: "buildApp",
+					stream: "stdout",
+					data: "Compiling frontend bundle\n",
+				});
+				return new Promise<HelmorAppInstallResult>((resolve) => {
+					deferred.resolve = resolve;
+				});
+			},
+		);
+
+		const firstRender = render(
+			<WorkspaceToastProvider value={pushToast}>
+				<LocalAppUpdatePanel />
+			</WorkspaceToastProvider>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Install Update" }));
+		expect(
+			await screen.findByText("Compiling frontend bundle"),
+		).toBeInTheDocument();
+		firstRender.unmount();
+
+		render(
+			<WorkspaceToastProvider value={pushToast}>
+				<LocalAppUpdatePanel />
+			</WorkspaceToastProvider>,
+		);
+
+		expect(
+			screen.getAllByText("Building production app").length,
+		).toBeGreaterThan(0);
+		expect(screen.getByText("Compiling frontend bundle")).toBeInTheDocument();
+		expect(apiMocks.runHelmorAppInstall).toHaveBeenCalledTimes(1);
+
+		expect(emitInstallEvent).toBeDefined();
+		emitInstallEvent?.({
+			type: "stepFinished",
+			stepId: "buildApp",
+			status: "ok",
+			message: null,
+		});
+		deferred.resolve?.(installResult());
+
+		expect(await screen.findByText("Update installed")).toBeInTheDocument();
 	});
 });

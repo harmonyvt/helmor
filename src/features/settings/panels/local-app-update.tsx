@@ -6,106 +6,20 @@ import {
 	Loader2,
 	X,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
-import {
-	type AppInstallEvent,
-	type AppInstallStepStatus,
-	cancelHelmorAppInstall,
-	type HelmorAppInstallResult,
-	restartApp,
-	runHelmorAppInstall,
-} from "@/lib/api";
+import { type HelmorAppInstallResult, restartApp } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { SettingsNotice, SettingsRow } from "../components/settings-row";
-
-const INSTALL_STEPS = [
-	{ id: "resolveRepo", label: "Find checkout" },
-	{ id: "pullRepo", label: "Pull latest changes" },
-	{ id: "buildApp", label: "Build app" },
-	{ id: "inspectBuiltApp", label: "Inspect build" },
-	{ id: "installApp", label: "Install app" },
-	{ id: "signApp", label: "Sign app" },
-	{ id: "verifyApp", label: "Verify app" },
-	{ id: "verifyAppEntitlements", label: "Verify entitlements" },
-	{ id: "inspectInstalledApp", label: "Read app details" },
-	{ id: "dataInfo", label: "Check data mode" },
-] as const;
-
-type InstallPhase = "idle" | "running" | "succeeded" | "failed" | "cancelled";
-type UiStepStatus = "pending" | "running" | AppInstallStepStatus | "error";
-
-type UiStep = {
-	id: string;
-	label: string;
-	status: UiStepStatus;
-	message: string | null;
-};
-
-type InstallUiState = {
-	phase: InstallPhase;
-	repoRoot: string | null;
-	installedAppPath: string | null;
-	currentStepId: string | null;
-	steps: UiStep[];
-	log: string;
-	error: string | null;
-	result: HelmorAppInstallResult | null;
-};
-
-const initialSteps = (): UiStep[] =>
-	INSTALL_STEPS.map((step) => ({
-		...step,
-		status: "pending",
-		message: null,
-	}));
-
-const initialState = (): InstallUiState => ({
-	phase: "idle",
-	repoRoot: null,
-	installedAppPath: null,
-	currentStepId: null,
-	steps: initialSteps(),
-	log: "",
-	error: null,
-	result: null,
-});
-
-const MAX_LOG_CHARS = 60_000;
-
-function appendLog(log: string, data: string) {
-	const next = `${log}${data}`;
-	return next.length > MAX_LOG_CHARS ? next.slice(-MAX_LOG_CHARS) : next;
-}
-
-function updateStep(
-	steps: UiStep[],
-	stepId: string,
-	patch: Partial<UiStep>,
-	fallbackLabel?: string,
-) {
-	let found = false;
-	const next = steps.map((step) => {
-		if (step.id !== stepId) return step;
-		found = true;
-		return {
-			...step,
-			...(fallbackLabel ? { label: fallbackLabel } : {}),
-			...patch,
-		};
-	});
-	if (found) return next;
-	return [
-		...next,
-		{
-			id: stepId,
-			label: fallbackLabel ?? stepId,
-			status: patch.status ?? "pending",
-			message: patch.message ?? null,
-		},
-	];
-}
+import {
+	cancelLocalAppInstall,
+	getLocalAppInstallSnapshot,
+	type InstallUiState,
+	startLocalAppInstall,
+	subscribeLocalAppInstall,
+	type UiStepStatus,
+} from "./local-app-update-store";
 
 function stepStatusClass(status: UiStepStatus) {
 	switch (status) {
@@ -124,10 +38,6 @@ function stepStatusClass(status: UiStepStatus) {
 	}
 }
 
-function isCancelledMessage(message: string) {
-	return /\bcancell?ed\b/i.test(message);
-}
-
 function currentStepLabel(state: InstallUiState) {
 	if (!state.currentStepId) return "Preparing update…";
 	return (
@@ -137,8 +47,11 @@ function currentStepLabel(state: InstallUiState) {
 }
 
 export function LocalAppUpdatePanel() {
-	const [installState, setInstallState] =
-		useState<InstallUiState>(initialState);
+	const installState = useSyncExternalStore(
+		subscribeLocalAppInstall,
+		getLocalAppInstallSnapshot,
+		getLocalAppInstallSnapshot,
+	);
 	const [logsExpanded, setLogsExpanded] = useState(false);
 	const [cancelling, setCancelling] = useState(false);
 	const pushToast = useWorkspaceToast();
@@ -153,69 +66,6 @@ export function LocalAppUpdatePanel() {
 			).length,
 		[installState.steps],
 	);
-
-	const handleInstallEvent = useCallback((event: AppInstallEvent) => {
-		setInstallState((previous) => {
-			switch (event.type) {
-				case "started":
-					return {
-						...previous,
-						repoRoot: event.repoRoot,
-						installedAppPath: event.installedAppPath,
-					};
-				case "stepStarted":
-					return {
-						...previous,
-						currentStepId: event.stepId,
-						steps: updateStep(
-							previous.steps,
-							event.stepId,
-							{ status: "running", message: null },
-							event.label,
-						),
-						log: appendLog(previous.log, `\n==> ${event.label}\n`),
-					};
-				case "output":
-					return {
-						...previous,
-						log: appendLog(previous.log, event.data),
-					};
-				case "stepFinished":
-					return {
-						...previous,
-						currentStepId:
-							previous.currentStepId === event.stepId
-								? null
-								: previous.currentStepId,
-						steps: updateStep(previous.steps, event.stepId, {
-							status: event.status,
-							message: event.message,
-						}),
-					};
-				case "completed":
-					return {
-						...previous,
-						phase: "succeeded",
-						currentStepId: null,
-						result: event.result,
-						error: null,
-					};
-				case "error":
-					return {
-						...previous,
-						phase: isCancelledMessage(event.message) ? "cancelled" : "failed",
-						currentStepId: null,
-						error: event.message,
-						steps: event.stepId
-							? updateStep(previous.steps, event.stepId, {
-									status: "error",
-									message: event.message,
-								})
-							: previous.steps,
-					};
-			}
-		});
-	}, []);
 
 	const showRestartToast = useCallback(
 		(result: HelmorAppInstallResult) => {
@@ -245,37 +95,16 @@ export function LocalAppUpdatePanel() {
 	);
 
 	const handleInstallApp = useCallback(async () => {
-		setInstallState({
-			...initialState(),
-			phase: "running",
-			log: "Preparing Helmor update…\n",
-		});
 		setLogsExpanded(false);
 		try {
-			const result = await runHelmorAppInstall(handleInstallEvent);
-			setInstallState((previous) => ({
-				...previous,
-				phase: "succeeded",
-				currentStepId: null,
-				result,
-				error: null,
-			}));
-			showRestartToast(result);
-		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
-			setInstallState((previous) => ({
-				...previous,
-				phase: isCancelledMessage(message) ? "cancelled" : "failed",
-				currentStepId: null,
-				error: message,
-			}));
-		}
-	}, [handleInstallEvent, showRestartToast]);
+			await startLocalAppInstall(showRestartToast);
+		} catch {}
+	}, [showRestartToast]);
 
 	const handleCancel = useCallback(async () => {
 		setCancelling(true);
 		try {
-			await cancelHelmorAppInstall();
+			await cancelLocalAppInstall();
 		} catch (error) {
 			pushToast(
 				error instanceof Error ? error.message : String(error),
@@ -393,6 +222,11 @@ function AppInstallProgressCard({
 						{completedCount} of {state.steps.length} steps complete
 						{state.repoRoot ? ` · ${state.repoRoot}` : ""}
 					</div>
+					{state.latestOutput ? (
+						<div className="mt-1 max-w-xl truncate font-mono text-[11px] text-muted-foreground/85">
+							{state.latestOutput}
+						</div>
+					) : null}
 				</div>
 				{state.result ? (
 					<div className="shrink-0 text-right text-muted-foreground">
