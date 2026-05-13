@@ -758,13 +758,15 @@ export const WorkspaceComposerContainer = memo(
 							);
 						}
 
-						// Record the parent session so the panel can show the old
-						// conversation history above a visual divider in the new thread.
-						storeProviderSwitchParent(newSessionId, {
-							parentSessionId: displayedSessionId,
-							fromProvider: currentProvider as AgentProvider,
-							toProvider: newProvider as AgentProvider,
-						});
+						if (choice === "bring-history") {
+							// Record the parent session so the panel can show the old
+							// conversation history above a visual divider in the new thread.
+							storeProviderSwitchParent(newSessionId, {
+								parentSessionId: displayedSessionId,
+								fromProvider: currentProvider as AgentProvider,
+								toProvider: newProvider as AgentProvider,
+							});
+						}
 
 						setProviderSwitchStatus("Switching composer to new provider…");
 						toast.loading("Switching composer to new provider…", {

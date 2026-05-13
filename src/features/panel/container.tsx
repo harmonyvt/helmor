@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { getProviderSwitchParent } from "@/features/composer/provider-switch-parents";
 import { getShortcut } from "@/features/shortcuts/registry";
 import type {
 	AgentModelSection,
@@ -27,7 +28,6 @@ import {
 	WORKSPACE_SCRIPT_PROMPTS,
 	type WorkspaceScriptType,
 } from "@/lib/workspace-script-actions";
-import { getProviderSwitchParent } from "../composer/provider-switch-parents";
 import { WorkspacePanel } from "./index";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 

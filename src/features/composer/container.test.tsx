@@ -141,6 +141,7 @@ vi.mock("./index", async () => {
 	};
 });
 
+import { getProviderSwitchParent } from "@/features/composer/provider-switch-parents";
 import { WorkspaceComposerContainer } from "./container";
 
 const MODEL_SECTIONS = [
@@ -271,11 +272,13 @@ describe("WorkspaceComposerContainer", () => {
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
 		apiMockState.setWorkspaceLinkedDirectories.mockReset();
+		localStorage.clear();
 	});
 
 	afterEach(() => {
 		cleanup();
 		vi.clearAllMocks();
+		localStorage.clear();
 	});
 
 	it("does not remount the composer when switching displayed sessions", () => {
@@ -669,6 +672,71 @@ describe("WorkspaceComposerContainer", () => {
 		expect(
 			queryClient.getQueryData(sessionThreadCacheKey("session-new")),
 		).toEqual([]);
+		expect(getProviderSwitchParent("session-new")).toEqual({
+			parentSessionId: "session-1",
+			fromProvider: "claude",
+			toProvider: "codex",
+		});
+	});
+
+	it("does not store a provider-switch parent when starting fresh", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		const onSelectModel = vi.fn();
+		const onSwitchSession = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={onSelectModel}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSwitchSession={onSwitchSession}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(composerMockState.lastOnSelectModel).not.toBeNull();
+		composerMockState.lastOnSelectModel?.("gpt-5.4");
+		fireEvent.click(await screen.findByText("Start fresh"));
+
+		await waitFor(() => {
+			expect(onSelectModel).toHaveBeenCalledWith(
+				"session:session-new",
+				"gpt-5.4",
+			);
+		});
+		expect(onSwitchSession).toHaveBeenCalledWith("session-new");
+		expect(apiMockState.createSession).toHaveBeenCalledWith("workspace-1");
+		expect(apiMockState.loadSessionThreadMessages).not.toHaveBeenCalled();
+		expect(getProviderSwitchParent("session-new")).toBeNull();
 	});
 
 	it("passes through pending prompt permission mode without a model override", async () => {
