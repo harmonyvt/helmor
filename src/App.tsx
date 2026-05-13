@@ -114,6 +114,7 @@ import {
 	helmorQueryKeys,
 	helmorQueryPersister,
 	sessionThreadMessagesQueryOptions,
+	shouldDehydrateHelmorQuery,
 	workspaceChangeRequestQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceForgeActionStatusQueryOptions,
@@ -312,41 +313,7 @@ function MainApp() {
 				persistOptions={{
 					persister: helmorQueryPersister,
 					dehydrateOptions: {
-						shouldDehydrateQuery: (query) => {
-							// Never persist session thread messages — they must
-							// always be loaded fresh from the DB. Stale streaming
-							// snapshots surviving app restart was a root cause of
-							// cross-session message contamination.
-							const key = query.queryKey;
-							if (
-								key[0] === "sessionMessages" &&
-								key.length >= 3 &&
-								key[2] === "thread"
-							) {
-								return false;
-							}
-							if (key[0] === "slashCommands") {
-								return false;
-							}
-							if (key[0] === "agentModelSections") {
-								return false;
-							}
-							// Workspace lists are fast local DB queries — always
-							// load fresh to avoid "ghost workspace" errors on startup.
-							if (
-								key[0] === "workspaceGroups" ||
-								key[0] === "archivedWorkspaces"
-							) {
-								return false;
-							}
-							if (
-								key[0] === "workspaceChanges" ||
-								key[0] === "workspaceFiles"
-							) {
-								return false;
-							}
-							return query.state.status === "success";
-						},
+						shouldDehydrateQuery: shouldDehydrateHelmorQuery,
 					},
 				}}
 				onSuccess={() => {
