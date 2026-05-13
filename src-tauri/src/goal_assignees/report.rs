@@ -29,6 +29,21 @@ pub(super) fn latest_report_marker(
     })
 }
 
+pub(super) fn message_text(message: &pipeline::types::ThreadMessageLike) -> String {
+    message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            pipeline::types::ExtendedMessagePart::Basic(pipeline::types::MessagePart::Text {
+                text,
+                ..
+            }) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn detect_report_type(text: &str) -> Option<&'static str> {
     text.lines().find_map(detect_report_type_in_line)
 }
@@ -52,21 +67,6 @@ fn normalize_report_marker_line(line: &str) -> String {
         trimmed = next;
     }
     trimmed.to_lowercase()
-}
-
-fn message_text(message: &pipeline::types::ThreadMessageLike) -> String {
-    message
-        .content
-        .iter()
-        .filter_map(|part| match part {
-            pipeline::types::ExtendedMessagePart::Basic(pipeline::types::MessagePart::Text {
-                text,
-                ..
-            }) => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn excerpt(text: &str) -> String {

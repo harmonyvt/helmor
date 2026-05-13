@@ -498,6 +498,12 @@ export type WorkspaceSessionSummary = {
 	 * inspector commit button (e.g. "create-pr", "commit-and-push"). Drives
 	 * post-stream verifiers and auto-close behavior. */
 	actionKind?: ActionKind | null;
+	threadRole?: string | null;
+	threadStatus?: string | null;
+	supersedesThreadId?: string | null;
+	staleReason?: string | null;
+	lastSupervisorMessageId?: string | null;
+	lastMilestoneReportId?: string | null;
 	parentSessionId?: string | null;
 	parentMessageId?: string | null;
 	delegationStatus?: string | null;
@@ -692,6 +698,17 @@ export type SendAssigneeMessageRequest = {
 	cardId: string;
 	message: string;
 	priority?: string | null;
+	threadId?: string | null;
+};
+
+export type SendThreadMessageRequest = {
+	goalWorkspaceId: string;
+	workspaceId: string;
+	threadId: string;
+	message: string;
+	priority?: string | null;
+	modelId?: string | null;
+	permissionMode?: string | null;
 };
 
 export type SendAssigneeMessageResult = {
@@ -709,11 +726,13 @@ export type SendAssigneeMessageResult = {
 	workspaceId: string;
 	pendingSendId: string;
 	message?: string | null;
+	supervisorMessageId?: string | null;
 };
 
 export type ReadAssigneeThreadRequest = {
 	goalWorkspaceId: string;
 	cardId: string;
+	threadId?: string | null;
 	sinceMessageId?: string | null;
 };
 
@@ -729,10 +748,37 @@ export type AssigneeStatusSummary = {
 	cardId: string;
 	workspaceId: string;
 	sessionId: string;
+	activeThreadId: string;
+	threadCount: number;
 	assigneeName: string;
 	sessionStatus: string;
+	effectiveStatus: string;
 	latestReport?: AssigneeReportMarker | null;
+	staleThreads: StaleThreadSummary[];
+	recommendedAction: string;
 	summary: string;
+};
+
+export type StaleThreadSummary = {
+	threadId: string;
+	reason: string;
+	lastMessageAt?: string | null;
+};
+
+export type SetCardAssigneeThreadRequest = {
+	goalWorkspaceId: string;
+	cardId: string;
+	threadId: string;
+	reason?: string | null;
+	supersedesThreadId?: string | null;
+};
+
+export type SetCardAssigneeThreadResult = {
+	cardId: string;
+	workspaceId: string;
+	activeThreadId: string;
+	supersededThreadId?: string | null;
+	reason?: string | null;
 };
 
 export type AssigneeSummary = {
@@ -2467,6 +2513,22 @@ export async function sendAssigneeMessage(
 	request: SendAssigneeMessageRequest,
 ): Promise<SendAssigneeMessageResult> {
 	return invoke<SendAssigneeMessageResult>("send_assignee_message", {
+		request,
+	});
+}
+
+export async function sendThreadMessage(
+	request: SendThreadMessageRequest,
+): Promise<SendAssigneeMessageResult> {
+	return invoke<SendAssigneeMessageResult>("send_thread_message", {
+		request,
+	});
+}
+
+export async function setCardAssigneeThread(
+	request: SetCardAssigneeThreadRequest,
+): Promise<SetCardAssigneeThreadResult> {
+	return invoke<SetCardAssigneeThreadResult>("set_card_assignee_thread", {
 		request,
 	});
 }

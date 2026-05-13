@@ -9,9 +9,9 @@ mod storage;
 
 use prompt::format_supervisor_update;
 pub use prompt::{assignee_bootstrap_prompt, AssigneeBootstrapPromptInput};
-use report::latest_report_marker;
 pub use report::AssigneeReportMarker;
-use resolver::resolve_assignee;
+use report::{latest_report_marker, message_text};
+use resolver::{resolve_assignee, resolve_thread_assignee};
 use storage::queue_assignee_prompt;
 
 use crate::{pipeline, service, sessions, ui_sync::UiMutationEvent};
@@ -23,6 +23,19 @@ pub struct SendAssigneeMessageRequest {
     pub card_id: String,
     pub message: String,
     pub priority: Option<String>,
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendThreadMessageRequest {
+    pub goal_workspace_id: String,
+    pub workspace_id: String,
+    pub thread_id: String,
+    pub message: String,
+    pub priority: Option<String>,
+    pub model_id: Option<String>,
+    pub permission_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +48,7 @@ pub struct SendAssigneeMessageResult {
     pub workspace_id: String,
     pub pending_send_id: String,
     pub message: String,
+    pub supervisor_message_id: Option<String>,
 }
 
 pub(crate) struct PreparedAssigneeMessage {
@@ -47,7 +61,18 @@ pub(crate) struct PreparedAssigneeMessage {
 pub struct ReadAssigneeThreadRequest {
     pub goal_workspace_id: String,
     pub card_id: String,
+    pub thread_id: Option<String>,
     pub since_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCardAssigneeThreadRequest {
+    pub goal_workspace_id: String,
+    pub card_id: String,
+    pub thread_id: String,
+    pub reason: Option<String>,
+    pub supersedes_thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,10 +105,33 @@ pub struct AssigneeStatusSummary {
     pub card_id: String,
     pub workspace_id: String,
     pub session_id: String,
+    pub active_thread_id: String,
+    pub thread_count: usize,
     pub assignee_name: String,
     pub session_status: String,
+    pub effective_status: String,
     pub latest_report: Option<AssigneeReportMarker>,
+    pub stale_threads: Vec<StaleThreadSummary>,
+    pub recommended_action: String,
     pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaleThreadSummary {
+    pub thread_id: String,
+    pub reason: String,
+    pub last_message_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCardAssigneeThreadResult {
+    pub card_id: String,
+    pub workspace_id: String,
+    pub active_thread_id: String,
+    pub superseded_thread_id: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,13 +149,13 @@ pub struct AssigneeSummary {
 pub fn send_assignee_message(
     request: SendAssigneeMessageRequest,
 ) -> Result<SendAssigneeMessageResult> {
-    let assignee = resolve_assignee(&request.goal_workspace_id, &request.card_id)?;
+    let assignee = resolve_assignee_for_send(&request)?;
     let message = format_supervisor_update(&request.message, request.priority.as_deref())?;
-    let pending_send_id = queue_assignee_prompt(&assignee, &message)?;
+    let queued = queue_assignee_prompt(&assignee, &message)?;
     let started = assignee.session.status != "streaming";
 
     let _ = crate::ui_sync::notify_running_app(UiMutationEvent::PendingCliSendQueued {
-        pending_send_id: pending_send_id.clone(),
+        pending_send_id: queued.pending_send_id.clone(),
         workspace_id: assignee.workspace_id.clone(),
         session_id: assignee.session.id.clone(),
         prompt: message.clone(),
@@ -121,15 +169,16 @@ pub fn send_assignee_message(
         execution_state: if started { "spawned" } else { "queued" }.to_string(),
         session_id: assignee.session.id,
         workspace_id: assignee.workspace_id,
-        pending_send_id,
+        pending_send_id: queued.pending_send_id,
         message,
+        supervisor_message_id: Some(queued.supervisor_message_id),
     })
 }
 
 pub(crate) fn prepare_assignee_message(
     request: SendAssigneeMessageRequest,
 ) -> Result<PreparedAssigneeMessage> {
-    let assignee = resolve_assignee(&request.goal_workspace_id, &request.card_id)?;
+    let assignee = resolve_assignee_for_send(&request)?;
     let message = format_supervisor_update(&request.message, request.priority.as_deref())?;
     let task_id = Uuid::new_v4().to_string();
     let result = SendAssigneeMessageResult {
@@ -145,6 +194,7 @@ pub(crate) fn prepare_assignee_message(
         workspace_id: assignee.workspace_id.clone(),
         pending_send_id: task_id,
         message: message.clone(),
+        supervisor_message_id: None,
     };
     let send_params = service::SendMessageParams {
         workspace_ref: assignee.workspace_id,
@@ -162,8 +212,67 @@ pub(crate) fn prepare_assignee_message(
     })
 }
 
+pub(crate) fn prepare_thread_message(
+    request: SendThreadMessageRequest,
+) -> Result<PreparedAssigneeMessage> {
+    let assignee = resolve_thread_assignee(
+        &request.goal_workspace_id,
+        &request.workspace_id,
+        &request.thread_id,
+    )?;
+    let message = format_supervisor_update(&request.message, request.priority.as_deref())?;
+    let task_id = Uuid::new_v4().to_string();
+    let result = SendAssigneeMessageResult {
+        queued: true,
+        started: assignee.session.status != "streaming",
+        execution_state: if assignee.session.status == "streaming" {
+            "queued"
+        } else {
+            "spawned"
+        }
+        .to_string(),
+        session_id: assignee.session.id.clone(),
+        workspace_id: assignee.workspace_id.clone(),
+        pending_send_id: task_id,
+        message: message.clone(),
+        supervisor_message_id: None,
+    };
+    let send_params = service::SendMessageParams {
+        workspace_ref: assignee.workspace_id,
+        session_id: Some(assignee.session.id),
+        prompt: message,
+        model: request.model_id.or(assignee.session.model),
+        permission_mode: request
+            .permission_mode
+            .or(Some(assignee.session.permission_mode)),
+        linked_directories: Vec::new(),
+        delegate_to_running_app: false,
+    };
+
+    Ok(PreparedAssigneeMessage {
+        result,
+        send_params,
+    })
+}
+
+fn resolve_assignee_for_send(
+    request: &SendAssigneeMessageRequest,
+) -> Result<resolver::ResolvedAssignee> {
+    match request.thread_id.as_deref() {
+        Some(thread_id) if !thread_id.trim().is_empty() => {
+            resolve_thread_assignee(&request.goal_workspace_id, &request.card_id, thread_id)
+        }
+        _ => resolve_assignee(&request.goal_workspace_id, &request.card_id),
+    }
+}
+
 pub fn read_assignee_thread(request: ReadAssigneeThreadRequest) -> Result<AssigneeThreadResult> {
-    let assignee = resolve_assignee(&request.goal_workspace_id, &request.card_id)?;
+    let assignee = match request.thread_id.as_deref() {
+        Some(thread_id) if !thread_id.trim().is_empty() => {
+            resolve_thread_assignee(&request.goal_workspace_id, &request.card_id, thread_id)?
+        }
+        _ => resolve_assignee(&request.goal_workspace_id, &request.card_id)?,
+    };
     let messages =
         load_assignee_messages(&assignee.session.id, request.since_message_id.as_deref())?;
     let latest_report = latest_report_marker(&messages);
@@ -176,12 +285,90 @@ pub fn read_assignee_thread(request: ReadAssigneeThreadRequest) -> Result<Assign
     })
 }
 
+pub fn set_card_assignee_thread(
+    request: SetCardAssigneeThreadRequest,
+) -> Result<SetCardAssigneeThreadResult> {
+    let new_assignee = resolve_thread_assignee(
+        &request.goal_workspace_id,
+        &request.card_id,
+        &request.thread_id,
+    )?;
+    let previous_assignee = resolve_assignee(&request.goal_workspace_id, &request.card_id).ok();
+    let superseded_thread_id = request
+        .supersedes_thread_id
+        .clone()
+        .or_else(|| {
+            previous_assignee
+                .as_ref()
+                .map(|assignee| assignee.session.id.clone())
+        })
+        .filter(|thread_id| thread_id != &new_assignee.session.id);
+
+    let conn = crate::models::db::write_conn()?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE workspaces SET active_session_id = ?2 WHERE id = ?1",
+        rusqlite::params![new_assignee.workspace_id, new_assignee.session.id],
+    )
+    .with_context(|| {
+        format!(
+            "Failed to set active assignee thread for workspace {}",
+            new_assignee.workspace_id
+        )
+    })?;
+    tx.execute(
+        "UPDATE sessions SET thread_role = 'assignee', thread_status = 'active', stale_reason = NULL WHERE id = ?1",
+        rusqlite::params![new_assignee.session.id],
+    )
+    .with_context(|| format!("Failed to mark thread {} active", new_assignee.session.id))?;
+    if let Some(thread_id) = superseded_thread_id.as_deref() {
+        tx.execute(
+            "UPDATE sessions SET thread_status = 'superseded', stale_reason = ?2 WHERE id = ?1",
+            rusqlite::params![thread_id, request.reason],
+        )
+        .with_context(|| format!("Failed to mark thread {thread_id} superseded"))?;
+        tx.execute(
+            "UPDATE sessions SET supersedes_thread_id = ?2 WHERE id = ?1",
+            rusqlite::params![new_assignee.session.id, thread_id],
+        )
+        .with_context(|| format!("Failed to link superseded thread {thread_id}"))?;
+    }
+    tx.commit()?;
+
+    Ok(SetCardAssigneeThreadResult {
+        card_id: new_assignee.card_id,
+        workspace_id: new_assignee.workspace_id,
+        active_thread_id: new_assignee.session.id,
+        superseded_thread_id,
+        reason: request.reason,
+    })
+}
+
 pub fn summarize_assignee_status(
     request: SummarizeAssigneeStatusRequest,
 ) -> Result<AssigneeStatusSummary> {
     let assignee = resolve_assignee(&request.goal_workspace_id, &request.card_id)?;
+    let sessions = sessions::list_workspace_sessions(&assignee.workspace_id)?;
     let messages = load_assignee_messages(&assignee.session.id, None)?;
     let latest_report = latest_report_marker(&messages);
+    let stale_threads = detect_stale_threads(&sessions, &assignee.session.id)?;
+    let effective_status = latest_report
+        .as_ref()
+        .map(|report| report.report_type.clone())
+        .or_else(|| assignee.session.thread_status.clone())
+        .unwrap_or_else(|| assignee.session.status.clone());
+    let recommended_action = if effective_status == "blocked" {
+        "Read the blocker and either answer it or start a replacement thread if the issue is unrecoverable."
+            .to_string()
+    } else if !stale_threads.is_empty() {
+        "Continue supervising the active thread and avoid sending follow-ups to stale or superseded threads."
+            .to_string()
+    } else if latest_report.is_none() {
+        "Inspect the active thread before reporting progress; no milestone report has been posted yet."
+            .to_string()
+    } else {
+        "Continue normal supervision on the active assignee thread.".to_string()
+    };
     let summary = latest_report
         .as_ref()
         .map(|report| format!("{}: {}", report.report_type, report.excerpt))
@@ -191,9 +378,14 @@ pub fn summarize_assignee_status(
         card_id: assignee.card_id,
         workspace_id: assignee.workspace_id,
         assignee_name: assignee_name(&assignee.session),
+        active_thread_id: assignee.session.id.clone(),
         session_id: assignee.session.id,
+        thread_count: sessions.len(),
         session_status: assignee.session.status,
+        effective_status,
         latest_report,
+        stale_threads,
+        recommended_action,
         summary,
     })
 }
@@ -260,6 +452,70 @@ fn load_assignee_messages(
         }
     }
     Ok(messages)
+}
+
+fn detect_stale_threads(
+    sessions: &[sessions::WorkspaceSessionSummary],
+    active_thread_id: &str,
+) -> Result<Vec<StaleThreadSummary>> {
+    let mut stale_threads = Vec::new();
+    for session in sessions {
+        let messages = load_assignee_messages(&session.id, None)?;
+        let explicit_reason = match session.thread_status.as_deref() {
+            Some("stale" | "superseded" | "blocked") => session
+                .stale_reason
+                .clone()
+                .or_else(|| session.thread_status.clone()),
+            _ => None,
+        };
+        let detected_reason = detect_stale_reason(session, &messages, active_thread_id);
+        if let Some(reason) = explicit_reason.or(detected_reason) {
+            stale_threads.push(StaleThreadSummary {
+                thread_id: session.id.clone(),
+                reason,
+                last_message_at: messages
+                    .last()
+                    .and_then(|message| message.created_at.clone())
+                    .or_else(|| session.last_user_message_at.clone())
+                    .or_else(|| Some(session.updated_at.clone())),
+            });
+        }
+    }
+    Ok(stale_threads)
+}
+
+fn detect_stale_reason(
+    session: &sessions::WorkspaceSessionSummary,
+    messages: &[pipeline::types::ThreadMessageLike],
+    active_thread_id: &str,
+) -> Option<String> {
+    if session.id != active_thread_id && session.thread_status.as_deref() == Some("active") {
+        return Some("superseded by active assignee thread".to_string());
+    }
+    let latest_assistant_text = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == pipeline::types::MessageRole::Assistant)
+        .map(message_text)
+        .unwrap_or_default()
+        .to_lowercase();
+    for needle in [
+        "model access",
+        "model not found",
+        "provider auth",
+        "authentication failed",
+        "permission denied",
+        "startup failure",
+        "failed to start",
+    ] {
+        if latest_assistant_text.contains(needle) {
+            return Some(format!("latest assistant response indicates {needle}"));
+        }
+    }
+    if session.status == "failed" {
+        return Some("session failed".to_string());
+    }
+    None
 }
 
 fn assignee_name(session: &sessions::WorkspaceSessionSummary) -> String {

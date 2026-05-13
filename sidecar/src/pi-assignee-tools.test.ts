@@ -13,6 +13,7 @@ describe("createAssigneeTools", () => {
 			"send_assignee_message",
 			"read_assignee_thread",
 			"summarize_assignee_status",
+			"set_card_assignee_thread",
 			"list_assignees",
 		]);
 	});
