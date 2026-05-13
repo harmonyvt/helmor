@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -212,7 +212,12 @@ pub fn list_assignees(request: ListAssigneesRequest) -> Result<Vec<AssigneeSumma
         let Ok(assignee) = resolve_assignee(&request.goal_workspace_id, &workspace.id) else {
             continue;
         };
-        let messages = load_assignee_messages(&assignee.session.id, None).unwrap_or_default();
+        let messages = load_assignee_messages(&assignee.session.id, None).with_context(|| {
+            format!(
+                "Failed to load assignee messages for session {}",
+                assignee.session.id
+            )
+        })?;
         let latest_report = latest_report_marker(&messages);
         let effective_status = latest_report
             .as_ref()
