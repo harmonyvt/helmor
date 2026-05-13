@@ -71,7 +71,7 @@ export function BrowserSurface({
 					onAddTab={handleAddTab}
 					onExit={onExit}
 				/>
-				<div className="relative flex min-h-0 flex-1 bg-background">
+				<div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
 					{tabs.length === 0 ? (
 						<BrowserEmptyState onAddTab={handleAddTab} />
 					) : (
@@ -400,6 +400,12 @@ function BrowserTabPanel({ tabId, url, isActive }: BrowserTabPanelProps) {
 
 				resizeObserver = new ResizeObserver(reposition);
 				resizeObserver.observe(host);
+				// Re-measure immediately after setup: the webview was created during
+				// async awaits (getBrowserTabProfile + createBrowserWebview), so the
+				// layout may have shifted (inspector appeared, window resized, etc.)
+				// by the time we get here. The ResizeObserver only fires on *changes*,
+				// so without this call the stale bounds persist until the 500ms poll.
+				reposition();
 				pollId = window.setInterval(reposition, 500);
 			} catch (err) {
 				if (!disposed) {
