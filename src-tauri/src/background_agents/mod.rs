@@ -16,6 +16,7 @@ use crate::{
 static SESSION_QUEUES: OnceLock<Mutex<HashMap<String, VecDeque<QueuedSend>>>> = OnceLock::new();
 static SESSION_RUNNING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static SESSION_WAITING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+mod progress;
 
 #[derive(Debug, Clone)]
 struct QueuedSend {
@@ -30,6 +31,7 @@ struct QueuedSend {
 pub struct BackgroundSendReceipt {
     pub task_id: String,
     pub started: bool,
+    pub execution_state: &'static str,
 }
 
 pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSendReceipt> {
@@ -77,6 +79,7 @@ pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSe
     Ok(BackgroundSendReceipt {
         task_id,
         started: should_start,
+        execution_state: if should_start { "spawned" } else { "queued" },
     })
 }
 
@@ -218,13 +221,8 @@ fn session_is_streaming(session_id: &str) -> Result<bool> {
 }
 
 fn publish_event(app: &AppHandle, workspace_id: &str, session_id: &str, event: &AgentStreamEvent) {
-    match event {
-        AgentStreamEvent::Done { .. }
-        | AgentStreamEvent::Aborted { .. }
-        | AgentStreamEvent::Error { .. } => {
-            publish_session_changed(app, workspace_id, session_id);
-        }
-        _ => {}
+    if progress::should_publish_event(session_id, event) {
+        publish_session_changed(app, workspace_id, session_id);
     }
 }
 
@@ -248,4 +246,23 @@ fn publish_session_changed(app: &AppHandle, workspace_id: &str, session_id: &str
             workspace_id: workspace_id.to_string(),
         },
     );
+    if let Ok(Some(goal_workspace_id)) = goal_workspace_id_for_child(workspace_id) {
+        ui_sync::publish(
+            app,
+            UiMutationEvent::WorkspaceChanged {
+                workspace_id: goal_workspace_id,
+            },
+        );
+    }
+}
+
+fn goal_workspace_id_for_child(workspace_id: &str) -> Result<Option<String>> {
+    let conn = crate::models::db::read_conn()?;
+    Ok(conn
+        .query_row(
+            "SELECT goal_workspace_id FROM workspaces WHERE id = ?1",
+            [workspace_id],
+            |row| row.get(0),
+        )
+        .optional()?)
 }

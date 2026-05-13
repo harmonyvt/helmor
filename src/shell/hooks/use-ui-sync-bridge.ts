@@ -63,6 +63,7 @@ function handleUiMutation(
 			});
 			return;
 		case "sessionMessagesChanged":
+			invalidateWorkspaceLists(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: [
 					...helmorQueryKeys.sessionMessages(event.sessionId),
