@@ -257,6 +257,7 @@ export function GoalsAiPanel({
 					goalDescription: goalDescription ?? null,
 				})}
 				onKanbanToolCall={handleKanbanToolCall}
+				compact
 				headerLeading={
 					<span className="text-[11px] font-medium tracking-[0.04em] text-muted-foreground/70">
 						Pi

@@ -791,20 +791,75 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								)}
 							</div>
 							<div className="flex shrink-0 items-center gap-1.5">
-								<Button
-									variant="ghost"
-									size="icon"
-									aria-label="Attach files"
-									title="Attach files"
-									onClick={() => {
-										void handleOpenFilePicker();
-									}}
-									disabled={inputDisabled}
-									className="rounded-[9px] text-muted-foreground hover:text-foreground"
-								>
-									<Paperclip className="size-[14px]" strokeWidth={1.8} />
-								</Button>
-								{sending ? (
+								{!(hasActivePlanReview && permissionMode === "plan") ? (
+									<Button
+										variant="ghost"
+										size="icon"
+										aria-label="Attach files"
+										title="Attach files"
+										onClick={() => {
+											void handleOpenFilePicker();
+										}}
+										disabled={inputDisabled}
+										className="rounded-[9px] text-muted-foreground hover:text-foreground"
+									>
+										<Paperclip className="size-[14px]" strokeWidth={1.8} />
+									</Button>
+								) : null}
+								{hasActivePlanReview && permissionMode === "plan" ? (
+									<>
+										<Button
+											variant="ghost"
+											size="sm"
+											aria-label="Request Changes"
+											onClick={handlePlanRequestChanges}
+											disabled={disabled || !hasContent}
+											className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none text-muted-foreground hover:text-foreground"
+										>
+											<MessageSquareMore
+												className="size-3.5"
+												strokeWidth={1.8}
+											/>
+											Request Changes
+										</Button>
+										<div className="my-0.5 flex h-7 overflow-hidden rounded-lg">
+											<Button
+												variant="default"
+												size="sm"
+												aria-label="Implement"
+												onClick={handlePlanImplement}
+												disabled={disabled}
+												className="h-7 cursor-pointer gap-1 rounded-r-none px-2 text-[12px] transition-none"
+											>
+												<Check className="size-3.5" strokeWidth={2} />
+												Implement
+											</Button>
+											<DropdownMenu>
+												<DropdownMenuTrigger asChild>
+													<Button
+														variant="default"
+														size="icon"
+														aria-label="Implement options"
+														disabled={disabled || !onImplementPlanInCleanThread}
+														className="h-7 w-7 cursor-pointer rounded-l-none border-l border-primary-foreground/20 transition-none"
+													>
+														<ChevronDown className="size-3.5" strokeWidth={2} />
+													</Button>
+												</DropdownMenuTrigger>
+												<DropdownMenuContent align="end" className="w-56">
+													<DropdownMenuItem
+														onSelect={handlePlanImplementCleanThread}
+														disabled={
+															!planReview || !onImplementPlanInCleanThread
+														}
+													>
+														Implement in Clean Thread
+													</DropdownMenuItem>
+												</DropdownMenuContent>
+											</DropdownMenu>
+										</div>
+									</>
+								) : sending ? (
 									<>
 										<Button
 											variant="destructive"
