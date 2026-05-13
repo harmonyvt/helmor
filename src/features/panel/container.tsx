@@ -10,7 +10,11 @@ import type {
 	WorkspaceDetail,
 	WorkspaceSessionSummary,
 } from "@/lib/api";
-import { createSession, loadRepoScripts } from "@/lib/api";
+import {
+	buildProviderSwitchDividerMessage,
+	createSession,
+	loadRepoScripts,
+} from "@/lib/api";
 import {
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -23,6 +27,7 @@ import {
 	WORKSPACE_SCRIPT_PROMPTS,
 	type WorkspaceScriptType,
 } from "@/lib/workspace-script-actions";
+import { getProviderSwitchParent } from "../composer/provider-switch-parents";
 import { WorkspacePanel } from "./index";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
@@ -286,6 +291,22 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		...sessionThreadMessagesQueryOptions(threadSessionId ?? "__none__"),
 		enabled: Boolean(threadSessionId),
 	});
+
+	// If this session was created by a provider switch with "Bring history",
+	// also load the parent session's messages so they can be shown above a
+	// visual divider. The lookup is synchronous (localStorage) so it doesn't
+	// need its own effect — it re-runs whenever threadSessionId changes.
+	const parentSessionInfo = useMemo(
+		() => (threadSessionId ? getProviderSwitchParent(threadSessionId) : null),
+		[threadSessionId],
+	);
+	const parentMessagesQuery = useQuery({
+		...sessionThreadMessagesQueryOptions(
+			parentSessionInfo?.parentSessionId ?? "__none__",
+		),
+		enabled: Boolean(parentSessionInfo?.parentSessionId),
+	});
+
 	const repoScriptsQuery = useQuery({
 		queryKey: helmorQueryKeys.repoScripts(
 			workspace?.repoId ?? "__none__",
@@ -296,7 +317,20 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		staleTime: 0,
 	});
 
-	const messages = messagesQuery.data ?? EMPTY_MESSAGES;
+	const currentMessages = messagesQuery.data ?? EMPTY_MESSAGES;
+
+	// Merge parent history + divider + current messages when applicable.
+	const messages = useMemo<ThreadMessageLike[]>(() => {
+		if (!parentSessionInfo || !parentMessagesQuery.data?.length) {
+			return currentMessages;
+		}
+		const divider = buildProviderSwitchDividerMessage(
+			parentSessionInfo.fromProvider,
+			parentSessionInfo.toProvider,
+		);
+		return [...parentMessagesQuery.data, divider, ...currentMessages];
+	}, [parentSessionInfo, parentMessagesQuery.data, currentMessages]);
+
 	const sessionDisplayProviders = useMemo<Record<string, AgentProvider>>(() => {
 		const modelSections =
 			queryClient.getQueryData<AgentModelSection[]>(

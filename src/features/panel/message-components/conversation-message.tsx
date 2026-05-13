@@ -1,7 +1,9 @@
 import { memo, useEffect } from "react";
 import { recordMessageRender } from "@/lib/dev-render-debug";
 import { ChatAssistantMessage } from "./assistant-message";
+import { ProviderSwitchDivider } from "./provider-switch-divider";
 import type { RenderedMessage } from "./shared";
+import { isProviderSwitchDividerPart } from "./shared";
 import { ChatSystemMessage } from "./system-message";
 import { ChatUserMessage } from "./user-message";
 
@@ -24,6 +26,18 @@ function ConversationMessage({
 	});
 
 	const streaming = message.role === "assistant" && message.streaming === true;
+
+	// Provider-switch divider: a synthetic system message injected between
+	// the parent session's history and the new session's messages.
+	if (
+		message.role === "system" &&
+		message.id === "__provider-switch-divider__"
+	) {
+		const dividerPart = message.content.find(isProviderSwitchDividerPart);
+		if (dividerPart) {
+			return <ProviderSwitchDivider part={dividerPart} />;
+		}
+	}
 
 	if (message.role === "user") {
 		return <ChatUserMessage message={message} />;

@@ -2817,7 +2817,44 @@ export function partKey(part: ExtendedMessagePart): string {
 	return part.id;
 }
 
-export type ExtendedMessagePart = MessagePart | CollapsedGroupPart;
+/**
+ * Frontend-only synthetic part injected between the old session's messages
+ * and the new session's messages after a provider switch with "Bring history".
+ * Never serialized to/from Rust or persisted to the database.
+ */
+export type ProviderSwitchDividerPart = {
+	type: "provider-switch-divider";
+	id: string;
+	fromProvider: AgentProvider;
+	toProvider: AgentProvider;
+};
+
+export type ExtendedMessagePart =
+	| MessagePart
+	| CollapsedGroupPart
+	| ProviderSwitchDividerPart;
+
+/**
+ * Build the synthetic system message that visually separates the old
+ * session's history from the new session's messages after a provider switch.
+ */
+export function buildProviderSwitchDividerMessage(
+	fromProvider: AgentProvider,
+	toProvider: AgentProvider,
+): ThreadMessageLike {
+	return {
+		role: "system",
+		id: "__provider-switch-divider__",
+		content: [
+			{
+				type: "provider-switch-divider",
+				id: "__provider-switch-divider__",
+				fromProvider,
+				toProvider,
+			},
+		],
+	};
+}
 
 /**
  * Mirror of the Rust `MessageRole` enum
