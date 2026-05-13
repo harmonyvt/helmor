@@ -71,7 +71,7 @@ function copySidecarDist(paths: SetupPaths): void {
 
 function runBunInstall(workspaceRoot: string): void {
 	console.log("  Installing workspace dependencies...");
-	execFileSync("bun", ["install"], {
+	execFileSync("sfw", ["bun", "install"], {
 		cwd: workspaceRoot,
 		stdio: "inherit",
 	});
