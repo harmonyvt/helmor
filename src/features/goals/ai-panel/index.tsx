@@ -1,6 +1,6 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { History, X } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import type {
@@ -23,7 +23,12 @@ import {
 	setGoalChildWorkspaceStatus,
 	summarizeAssigneeStatus,
 } from "@/lib/api";
-import { helmorQueryKeys } from "@/lib/query-client";
+import {
+	agentModelSectionsQueryOptions,
+	helmorQueryKeys,
+} from "@/lib/query-client";
+import { useSettings } from "@/lib/settings";
+import { resolvePiHandoffModel } from "../pi-handoff-models";
 import { HistoryView } from "./history-view";
 
 type GoalsAiPanelProps = {
@@ -53,6 +58,14 @@ export function GoalsAiPanel({
 	onCardCreated,
 }: GoalsAiPanelProps) {
 	const queryClient = useQueryClient();
+	const { settings } = useSettings();
+	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
+	const piModels = useMemo(
+		() =>
+			modelSectionsQuery.data?.find((section) => section.id === "pi")
+				?.options ?? [],
+		[modelSectionsQuery.data],
+	);
 	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
 		null,
 	);
@@ -105,6 +118,20 @@ export function GoalsAiPanel({
 							"Goal setup must finish before Pi can create cards.",
 						);
 					}
+					const requestedProvider =
+						typeof args.assignedProvider === "string"
+							? args.assignedProvider
+							: null;
+					const requestedModelId =
+						typeof args.assignedModelId === "string"
+							? args.assignedModelId
+							: null;
+					const handoffModel = resolvePiHandoffModel({
+						assignedProvider: requestedProvider,
+						assignedModelId: requestedModelId,
+						allowedModelIds: settings.piHandoffModelIds,
+						piModels,
+					});
 					const created = await createGoalChildWorkspaceAndStart({
 						goalWorkspace: workspaceId,
 						title: String(args.title ?? "Untitled"),
@@ -113,14 +140,8 @@ export function GoalsAiPanel({
 						lane: String(args.lane ?? "backlog") as WorkspaceStatus,
 						targetBranch:
 							typeof args.targetBranch === "string" ? args.targetBranch : null,
-						assignedProvider:
-							typeof args.assignedProvider === "string"
-								? args.assignedProvider
-								: null,
-						assignedModelId:
-							typeof args.assignedModelId === "string"
-								? args.assignedModelId
-								: null,
+						assignedProvider: handoffModel.assignedProvider,
+						assignedModelId: handoffModel.assignedModelId,
 						assignedEffortLevel:
 							typeof args.assignedEffortLevel === "string"
 								? args.assignedEffortLevel
@@ -141,8 +162,8 @@ export function GoalsAiPanel({
 						onCardCreated?.(newWorkspace);
 					}
 					result = newWorkspace
-						? { ...created, workspace: newWorkspace }
-						: created;
+						? { ...created, workspace: newWorkspace, handoffModel }
+						: { ...created, handoffModel };
 				} else if (event.tool === "move_kanban_card") {
 					const childWorkspaceId = String(
 						args.cardId ?? args.workspaceId ?? "",
@@ -237,7 +258,14 @@ export function GoalsAiPanel({
 				);
 			}
 		},
-		[workspaceId, queryClient, onCardCreated, canCreateCards],
+		[
+			workspaceId,
+			queryClient,
+			onCardCreated,
+			canCreateCards,
+			settings.piHandoffModelIds,
+			piModels,
+		],
 	);
 
 	return (
