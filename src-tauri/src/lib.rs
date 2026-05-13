@@ -349,6 +349,7 @@ pub fn run() {
             commands::system_commands::ack_pending_cli_send_started,
             commands::editor_commands::read_editor_file,
             commands::editor_commands::read_file_at_ref,
+            commands::editor_commands::get_file_unified_diff,
             commands::workspace_commands::set_workspace_status,
             commands::workspace_commands::list_workspace_linked_directories,
             commands::workspace_commands::set_workspace_linked_directories,

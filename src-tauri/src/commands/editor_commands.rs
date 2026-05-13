@@ -138,6 +138,26 @@ pub async fn get_workspace_git_action_status(
 }
 
 #[tauri::command]
+pub async fn get_file_unified_diff(
+    workspace_root_path: String,
+    relative_path: String,
+    from_ref: Option<String>,
+    to_ref: Option<String>,
+    cached: Option<bool>,
+) -> CmdResult<Option<String>> {
+    run_blocking(move || {
+        editor_files::get_file_unified_diff(
+            &workspace_root_path,
+            &relative_path,
+            from_ref.as_deref(),
+            to_ref.as_deref(),
+            cached.unwrap_or(false),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn write_editor_file(
     path: String,
     content: String,

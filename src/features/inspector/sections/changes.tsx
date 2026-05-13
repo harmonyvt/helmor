@@ -43,6 +43,7 @@ import {
 import { cn } from "@/lib/utils";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import { type FileDiffScope, useFileDiffHover } from "./file-diff-hover";
 import { GitSectionHeader } from "./git-section-header";
 
 const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
@@ -399,6 +400,8 @@ export function ChangesSection({
 								activeEditorPath={activeEditorPath}
 								onOpenEditorFile={onOpenEditorFile}
 								flashingPaths={flashingPaths}
+								workspaceRootPath={workspaceRootPath}
+								diffScope={{ kind: "staged" }}
 							/>
 						)}
 						{unstagedChanges.length > 0 && (
@@ -424,6 +427,8 @@ export function ChangesSection({
 								activeEditorPath={activeEditorPath}
 								onOpenEditorFile={onOpenEditorFile}
 								flashingPaths={flashingPaths}
+								workspaceRootPath={workspaceRootPath}
+								diffScope={{ kind: "unstaged" }}
 							/>
 						)}
 					</>
@@ -443,6 +448,7 @@ export function ChangesSection({
 						activeEditorPath={activeEditorPath}
 						onOpenEditorFile={onOpenEditorFile}
 						flashingPaths={flashingPaths}
+						workspaceRootPath={workspaceRootPath}
 					/>
 				)}
 
@@ -475,6 +481,8 @@ function ChangesGroup({
 	activeEditorPath,
 	onOpenEditorFile,
 	flashingPaths,
+	workspaceRootPath,
+	diffScope,
 }: {
 	label: string;
 	icon?: React.ReactNode;
@@ -492,6 +500,8 @@ function ChangesGroup({
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
+	workspaceRootPath: string | null;
+	diffScope: FileDiffScope;
 }) {
 	return (
 		<div>
@@ -550,6 +560,8 @@ function ChangesGroup({
 							action={action}
 							onStageAction={onStageAction}
 							onDiscard={onDiscard}
+							workspaceRootPath={workspaceRootPath}
+							diffScope={diffScope}
 						/>
 					) : (
 						<ChangesFlatView
@@ -561,6 +573,8 @@ function ChangesGroup({
 							action={action}
 							onStageAction={onStageAction}
 							onDiscard={onDiscard}
+							workspaceRootPath={workspaceRootPath}
+							diffScope={diffScope}
 						/>
 					)}
 				</div>
@@ -582,6 +596,7 @@ function BranchDiffSection({
 	activeEditorPath,
 	onOpenEditorFile,
 	flashingPaths,
+	workspaceRootPath,
 }: {
 	targetBranch: string | null;
 	count: number;
@@ -595,6 +610,7 @@ function BranchDiffSection({
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
+	workspaceRootPath: string | null;
 }) {
 	const handleOpenFile = useCallback(
 		(path: string, options?: DiffOpenOptions) => {
@@ -662,6 +678,12 @@ function BranchDiffSection({
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={handleOpenFile}
 							flashingPaths={flashingPaths}
+							workspaceRootPath={workspaceRootPath}
+							diffScope={
+								targetBranch
+									? { kind: "branch", fromRef: targetBranch, toRef: "HEAD" }
+									: { kind: "unstaged" }
+							}
 						/>
 					) : (
 						<ChangesFlatView
@@ -670,6 +692,12 @@ function BranchDiffSection({
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={handleOpenFile}
 							flashingPaths={flashingPaths}
+							workspaceRootPath={workspaceRootPath}
+							diffScope={
+								targetBranch
+									? { kind: "branch", fromRef: targetBranch, toRef: "HEAD" }
+									: { kind: "unstaged" }
+							}
 						/>
 					)}
 				</div>
@@ -722,6 +750,8 @@ function ChangesTreeView({
 	action,
 	onStageAction,
 	onDiscard,
+	workspaceRootPath,
+	diffScope,
 }: {
 	changes: InspectorFileItem[];
 	editorMode: boolean;
@@ -731,6 +761,8 @@ function ChangesTreeView({
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
 	onDiscard?: (path: string) => void;
+	workspaceRootPath?: string | null;
+	diffScope?: FileDiffScope;
 }) {
 	const tree = buildTree(changes);
 	const [expanded, setExpanded] = useState<Set<string>>(
@@ -763,6 +795,8 @@ function ChangesTreeView({
 				action={action}
 				onStageAction={onStageAction}
 				onDiscard={onDiscard}
+				workspaceRootPath={workspaceRootPath}
+				diffScope={diffScope}
 			/>
 		</div>
 	);
@@ -791,6 +825,8 @@ function TreeNodeList({
 	action,
 	onStageAction,
 	onDiscard,
+	workspaceRootPath,
+	diffScope,
 }: {
 	nodes: Map<string, ReturnType<typeof buildTree>>;
 	expanded: Set<string>;
@@ -803,6 +839,8 @@ function TreeNodeList({
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
 	onDiscard?: (path: string) => void;
+	workspaceRootPath?: string | null;
+	diffScope?: FileDiffScope;
 }) {
 	const sorted = [...nodes.values()].sort((left, right) => {
 		const leftIsFolder = left.children.size > 0 && !left.file;
@@ -862,6 +900,8 @@ function TreeNodeList({
 									action={action}
 									onStageAction={onStageAction}
 									onDiscard={onDiscard}
+									workspaceRootPath={workspaceRootPath}
+									diffScope={diffScope}
 								/>
 							)}
 						</div>
@@ -869,55 +909,105 @@ function TreeNodeList({
 				}
 
 				const file = node.file;
-				const selected = file?.absolutePath === activeEditorPath;
-				const isFlashing = !!file && flashingPaths.has(file.path);
+				if (!file) return null;
 
 				return (
-					<div
+					<TreeFileRow
 						key={node.path}
-						className={cn(
-							"group/row flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
-							selected &&
-								(editorMode
-									? "bg-accent text-foreground"
-									: "bg-muted/60 text-foreground"),
-						)}
-						style={{ paddingLeft: `${depth * 12 + 22}px` }}
-						role="treeitem"
-						tabIndex={0}
-						onClick={() =>
-							file &&
-							onOpenEditorFile(file.absolutePath, {
-								fileStatus: file.status,
-							})
-						}
-						onKeyDown={(event) => {
-							if ((event.key === "Enter" || event.key === " ") && file) {
-								event.preventDefault();
-								onOpenEditorFile(file.absolutePath, {
-									fileStatus: file.status,
-								});
-							}
-						}}
-					>
-						<img
-							src={getMaterialFileIcon(node.name)}
-							alt=""
-							className="size-4 shrink-0"
-						/>
-						<ShinyFlash active={isFlashing}>{node.name}</ShinyFlash>
-						{file && (
-							<StageActionSlot
-								file={file}
-								action={action}
-								onStageAction={onStageAction}
-								onDiscard={onDiscard}
-							/>
-						)}
-					</div>
+						file={file}
+						nodeName={node.name}
+						depth={depth}
+						editorMode={editorMode}
+						activeEditorPath={activeEditorPath}
+						onOpenEditorFile={onOpenEditorFile}
+						isFlashing={flashingPaths.has(file.path)}
+						action={action}
+						onStageAction={onStageAction}
+						onDiscard={onDiscard}
+						workspaceRootPath={workspaceRootPath}
+						diffScope={diffScope}
+					/>
 				);
 			})}
 		</>
+	);
+}
+
+function TreeFileRow({
+	file,
+	nodeName,
+	depth,
+	editorMode,
+	activeEditorPath,
+	onOpenEditorFile,
+	isFlashing,
+	action,
+	onStageAction,
+	onDiscard,
+	workspaceRootPath,
+	diffScope,
+}: {
+	file: InspectorFileItem;
+	nodeName: string;
+	depth: number;
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	isFlashing: boolean;
+	action?: StageActionKind;
+	onStageAction?: (path: string) => void;
+	onDiscard?: (path: string) => void;
+	workspaceRootPath?: string | null;
+	diffScope?: FileDiffScope;
+}) {
+	const rowRef = useRef<HTMLDivElement>(null);
+	const { onMouseEnter, onMouseLeave, popover } = useFileDiffHover(
+		rowRef,
+		workspaceRootPath,
+		file.path,
+		diffScope ?? { kind: "unstaged" },
+	);
+	const selected = file.absolutePath === activeEditorPath;
+
+	return (
+		<div
+			ref={rowRef}
+			className={cn(
+				"group/row flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
+				selected &&
+					(editorMode
+						? "bg-accent text-foreground"
+						: "bg-muted/60 text-foreground"),
+			)}
+			style={{ paddingLeft: `${depth * 12 + 22}px` }}
+			role="treeitem"
+			tabIndex={0}
+			onMouseEnter={onMouseEnter}
+			onMouseLeave={onMouseLeave}
+			onClick={() =>
+				onOpenEditorFile(file.absolutePath, { fileStatus: file.status })
+			}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					onOpenEditorFile(file.absolutePath, { fileStatus: file.status });
+				}
+			}}
+		>
+			<img
+				src={getMaterialFileIcon(nodeName)}
+				alt=""
+				className="size-4 shrink-0"
+			/>
+			<ShinyFlash active={isFlashing}>{nodeName}</ShinyFlash>
+			<StageActionSlot
+				file={file}
+				action={action}
+				onStageAction={onStageAction}
+				onDiscard={onDiscard}
+			/>
+			{popover}
+		</div>
 	);
 }
 
@@ -930,6 +1020,8 @@ function ChangesFlatView({
 	action,
 	onStageAction,
 	onDiscard,
+	workspaceRootPath,
+	diffScope,
 }: {
 	changes: InspectorFileItem[];
 	editorMode: boolean;
@@ -939,88 +1031,139 @@ function ChangesFlatView({
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
 	onDiscard?: (path: string) => void;
+	workspaceRootPath?: string | null;
+	diffScope?: FileDiffScope;
+}) {
+	return (
+		<div className="py-0.5">
+			{changes.map((change) => (
+				<FlatFileRow
+					key={change.path}
+					change={change}
+					editorMode={editorMode}
+					activeEditorPath={activeEditorPath}
+					onOpenEditorFile={onOpenEditorFile}
+					isFlashing={flashingPaths.has(change.path)}
+					action={action}
+					onStageAction={onStageAction}
+					onDiscard={onDiscard}
+					workspaceRootPath={workspaceRootPath}
+					diffScope={diffScope}
+				/>
+			))}
+		</div>
+	);
+}
+
+function FlatFileRow({
+	change,
+	editorMode,
+	activeEditorPath,
+	onOpenEditorFile,
+	isFlashing,
+	action,
+	onStageAction,
+	onDiscard,
+	workspaceRootPath,
+	diffScope,
+}: {
+	change: InspectorFileItem;
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	isFlashing: boolean;
+	action?: StageActionKind;
+	onStageAction?: (path: string) => void;
+	onDiscard?: (path: string) => void;
+	workspaceRootPath?: string | null;
+	diffScope?: FileDiffScope;
 }) {
 	const hasStage = !!action && !!onStageAction;
 	const hasDiscard = !!onDiscard;
 	const hasAction = hasStage || hasDiscard;
 
+	const rowRef = useRef<HTMLDivElement>(null);
+	const { onMouseEnter, onMouseLeave, popover } = useFileDiffHover(
+		rowRef,
+		workspaceRootPath,
+		change.path,
+		diffScope ?? { kind: "unstaged" },
+	);
+
 	return (
-		<div className="py-0.5">
-			{changes.map((change) => (
-				<div
-					key={change.path}
+		<div
+			ref={rowRef}
+			className={cn(
+				"group/row flex cursor-pointer items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
+				change.absolutePath === activeEditorPath &&
+					(editorMode
+						? "bg-accent text-foreground"
+						: "bg-muted/60 text-foreground"),
+			)}
+			role="button"
+			tabIndex={0}
+			onMouseEnter={onMouseEnter}
+			onMouseLeave={onMouseLeave}
+			onClick={() =>
+				onOpenEditorFile(change.absolutePath, {
+					fileStatus: change.status,
+				})
+			}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					onOpenEditorFile(change.absolutePath, {
+						fileStatus: change.status,
+					});
+				}
+			}}
+		>
+			<img
+				src={getMaterialFileIcon(change.name)}
+				alt=""
+				className="size-4 shrink-0"
+			/>
+			<span className="min-w-0 max-w-[60%] truncate">
+				<ShinyFlash active={isFlashing}>{change.name}</ShinyFlash>
+			</span>
+			<span
+				className={cn(
+					"min-w-0 flex-1 truncate text-right text-[10px] text-muted-foreground",
+					hasAction && "group-hover/row:hidden",
+				)}
+			>
+				{change.path.includes("/")
+					? change.path.slice(0, change.path.lastIndexOf("/"))
+					: ""}
+			</span>
+			<span
+				className={cn(
+					"flex shrink-0 items-center gap-1 tabular-nums",
+					hasAction && "group-hover/row:hidden",
+				)}
+			>
+				<LineStats
+					insertions={change.insertions}
+					deletions={change.deletions}
+				/>
+				<span
 					className={cn(
-						"group/row flex cursor-pointer items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
-						change.absolutePath === activeEditorPath &&
-							(editorMode
-								? "bg-accent text-foreground"
-								: "bg-muted/60 text-foreground"),
+						"inline-flex h-4 w-4 items-center justify-center text-[10px] font-semibold",
+						STATUS_COLORS[change.status],
 					)}
-					role="button"
-					tabIndex={0}
-					onClick={() =>
-						onOpenEditorFile(change.absolutePath, {
-							fileStatus: change.status,
-						})
-					}
-					onKeyDown={(event) => {
-						if (event.key === "Enter" || event.key === " ") {
-							event.preventDefault();
-							onOpenEditorFile(change.absolutePath, {
-								fileStatus: change.status,
-							});
-						}
-					}}
 				>
-					<img
-						src={getMaterialFileIcon(change.name)}
-						alt=""
-						className="size-4 shrink-0"
-					/>
-					<span className="min-w-0 max-w-[60%] truncate">
-						<ShinyFlash active={flashingPaths.has(change.path)}>
-							{change.name}
-						</ShinyFlash>
-					</span>
-					<span
-						className={cn(
-							"min-w-0 flex-1 truncate text-right text-[10px] text-muted-foreground",
-							hasAction && "group-hover/row:hidden",
-						)}
-					>
-						{change.path.includes("/")
-							? change.path.slice(0, change.path.lastIndexOf("/"))
-							: ""}
-					</span>
-					<span
-						className={cn(
-							"flex shrink-0 items-center gap-1 tabular-nums",
-							hasAction && "group-hover/row:hidden",
-						)}
-					>
-						<LineStats
-							insertions={change.insertions}
-							deletions={change.deletions}
-						/>
-						<span
-							className={cn(
-								"inline-flex h-4 w-4 items-center justify-center text-[10px] font-semibold",
-								STATUS_COLORS[change.status],
-							)}
-						>
-							{change.status}
-						</span>
-					</span>
-					{hasAction && (
-						<RowHoverActions
-							path={change.path}
-							action={action}
-							onStageAction={onStageAction}
-							onDiscard={onDiscard}
-						/>
-					)}
-				</div>
-			))}
+					{change.status}
+				</span>
+			</span>
+			{hasAction && (
+				<RowHoverActions
+					path={change.path}
+					action={action}
+					onStageAction={onStageAction}
+					onDiscard={onDiscard}
+				/>
+			)}
+			{popover}
 		</div>
 	);
 }
