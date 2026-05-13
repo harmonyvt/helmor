@@ -115,7 +115,7 @@
           echo "  - node $(node --version)"
           echo ""
           echo "🔨 Common commands:"
-          echo "  bun install              # Install dependencies"
+          echo "  sfw bun install          # Install dependencies"
           echo "  bun run dev              # Start dev server (Tauri + Vite)"
           echo "  bun run dev:analyze      # Dev with perf HUD"
           echo "  bun run build            # Build frontend"

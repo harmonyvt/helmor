@@ -48,7 +48,7 @@ direnv allow
 
 Now you can run commands directly:
 ```bash
-bun install
+sfw bun install
 bun run dev
 ```
 
@@ -63,7 +63,7 @@ cd /path/to/helmor/calypso
 nix develop
 
 # Now run your commands
-bun install
+sfw bun install
 bun run dev
 ```
 
@@ -108,7 +108,7 @@ Once in the environment (via `nix develop` or direnv):
 
 ```bash
 # Setup
-bun install                  # Install dependencies
+sfw bun install              # Install dependencies
 
 # Development
 bun run dev                  # Start Tauri + Vite dev server

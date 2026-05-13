@@ -158,7 +158,7 @@ function detectTarget(): TargetInfo {
 function ensureExists(path: string, label: string): void {
 	if (!existsSync(path)) {
 		throw new Error(
-			`[stage-vendor] expected ${label} at ${path} — run \`bun install\` in sidecar/ first`,
+			`[stage-vendor] expected ${label} at ${path} — run \`sfw bun install\` in sidecar/ first`,
 		);
 	}
 }

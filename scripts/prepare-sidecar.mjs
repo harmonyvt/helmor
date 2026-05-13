@@ -3,7 +3,7 @@
  * Bundle-binary staging script. Tauri invokes this via `beforeBuildCommand`.
  *
  * Steps:
- * 1. `cd sidecar && bun install --frozen-lockfile` (so CI runners have deps).
+ * 1. `cd sidecar && sfw bun install --frozen-lockfile` (so CI runners have deps).
  * 2. `bun run build` — produces `sidecar/dist/helmor-sidecar` plus the
  *    `sidecar/dist/vendor/` tree that Tauri bundles as resources.
  * 3. `cargo build --bin helmor-cli --bin helmor-web --release --target <triple>` — produces
@@ -100,7 +100,7 @@ function detectTargetTriple() {
 
 function main() {
 	// 1. Install sidecar deps (idempotent; fast when lockfile matches).
-	run("bun install --frozen-lockfile", sidecarDir);
+	run("sfw bun install --frozen-lockfile", sidecarDir);
 
 	// 2. Build the compiled sidecar + staged vendor tree.
 	run("bun run build", sidecarDir);

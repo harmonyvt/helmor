@@ -987,7 +987,7 @@ fn prepare_workspace_inserts_initializing_row_without_creating_worktree() {
 
     harness.commit_repo_files(&[(
         "helmor.json",
-        r#"{"scripts":{"setup":"bun install","run":"bun run dev"}}"#,
+        r#"{"scripts":{"setup":"sfw bun install","run":"bun run dev"}}"#,
     )]);
 
     let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
@@ -1025,7 +1025,7 @@ fn prepare_workspace_inserts_initializing_row_without_creating_worktree() {
     // is still missing, so the 3-tier priority falls back to repo root).
     assert_eq!(
         prepared.repo_scripts.setup_script.as_deref(),
-        Some("bun install")
+        Some("sfw bun install")
     );
     assert_eq!(
         prepared.repo_scripts.run_script.as_deref(),
