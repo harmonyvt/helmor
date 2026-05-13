@@ -251,6 +251,8 @@ pub fn run() {
             commands::goal_commands::create_goal_child_workspace,
             commands::goal_commands::create_goal_child_workspace_and_start,
             commands::goal_commands::send_assignee_message,
+            commands::goal_commands::send_thread_message,
+            commands::goal_commands::set_card_assignee_thread,
             commands::goal_commands::read_assignee_thread,
             commands::goal_commands::summarize_assignee_status,
             commands::goal_commands::list_assignees,

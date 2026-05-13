@@ -59,6 +59,7 @@ fn send_assignee_message_queues_follow_up_without_changing_lane() {
         card_id: "00000000-0000-0000-0000-000000000002".to_string(),
         message: "Use the new cache API.".to_string(),
         priority: Some("high".to_string()),
+        thread_id: None,
     })
     .unwrap();
 
@@ -117,6 +118,7 @@ fn send_assignee_message_rolls_back_prompt_when_queue_insert_fails() {
         card_id: "00000000-0000-0000-0000-000000000002".to_string(),
         message: "This should not persist without a queue row.".to_string(),
         priority: None,
+        thread_id: None,
     })
     .unwrap_err();
     assert!(error
@@ -169,6 +171,7 @@ fn read_assignee_thread_is_limited_to_assigned_session_and_reports_marker() {
         goal_assignees::read_assignee_thread(crate::goal_assignees::ReadAssigneeThreadRequest {
             goal_workspace_id: "00000000-0000-0000-0000-000000000001".to_string(),
             card_id: "00000000-0000-0000-0000-000000000002".to_string(),
+            thread_id: None,
             since_message_id: None,
         })
         .unwrap();
@@ -182,4 +185,125 @@ fn read_assignee_thread_is_limited_to_assigned_session_and_reports_marker() {
             .map(|report| report.report_type.as_str()),
         Some("blocked"),
     );
+}
+
+#[test]
+fn can_target_retry_thread_and_make_it_active_assignee() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+    connection
+        .execute(
+            r#"
+            INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode, thread_role, thread_status)
+            VALUES ('retry-session', '00000000-0000-0000-0000-000000000002', 'Retry — Build API', 'codex', 'idle', 'gpt-5.4', 'default', 'retry', 'active')
+            "#,
+            [],
+        )
+        .unwrap();
+
+    let reassigned = goal_assignees::set_card_assignee_thread(
+        crate::goal_assignees::SetCardAssigneeThreadRequest {
+            goal_workspace_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            card_id: "00000000-0000-0000-0000-000000000002".to_string(),
+            thread_id: "retry-session".to_string(),
+            reason: Some("original model startup failed".to_string()),
+            supersedes_thread_id: Some("session-assignee".to_string()),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(reassigned.active_thread_id, "retry-session");
+    assert_eq!(
+        reassigned.superseded_thread_id.as_deref(),
+        Some("session-assignee")
+    );
+
+    let result = goal_assignees::send_assignee_message(SendAssigneeMessageRequest {
+        goal_workspace_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        card_id: "00000000-0000-0000-0000-000000000002".to_string(),
+        message: "Retry with the known-good model.".to_string(),
+        priority: None,
+        thread_id: None,
+    })
+    .unwrap();
+
+    assert_eq!(result.session_id, "retry-session");
+    let active_session_id: String = connection
+        .query_row(
+            "SELECT active_session_id FROM workspaces WHERE id = '00000000-0000-0000-0000-000000000002'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(active_session_id, "retry-session");
+
+    let (thread_status, stale_reason): (Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT thread_status, stale_reason FROM sessions WHERE id = 'session-assignee'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(thread_status.as_deref(), Some("superseded"));
+    assert_eq!(
+        stale_reason.as_deref(),
+        Some("original model startup failed")
+    );
+}
+
+#[test]
+fn summarize_assignee_status_reports_stale_original_and_active_retry() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+    connection
+        .execute(
+            r#"
+            INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode, thread_role, thread_status, supersedes_thread_id)
+            VALUES ('retry-session', '00000000-0000-0000-0000-000000000002', 'Retry — Build API', 'codex', 'idle', 'gpt-5.4', 'default', 'assignee', 'active', 'session-assignee')
+            "#,
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET active_session_id = 'retry-session' WHERE id = '00000000-0000-0000-0000-000000000002'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE sessions SET thread_status = 'superseded', stale_reason = 'model access failure' WHERE id = 'session-assignee'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            r#"INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at)
+               VALUES ('retry-progress', 'retry-session', 'assistant', ?1, '2026-01-01T00:10:00', '2026-01-01T00:10:00')"#,
+            [r###"{"type":"assistant","message":{"id":"turn-retry","role":"assistant","content":[{"type":"text","text":"## Progress\nRetry is implementing the API."}]}}"###],
+        )
+        .unwrap();
+
+    let summary = goal_assignees::summarize_assignee_status(
+        crate::goal_assignees::SummarizeAssigneeStatusRequest {
+            goal_workspace_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            card_id: "00000000-0000-0000-0000-000000000002".to_string(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(summary.active_thread_id, "retry-session");
+    assert_eq!(summary.thread_count, 2);
+    assert_eq!(summary.effective_status, "progress");
+    assert_eq!(summary.stale_threads.len(), 1);
+    assert_eq!(summary.stale_threads[0].thread_id, "session-assignee");
+    assert_eq!(summary.stale_threads[0].reason, "model access failure");
 }

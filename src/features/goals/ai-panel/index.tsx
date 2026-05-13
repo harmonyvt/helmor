@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, X } from "lucide-react";
+import { History, ListTree, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkspaceConversationContainer } from "@/features/conversation";
@@ -12,6 +12,7 @@ import type {
 } from "@/lib/api";
 import {
 	createGoalChildWorkspaceAndStart,
+	deleteSession,
 	listAssignees,
 	listGoalChildWorkspaces,
 	loadSessionThreadMessages,
@@ -20,6 +21,8 @@ import {
 	renameSession,
 	sendAssigneeMessage,
 	sendKanbanToolResult,
+	sendThreadMessage,
+	setCardAssigneeThread,
 	setGoalChildWorkspaceStatus,
 	summarizeAssigneeStatus,
 } from "@/lib/api";
@@ -30,6 +33,7 @@ import {
 import { useSettings } from "@/lib/settings";
 import { resolvePiHandoffModel } from "../pi-handoff-models";
 import { HistoryView } from "./history-view";
+import { ThreadManagerView } from "./thread-manager-view";
 
 type GoalsAiPanelProps = {
 	workspaceId: string;
@@ -49,7 +53,7 @@ const piOnlyModelFilter = (model: AgentModelOption) => model.provider === "pi";
 
 export function GoalsAiPanel({
 	workspaceId,
-	cards: _cards,
+	cards,
 	kanbanSnapshot,
 	goalTitle,
 	goalDescription,
@@ -72,7 +76,9 @@ export function GoalsAiPanel({
 	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
 		null,
 	);
-	const [showHistory, setShowHistory] = useState(false);
+	const [overlayMode, setOverlayMode] = useState<"history" | "threads" | null>(
+		null,
+	);
 
 	const handleSelectSession = useCallback((sessionId: string | null) => {
 		setSelectedSessionId(sessionId);
@@ -90,15 +96,23 @@ export function GoalsAiPanel({
 	const handleRestoreSession = useCallback(
 		(session: WorkspaceSessionSummary) => {
 			handleSelectSession(session.id);
-			setShowHistory(false);
+			setOverlayMode(null);
 		},
 		[handleSelectSession],
 	);
 
 	const handleNewSession = useCallback(() => {
 		handleSelectSession(null);
-		setShowHistory(false);
+		setOverlayMode(null);
 	}, [handleSelectSession]);
+
+	const handleOpenManagedThread = useCallback(
+		(_card: WorkspaceDetail, session: WorkspaceSessionSummary) => {
+			handleSelectSession(session.id);
+			setOverlayMode(null);
+		},
+		[handleSelectSession],
+	);
 
 	const handleKanbanToolCall = useCallback(
 		async (event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>) => {
@@ -212,6 +226,16 @@ export function GoalsAiPanel({
 							String(args.workspaceId),
 						),
 					});
+				} else if (event.tool === "delete_thread") {
+					const workspaceRef = String(
+						args.workspaceId ?? args.workspace_id ?? "",
+					);
+					const threadId = String(args.threadId ?? args.thread_id ?? "");
+					await deleteSession(threadId);
+					result = { threadId, workspaceId: workspaceRef, deleted: true };
+					await queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(workspaceRef),
+					});
 				} else if (event.tool === "send_assignee_message") {
 					const cardId = String(args.cardId ?? args.card_id ?? "");
 					const message = String(args.message ?? "");
@@ -220,6 +244,55 @@ export function GoalsAiPanel({
 						cardId,
 						message,
 						priority: typeof args.priority === "string" ? args.priority : null,
+						threadId:
+							typeof args.threadId === "string"
+								? args.threadId
+								: typeof args.thread_id === "string"
+									? args.thread_id
+									: null,
+					});
+					await queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(cardId),
+					});
+				} else if (event.tool === "send_thread_message") {
+					const workspaceRef = String(
+						args.workspaceId ?? args.workspace_id ?? "",
+					);
+					result = await sendThreadMessage({
+						goalWorkspaceId: workspaceId,
+						workspaceId: workspaceRef,
+						threadId: String(args.threadId ?? args.thread_id ?? ""),
+						message: String(args.message ?? ""),
+						priority: typeof args.priority === "string" ? args.priority : null,
+						modelId:
+							typeof args.modelId === "string"
+								? args.modelId
+								: typeof args.model_id === "string"
+									? args.model_id
+									: null,
+						permissionMode:
+							typeof args.permissionMode === "string"
+								? args.permissionMode
+								: typeof args.permission_mode === "string"
+									? args.permission_mode
+									: null,
+					});
+					await queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(workspaceRef),
+					});
+				} else if (event.tool === "set_card_assignee_thread") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					result = await setCardAssigneeThread({
+						goalWorkspaceId: workspaceId,
+						cardId,
+						threadId: String(args.threadId ?? args.thread_id ?? ""),
+						reason: typeof args.reason === "string" ? args.reason : null,
+						supersedesThreadId:
+							typeof args.supersedesThreadId === "string"
+								? args.supersedesThreadId
+								: typeof args.supersedes_thread_id === "string"
+									? args.supersedes_thread_id
+									: null,
 					});
 					await queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceSessions(cardId),
@@ -228,6 +301,12 @@ export function GoalsAiPanel({
 					result = await readAssigneeThread({
 						goalWorkspaceId: workspaceId,
 						cardId: String(args.cardId ?? args.card_id ?? ""),
+						threadId:
+							typeof args.threadId === "string"
+								? args.threadId
+								: typeof args.thread_id === "string"
+									? args.thread_id
+									: null,
 						sinceMessageId:
 							typeof args.sinceMessageId === "string"
 								? args.sinceMessageId
@@ -298,7 +377,17 @@ export function GoalsAiPanel({
 							variant="ghost"
 							size="icon"
 							className="size-7 cursor-pointer"
-							onClick={() => setShowHistory(true)}
+							onClick={() => setOverlayMode("threads")}
+							aria-label="Manage goal card threads"
+						>
+							<ListTree className="size-3.5" />
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="size-7 cursor-pointer"
+							onClick={() => setOverlayMode("history")}
 							aria-label="View conversation history"
 						>
 							<History className="size-3.5" />
@@ -316,29 +405,37 @@ export function GoalsAiPanel({
 					</>
 				}
 			/>
-			{showHistory && (
+			{overlayMode && (
 				<div className="absolute inset-0 z-10 flex flex-col bg-background">
 					<div className="flex h-10 shrink-0 items-center justify-between border-b px-3">
 						<span className="text-[11px] font-medium tracking-[0.04em] text-muted-foreground/70">
-							Conversations
+							{overlayMode === "threads" ? "Goal threads" : "Conversations"}
 						</span>
 						<Button
 							type="button"
 							variant="ghost"
 							size="icon"
 							className="size-7 cursor-pointer"
-							onClick={() => setShowHistory(false)}
+							onClick={() => setOverlayMode(null)}
 							aria-label="Back to conversation"
 						>
 							<X className="size-3.5" />
 						</Button>
 					</div>
-					<HistoryView
-						workspaceId={workspaceId}
-						activeSessionId={displayedSessionId}
-						onRestore={handleRestoreSession}
-						onNewSession={handleNewSession}
-					/>
+					{overlayMode === "threads" ? (
+						<ThreadManagerView
+							goalWorkspaceId={workspaceId}
+							cards={cards}
+							onOpenThread={handleOpenManagedThread}
+						/>
+					) : (
+						<HistoryView
+							workspaceId={workspaceId}
+							activeSessionId={displayedSessionId}
+							onRestore={handleRestoreSession}
+							onNewSession={handleNewSession}
+						/>
+					)}
 				</div>
 			)}
 		</div>

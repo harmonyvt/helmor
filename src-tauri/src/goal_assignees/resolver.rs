@@ -41,6 +41,37 @@ pub(super) fn resolve_assignee(goal_workspace_id: &str, card_id: &str) -> Result
     })
 }
 
+pub(super) fn resolve_thread_assignee(
+    goal_workspace_id: &str,
+    card_id: &str,
+    thread_id: &str,
+) -> Result<ResolvedAssignee> {
+    let goal_workspace_id = service::resolve_workspace_ref(goal_workspace_id)?;
+    let workspace_id = resolve_child_workspace_id(&goal_workspace_id, card_id)?;
+    let record = workspace_models::load_workspace_record_by_id(&workspace_id)?
+        .with_context(|| format!("Goal child workspace not found: {workspace_id}"))?;
+
+    if record.workspace_kind != WorkspaceKind::Code
+        || record.goal_workspace_id.as_deref() != Some(goal_workspace_id.as_str())
+    {
+        bail!("Workspace {workspace_id} is not a child of Goal workspace {goal_workspace_id}");
+    }
+
+    let sessions = sessions::list_workspace_sessions(&workspace_id)?;
+    let session = sessions
+        .into_iter()
+        .find(|session| session.id == thread_id)
+        .with_context(|| {
+            format!("Thread {thread_id} is not in Goal child workspace {workspace_id}")
+        })?;
+
+    Ok(ResolvedAssignee {
+        card_id: card_id.to_string(),
+        workspace_id,
+        session,
+    })
+}
+
 fn resolve_child_workspace_id(goal_workspace_id: &str, card_id: &str) -> Result<String> {
     if let Some(record) = workspace_models::load_workspace_record_by_id(card_id)? {
         if record.goal_workspace_id.as_deref() == Some(goal_workspace_id) {

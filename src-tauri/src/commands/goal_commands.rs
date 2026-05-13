@@ -166,6 +166,43 @@ pub async fn send_assignee_message(
 }
 
 #[tauri::command]
+pub async fn send_thread_message(
+    app: AppHandle,
+    request: crate::goal_assignees::SendThreadMessageRequest,
+) -> CmdResult<crate::goal_assignees::SendAssigneeMessageResult> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
+    let prepared =
+        run_blocking(move || crate::goal_assignees::prepare_thread_message(request)).await?;
+    let mut result = prepared.result;
+    let receipt = crate::background_agents::enqueue(app.clone(), prepared.send_params)?;
+    result.started = receipt.started;
+    result.pending_send_id = receipt.task_id;
+    result.execution_state = receipt.execution_state.to_string();
+    publish_goal_child_workspace_changes(
+        &app,
+        goal_workspace_id,
+        Some(result.workspace_id.clone()),
+    );
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn set_card_assignee_thread(
+    app: AppHandle,
+    request: crate::goal_assignees::SetCardAssigneeThreadRequest,
+) -> CmdResult<crate::goal_assignees::SetCardAssigneeThreadResult> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
+    let result =
+        run_blocking(move || crate::goal_assignees::set_card_assignee_thread(request)).await?;
+    publish_goal_child_workspace_changes(
+        &app,
+        goal_workspace_id,
+        Some(result.workspace_id.clone()),
+    );
+    Ok(result)
+}
+
+#[tauri::command]
 pub async fn read_assignee_thread(
     request: crate::goal_assignees::ReadAssigneeThreadRequest,
 ) -> CmdResult<crate::goal_assignees::AssigneeThreadResult> {

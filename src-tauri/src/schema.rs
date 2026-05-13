@@ -219,6 +219,23 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add action_kind column")?;
     }
 
+    for (column, definition) in [
+        ("thread_role", "TEXT"),
+        ("thread_status", "TEXT"),
+        ("supersedes_thread_id", "TEXT"),
+        ("stale_reason", "TEXT"),
+        ("last_supervisor_message_id", "TEXT"),
+        ("last_milestone_report_id", "TEXT"),
+    ] {
+        if has_table(connection, "sessions") && !has_column(connection, "sessions", column) {
+            connection
+                .execute_batch(&format!(
+                    "ALTER TABLE sessions ADD COLUMN {column} {definition}"
+                ))
+                .with_context(|| format!("Failed to add sessions.{column}"))?;
+        }
+    }
+
     // Migration: wrap plain-text user prompts as JSON.
     //
     // Pre-migration, the `content` column held a union type: assistant/system/
@@ -632,6 +649,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     fast_mode INTEGER DEFAULT 0,
     action_kind TEXT,
     context_usage_meta TEXT,
+    thread_role TEXT,
+    thread_status TEXT,
+    supersedes_thread_id TEXT,
+    stale_reason TEXT,
+    last_supervisor_message_id TEXT,
+    last_milestone_report_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
