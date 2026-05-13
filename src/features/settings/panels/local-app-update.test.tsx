@@ -89,7 +89,7 @@ describe("LocalAppUpdatePanel", () => {
 		await user.click(screen.getByRole("button", { name: "Install Update" }));
 
 		expect(await screen.findByText("Update installed")).toBeInTheDocument();
-		expect(screen.getByText(/1 of 9 steps complete/)).toBeInTheDocument();
+		expect(screen.getByText(/1 of 10 steps complete/)).toBeInTheDocument();
 		expect(screen.getByText("v0.12.3")).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Diagnostics log" }));
@@ -143,6 +143,31 @@ describe("LocalAppUpdatePanel", () => {
 		expect(
 			screen.getByRole("button", { name: "Install Update" }),
 		).toBeEnabled();
+	});
+
+	it("treats either cancellation spelling as cancelled", async () => {
+		const user = userEvent.setup();
+		apiMocks.runHelmorAppInstall.mockImplementation(
+			async (onEvent: (event: AppInstallEvent) => void) => {
+				onEvent({
+					type: "error",
+					stepId: "buildApp",
+					message: "Install canceled by user",
+				});
+				throw new Error("Install cancelled by user");
+			},
+		);
+
+		render(
+			<WorkspaceToastProvider value={vi.fn()}>
+				<LocalAppUpdatePanel />
+			</WorkspaceToastProvider>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Install Update" }));
+
+		expect(await screen.findByText("Update cancelled")).toBeInTheDocument();
+		expect(screen.queryByText("Update failed")).not.toBeInTheDocument();
 	});
 
 	it("cancels an in-flight install", async () => {

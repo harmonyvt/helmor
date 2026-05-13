@@ -86,6 +86,25 @@
 		var(--workspace-pr-closed-accent) 35%,
 		transparent
 	);
+	--app-base: var(--background);
+	--app-foreground: var(--foreground);
+	--app-foreground-soft: color-mix(
+		in oklch,
+		var(--foreground) 72%,
+		transparent
+	);
+	--app-muted: var(--muted-foreground);
+	--app-muted-foreground: var(--muted-foreground);
+	--app-border: var(--border);
+	--app-border-strong: color-mix(
+		in oklch,
+		var(--border) 70%,
+		var(--foreground) 30%
+	);
+	--app-success: var(--success);
+	--app-warning: var(--terminal-yellow);
+	--app-info: var(--terminal-blue);
+	--app-destructive: var(--destructive);
 	--plan: #48968c;
 	/* Terminal (xterm.js) — reuses app tokens where possible */
 	--terminal-background: var(--sidebar);

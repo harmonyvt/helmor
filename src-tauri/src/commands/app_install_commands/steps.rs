@@ -31,7 +31,7 @@ pub(super) fn verify_installed_app(
     run_checked_command(
         state,
         channel,
-        InstallStepId::VerifyApp,
+        InstallStepId::VerifyAppEntitlements,
         command_spec(
             "codesign",
             [

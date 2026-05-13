@@ -28,6 +28,7 @@ const INSTALL_STEPS = [
 	{ id: "installApp", label: "Install app" },
 	{ id: "signApp", label: "Sign app" },
 	{ id: "verifyApp", label: "Verify app" },
+	{ id: "verifyAppEntitlements", label: "Verify entitlements" },
 	{ id: "inspectInstalledApp", label: "Read app details" },
 	{ id: "dataInfo", label: "Check data mode" },
 ] as const;
@@ -109,18 +110,22 @@ function updateStep(
 function stepStatusClass(status: UiStepStatus) {
 	switch (status) {
 		case "ok":
-			return "border-green-400/30 bg-green-400/10 text-green-300";
+			return "border-app-success/30 bg-app-success/10 text-app-success";
 		case "warning":
-			return "border-amber-400/30 bg-amber-400/10 text-amber-300";
+			return "border-app-warning/30 bg-app-warning/10 text-app-warning";
 		case "skipped":
-			return "border-muted-foreground/20 bg-muted/40 text-muted-foreground";
+			return "border-app-muted/20 bg-app-muted/40 text-app-muted";
 		case "error":
-			return "border-destructive/35 bg-destructive/10 text-destructive";
+			return "border-app-destructive/35 bg-app-destructive/10 text-app-destructive";
 		case "running":
-			return "border-sky-400/30 bg-sky-400/10 text-sky-300";
+			return "border-app-info/30 bg-app-info/10 text-app-info";
 		default:
-			return "border-border/50 bg-muted/20 text-muted-foreground";
+			return "border-app-border/50 bg-app-base/20 text-app-foreground";
 	}
+}
+
+function isCancelledMessage(message: string) {
+	return /\bcancell?ed\b/i.test(message);
 }
 
 function currentStepLabel(state: InstallUiState) {
@@ -198,9 +203,7 @@ export function LocalAppUpdatePanel() {
 				case "error":
 					return {
 						...previous,
-						phase: event.message.toLowerCase().includes("cancelled")
-							? "cancelled"
-							: "failed",
+						phase: isCancelledMessage(event.message) ? "cancelled" : "failed",
 						currentStepId: null,
 						error: event.message,
 						steps: event.stepId
@@ -262,9 +265,7 @@ export function LocalAppUpdatePanel() {
 			const message = e instanceof Error ? e.message : String(e);
 			setInstallState((previous) => ({
 				...previous,
-				phase: message.toLowerCase().includes("cancelled")
-					? "cancelled"
-					: "failed",
+				phase: isCancelledMessage(message) ? "cancelled" : "failed",
 				currentStepId: null,
 				error: message,
 			}));
@@ -380,11 +381,11 @@ function AppInstallProgressCard({
 				<div className="min-w-0">
 					<div className="flex items-center gap-2 font-medium text-foreground">
 						{state.phase === "running" ? (
-							<Loader2 className="size-3.5 animate-spin text-sky-300" />
+							<Loader2 className="size-3.5 animate-spin text-app-info" />
 						) : state.phase === "succeeded" ? (
-							<Check className="size-3.5 text-green-300" />
+							<Check className="size-3.5 text-app-success" />
 						) : (
-							<X className="size-3.5 text-destructive" />
+							<X className="size-3.5 text-app-destructive" />
 						)}
 						<span>{heading}</span>
 					</div>

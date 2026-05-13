@@ -17,6 +17,7 @@ pub(super) enum InstallStepId {
     InstallApp,
     SignApp,
     VerifyApp,
+    VerifyAppEntitlements,
     InspectInstalledApp,
     DataInfo,
 }
@@ -31,6 +32,7 @@ impl InstallStepId {
             Self::InstallApp => "installApp",
             Self::SignApp => "signApp",
             Self::VerifyApp => "verifyApp",
+            Self::VerifyAppEntitlements => "verifyAppEntitlements",
             Self::InspectInstalledApp => "inspectInstalledApp",
             Self::DataInfo => "dataInfo",
         }
@@ -45,6 +47,7 @@ impl InstallStepId {
             Self::InstallApp => "Installing into Applications",
             Self::SignApp => "Ad-hoc signing installed app",
             Self::VerifyApp => "Verifying installed app",
+            Self::VerifyAppEntitlements => "Verifying app entitlements",
             Self::InspectInstalledApp => "Reading installed app details",
             Self::DataInfo => "Checking installed app data mode",
         }
