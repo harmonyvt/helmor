@@ -462,6 +462,17 @@ body {
 	--color-card: var(--card);
 	--color-foreground: var(--foreground);
 	--color-background: var(--background);
+	--color-app-base: var(--app-base);
+	--color-app-border-strong: var(--app-border-strong);
+	--color-app-border: var(--app-border);
+	--color-app-destructive: var(--app-destructive);
+	--color-app-foreground-soft: var(--app-foreground-soft);
+	--color-app-foreground: var(--app-foreground);
+	--color-app-info: var(--app-info);
+	--color-app-muted-foreground: var(--app-muted-foreground);
+	--color-app-muted: var(--app-muted);
+	--color-app-success: var(--app-success);
+	--color-app-warning: var(--app-warning);
 	--color-plan: var(--plan);
 	--radius-sm: calc(var(--radius) * 0.6);
 	--radius-md: calc(var(--radius) * 0.8);

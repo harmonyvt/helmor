@@ -1,46 +1,289 @@
-import { Download, Loader2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import {
+	Check,
+	ChevronDown,
+	ChevronRight,
+	Download,
+	Loader2,
+	X,
+} from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { restartApp, runHelmorAppInstall } from "@/lib/api";
+import {
+	type AppInstallEvent,
+	type AppInstallStepStatus,
+	cancelHelmorAppInstall,
+	type HelmorAppInstallResult,
+	restartApp,
+	runHelmorAppInstall,
+} from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { SettingsNotice, SettingsRow } from "../components/settings-row";
 
+const INSTALL_STEPS = [
+	{ id: "resolveRepo", label: "Find checkout" },
+	{ id: "pullRepo", label: "Pull latest changes" },
+	{ id: "buildApp", label: "Build app" },
+	{ id: "inspectBuiltApp", label: "Inspect build" },
+	{ id: "installApp", label: "Install app" },
+	{ id: "signApp", label: "Sign app" },
+	{ id: "verifyApp", label: "Verify app" },
+	{ id: "verifyAppEntitlements", label: "Verify entitlements" },
+	{ id: "inspectInstalledApp", label: "Read app details" },
+	{ id: "dataInfo", label: "Check data mode" },
+] as const;
+
+type InstallPhase = "idle" | "running" | "succeeded" | "failed" | "cancelled";
+type UiStepStatus = "pending" | "running" | AppInstallStepStatus | "error";
+
+type UiStep = {
+	id: string;
+	label: string;
+	status: UiStepStatus;
+	message: string | null;
+};
+
+type InstallUiState = {
+	phase: InstallPhase;
+	repoRoot: string | null;
+	installedAppPath: string | null;
+	currentStepId: string | null;
+	steps: UiStep[];
+	log: string;
+	error: string | null;
+	result: HelmorAppInstallResult | null;
+};
+
+const initialSteps = (): UiStep[] =>
+	INSTALL_STEPS.map((step) => ({
+		...step,
+		status: "pending",
+		message: null,
+	}));
+
+const initialState = (): InstallUiState => ({
+	phase: "idle",
+	repoRoot: null,
+	installedAppPath: null,
+	currentStepId: null,
+	steps: initialSteps(),
+	log: "",
+	error: null,
+	result: null,
+});
+
+const MAX_LOG_CHARS = 60_000;
+
+function appendLog(log: string, data: string) {
+	const next = `${log}${data}`;
+	return next.length > MAX_LOG_CHARS ? next.slice(-MAX_LOG_CHARS) : next;
+}
+
+function updateStep(
+	steps: UiStep[],
+	stepId: string,
+	patch: Partial<UiStep>,
+	fallbackLabel?: string,
+) {
+	let found = false;
+	const next = steps.map((step) => {
+		if (step.id !== stepId) return step;
+		found = true;
+		return {
+			...step,
+			...(fallbackLabel ? { label: fallbackLabel } : {}),
+			...patch,
+		};
+	});
+	if (found) return next;
+	return [
+		...next,
+		{
+			id: stepId,
+			label: fallbackLabel ?? stepId,
+			status: patch.status ?? "pending",
+			message: patch.message ?? null,
+		},
+	];
+}
+
+function stepStatusClass(status: UiStepStatus) {
+	switch (status) {
+		case "ok":
+			return "border-app-success/30 bg-app-success/10 text-app-success";
+		case "warning":
+			return "border-app-warning/30 bg-app-warning/10 text-app-warning";
+		case "skipped":
+			return "border-app-muted/20 bg-app-muted/40 text-app-muted";
+		case "error":
+			return "border-app-destructive/35 bg-app-destructive/10 text-app-destructive";
+		case "running":
+			return "border-app-info/30 bg-app-info/10 text-app-info";
+		default:
+			return "border-app-border/50 bg-app-base/20 text-app-foreground";
+	}
+}
+
+function isCancelledMessage(message: string) {
+	return /\bcancell?ed\b/i.test(message);
+}
+
+function currentStepLabel(state: InstallUiState) {
+	if (!state.currentStepId) return "Preparing update…";
+	return (
+		state.steps.find((step) => step.id === state.currentStepId)?.label ??
+		"Running update…"
+	);
+}
+
 export function LocalAppUpdatePanel() {
-	const [installingApp, setInstallingApp] = useState(false);
-	const [appInstallError, setAppInstallError] = useState<string | null>(null);
+	const [installState, setInstallState] =
+		useState<InstallUiState>(initialState);
+	const [logsExpanded, setLogsExpanded] = useState(false);
+	const [cancelling, setCancelling] = useState(false);
 	const pushToast = useWorkspaceToast();
 
-	const handleInstallApp = useCallback(async () => {
-		setInstallingApp(true);
-		setAppInstallError(null);
-		try {
-			const result = await runHelmorAppInstall();
-			setInstallingApp(false);
-			if (result.restartRequired) {
-				pushToast(
-					"The new app has been installed. Restart Helmor to start using it.",
-					"Restart required",
-					"default",
-					{
-						persistent: true,
-						action: {
-							label: "Restart now",
-							onClick: () => {
-								void restartApp(true).catch((error) => {
-									pushToast(
-										error instanceof Error ? error.message : String(error),
-										"Unable to restart Helmor",
-										"destructive",
-									);
-								});
-							},
+	const installingApp = installState.phase === "running";
+	const appInstallError = installState.error;
+
+	const completedCount = useMemo(
+		() =>
+			installState.steps.filter((step) =>
+				["ok", "warning", "skipped"].includes(step.status),
+			).length,
+		[installState.steps],
+	);
+
+	const handleInstallEvent = useCallback((event: AppInstallEvent) => {
+		setInstallState((previous) => {
+			switch (event.type) {
+				case "started":
+					return {
+						...previous,
+						repoRoot: event.repoRoot,
+						installedAppPath: event.installedAppPath,
+					};
+				case "stepStarted":
+					return {
+						...previous,
+						currentStepId: event.stepId,
+						steps: updateStep(
+							previous.steps,
+							event.stepId,
+							{ status: "running", message: null },
+							event.label,
+						),
+						log: appendLog(previous.log, `\n==> ${event.label}\n`),
+					};
+				case "output":
+					return {
+						...previous,
+						log: appendLog(previous.log, event.data),
+					};
+				case "stepFinished":
+					return {
+						...previous,
+						currentStepId:
+							previous.currentStepId === event.stepId
+								? null
+								: previous.currentStepId,
+						steps: updateStep(previous.steps, event.stepId, {
+							status: event.status,
+							message: event.message,
+						}),
+					};
+				case "completed":
+					return {
+						...previous,
+						phase: "succeeded",
+						currentStepId: null,
+						result: event.result,
+						error: null,
+					};
+				case "error":
+					return {
+						...previous,
+						phase: isCancelledMessage(event.message) ? "cancelled" : "failed",
+						currentStepId: null,
+						error: event.message,
+						steps: event.stepId
+							? updateStep(previous.steps, event.stepId, {
+									status: "error",
+									message: event.message,
+								})
+							: previous.steps,
+					};
+			}
+		});
+	}, []);
+
+	const showRestartToast = useCallback(
+		(result: HelmorAppInstallResult) => {
+			if (!result.restartRequired) return;
+			pushToast(
+				"The new app has been installed. Restart Helmor to start using it.",
+				"Restart required",
+				"default",
+				{
+					persistent: true,
+					action: {
+						label: "Restart now",
+						onClick: () => {
+							void restartApp(true).catch((error) => {
+								pushToast(
+									error instanceof Error ? error.message : String(error),
+									"Unable to restart Helmor",
+									"destructive",
+								);
+							});
 						},
 					},
-				);
-			}
+				},
+			);
+		},
+		[pushToast],
+	);
+
+	const handleInstallApp = useCallback(async () => {
+		setInstallState({
+			...initialState(),
+			phase: "running",
+			log: "Preparing Helmor update…\n",
+		});
+		setLogsExpanded(false);
+		try {
+			const result = await runHelmorAppInstall(handleInstallEvent);
+			setInstallState((previous) => ({
+				...previous,
+				phase: "succeeded",
+				currentStepId: null,
+				result,
+				error: null,
+			}));
+			showRestartToast(result);
 		} catch (e) {
-			setAppInstallError(e instanceof Error ? e.message : String(e));
-			setInstallingApp(false);
+			const message = e instanceof Error ? e.message : String(e);
+			setInstallState((previous) => ({
+				...previous,
+				phase: isCancelledMessage(message) ? "cancelled" : "failed",
+				currentStepId: null,
+				error: message,
+			}));
+		}
+	}, [handleInstallEvent, showRestartToast]);
+
+	const handleCancel = useCallback(async () => {
+		setCancelling(true);
+		try {
+			await cancelHelmorAppInstall();
+		} catch (error) {
+			pushToast(
+				error instanceof Error ? error.message : String(error),
+				"Unable to cancel update",
+				"destructive",
+			);
+		} finally {
+			setCancelling(false);
 		}
 	}, [pushToast]);
 
@@ -62,32 +305,152 @@ export function LocalAppUpdatePanel() {
 					<code className="mx-1 rounded bg-muted px-1 py-0.5 text-[11px]">
 						~/helmor
 					</code>
-					then build the production macOS app and install it to
+					then build, sign, verify, and install the macOS app to
 					<code className="mx-1 rounded bg-muted px-1 py-0.5 text-[11px]">
 						/Applications/Helmor.app
 					</code>
-					. Helmor will ask you to restart when installation finishes.
+					.
 					{appInstallError ? (
 						<SettingsNotice tone="error">{appInstallError}</SettingsNotice>
+					) : null}
+					{installState.phase !== "idle" ? (
+						<AppInstallProgressCard
+							state={installState}
+							completedCount={completedCount}
+							logsExpanded={logsExpanded}
+							onToggleLogs={() => setLogsExpanded((expanded) => !expanded)}
+						/>
 					) : null}
 				</>
 			}
 		>
-			<Button
-				variant="outline"
-				size="sm"
-				onClick={handleInstallApp}
-				disabled={installingApp}
-			>
+			<div className="flex items-center gap-2">
 				{installingApp ? (
-					<>
-						<Loader2 className="mr-1.5 size-3.5 animate-spin" />
-						Installing...
-					</>
-				) : (
-					"Install Update"
-				)}
-			</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={handleCancel}
+						disabled={cancelling}
+					>
+						{cancelling ? "Cancelling…" : "Cancel"}
+					</Button>
+				) : null}
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={handleInstallApp}
+					disabled={installingApp}
+				>
+					{installingApp ? (
+						<>
+							<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+							Installing...
+						</>
+					) : (
+						"Install Update"
+					)}
+				</Button>
+			</div>
 		</SettingsRow>
+	);
+}
+
+function AppInstallProgressCard({
+	state,
+	completedCount,
+	logsExpanded,
+	onToggleLogs,
+}: {
+	state: InstallUiState;
+	completedCount: number;
+	logsExpanded: boolean;
+	onToggleLogs: () => void;
+}) {
+	const heading =
+		state.phase === "running"
+			? currentStepLabel(state)
+			: state.phase === "succeeded"
+				? "Update installed"
+				: state.phase === "cancelled"
+					? "Update cancelled"
+					: "Update failed";
+
+	return (
+		<div className="mt-3 rounded-lg border border-border/55 bg-card/70 p-3 text-[12px] shadow-sm">
+			<div className="flex items-start justify-between gap-3">
+				<div className="min-w-0">
+					<div className="flex items-center gap-2 font-medium text-foreground">
+						{state.phase === "running" ? (
+							<Loader2 className="size-3.5 animate-spin text-app-info" />
+						) : state.phase === "succeeded" ? (
+							<Check className="size-3.5 text-app-success" />
+						) : (
+							<X className="size-3.5 text-app-destructive" />
+						)}
+						<span>{heading}</span>
+					</div>
+					<div className="mt-1 text-muted-foreground">
+						{completedCount} of {state.steps.length} steps complete
+						{state.repoRoot ? ` · ${state.repoRoot}` : ""}
+					</div>
+				</div>
+				{state.result ? (
+					<div className="shrink-0 text-right text-muted-foreground">
+						{state.result.version ? <div>v{state.result.version}</div> : null}
+						{state.result.size ? <div>{state.result.size}</div> : null}
+					</div>
+				) : null}
+			</div>
+
+			<div className="mt-3 grid gap-1.5 sm:grid-cols-2">
+				{state.steps.map((step) => (
+					<div
+						key={step.id}
+						className={cn(
+							"rounded-md border px-2 py-1.5",
+							stepStatusClass(step.status),
+						)}
+					>
+						<div className="flex items-center gap-1.5">
+							{step.status === "running" ? (
+								<Loader2 className="size-3 animate-spin" />
+							) : step.status === "ok" ? (
+								<Check className="size-3" />
+							) : step.status === "error" ? (
+								<X className="size-3" />
+							) : null}
+							<span className="truncate">{step.label}</span>
+						</div>
+						{step.message ? (
+							<div className="mt-0.5 truncate opacity-80">{step.message}</div>
+						) : null}
+					</div>
+				))}
+			</div>
+
+			{state.result?.signingWarning ? (
+				<SettingsNotice tone="warn">
+					{state.result.signingWarning}
+				</SettingsNotice>
+			) : null}
+
+			<button
+				type="button"
+				className="mt-3 flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground"
+				onClick={onToggleLogs}
+			>
+				{logsExpanded ? (
+					<ChevronDown className="size-3" />
+				) : (
+					<ChevronRight className="size-3" />
+				)}
+				Diagnostics log
+			</button>
+			{logsExpanded ? (
+				<pre className="mt-2 max-h-56 overflow-auto rounded-md bg-background/80 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+					{state.log.trim() || "No output yet."}
+				</pre>
+			) : null}
+		</div>
 	);
 }
