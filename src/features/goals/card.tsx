@@ -1,5 +1,10 @@
 import { AlertTriangle, Bot, GitBranch } from "lucide-react";
-import type { AssigneeReportMarker, WorkspaceDetail } from "@/lib/api";
+import { WorkspaceHoverCard } from "@/features/navigation/workspace-hover-card";
+import type {
+	AssigneeReportMarker,
+	WorkspaceDetail,
+	WorkspaceRow,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type WorkspaceCardProps = {
@@ -43,6 +48,32 @@ function AgentStatusDot({ status }: { status: string }) {
 			)}
 		/>
 	);
+}
+
+function detailToRow(ws: WorkspaceDetail): WorkspaceRow {
+	return {
+		id: ws.id,
+		title: ws.title,
+		directoryName: ws.directoryName,
+		workspaceKind: ws.workspaceKind,
+		goalWorkspaceId: ws.goalWorkspaceId,
+		repoName: ws.repoName,
+		repoIconSrc: ws.repoIconSrc,
+		repoInitials: ws.repoInitials,
+		status: ws.status,
+		branch: ws.branch,
+		activeSessionId: ws.activeSessionId,
+		activeSessionTitle: ws.activeSessionTitle,
+		activeSessionAgentType: ws.activeSessionAgentType,
+		activeSessionStatus: ws.activeSessionStatus,
+		// WorkspaceDetail doesn't expose primarySession separately; use active as proxy
+		primarySessionId: ws.activeSessionId,
+		primarySessionTitle: ws.activeSessionTitle,
+		prTitle: ws.prTitle,
+		prSyncState: ws.prSyncState,
+		prUrl: ws.prUrl,
+		sessionCount: ws.sessionCount,
+	};
 }
 
 export function WorkspaceCard({
@@ -153,5 +184,21 @@ export function WorkspaceCard({
 				</div>
 			) : null}
 		</article>
+	);
+}
+
+/** WorkspaceCard wrapped in a HoverCard that shows workspace details on hover,
+ *  matching the behaviour of sidebar workspace rows. */
+export function WorkspaceCardWithHover(props: WorkspaceCardProps) {
+	const { workspace: ws } = props;
+	const isSending = ws.activeSessionStatus === "streaming";
+	return (
+		<WorkspaceHoverCard row={detailToRow(ws)} isSending={isSending}>
+			{/* div wrapper is required: WorkspaceCard doesn't forward refs, so
+			    HoverCardTrigger asChild attaches hover listeners to this div. */}
+			<div>
+				<WorkspaceCard {...props} />
+			</div>
+		</WorkspaceHoverCard>
 	);
 }
