@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, ListTree, X } from "lucide-react";
+import { History, ListTree, SlidersHorizontal, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkspaceConversationContainer } from "@/features/conversation";
@@ -32,6 +32,7 @@ import {
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { resolvePiHandoffModel } from "../pi-handoff-models";
+import { HandoffModelsView } from "./handoff-models-view";
 import { HistoryView } from "./history-view";
 import { ThreadManagerView } from "./thread-manager-view";
 
@@ -76,9 +77,9 @@ export function GoalsAiPanel({
 	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
 		null,
 	);
-	const [overlayMode, setOverlayMode] = useState<"history" | "threads" | null>(
-		null,
-	);
+	const [overlayMode, setOverlayMode] = useState<
+		"history" | "models" | "threads" | null
+	>(null);
 
 	const handleSelectSession = useCallback((sessionId: string | null) => {
 		setSelectedSessionId(sessionId);
@@ -113,6 +114,13 @@ export function GoalsAiPanel({
 		},
 		[handleSelectSession],
 	);
+
+	const overlayTitle =
+		overlayMode === "threads"
+			? "Goal threads"
+			: overlayMode === "models"
+				? "Handoff models"
+				: "Conversations";
 
 	const handleKanbanToolCall = useCallback(
 		async (event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>) => {
@@ -377,6 +385,16 @@ export function GoalsAiPanel({
 							variant="ghost"
 							size="icon"
 							className="size-7 cursor-pointer"
+							onClick={() => setOverlayMode("models")}
+							aria-label="Manage handoff models"
+						>
+							<SlidersHorizontal className="size-3.5" />
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="size-7 cursor-pointer"
 							onClick={() => setOverlayMode("threads")}
 							aria-label="Manage goal card threads"
 						>
@@ -409,7 +427,7 @@ export function GoalsAiPanel({
 				<div className="absolute inset-0 z-10 flex flex-col bg-background">
 					<div className="flex h-10 shrink-0 items-center justify-between border-b px-3">
 						<span className="text-[11px] font-medium tracking-[0.04em] text-muted-foreground/70">
-							{overlayMode === "threads" ? "Goal threads" : "Conversations"}
+							{overlayTitle}
 						</span>
 						<Button
 							type="button"
@@ -428,6 +446,8 @@ export function GoalsAiPanel({
 							cards={cards}
 							onOpenThread={handleOpenManagedThread}
 						/>
+					) : overlayMode === "models" ? (
+						<HandoffModelsView piModels={piModels} />
 					) : (
 						<HistoryView
 							workspaceId={workspaceId}
