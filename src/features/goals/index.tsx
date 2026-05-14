@@ -334,7 +334,6 @@ export function GoalWorkspaceContainer({
 		));
 
 	const handlePiChipClick = useCallback(() => {
-		if (!isGoalReadyForChildren) return;
 		if (piState === "panel") {
 			setPiState("dock");
 		} else {
@@ -343,7 +342,7 @@ export function GoalWorkspaceContainer({
 			setShowAddPanel(false);
 			setPiState("panel");
 		}
-	}, [isGoalReadyForChildren, piState, setPiState]);
+	}, [piState, setPiState]);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
@@ -379,7 +378,6 @@ export function GoalWorkspaceContainer({
 					<GoalPiChip
 						piState={piState}
 						unreadCount={unreadCount}
-						disabled={!isGoalReadyForChildren}
 						onClick={handlePiChipClick}
 					/>
 				}
