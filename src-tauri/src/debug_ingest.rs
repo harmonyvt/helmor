@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::extract::{Query, State};
@@ -18,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::ipc::Channel;
 use tokio::sync::oneshot;
+use tokio::time::timeout;
 use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 use uuid::Uuid;
@@ -25,6 +27,7 @@ use uuid::Uuid;
 const MAX_ENTRIES: usize = 500;
 const DEBUG_TOKEN_HEADER: &str = "x-helmor-debug-token";
 const NGROK_DOMAIN_ENV: &str = "HELMOR_DEBUG_INGEST_NGROK_DOMAIN";
+const PUBLIC_TUNNEL_START_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,7 +143,17 @@ impl DebugIngestManager {
 
         match public_forward {
             Some(config) if config.enabled => {
-                if let Err(error) = self.ensure_public_tunnel(workspace_id, &config).await {
+                let tunnel_result = timeout(
+                    PUBLIC_TUNNEL_START_TIMEOUT,
+                    self.ensure_public_tunnel(workspace_id, &config),
+                )
+                .await
+                .unwrap_or_else(|_| {
+                    Err(anyhow::anyhow!(
+                        "Timed out starting ngrok debug ingest tunnel"
+                    ))
+                });
+                if let Err(error) = tunnel_result {
                     let message = format!("{error:#}");
                     tracing::warn!(workspace_id, error = %message, "Failed to start ngrok debug ingest tunnel");
                     self.set_public_tunnel_error(workspace_id, Some(message));

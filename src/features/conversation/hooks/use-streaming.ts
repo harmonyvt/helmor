@@ -65,6 +65,7 @@ import { buildDebugPromptPrefix } from "../debug-mode";
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
 const STREAM_START_PLACEHOLDER_TEXT = "Working…";
+const DEBUG_INGEST_PROMPT_TIMEOUT_MS = 2_500;
 
 function buildTitleSeed(prompt: string): string {
 	const normalized = prompt
@@ -94,6 +95,48 @@ function createStreamStartPlaceholder(id: string): ThreadMessageLike {
 		}),
 		streaming: true,
 	};
+}
+
+async function resolveDebugIngestStatusForPrompt({
+	debugMode,
+	targetWorkspaceId,
+	ensureDebugIngestForSubmit,
+}: {
+	debugMode: boolean;
+	targetWorkspaceId: string | null;
+	ensureDebugIngestForSubmit?: (
+		workspaceId: string,
+	) => Promise<DebugIngestStatus | null>;
+}): Promise<DebugIngestStatus | null> {
+	if (!debugMode || !targetWorkspaceId || !ensureDebugIngestForSubmit) {
+		return null;
+	}
+
+	let timedOut = false;
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	const ingestPromise = Promise.resolve()
+		.then(() => ensureDebugIngestForSubmit(targetWorkspaceId))
+		.catch((error) => {
+			if (!timedOut) {
+				console.warn("[conversation] debug ingest startup failed:", error);
+			}
+			return null;
+		});
+	const timeoutPromise = new Promise<null>((resolve) => {
+		timeoutId = setTimeout(() => {
+			timedOut = true;
+			console.warn(
+				"[conversation] debug ingest startup timed out; continuing without an ingest endpoint.",
+			);
+			resolve(null);
+		}, DEBUG_INGEST_PROMPT_TIMEOUT_MS);
+	});
+
+	const status = await Promise.race([ingestPromise, timeoutPromise]);
+	if (timeoutId !== null) {
+		clearTimeout(timeoutId);
+	}
+	return status;
 }
 
 function hasAssistantProgress(messages: ThreadMessageLike[]): boolean {
@@ -1448,10 +1491,11 @@ export function useConversationStreaming({
 					isFirstUserMessage && !isCompactCommand
 						? resolveGeneralPreferencePrefix(repoPreferences)
 						: null;
-				const debugIngestStatus =
-					debugMode && targetWorkspaceId && ensureDebugIngestForSubmit
-						? await ensureDebugIngestForSubmit(targetWorkspaceId)
-						: null;
+				const debugIngestStatus = await resolveDebugIngestStatusForPrompt({
+					debugMode,
+					targetWorkspaceId,
+					ensureDebugIngestForSubmit,
+				});
 				const debugPromptPrefix = buildDebugPromptPrefix(
 					debugMode,
 					debugIngestStatus,
