@@ -24,12 +24,15 @@ import {
 } from "@/components/ui/tooltip";
 import { browserWebviewLabel } from "@/features/browser-tabs/ids";
 import {
+	type BrowserWebviewGeometry,
+	type BrowserWebviewGeometrySource,
 	createBrowserWebview,
 	goBackBrowserWebview,
 	goForwardBrowserWebview,
 	measureBrowserWebviewBounds,
 	openBrowserWebviewDevtools,
 	positionBrowserWebview,
+	readBrowserWebviewGeometry,
 } from "@/features/browser-tabs/runtime";
 import { ShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import { getBrowserTabProfile, navigateBrowserTab } from "@/lib/api";
@@ -339,14 +342,40 @@ type BrowserTabPanelProps = {
 
 type WebviewInstance = Awaited<ReturnType<typeof createBrowserWebview>>;
 
+function geometryDiffers(
+	current: BrowserWebviewGeometry | null,
+	next: BrowserWebviewGeometry,
+): boolean {
+	if (!current) return true;
+	const delta = (a: number, b: number) => Math.abs(a - b);
+	return (
+		delta(current.requestedBounds.x, next.requestedBounds.x) > 0.5 ||
+		delta(current.requestedBounds.y, next.requestedBounds.y) > 0.5 ||
+		delta(current.requestedBounds.width, next.requestedBounds.width) > 0.5 ||
+		delta(current.requestedBounds.height, next.requestedBounds.height) > 0.5 ||
+		delta(current.nativeFrame.logical.x, next.nativeFrame.logical.x) > 0.5 ||
+		delta(current.nativeFrame.logical.y, next.nativeFrame.logical.y) > 0.5 ||
+		delta(current.nativeFrame.logical.width, next.nativeFrame.logical.width) >
+			0.5 ||
+		delta(current.nativeFrame.logical.height, next.nativeFrame.logical.height) >
+			0.5 ||
+		delta(current.pageViewport.width, next.pageViewport.width) > 0.5 ||
+		delta(current.pageViewport.height, next.pageViewport.height) > 0.5 ||
+		delta(current.pageViewport.scaleFactor, next.pageViewport.scaleFactor) >
+			0.01
+	);
+}
+
 function BrowserTabPanel({ tabId, url, isActive }: BrowserTabPanelProps) {
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	const webviewRef = useRef<WebviewInstance | null>(null);
 	const latestUrlRef = useRef(url);
+	const geometryRef = useRef<BrowserWebviewGeometry | null>(null);
 	const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">(
 		"idle",
 	);
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
+	const [geometry, setGeometry] = useState<BrowserWebviewGeometry | null>(null);
 	const label = useMemo(() => browserWebviewLabel(tabId), [tabId]);
 
 	useEffect(() => {
@@ -359,6 +388,23 @@ function BrowserTabPanel({ tabId, url, isActive }: BrowserTabPanelProps) {
 		let resizeObserver: ResizeObserver | null = null;
 		let pollId: number | null = null;
 
+		async function applyGeometry(source: BrowserWebviewGeometrySource) {
+			const host = hostRef.current;
+			const webview = webviewRef.current;
+			if (!host || !webview) return;
+			const bounds = measureBrowserWebviewBounds(host);
+			await positionBrowserWebview(webview, bounds);
+			const nextGeometry = await readBrowserWebviewGeometry(
+				webview,
+				bounds,
+				source,
+			);
+			if (disposed) return;
+			if (!geometryDiffers(geometryRef.current, nextGeometry)) return;
+			geometryRef.current = nextGeometry;
+			setGeometry(nextGeometry);
+		}
+
 		async function mount() {
 			const host = hostRef.current;
 			if (!host) return;
@@ -366,47 +412,43 @@ function BrowserTabPanel({ tabId, url, isActive }: BrowserTabPanelProps) {
 			setErrorMsg(null);
 			try {
 				let webview = webviewRef.current;
+				let geometrySource: BrowserWebviewGeometrySource = "manual";
 				if (webview) {
 					await webview.show().catch(() => undefined);
-					await positionBrowserWebview(
-						webview,
-						measureBrowserWebviewBounds(host),
-					);
 				} else {
+					const bounds = measureBrowserWebviewBounds(host);
 					const profile = await getBrowserTabProfile(tabId);
 					if (disposed) return;
 					webview = await createBrowserWebview(
 						label,
 						latestUrlRef.current,
-						measureBrowserWebviewBounds(host),
+						bounds,
 						profile,
 					);
+					geometrySource = "create";
 				}
 				if (disposed) {
 					await webview.hide().catch(() => undefined);
 					return;
 				}
 				webviewRef.current = webview;
+				await applyGeometry(geometrySource);
 				setStatus("ready");
 				void webview.setFocus().catch(() => undefined);
 
-				const reposition = () => {
-					if (!hostRef.current || !webviewRef.current) return;
-					void positionBrowserWebview(
-						webviewRef.current,
-						measureBrowserWebviewBounds(hostRef.current),
-					).catch(() => undefined);
+				const reposition = (source: BrowserWebviewGeometrySource) => {
+					void applyGeometry(source).catch(() => undefined);
 				};
 
-				resizeObserver = new ResizeObserver(reposition);
+				resizeObserver = new ResizeObserver(() => reposition("resize"));
 				resizeObserver.observe(host);
 				// Re-measure immediately after setup: the webview was created during
 				// async awaits (getBrowserTabProfile + createBrowserWebview), so the
 				// layout may have shifted (inspector appeared, window resized, etc.)
 				// by the time we get here. The ResizeObserver only fires on *changes*,
 				// so without this call the stale bounds persist until the 500ms poll.
-				reposition();
-				pollId = window.setInterval(reposition, 500);
+				reposition("manual");
+				pollId = window.setInterval(() => reposition("poll"), 500);
 			} catch (err) {
 				if (!disposed) {
 					setStatus("error");
@@ -423,6 +465,8 @@ function BrowserTabPanel({ tabId, url, isActive }: BrowserTabPanelProps) {
 			if (pollId !== null) window.clearInterval(pollId);
 			const wv = webviewRef.current;
 			setStatus("idle");
+			geometryRef.current = null;
+			setGeometry(null);
 			if (wv) void wv.hide().catch(() => undefined);
 		};
 	}, [isActive, label, tabId]);
@@ -433,7 +477,15 @@ function BrowserTabPanel({ tabId, url, isActive }: BrowserTabPanelProps) {
 			className="absolute inset-0 flex flex-col"
 			aria-label={`Browser tab ${tabId}`}
 		>
-			<div ref={hostRef} className="relative min-h-0 flex-1 overflow-hidden">
+			<div
+				ref={hostRef}
+				className="relative min-h-0 flex-1 overflow-hidden"
+				data-browser-webview-source={geometry?.source}
+				data-browser-webview-width={geometry?.nativeFrame.logical.width}
+				data-browser-webview-height={geometry?.nativeFrame.logical.height}
+				data-browser-page-viewport-width={geometry?.pageViewport.width}
+				data-browser-page-viewport-height={geometry?.pageViewport.height}
+			>
 				{status !== "ready" && (
 					<div className="absolute inset-0 flex items-center justify-center bg-background">
 						{status === "error" ? (
