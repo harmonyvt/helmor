@@ -17,6 +17,7 @@ export type GoalAiSurfaceContext = {
 
 export type GoalAiSurfaceProps = GoalAiSurfaceContext & {
 	onClose: () => void;
+	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
 };
 
 export type GoalWorkspaceContainerProps = {
@@ -27,4 +28,8 @@ export type GoalWorkspaceContainerProps = {
 	activeEditorPath?: string | null;
 	onOpenEditorFile?: (path: string, options?: DiffOpenOptions) => void;
 	renderAiSurface?: (props: GoalAiSurfaceProps) => React.ReactNode;
+	/** Called whenever the Pi AI agent starts or stops streaming. Propagates
+	 *  the goal workspace ID in/out of the app-level sendingWorkspaceIds set
+	 *  so the sidebar folder ring stays in sync. */
+	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
 };

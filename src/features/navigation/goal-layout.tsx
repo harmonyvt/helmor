@@ -1,6 +1,7 @@
 import {
 	Archive,
 	ArrowRight,
+	Bot,
 	ChevronRight,
 	Circle,
 	Folder,
@@ -21,6 +22,7 @@ import {
 	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { ShineBorder } from "@/components/ui/shine-border";
 import { GOAL_LANES } from "@/features/goals/board-model";
 import type { WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -288,6 +290,8 @@ export type GoalRowActions = Pick<
 	) => void;
 	onDragStartWorkspace?: (workspaceId: string) => void;
 	onDragEndWorkspace?: () => void;
+	/** Navigate to the goal workspace AND open the Pi AI panel. */
+	onOpenGoalAiSurface?: (goalWorkspaceId: string) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -362,6 +366,7 @@ function GoalFolderHeader({
 	indent,
 	actions,
 	isDragTarget,
+	isGoalAiRunning,
 	onSelect,
 	onToggle,
 	onDragEnter,
@@ -373,6 +378,8 @@ function GoalFolderHeader({
 	indent?: number;
 	actions: GoalRowActions;
 	isDragTarget?: boolean;
+	/** When true, Pi is actively streaming for this goal — shows a ring on the folder icon. */
+	isGoalAiRunning?: boolean;
 	onSelect?: (id: string) => void;
 	onToggle: () => void;
 	onDragEnter?: (e: React.DragEvent) => void;
@@ -466,15 +473,50 @@ function GoalFolderHeader({
 								: "text-foreground/75 hover:text-foreground",
 						)}
 					>
-						<FolderIcon
-							className={cn(
-								"size-[13px] shrink-0 transition-colors",
-								selected ? "text-foreground/80" : "text-muted-foreground/70",
+						<span className="relative inline-flex shrink-0 items-center justify-center">
+							<FolderIcon
+								className={cn(
+									"size-[13px] transition-colors",
+									selected ? "text-foreground/80" : "text-muted-foreground/70",
+								)}
+								strokeWidth={1.7}
+							/>
+							{isGoalAiRunning && (
+								<ShineBorder
+									borderWidth={1.5}
+									duration={4}
+									shineColor={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
+									style={{
+										inset: "-3px",
+										width: "calc(100% + 6px)",
+										height: "calc(100% + 6px)",
+										borderRadius: "4px",
+									}}
+								/>
 							)}
-							strokeWidth={1.7}
-						/>
+						</span>
 						<span className="truncate">{goalGroup.goalTitle}</span>
 					</button>
+
+					{/* Pi button — navigate to goal AND open the AI surface */}
+					{actions.onOpenGoalAiSurface ? (
+						<button
+							type="button"
+							onClick={() =>
+								actions.onOpenGoalAiSurface?.(goalGroup.goalWorkspaceId)
+							}
+							className={cn(
+								"flex size-5 shrink-0 cursor-pointer items-center justify-center rounded transition-all hover:bg-accent hover:text-foreground",
+								isGoalAiRunning
+									? "text-chart-2 opacity-100"
+									: "text-muted-foreground/30 opacity-0 group-hover/folder:opacity-100",
+							)}
+							aria-label="Open Goal AI surface"
+							title="Open Goal AI surface"
+						>
+							<Bot className="size-3" strokeWidth={2.2} />
+						</button>
+					) : null}
 
 					<button
 						type="button"
@@ -832,6 +874,9 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 		const isDragTarget =
 			draggedWorkspaceId != null &&
 			hoveredGoalId === item.goalGroup.goalWorkspaceId;
+		const isGoalAiRunning = sendingWorkspaceIds?.has(
+			item.goalGroup.goalWorkspaceId,
+		);
 		return (
 			<GoalFolderHeader
 				goalGroup={item.goalGroup}
@@ -840,6 +885,7 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 				selected={selectedWorkspaceId === item.goalGroup.goalWorkspaceId}
 				actions={actions}
 				isDragTarget={isDragTarget}
+				isGoalAiRunning={isGoalAiRunning}
 				onSelect={actions.onSelect}
 				onToggle={handleGoalToggle}
 				onDragEnter={(e) => {

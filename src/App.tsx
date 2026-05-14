@@ -564,6 +564,10 @@ function AppShell({
 	);
 	const [interactionRequiredSessions, setInteractionRequiredSessions] =
 		useState<Map<string, string>>(() => new Map());
+	// When the user clicks "Open Goal AI surface" from the sidebar, we store the
+	// goal workspace ID here. GoalPiAutoOpen (inside GoalPiStateProvider) watches
+	// this and opens Pi once the goal board is mounted.
+	const pendingGoalAiOpenRef = useRef<string | null>(null);
 	const activeDebugWorkspaceIds = useMemo(() => {
 		const ids = new Set<string>();
 		for (const [contextKey, enabled] of Object.entries(composerDebugModes)) {
@@ -1728,6 +1732,15 @@ function AppShell({
 		[handleSelectWorkspace, handleSelectSession],
 	);
 
+	// Navigate to a goal workspace AND open its Pi AI panel.
+	const handleOpenGoalAiSurface = useCallback(
+		(goalWorkspaceId: string) => {
+			pendingGoalAiOpenRef.current = goalWorkspaceId;
+			handleSelectWorkspace(goalWorkspaceId);
+		},
+		[handleSelectWorkspace],
+	);
+
 	const {
 		commitButtonMode,
 		commitButtonState,
@@ -2557,6 +2570,7 @@ function AppShell({
 																newWorkspaceShortcut={newWorkspaceShortcut}
 																addRepositoryShortcut={addRepositoryShortcut}
 																onSelectWorkspace={handleSelectWorkspace}
+																onOpenGoalAiSurface={handleOpenGoalAiSurface}
 																pushWorkspaceToast={pushWorkspaceToast}
 															/>
 														</div>
@@ -2646,6 +2660,8 @@ function AppShell({
 													selectedWorkspaceDetailQuery.data?.workspaceKind ===
 													"goal"
 												}
+												goalWorkspaceId={goalContextId}
+												pendingGoalAiOpenRef={pendingGoalAiOpenRef}
 											/>
 											{/* Pi sheet portal — only active when piState === "sheet" */}
 											{goalContextId &&
@@ -2693,6 +2709,7 @@ function AppShell({
 													selectedWorkspaceId ? (
 														<GoalWorkspaceContainer
 															workspaceId={selectedWorkspaceId}
+															onSendingWorkspacesChange={setSendingWorkspaceIds}
 															headerLeading={
 																sidebarCollapsed ? (
 																	<>
@@ -3146,13 +3163,19 @@ function AppShell({
  *
  *  - Entering a child workspace while Pi is in "panel" mode → auto-dock.
  *  - Returning to the goal board while Pi is in "sheet" mode  → auto-dock.
+ *  - When the user clicked "Open Goal AI surface" in the sidebar, opens Pi
+ *    in "panel" mode once the goal board is active.
  */
 function GoalPiViewTransition({
 	isChildWorkspace,
 	isGoalBoard,
+	goalWorkspaceId,
+	pendingGoalAiOpenRef,
 }: {
 	isChildWorkspace: boolean;
 	isGoalBoard: boolean;
+	goalWorkspaceId: string | null;
+	pendingGoalAiOpenRef: React.MutableRefObject<string | null>;
 }) {
 	const { piState, setPiState } = useGoalPiState();
 	useEffect(() => {
@@ -3163,6 +3186,19 @@ function GoalPiViewTransition({
 			setPiState("dock");
 		}
 	}, [isChildWorkspace, isGoalBoard, piState, setPiState]);
+
+	// Consume a pending "open Pi" intent set by handleOpenGoalAiSurface.
+	useEffect(() => {
+		if (
+			isGoalBoard &&
+			goalWorkspaceId !== null &&
+			pendingGoalAiOpenRef.current === goalWorkspaceId
+		) {
+			pendingGoalAiOpenRef.current = null;
+			setPiState("panel");
+		}
+	}, [isGoalBoard, goalWorkspaceId, pendingGoalAiOpenRef, setPiState]);
+
 	return null;
 }
 
