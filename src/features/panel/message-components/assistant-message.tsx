@@ -52,17 +52,21 @@ const AssistantText = memo(function AssistantText({
 			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-foreground"
 			style={{ fontSize: `${settings.fontSize}px` }}
 		>
-			<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
-				<LazyStreamdown
-					animated={false}
-					caret={undefined}
-					className="conversation-streamdown"
-					isAnimating={false}
-					mode={mode}
-				>
-					{smoothedText}
-				</LazyStreamdown>
-			</Suspense>
+			{streaming ? (
+				<AssistantTextFallback text={smoothedText} />
+			) : (
+				<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
+					<LazyStreamdown
+						animated={false}
+						caret={undefined}
+						className="conversation-streamdown"
+						isAnimating={false}
+						mode={mode}
+					>
+						{smoothedText}
+					</LazyStreamdown>
+				</Suspense>
+			)}
 		</div>
 	);
 });
@@ -158,8 +162,8 @@ export function ChatAssistantMessage({
 			data-message-role="assistant"
 			className="group/assistant flex min-w-0 max-w-full flex-col gap-1"
 		>
-			{parts.map((part) => {
-				const key = partKey(part);
+			{parts.map((part, index) => {
+				const key = `${index}:${partKey(part) ?? part.type}`;
 				if (isTextPart(part)) {
 					return (
 						<AssistantText key={key} text={part.text} streaming={streaming} />
