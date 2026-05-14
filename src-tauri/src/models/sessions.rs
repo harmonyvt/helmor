@@ -1,12 +1,183 @@
 use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agents::ActionKind;
 use crate::pipeline::types::HistoricalRecord;
 
 use super::{db, settings};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSurfaceKind {
+    Chat,
+    Terminal,
+}
+
+impl SessionSurfaceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSurfaceMode {
+    Thread,
+    TaskMonitor,
+    Terminal,
+    AgentTerminal,
+}
+
+impl SessionSurfaceMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Thread => "thread",
+            Self::TaskMonitor => "task_monitor",
+            Self::Terminal => "terminal",
+            Self::AgentTerminal => "agent_terminal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionControlOwner {
+    User,
+    Agent,
+    System,
+}
+
+impl SessionControlOwner {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Agent => "agent",
+            Self::System => "system",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionInputPolicy {
+    Writable,
+    ReadOnly,
+    RequestControl,
+    BlockedForApproval,
+}
+
+impl SessionInputPolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Writable => "writable",
+            Self::ReadOnly => "read_only",
+            Self::RequestControl => "request_control",
+            Self::BlockedForApproval => "blocked_for_approval",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionCreatedBy {
+    User,
+    Goal,
+    Pi,
+    System,
+}
+
+impl SessionCreatedBy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Goal => "goal",
+            Self::Pi => "pi",
+            Self::System => "system",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSessionOptions {
+    #[serde(default)]
+    pub action_kind: Option<ActionKind>,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    #[serde(default)]
+    pub surface_mode: Option<SessionSurfaceMode>,
+    #[serde(default)]
+    pub runtime: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InternalCreateSessionOptions {
+    pub action_kind: Option<ActionKind>,
+    pub permission_mode: Option<String>,
+    pub surface_kind: SessionSurfaceKind,
+    pub surface_mode: SessionSurfaceMode,
+    pub control_owner: SessionControlOwner,
+    pub input_policy: SessionInputPolicy,
+    pub created_by: SessionCreatedBy,
+    pub terminal_runtime: Option<String>,
+    pub terminal_cwd: Option<String>,
+    pub agent_type: Option<String>,
+    pub title: Option<String>,
+}
+
+impl Default for InternalCreateSessionOptions {
+    fn default() -> Self {
+        Self {
+            action_kind: None,
+            permission_mode: None,
+            surface_kind: SessionSurfaceKind::Chat,
+            surface_mode: SessionSurfaceMode::Thread,
+            control_owner: SessionControlOwner::User,
+            input_policy: SessionInputPolicy::Writable,
+            created_by: SessionCreatedBy::User,
+            terminal_runtime: None,
+            terminal_cwd: None,
+            agent_type: None,
+            title: None,
+        }
+    }
+}
+
+impl CreateSessionOptions {
+    fn into_internal(self) -> Result<InternalCreateSessionOptions> {
+        let mode = self.surface_mode.unwrap_or(SessionSurfaceMode::Thread);
+        let mut options = InternalCreateSessionOptions {
+            action_kind: self.action_kind,
+            permission_mode: self.permission_mode,
+            ..Default::default()
+        };
+
+        match mode {
+            SessionSurfaceMode::Thread => {}
+            SessionSurfaceMode::Terminal => {
+                let runtime = self
+                    .runtime
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "shell".to_string());
+                options.surface_kind = SessionSurfaceKind::Terminal;
+                options.surface_mode = SessionSurfaceMode::Terminal;
+                options.terminal_runtime = Some(runtime.clone());
+                options.agent_type = Some(runtime);
+                options.title = Some("Terminal".to_string());
+            }
+            SessionSurfaceMode::TaskMonitor | SessionSurfaceMode::AgentTerminal => {
+                bail!("{mode:?} sessions can only be created by internal system flows");
+            }
+        }
+
+        Ok(options)
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +208,16 @@ pub struct WorkspaceSessionSummary {
     pub stale_reason: Option<String>,
     pub last_supervisor_message_id: Option<String>,
     pub last_milestone_report_id: Option<String>,
+    pub surface_kind: String,
+    pub surface_mode: String,
+    pub control_owner: String,
+    pub input_policy: String,
+    pub created_by: String,
+    pub terminal_runtime: Option<String>,
+    pub terminal_cwd: Option<String>,
+    pub terminal_started_at: Option<String>,
+    pub terminal_stopped_at: Option<String>,
+    pub terminal_exit_code: Option<i64>,
     pub parent_session_id: Option<String>,
     pub parent_message_id: Option<String>,
     pub delegation_status: Option<String>,
@@ -77,6 +258,16 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
               s.stale_reason,
               s.last_supervisor_message_id,
               s.last_milestone_report_id,
+              s.surface_kind,
+              s.surface_mode,
+              s.control_owner,
+              s.input_policy,
+              s.created_by,
+              s.terminal_runtime,
+              s.terminal_cwd,
+              s.terminal_started_at,
+              s.terminal_stopped_at,
+              s.terminal_exit_code,
               child.parent_session_id,
               child.parent_message_id,
               child.status AS delegation_status,
@@ -122,10 +313,20 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
             stale_reason: row.get(19)?,
             last_supervisor_message_id: row.get(20)?,
             last_milestone_report_id: row.get(21)?,
-            parent_session_id: row.get(22)?,
-            parent_message_id: row.get(23)?,
-            delegation_status: row.get(24)?,
-            child_count: row.get(25)?,
+            surface_kind: row.get(22)?,
+            surface_mode: row.get(23)?,
+            control_owner: row.get(24)?,
+            input_policy: row.get(25)?,
+            created_by: row.get(26)?,
+            terminal_runtime: row.get(27)?,
+            terminal_cwd: row.get(28)?,
+            terminal_started_at: row.get(29)?,
+            terminal_stopped_at: row.get(30)?,
+            terminal_exit_code: row.get(31)?,
+            parent_session_id: row.get(32)?,
+            parent_message_id: row.get(33)?,
+            delegation_status: row.get(34)?,
+            child_count: row.get(35)?,
         })
     })?;
 
@@ -448,6 +649,106 @@ pub fn create_session(
     action_kind: Option<ActionKind>,
     permission_mode: Option<&str>,
 ) -> Result<CreateSessionResponse> {
+    create_session_with_options(
+        workspace_id,
+        InternalCreateSessionOptions {
+            action_kind,
+            permission_mode: permission_mode.map(str::to_string),
+            ..Default::default()
+        },
+    )
+}
+
+pub fn create_user_session(
+    workspace_id: &str,
+    options: Option<CreateSessionOptions>,
+) -> Result<CreateSessionResponse> {
+    let internal_options = options.unwrap_or(CreateSessionOptions {
+        action_kind: None,
+        permission_mode: None,
+        surface_mode: None,
+        runtime: None,
+    });
+    create_session_with_options(workspace_id, internal_options.into_internal()?)
+}
+
+pub fn create_internal_session(
+    workspace_id: &str,
+    options: InternalCreateSessionOptions,
+) -> Result<CreateSessionResponse> {
+    match options.surface_mode {
+        SessionSurfaceMode::Thread | SessionSurfaceMode::Terminal
+            if options.created_by == SessionCreatedBy::User => {}
+        SessionSurfaceMode::TaskMonitor | SessionSurfaceMode::AgentTerminal
+            if options.created_by != SessionCreatedBy::User => {}
+        SessionSurfaceMode::Thread | SessionSurfaceMode::Terminal
+            if options.created_by != SessionCreatedBy::User => {}
+        _ => bail!("Invalid session mode/creator combination"),
+    }
+    create_session_with_options(workspace_id, options)
+}
+
+pub fn update_session_control(
+    session_id: &str,
+    control_owner: SessionControlOwner,
+    input_policy: SessionInputPolicy,
+) -> Result<String> {
+    let connection = db::write_conn()?;
+    let workspace_id: String = connection
+        .query_row(
+            r#"
+            UPDATE sessions
+            SET control_owner = ?2, input_policy = ?3
+            WHERE id = ?1
+            RETURNING workspace_id
+            "#,
+            (session_id, control_owner.as_str(), input_policy.as_str()),
+            |row| row.get(0),
+        )
+        .with_context(|| format!("Failed to update control for session {session_id}"))?;
+    Ok(workspace_id)
+}
+
+pub fn update_terminal_started(session_id: &str, cwd: &str) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            r#"
+            UPDATE sessions
+            SET terminal_cwd = ?2,
+                terminal_started_at = COALESCE(terminal_started_at, datetime('now')),
+                terminal_stopped_at = NULL,
+                terminal_exit_code = NULL,
+                status = 'running'
+            WHERE id = ?1
+            "#,
+            (session_id, cwd),
+        )
+        .with_context(|| format!("Failed to mark terminal session {session_id} started"))?;
+    Ok(())
+}
+
+pub fn update_terminal_stopped(session_id: &str, exit_code: Option<i32>) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            r#"
+            UPDATE sessions
+            SET terminal_stopped_at = datetime('now'),
+                terminal_exit_code = ?2,
+                status = 'idle'
+            WHERE id = ?1
+            "#,
+            (session_id, exit_code),
+        )
+        .with_context(|| format!("Failed to mark terminal session {session_id} stopped"))?;
+    Ok(())
+}
+
+fn create_session_with_options(
+    workspace_id: &str,
+    options: InternalCreateSessionOptions,
+) -> Result<CreateSessionResponse> {
     let mut connection = db::write_conn()?;
 
     // `model` is left NULL on create: the frontend owns model selection via
@@ -480,25 +781,41 @@ pub fn create_session(
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
-    let title = default_session_title_for_action_kind_with_workspace(
-        &transaction,
-        workspace_id,
-        action_kind,
-    )?;
+    let title = match options.title {
+        Some(title) => title,
+        None => default_session_title_for_action_kind_with_workspace(
+            &transaction,
+            workspace_id,
+            options.action_kind,
+        )?,
+    };
 
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level)
-            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, NULL, ?6)
+            INSERT INTO sessions (
+                id, workspace_id, status, title, permission_mode, action_kind,
+                model, effort_level, agent_type, surface_kind, surface_mode,
+                control_owner, input_policy, created_by, terminal_runtime,
+                terminal_cwd
+            )
+            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             "#,
             (
                 &session_id,
                 workspace_id,
                 &title,
-                permission_mode.unwrap_or("default"),
-                action_kind,
+                options.permission_mode.as_deref().unwrap_or("default"),
+                options.action_kind,
                 &default_effort,
+                options.agent_type.as_deref(),
+                options.surface_kind.as_str(),
+                options.surface_mode.as_str(),
+                options.control_owner.as_str(),
+                options.input_policy.as_str(),
+                options.created_by.as_str(),
+                options.terminal_runtime.as_deref(),
+                options.terminal_cwd.as_deref(),
             ),
         )
         .context("Failed to create session")?;
@@ -736,6 +1053,10 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
               s.thread_role, s.thread_status, s.supersedes_thread_id,
               s.stale_reason, s.last_supervisor_message_id,
               s.last_milestone_report_id,
+              s.surface_kind, s.surface_mode, s.control_owner,
+              s.input_policy, s.created_by, s.terminal_runtime,
+              s.terminal_cwd, s.terminal_started_at,
+              s.terminal_stopped_at, s.terminal_exit_code,
               child.parent_session_id, child.parent_message_id,
               child.status AS delegation_status,
               COALESCE(child_counts.child_count, 0) AS child_count
@@ -779,10 +1100,20 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
                 stale_reason: row.get(19)?,
                 last_supervisor_message_id: row.get(20)?,
                 last_milestone_report_id: row.get(21)?,
-                parent_session_id: row.get(22)?,
-                parent_message_id: row.get(23)?,
-                delegation_status: row.get(24)?,
-                child_count: row.get(25)?,
+                surface_kind: row.get(22)?,
+                surface_mode: row.get(23)?,
+                control_owner: row.get(24)?,
+                input_policy: row.get(25)?,
+                created_by: row.get(26)?,
+                terminal_runtime: row.get(27)?,
+                terminal_cwd: row.get(28)?,
+                terminal_started_at: row.get(29)?,
+                terminal_stopped_at: row.get(30)?,
+                terminal_exit_code: row.get(31)?,
+                parent_session_id: row.get(32)?,
+                parent_message_id: row.get(33)?,
+                delegation_status: row.get(34)?,
+                child_count: row.get(35)?,
             })
         })
         .context("Failed to query hidden sessions")?;
@@ -794,7 +1125,37 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_dir::TEST_ENV_LOCK;
     use rusqlite::Connection;
+    use std::{fs, path::PathBuf};
+
+    struct TestDataDir {
+        root: PathBuf,
+    }
+
+    impl TestDataDir {
+        fn new(name: &str) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("helmor-test-{name}-{}", uuid::Uuid::new_v4()));
+            std::env::set_var("HELMOR_DATA_DIR", root.display().to_string());
+            crate::data_dir::ensure_directory_structure().unwrap();
+            let db_path = crate::data_dir::db_path().unwrap();
+            let conn = Connection::open(&db_path).unwrap();
+            crate::schema::ensure_schema(&conn).unwrap();
+            Self { root }
+        }
+
+        fn connection(&self) -> Connection {
+            Connection::open(crate::data_dir::db_path().unwrap()).unwrap()
+        }
+    }
+
+    impl Drop for TestDataDir {
+        fn drop(&mut self) {
+            std::env::remove_var("HELMOR_DATA_DIR");
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
 
     fn test_db() -> (Connection, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -839,6 +1200,90 @@ mod tests {
             })
             .unwrap();
         assert_eq!(title, "Test Session");
+    }
+
+    #[test]
+    fn create_user_terminal_session_persists_surface_metadata() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let dir = TestDataDir::new("create-terminal-session");
+        let conn = dir.connection();
+        seed(&conn);
+
+        let response = create_user_session(
+            "w1",
+            Some(CreateSessionOptions {
+                action_kind: None,
+                permission_mode: None,
+                surface_mode: Some(SessionSurfaceMode::Terminal),
+                runtime: Some("shell".into()),
+            }),
+        )
+        .unwrap();
+
+        let row: (String, String, String, String, String, Option<String>) = conn
+            .query_row(
+                r#"
+                SELECT surface_kind, surface_mode, control_owner, input_policy,
+                       created_by, terminal_runtime
+                FROM sessions WHERE id = ?1
+                "#,
+                [response.session_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "terminal");
+        assert_eq!(row.1, "terminal");
+        assert_eq!(row.2, "user");
+        assert_eq!(row.3, "writable");
+        assert_eq!(row.4, "user");
+        assert_eq!(row.5.as_deref(), Some("shell"));
+    }
+
+    #[test]
+    fn create_internal_agent_terminal_persists_agent_control() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let dir = TestDataDir::new("create-agent-terminal-session");
+        let conn = dir.connection();
+        seed(&conn);
+
+        let response = create_internal_session(
+            "w1",
+            InternalCreateSessionOptions {
+                surface_kind: SessionSurfaceKind::Terminal,
+                surface_mode: SessionSurfaceMode::AgentTerminal,
+                control_owner: SessionControlOwner::Agent,
+                input_policy: SessionInputPolicy::RequestControl,
+                created_by: SessionCreatedBy::Pi,
+                terminal_runtime: Some("pi".into()),
+                agent_type: Some("pi".into()),
+                title: Some("Agent Terminal".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let row: (String, String, String, Option<String>) = conn
+            .query_row(
+                "SELECT surface_mode, control_owner, input_policy, agent_type FROM sessions WHERE id = ?1",
+                [response.session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "agent_terminal");
+        assert_eq!(row.1, "agent");
+        assert_eq!(row.2, "request_control");
+        assert_eq!(row.3.as_deref(), Some("pi"));
     }
 
     #[test]

@@ -54,6 +54,7 @@ function handleUiMutation(
 			});
 			return;
 		case "sessionListChanged":
+		case "sessionModeChanged":
 			invalidateWorkspaceLists(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),

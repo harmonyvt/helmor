@@ -504,6 +504,20 @@ export type WorkspaceSessionSummary = {
 	staleReason?: string | null;
 	lastSupervisorMessageId?: string | null;
 	lastMilestoneReportId?: string | null;
+	surfaceKind?: "chat" | "terminal";
+	surfaceMode?: "thread" | "task_monitor" | "terminal" | "agent_terminal";
+	controlOwner?: "user" | "agent" | "system";
+	inputPolicy?:
+		| "writable"
+		| "read_only"
+		| "request_control"
+		| "blocked_for_approval";
+	createdBy?: "user" | "goal" | "pi" | "system";
+	terminalRuntime?: string | null;
+	terminalCwd?: string | null;
+	terminalStartedAt?: string | null;
+	terminalStoppedAt?: string | null;
+	terminalExitCode?: number | null;
 	parentSessionId?: string | null;
 	parentMessageId?: string | null;
 	delegationStatus?: string | null;
@@ -1654,6 +1668,7 @@ export type UiMutationEvent =
 	| { type: "workspaceListChanged" }
 	| { type: "workspaceChanged"; workspaceId: string }
 	| { type: "sessionListChanged"; workspaceId: string }
+	| { type: "sessionModeChanged"; workspaceId: string }
 	| { type: "sessionMessagesChanged"; workspaceId: string; sessionId: string }
 	| { type: "contextUsageChanged"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
@@ -3263,12 +3278,34 @@ export async function createSession(
 	options?: {
 		actionKind?: ActionKind | null;
 		permissionMode?: string | null;
+		surfaceMode?: "thread" | "terminal" | null;
+		runtime?: string | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
-		actionKind: options?.actionKind ?? null,
-		permissionMode: options?.permissionMode ?? null,
+		options: options
+			? {
+					actionKind: options.actionKind ?? null,
+					permissionMode: options.permissionMode ?? null,
+					surfaceMode: options.surfaceMode ?? null,
+					runtime: options.runtime ?? null,
+				}
+			: null,
+		actionKind: null,
+		permissionMode: null,
+	});
+}
+
+export async function updateSessionControl(
+	sessionId: string,
+	controlOwner: WorkspaceSessionSummary["controlOwner"],
+	inputPolicy: WorkspaceSessionSummary["inputPolicy"],
+): Promise<void> {
+	return invoke("update_session_control", {
+		sessionId,
+		controlOwner,
+		inputPolicy,
 	});
 }
 
@@ -3571,6 +3608,66 @@ export async function spawnTerminal(
 		workspaceId,
 		instanceId,
 		channel,
+	});
+}
+
+export async function spawnSessionTerminal(
+	repoId: string,
+	workspaceId: string,
+	sessionId: string,
+	runtime: string | null,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("spawn_session_terminal", {
+		repoId,
+		workspaceId,
+		sessionId,
+		runtime,
+		channel,
+	});
+}
+
+export async function stopSessionTerminal(
+	repoId: string,
+	workspaceId: string,
+	sessionId: string,
+): Promise<boolean> {
+	return invoke<boolean>("stop_session_terminal", {
+		repoId,
+		workspaceId,
+		sessionId,
+	});
+}
+
+export async function writeSessionTerminalStdin(
+	repoId: string,
+	workspaceId: string,
+	sessionId: string,
+	data: string,
+): Promise<boolean> {
+	return invoke<boolean>("write_session_terminal_stdin", {
+		repoId,
+		workspaceId,
+		sessionId,
+		data,
+	});
+}
+
+export async function resizeSessionTerminal(
+	repoId: string,
+	workspaceId: string,
+	sessionId: string,
+	cols: number,
+	rows: number,
+): Promise<boolean> {
+	return invoke<boolean>("resize_session_terminal", {
+		repoId,
+		workspaceId,
+		sessionId,
+		cols,
+		rows,
 	});
 }
 

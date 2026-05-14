@@ -37,6 +37,7 @@ import { getUnresolvedPlanReview } from "@/lib/plan-review";
 import {
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
+	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { EMPTY_QUEUE, useSubmitQueue } from "@/lib/use-submit-queue";
@@ -200,6 +201,10 @@ export const WorkspaceConversationContainer = memo(
 		// switches because this container is mounted once in the App
 		// tree (not keyed by session id).
 		const { settings } = useSettings();
+		const sessionsQuery = useQuery({
+			...workspaceSessionsQueryOptions(displayedWorkspaceId ?? "__none__"),
+			enabled: Boolean(displayedWorkspaceId),
+		});
 		const { queuesBySessionId, api: submitQueueApi } = useSubmitQueue();
 
 		const handlePiUiRequest = useCallback(
@@ -408,6 +413,15 @@ export const WorkspaceConversationContainer = memo(
 					{piUiAccessory}
 				</>
 			) : null;
+		const selectedSession = sessionsQuery.data?.find(
+			(session) => session.id === displayedSessionId,
+		);
+		const selectedInputPolicy = selectedSession?.inputPolicy ?? "writable";
+		const hideComposerForMode =
+			selectedSession?.surfaceKind === "terminal" ||
+			selectedSession?.surfaceMode === "task_monitor" ||
+			selectedInputPolicy === "read_only" ||
+			selectedInputPolicy === "request_control";
 
 		const effectiveDeferredToolResponse =
 			useCallback<DeferredToolResponseHandler>(
@@ -455,62 +469,90 @@ export const WorkspaceConversationContainer = memo(
 					compact={compact}
 				/>
 
-				<div
-					className={
-						compact ? "mt-auto px-2.5 pb-2.5 pt-0" : "mt-auto px-4 pb-4 pt-0"
-					}
-				>
-					<div>
-						{effectiveComposerAccessory}
-						<WorkspaceComposerContainer
-							displayedWorkspaceId={displayedWorkspaceId}
-							displayedSessionId={displayedSessionId}
-							disabled={selectionPending}
-							sending={isSending}
-							sendError={activeSendError}
-							restoreDraft={restoreDraft}
-							restoreImages={restoreImages}
-							restoreFiles={restoreFiles}
-							restoreCustomTags={restoreCustomTags}
-							restoreNonce={restoreNonce}
-							pendingElicitation={pendingElicitation}
-							onElicitationResponse={handleElicitationResponse}
-							elicitationResponsePending={elicitationResponsePending}
-							pendingDeferredTool={effectivePendingDeferredTool}
-							onDeferredToolResponse={effectiveDeferredToolResponse}
-							planReview={planReview}
-							onImplementPlanInCleanThread={
-								displayedWorkspaceId && onQueuePendingPromptForSession
-									? handleImplementPlanInCleanThread
-									: undefined
-							}
-							modelSelections={composerModelSelections}
-							effortLevels={composerEffortLevels}
-							permissionModes={composerPermissionModes}
-							fastModes={composerFastModes}
-							debugModes={composerDebugModes}
-							activeFastPreludes={activeFastPreludes}
-							onSelectModel={handleSelectModel}
-							onSelectEffort={handleSelectEffort}
-							onChangePermissionMode={handleChangePermissionMode}
-							onChangeFastMode={handleChangeFastMode}
-							onChangeDebugMode={handleChangeDebugMode}
-							onSwitchSession={onSelectSession}
-							onSubmit={handleComposerSubmitWrapper}
-							onStop={handleStopStream}
-							pendingPromptForSession={pendingPromptForSession}
-							onPendingPromptConsumed={onPendingPromptConsumed}
-							pendingInsertRequests={relevantPendingInsertRequests}
-							onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
-							queueItems={queueItems}
-							onSteerQueued={handleSteerQueued}
-							onRemoveQueued={handleRemoveQueued}
-							modelFilter={modelFilter}
-							hideToolbar={compact}
-						/>
+				{hideComposerForMode ? (
+					<ModeStatusBar session={selectedSession} />
+				) : (
+					<div
+						className={
+							compact ? "mt-auto px-2.5 pb-2.5 pt-0" : "mt-auto px-4 pb-4 pt-0"
+						}
+					>
+						<div>
+							{effectiveComposerAccessory}
+							<WorkspaceComposerContainer
+								displayedWorkspaceId={displayedWorkspaceId}
+								displayedSessionId={displayedSessionId}
+								disabled={selectionPending}
+								sending={isSending}
+								sendError={activeSendError}
+								restoreDraft={restoreDraft}
+								restoreImages={restoreImages}
+								restoreFiles={restoreFiles}
+								restoreCustomTags={restoreCustomTags}
+								restoreNonce={restoreNonce}
+								pendingElicitation={pendingElicitation}
+								onElicitationResponse={handleElicitationResponse}
+								elicitationResponsePending={elicitationResponsePending}
+								pendingDeferredTool={effectivePendingDeferredTool}
+								onDeferredToolResponse={effectiveDeferredToolResponse}
+								planReview={planReview}
+								onImplementPlanInCleanThread={
+									displayedWorkspaceId && onQueuePendingPromptForSession
+										? handleImplementPlanInCleanThread
+										: undefined
+								}
+								modelSelections={composerModelSelections}
+								effortLevels={composerEffortLevels}
+								permissionModes={composerPermissionModes}
+								fastModes={composerFastModes}
+								debugModes={composerDebugModes}
+								activeFastPreludes={activeFastPreludes}
+								onSelectModel={handleSelectModel}
+								onSelectEffort={handleSelectEffort}
+								onChangePermissionMode={handleChangePermissionMode}
+								onChangeFastMode={handleChangeFastMode}
+								onChangeDebugMode={handleChangeDebugMode}
+								onSwitchSession={onSelectSession}
+								onSubmit={handleComposerSubmitWrapper}
+								onStop={handleStopStream}
+								pendingPromptForSession={pendingPromptForSession}
+								onPendingPromptConsumed={onPendingPromptConsumed}
+								pendingInsertRequests={relevantPendingInsertRequests}
+								onPendingInsertRequestsConsumed={
+									onPendingInsertRequestsConsumed
+								}
+								queueItems={queueItems}
+								onSteerQueued={handleSteerQueued}
+								onRemoveQueued={handleRemoveQueued}
+								modelFilter={modelFilter}
+								hideToolbar={compact}
+							/>
+						</div>
 					</div>
-				</div>
+				)}
 			</FileLinkProvider>
 		);
 	},
 );
+
+function ModeStatusBar({
+	session,
+}: {
+	session?: {
+		surfaceMode?: string;
+		controlOwner?: string;
+		agentType?: string | null;
+	} | null;
+}) {
+	const label =
+		session?.surfaceMode === "task_monitor"
+			? "Task Monitor is read-only. Progress appears in the thread."
+			: session?.surfaceMode === "agent_terminal"
+				? `Agent Terminal controlled by ${session.agentType ?? session.controlOwner ?? "agent"}.`
+				: "Terminal input is handled in the terminal surface.";
+	return (
+		<div className="mt-auto border-t bg-background/70 px-4 py-2 text-xs text-muted-foreground">
+			{label}
+		</div>
+	);
+}
