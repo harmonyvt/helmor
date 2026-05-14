@@ -3,7 +3,6 @@ import {
 	GitPullRequestDraft,
 	LoaderCircle,
 	Pencil,
-	Plus,
 } from "lucide-react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
@@ -30,10 +29,6 @@ type GoalHeaderProps = {
 	hasBranch?: boolean;
 	hasTargetBranch?: boolean;
 	onEditGoal: () => void;
-	onShowAddCard: () => void;
-	canCreateCards?: boolean;
-	/** Rendered in the right action area — use this to pass the Pi chip. */
-	headerActions?: React.ReactNode;
 };
 
 function prAccentClass(prSyncState?: PrSyncState | null) {
@@ -153,13 +148,12 @@ export function GoalHeader({
 	hasBranch = false,
 	hasTargetBranch = false,
 	onEditGoal,
-	onShowAddCard,
-	canCreateCards = true,
-	headerActions,
 }: GoalHeaderProps) {
 	const parsedPr = parsePrUrl(prUrl);
 	const setup = setupStatus({
-		canCreateCards,
+		// Pass false — we never want to suppress the badge here based on
+		// card-creation readiness. The tab bar owns the Add card gating.
+		canCreateCards: false,
 		workspaceState,
 		prSyncState,
 		hasBranch,
@@ -188,6 +182,8 @@ export function GoalHeader({
 						</h1>
 					</div>
 				</div>
+
+				{/* Setup badge + PR button live in the title row */}
 				<div className="flex shrink-0 items-center gap-2">
 					{setup ? <GoalSetupBadge status={setup} /> : null}
 					{prUrl ? (
@@ -202,25 +198,10 @@ export function GoalHeader({
 							</a>
 						</Button>
 					) : null}
-					{headerActions}
-					<Button
-						variant="outline"
-						size="sm"
-						className="cursor-pointer"
-						onClick={onShowAddCard}
-						disabled={!canCreateCards}
-						title={
-							canCreateCards
-								? "Add card"
-								: "Goal setup must finish before adding cards"
-						}
-					>
-						<Plus className="size-3.5" />
-						Add card
-					</Button>
 				</div>
 			</header>
 
+			{/* Description row — click to edit */}
 			<button
 				type="button"
 				className="group flex shrink-0 cursor-pointer items-start gap-2 border-b border-border/50 bg-muted/20 px-5 py-2 text-left transition-colors hover:bg-muted/40"
@@ -233,7 +214,7 @@ export function GoalHeader({
 							{goalDescription}
 						</p>
 					) : (
-						<p className="text-[12px] text-muted-foreground/50 italic">
+						<p className="text-[12px] italic text-muted-foreground/50">
 							Add a description for this goal…
 						</p>
 					)}
