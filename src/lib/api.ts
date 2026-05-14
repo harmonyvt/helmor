@@ -3767,6 +3767,54 @@ export async function spawnSessionTerminal(
 	});
 }
 
+export type TerminalProfile = {
+	id: string;
+	label: string;
+	command?: string | null;
+	args: string[];
+	env: Array<{ key: string; value: string }>;
+	tmuxBacked: boolean;
+};
+
+export type TmuxSessionStatus = {
+	available: boolean;
+	sessionName: string;
+	exists: boolean;
+	attachedClients: number;
+	windows: number;
+	panes: number;
+	currentCommand?: string | null;
+	currentPath?: string | null;
+	paneTitle?: string | null;
+	dead: boolean;
+};
+
+export async function listTerminalProfiles(): Promise<TerminalProfile[]> {
+	return invoke<TerminalProfile[]>("list_terminal_profiles");
+}
+
+export async function getSessionTerminalStatus(
+	workspaceId: string,
+	sessionId: string,
+): Promise<TmuxSessionStatus> {
+	return invoke<TmuxSessionStatus>("get_session_terminal_status", {
+		workspaceId,
+		sessionId,
+	});
+}
+
+export async function captureSessionTerminal(
+	workspaceId: string,
+	sessionId: string,
+	lines = 80,
+): Promise<string> {
+	return invoke<string>("capture_session_terminal", {
+		workspaceId,
+		sessionId,
+		lines,
+	});
+}
+
 export async function stopSessionTerminal(
 	repoId: string,
 	workspaceId: string,

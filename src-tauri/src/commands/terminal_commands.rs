@@ -1,8 +1,8 @@
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::repos;
 use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
+use crate::{repos, terminal_profiles, tmux};
 
 use super::common::CmdResult;
 
@@ -20,27 +20,6 @@ fn make_workspace_script_type(instance_id: &str) -> String {
 
 fn make_session_script_type(instance_id: &str) -> String {
     format!("session-terminal:{instance_id}")
-}
-
-fn session_terminal_runtime_command(runtime: Option<String>) -> (String, Option<String>) {
-    let runtime_label = runtime
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("shell")
-        .to_string();
-    let normalized = runtime_label
-        .to_ascii_lowercase()
-        .chars()
-        .filter(|ch| !matches!(ch, ' ' | '_' | '-'))
-        .collect::<String>();
-    let command = match normalized.as_str() {
-        "" | "shell" => None,
-        "opencode" => Some("opencode".to_string()),
-        "openai" | "openaicodex" => Some("codex".to_string()),
-        _ => Some(runtime_label.clone()),
-    };
-    (runtime_label, command)
 }
 
 /// Spawn a blank interactive shell ($SHELL -i -l) on a fresh PTY in the
@@ -154,22 +133,53 @@ pub async fn spawn_session_terminal(
     };
     let mgr = manager.inner().clone();
     let script_type = make_session_script_type(&session_id);
-    let (runtime_label, initial_input) = session_terminal_runtime_command(runtime);
+    let profile =
+        terminal_profiles::resolve_terminal_profile(runtime.as_deref().unwrap_or("shell"));
+    let runtime_label = profile.label.clone();
+    let profile_command = profile.command_line();
+    let tmux_session_name = tmux::session_name(&workspace_id, &session_id);
+    let tmux_available = tmux::is_available();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let result = crate::workspace::scripts::run_terminal_session(
-            &mgr,
-            &repo_id,
-            &script_type,
-            Some(&workspace_id),
-            &working_dir,
-            &context,
-            channel.clone(),
-            initial_input.as_deref(),
-        );
+        let result = if tmux_available {
+            let script = tmux::attach_or_create_script(
+                &tmux_session_name,
+                &working_dir,
+                profile_command.as_deref(),
+            );
+            let args = vec!["-lc".to_string(), script];
+            crate::workspace::scripts::run_terminal_command(
+                &mgr,
+                &repo_id,
+                &script_type,
+                Some(&workspace_id),
+                &working_dir,
+                &context,
+                channel.clone(),
+                "/bin/sh",
+                &args,
+            )
+        } else {
+            let _ = channel.send(ScriptEvent::Stdout {
+                data: "\r\n\x1b[33mtmux not found; running in a transient Helmor PTY.\x1b[0m\r\n"
+                    .to_string(),
+            });
+            crate::workspace::scripts::run_terminal_session(
+                &mgr,
+                &repo_id,
+                &script_type,
+                Some(&workspace_id),
+                &working_dir,
+                &context,
+                channel.clone(),
+                profile_command.as_deref(),
+            )
+        };
         match result {
             Ok(exit_code) => {
-                let _ = crate::sessions::update_terminal_stopped(&session_id, exit_code);
+                if !tmux_available || !tmux::session_exists(&tmux_session_name) {
+                    let _ = crate::sessions::update_terminal_stopped(&session_id, exit_code);
+                }
             }
             Err(e) => {
                 let _ = crate::sessions::update_terminal_stopped(&session_id, Some(1));
@@ -181,6 +191,30 @@ pub async fn spawn_session_terminal(
     });
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn list_terminal_profiles() -> CmdResult<Vec<terminal_profiles::TerminalProfile>> {
+    Ok(terminal_profiles::list_terminal_profiles())
+}
+
+#[tauri::command]
+pub async fn get_session_terminal_status(
+    workspace_id: String,
+    session_id: String,
+) -> CmdResult<tmux::TmuxSessionStatus> {
+    let session_name = tmux::session_name(&workspace_id, &session_id);
+    Ok(tmux::status(&session_name)?)
+}
+
+#[tauri::command]
+pub async fn capture_session_terminal(
+    workspace_id: String,
+    session_id: String,
+    lines: Option<u16>,
+) -> CmdResult<String> {
+    let session_name = tmux::session_name(&workspace_id, &session_id);
+    Ok(tmux::capture_pane(&session_name, lines.unwrap_or(80))?)
 }
 
 #[tauri::command]
@@ -205,12 +239,14 @@ pub async fn stop_session_terminal(
     workspace_id: String,
     session_id: String,
 ) -> CmdResult<bool> {
+    let tmux_session_name = tmux::session_name(&workspace_id, &session_id);
+    let tmux_killed = tmux::kill_session(&tmux_session_name)?;
     let key = (
         repo_id,
         make_session_script_type(&session_id),
         Some(workspace_id),
     );
-    Ok(manager.kill(&key))
+    Ok(manager.kill(&key) || tmux_killed)
 }
 
 #[tauri::command]

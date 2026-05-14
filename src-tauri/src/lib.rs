@@ -23,6 +23,8 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod terminal_profiles;
+pub mod tmux;
 pub mod ui_sync;
 pub mod web;
 pub mod web_daemon;
@@ -291,6 +293,9 @@ pub fn run() {
             commands::script_commands::resize_repo_script,
             commands::terminal_commands::spawn_terminal,
             commands::terminal_commands::spawn_session_terminal,
+            commands::terminal_commands::list_terminal_profiles,
+            commands::terminal_commands::get_session_terminal_status,
+            commands::terminal_commands::capture_session_terminal,
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::stop_session_terminal,
             commands::terminal_commands::write_terminal_stdin,

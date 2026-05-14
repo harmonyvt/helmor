@@ -1,13 +1,17 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { LucideIcon } from "lucide-react";
 import {
 	AlertCircle,
 	ArrowLeft,
 	ArrowRight,
 	Bot,
+	Braces,
 	Check,
 	ChevronDown,
 	Clock3,
+	Code,
 	Copy,
+	Cpu,
 	GitBranch,
 	History,
 	MessageSquare,
@@ -15,6 +19,7 @@ import {
 	Pencil,
 	Plus,
 	RotateCcw,
+	Terminal,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -29,6 +34,9 @@ import {
 	DropdownMenuItem,
 	DropdownMenuLabel,
 	DropdownMenuSeparator,
+	DropdownMenuSub,
+	DropdownMenuSubContent,
+	DropdownMenuSubTrigger,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { HyperText } from "@/components/ui/hyper-text";
@@ -47,10 +55,12 @@ import {
 	createSession,
 	deleteSession,
 	listRemoteBranches,
+	listTerminalProfiles,
 	loadHiddenSessions,
 	prefetchRemoteRefs,
 	renameSession,
 	renameWorkspaceBranch,
+	type TerminalProfile,
 	unhideSession,
 	updateIntendedTargetBranch,
 	type WorkspaceDetail,
@@ -133,6 +143,11 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		staleTime: 5 * 60 * 1000,
 		gcTime: 10 * 60 * 1000,
 	});
+	const terminalProfilesQuery = useQuery({
+		queryKey: ["terminalProfiles"],
+		queryFn: listTerminalProfiles,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
 	const remoteBranches = branchesQuery.data ?? [];
 	const loadingBranches = branchesQuery.isFetching;
 	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -207,11 +222,11 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	}, []);
 
 	const handleCreateSession = useCallback(
-		async (mode: "thread" | "terminal") => {
+		async (mode: "thread" | "terminal", runtimeOverride?: string | null) => {
 			if (!workspace) {
 				return;
 			}
-			const runtime = mode === "terminal" ? "shell" : null;
+			const runtime = mode === "terminal" ? (runtimeOverride ?? "shell") : null;
 			try {
 				const result = await createSession(workspace.id, {
 					surfaceMode: mode,
@@ -245,10 +260,13 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		void handleCreateSession("thread");
 	}, [handleCreateSession]);
 
-	const handleCreateTerminal = useCallback(() => {
-		setNewSessionOpen(false);
-		void handleCreateSession("terminal");
-	}, [handleCreateSession]);
+	const handleCreateTerminalProfile = useCallback(
+		(runtime: string) => {
+			setNewSessionOpen(false);
+			void handleCreateSession("terminal", runtime);
+		},
+		[handleCreateSession],
+	);
 
 	const handleHideSession = useCallback(
 		async (sessionId: string, event: React.MouseEvent) => {
@@ -499,7 +517,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						open={newSessionOpen}
 						onOpenChange={setNewSessionOpen}
 						onCreateThread={handleCreateThread}
-						onCreateTerminal={handleCreateTerminal}
+						onCreateTerminal={handleCreateTerminalProfile}
+						terminalProfiles={
+							terminalProfilesQuery.data ?? DEFAULT_TERMINAL_PROFILES
+						}
 					/>
 
 					{headerActions ? (
@@ -884,7 +905,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					open={newSessionOpen}
 					onOpenChange={setNewSessionOpen}
 					onCreateThread={handleCreateThread}
-					onCreateTerminal={handleCreateTerminal}
+					onCreateTerminal={handleCreateTerminalProfile}
+					terminalProfiles={
+						terminalProfilesQuery.data ?? DEFAULT_TERMINAL_PROFILES
+					}
 					shortcut={newSessionShortcut}
 				/>
 
@@ -1000,17 +1024,80 @@ function SessionProviderIcon({
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }
 
+const DEFAULT_TERMINAL_PROFILES: TerminalProfile[] = [
+	{
+		id: "shell",
+		label: "Shell",
+		command: null,
+		args: [],
+		env: [],
+		tmuxBacked: true,
+	},
+	{
+		id: "claude",
+		label: "Claude",
+		command: "claude",
+		args: ["--permission-mode", "bypassPermissions"],
+		env: [],
+		tmuxBacked: true,
+	},
+	{
+		id: "codex",
+		label: "Codex",
+		command: "codex",
+		args: ["--no-alt-screen", "--dangerously-bypass-approvals-and-sandbox"],
+		env: [],
+		tmuxBacked: true,
+	},
+	{
+		id: "opencode",
+		label: "OpenCode",
+		command: "opencode",
+		args: [],
+		env: [
+			{ key: "OPENCODE_CONFIG_CONTENT", value: '{"permission":"allow"}' },
+			{ key: "OPENCODE_YOLO", value: "true" },
+			{ key: "OPENCODE_DANGEROUSLY_SKIP_PERMISSIONS", value: "true" },
+		],
+		tmuxBacked: true,
+	},
+	{ id: "pi", label: "Pi", command: "pi", args: [], env: [], tmuxBacked: true },
+];
+
+/** Maps a terminal profile id to a unique icon and human-readable description. */
+function terminalProfileMeta(profile: TerminalProfile): {
+	Icon: LucideIcon;
+	description: string;
+} {
+	switch (profile.id) {
+		case "shell":
+			return { Icon: Terminal, description: "Login shell" };
+		case "claude":
+			return { Icon: Bot, description: "Claude Code" };
+		case "codex":
+			return { Icon: Braces, description: "OpenAI Codex CLI" };
+		case "opencode":
+			return { Icon: Code, description: "Open-source code agent" };
+		case "pi":
+			return { Icon: Cpu, description: "Pi coding agent" };
+		default:
+			return { Icon: MonitorUp, description: profile.command ?? profile.id };
+	}
+}
+
 function NewSessionMenu({
 	open,
 	onOpenChange,
 	onCreateThread,
 	onCreateTerminal,
+	terminalProfiles,
 	shortcut,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onCreateThread: () => void;
-	onCreateTerminal: () => void;
+	onCreateTerminal: (runtime: string) => void;
+	terminalProfiles: TerminalProfile[];
 	shortcut?: string | null;
 }) {
 	return (
@@ -1054,15 +1141,36 @@ function NewSessionMenu({
 					</div>
 				</DropdownMenuItem>
 				<DropdownMenuSeparator />
-				<DropdownMenuItem onSelect={onCreateTerminal}>
-					<MonitorUp className="size-3.5" strokeWidth={1.8} />
-					<div className="flex flex-col">
-						<span>Run a terminal</span>
-						<span className="text-[11px] text-muted-foreground">
-							Runtime: shell
-						</span>
-					</div>
-				</DropdownMenuItem>
+				<DropdownMenuSub>
+					<DropdownMenuSubTrigger>
+						<MonitorUp className="size-3.5" strokeWidth={1.8} />
+						<div className="flex flex-col">
+							<span>Run a terminal</span>
+							<span className="text-[11px] text-muted-foreground">
+								Choose profile
+							</span>
+						</div>
+					</DropdownMenuSubTrigger>
+					<DropdownMenuSubContent className="w-52">
+						{terminalProfiles.map((profile) => {
+							const { Icon, description } = terminalProfileMeta(profile);
+							return (
+								<DropdownMenuItem
+									key={profile.id}
+									onSelect={() => onCreateTerminal(profile.id)}
+								>
+									<Icon className="size-3.5" strokeWidth={1.8} />
+									<div className="flex flex-col">
+										<span>{profile.label}</span>
+										<span className="text-[11px] text-muted-foreground">
+											{description}
+										</span>
+									</div>
+								</DropdownMenuItem>
+							);
+						})}
+					</DropdownMenuSubContent>
+				</DropdownMenuSub>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

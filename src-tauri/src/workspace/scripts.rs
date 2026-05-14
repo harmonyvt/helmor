@@ -352,6 +352,38 @@ pub fn run_terminal_session(
     )
 }
 
+/// Spawn an arbitrary interactive terminal command on a PTY.
+///
+/// Used by tmux-backed Terminal sessions: Helmor still owns the visible PTY
+/// and streams bytes to xterm, while tmux owns the durable session behind it.
+#[allow(clippy::too_many_arguments)]
+pub fn run_terminal_command(
+    manager: &ScriptProcessManager,
+    repo_id: &str,
+    script_type: &str,
+    workspace_id: Option<&str>,
+    working_dir: &str,
+    context: &ScriptContext,
+    channel: Channel<ScriptEvent>,
+    command_path: &str,
+    command_args: &[String],
+) -> Result<Option<i32>> {
+    let arg_refs = command_args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_script_with_shell(
+        manager,
+        repo_id,
+        script_type,
+        workspace_id,
+        None,
+        working_dir,
+        context,
+        channel,
+        None,
+        command_path,
+        &arg_refs,
+    )
+}
+
 /// Internal implementation of [`run_script`] that takes the shell path and
 /// args explicitly. Exposed within the crate so tests can substitute a lean
 /// `/bin/sh` for the user's (potentially slow) interactive `$SHELL`.
