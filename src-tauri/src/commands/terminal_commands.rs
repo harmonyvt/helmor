@@ -22,6 +22,27 @@ fn make_session_script_type(instance_id: &str) -> String {
     format!("session-terminal:{instance_id}")
 }
 
+fn session_terminal_runtime_command(runtime: Option<String>) -> (String, Option<String>) {
+    let runtime_label = runtime
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("shell")
+        .to_string();
+    let normalized = runtime_label
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| !matches!(ch, ' ' | '_' | '-'))
+        .collect::<String>();
+    let command = match normalized.as_str() {
+        "" | "shell" => None,
+        "opencode" => Some("opencode".to_string()),
+        "openai" | "openaicodex" => Some("codex".to_string()),
+        _ => Some(runtime_label.clone()),
+    };
+    (runtime_label, command)
+}
+
 /// Spawn a blank interactive shell ($SHELL -i -l) on a fresh PTY in the
 /// workspace directory and stream its output to the frontend over `channel`.
 ///
@@ -80,6 +101,7 @@ pub async fn spawn_terminal(
             &working_dir,
             &context,
             channel.clone(),
+            None,
         ) {
             let _ = channel.send(ScriptEvent::Error {
                 message: e.to_string(),
@@ -132,7 +154,7 @@ pub async fn spawn_session_terminal(
     };
     let mgr = manager.inner().clone();
     let script_type = make_session_script_type(&session_id);
-    let runtime_label = runtime.unwrap_or_else(|| "shell".to_string());
+    let (runtime_label, initial_input) = session_terminal_runtime_command(runtime);
 
     tauri::async_runtime::spawn_blocking(move || {
         let result = crate::workspace::scripts::run_terminal_session(
@@ -143,6 +165,7 @@ pub async fn spawn_session_terminal(
             &working_dir,
             &context,
             channel.clone(),
+            initial_input.as_deref(),
         );
         match result {
             Ok(exit_code) => {

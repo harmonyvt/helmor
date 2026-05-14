@@ -1019,7 +1019,7 @@ function NewSessionMenu({
 				<TooltipTrigger asChild>
 					<DropdownMenuTrigger asChild>
 						<Button
-							aria-label="New thread"
+							aria-label="New session"
 							variant="ghost"
 							size="icon-sm"
 							className="ml-0.5 shrink-0 cursor-pointer text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -1033,7 +1033,7 @@ function NewSessionMenu({
 					sideOffset={4}
 					className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
 				>
-					<span>New thread</span>
+					<span>New session</span>
 					{shortcut ? (
 						<InlineShortcutDisplay
 							hotkey={shortcut}
@@ -1043,7 +1043,7 @@ function NewSessionMenu({
 				</TooltipContent>
 			</Tooltip>
 			<DropdownMenuContent align="end" className="w-48">
-				<DropdownMenuLabel>New thread</DropdownMenuLabel>
+				<DropdownMenuLabel>New session</DropdownMenuLabel>
 				<DropdownMenuItem onSelect={onCreateThread}>
 					<MessageSquare className="size-3.5" strokeWidth={1.8} />
 					<div className="flex flex-col">

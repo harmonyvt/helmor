@@ -3299,8 +3299,8 @@ export async function createSession(
 
 export async function updateSessionControl(
 	sessionId: string,
-	controlOwner: WorkspaceSessionSummary["controlOwner"],
-	inputPolicy: WorkspaceSessionSummary["inputPolicy"],
+	controlOwner: NonNullable<WorkspaceSessionSummary["controlOwner"]>,
+	inputPolicy: NonNullable<WorkspaceSessionSummary["inputPolicy"]>,
 ): Promise<void> {
 	return invoke("update_session_control", {
 		sessionId,

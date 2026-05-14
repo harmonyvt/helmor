@@ -697,6 +697,20 @@ pub fn create_internal_session(
     workspace_id: &str,
     options: InternalCreateSessionOptions,
 ) -> Result<CreateSessionResponse> {
+    let expected_surface_kind = match options.surface_mode {
+        SessionSurfaceMode::Thread | SessionSurfaceMode::TaskMonitor => SessionSurfaceKind::Chat,
+        SessionSurfaceMode::Terminal | SessionSurfaceMode::AgentTerminal => {
+            SessionSurfaceKind::Terminal
+        }
+    };
+    if options.surface_kind != expected_surface_kind {
+        bail!(
+            "Invalid session surface kind '{}' for mode '{}'",
+            options.surface_kind.as_str(),
+            options.surface_mode.as_str()
+        );
+    }
+
     match options.surface_mode {
         SessionSurfaceMode::Thread | SessionSurfaceMode::Terminal
             if options.created_by == SessionCreatedBy::User => {}
@@ -737,7 +751,7 @@ pub fn update_terminal_started(session_id: &str, cwd: &str) -> Result<()> {
             r#"
             UPDATE sessions
             SET terminal_cwd = ?2,
-                terminal_started_at = COALESCE(terminal_started_at, datetime('now')),
+                terminal_started_at = datetime('now'),
                 terminal_stopped_at = NULL,
                 terminal_exit_code = NULL,
                 status = 'running'
@@ -1384,6 +1398,84 @@ mod tests {
         assert_eq!(row.1, "agent");
         assert_eq!(row.2, "request_control");
         assert_eq!(row.3.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn create_internal_session_rejects_conflicting_surface_kind() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("reject-conflicting-surface-kind");
+
+        let error = create_internal_session(
+            "w1",
+            InternalCreateSessionOptions {
+                surface_kind: SessionSurfaceKind::Chat,
+                surface_mode: SessionSurfaceMode::AgentTerminal,
+                control_owner: SessionControlOwner::Agent,
+                input_policy: SessionInputPolicy::RequestControl,
+                created_by: SessionCreatedBy::Pi,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Invalid session surface kind 'chat' for mode 'agent_terminal'"));
+    }
+
+    #[test]
+    fn update_terminal_started_refreshes_existing_start_time() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let dir = TestDataDir::new("terminal-start-refresh");
+        let conn = dir.connection();
+        seed(&conn);
+
+        conn.execute(
+            r#"
+            UPDATE sessions
+            SET terminal_started_at = '2000-01-01 00:00:00',
+                terminal_stopped_at = '2000-01-01 00:05:00',
+                terminal_exit_code = 0,
+                status = 'idle'
+            WHERE id = 's1'
+            "#,
+            [],
+        )
+        .unwrap();
+
+        update_terminal_started("s1", "/tmp/helmor").unwrap();
+
+        let row: (
+            Option<String>,
+            Option<String>,
+            Option<i32>,
+            String,
+            Option<String>,
+        ) = conn
+            .query_row(
+                r#"
+                SELECT terminal_started_at, terminal_stopped_at, terminal_exit_code,
+                       status, terminal_cwd
+                FROM sessions WHERE id = 's1'
+                "#,
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_ne!(row.0.as_deref(), Some("2000-01-01 00:00:00"));
+        assert!(row.1.is_none());
+        assert!(row.2.is_none());
+        assert_eq!(row.3, "running");
+        assert_eq!(row.4.as_deref(), Some("/tmp/helmor"));
     }
 
     #[test]
