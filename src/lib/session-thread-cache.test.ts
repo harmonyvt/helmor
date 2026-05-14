@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import type { ThreadMessageLike } from "./api";
 import {
 	appendUserMessage,
+	mergeStreamingDelta,
 	mergeStreamingPartial,
 	readSessionThread,
 	replaceStreamingTail,
@@ -161,6 +162,50 @@ describe("session-thread-cache", () => {
 		expect(cached).toHaveLength(2);
 		expect(cached?.[0]).toBe(prior[0]);
 		expect(cached?.[1]?.id).toBe("a1");
+	});
+
+	it("mergeStreamingDelta patches matching background stream text parts", () => {
+		const client = makeClient();
+		const prior = [
+			makeMessage("u1", "user", "background prompt"),
+			{
+				...makeMessage("a1", "assistant", "first"),
+				streaming: true,
+			},
+		];
+		client.setQueryData(sessionThreadCacheKey("session-1"), prior);
+
+		mergeStreamingDelta(client, "session-1", {
+			messageId: "a1",
+			partId: "a1:txt:0",
+			partType: "text",
+			textDelta: " second",
+		});
+
+		const cached = readSessionThread(client, "session-1");
+		expect(cached).toHaveLength(2);
+		expect(cached?.[0]).toBe(prior[0]);
+		const latest = cached?.[1]?.content[0];
+		expect(latest?.type).toBe("text");
+		if (latest?.type === "text") {
+			expect(latest.text).toBe("first second");
+		}
+		expect(cached?.[1]?.streaming).toBe(true);
+	});
+
+	it("mergeStreamingDelta leaves cache unchanged when the partial anchor is missing", () => {
+		const client = makeClient();
+		const prior = [makeMessage("u1", "user", "background prompt")];
+		client.setQueryData(sessionThreadCacheKey("session-1"), prior);
+
+		mergeStreamingDelta(client, "session-1", {
+			messageId: "a1",
+			partId: "a1:txt:0",
+			partType: "text",
+			textDelta: " chunk",
+		});
+
+		expect(readSessionThread(client, "session-1")).toBe(prior);
 	});
 
 	it("restoreSnapshot reverts to the captured state and removes the entry on undefined", () => {

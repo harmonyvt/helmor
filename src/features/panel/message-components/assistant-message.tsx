@@ -52,21 +52,17 @@ const AssistantText = memo(function AssistantText({
 			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-foreground"
 			style={{ fontSize: `${settings.fontSize}px` }}
 		>
-			{streaming ? (
-				<AssistantTextFallback text={smoothedText} />
-			) : (
-				<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
-					<LazyStreamdown
-						animated={false}
-						caret={undefined}
-						className="conversation-streamdown"
-						isAnimating={false}
-						mode={mode}
-					>
-						{smoothedText}
-					</LazyStreamdown>
-				</Suspense>
-			)}
+			<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
+				<LazyStreamdown
+					animated={false}
+					caret={undefined}
+					className="conversation-streamdown"
+					isAnimating={false}
+					mode={mode}
+				>
+					{smoothedText}
+				</LazyStreamdown>
+			</Suspense>
 		</div>
 	);
 });

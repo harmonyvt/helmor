@@ -210,6 +210,62 @@ describe("useUiSyncBridge", () => {
 		});
 	});
 
+	it("patches background streaming deltas without invalidating session lists per tick", () => {
+		const queryClient = makeClient();
+		const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+		const threadKey = sessionThreadCacheKey("session-1");
+		const workspaceSessionsKey =
+			helmorQueryKeys.workspaceSessions("workspace-1");
+
+		renderHook(() =>
+			useUiSyncBridge({
+				queryClient,
+				processPendingCliSends: vi.fn(),
+				reloadSettings: vi.fn(),
+				refreshGithubIdentity: vi.fn(),
+			}),
+		);
+
+		act(() => {
+			capturedSubscription?.({
+				type: "sessionStreamEvent",
+				workspaceId: "workspace-1",
+				sessionId: "session-1",
+				event: {
+					kind: "streamingPartial",
+					message: makeMessage("assistant-1", "assistant", "partial", true),
+				},
+			});
+		});
+
+		act(() => {
+			capturedSubscription?.({
+				type: "sessionStreamEvent",
+				workspaceId: "workspace-1",
+				sessionId: "session-1",
+				event: {
+					kind: "streamingDelta",
+					delta: {
+						messageId: "assistant-1",
+						partId: "assistant-1:txt:0",
+						partType: "text",
+						textDelta: " delta",
+					},
+				},
+			});
+		});
+
+		const cached = queryClient.getQueryData<ThreadMessageLike[]>(threadKey);
+		const latestPart = cached?.[0]?.content[0];
+		expect(latestPart?.type).toBe("text");
+		if (latestPart?.type === "text") {
+			expect(latestPart.text).toBe("partial delta");
+		}
+		expect(invalidateQueries).not.toHaveBeenCalledWith({
+			queryKey: workspaceSessionsKey,
+		});
+	});
+
 	it("invalidates forge detection when forge state changes", async () => {
 		const queryClient = makeClient();
 		const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
