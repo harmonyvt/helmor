@@ -64,6 +64,8 @@ export function WorkspaceEditorSurface({
 		editorSession.kind === "diff" &&
 		editorSession.originalText !== undefined &&
 		editorSession.modifiedText !== undefined;
+	const effectiveWorkspaceRootPath =
+		editorSession.workspaceRootPath ?? workspaceRootPath;
 	const closeLabel =
 		editorSession.kind === "diff" ? "Close diff view" : "Close editor view";
 
@@ -86,15 +88,19 @@ export function WorkspaceEditorSurface({
 
 				// Fetch original side (from git ref)
 				const originalPromise =
-					isDiff && status !== "A" && workspaceRootPath
-						? api.readFileAtRef(workspaceRootPath, editorSession.path, origRef)
+					isDiff && status !== "A" && effectiveWorkspaceRootPath
+						? api.readFileAtRef(
+								effectiveWorkspaceRootPath,
+								editorSession.path,
+								origRef,
+							)
 						: Promise.resolve(null);
 
 				// Fetch modified side (from disk or git ref)
 				const modifiedPromise = editorSession.modifiedRef
-					? workspaceRootPath
+					? effectiveWorkspaceRootPath
 						? api.readFileAtRef(
-								workspaceRootPath,
+								effectiveWorkspaceRootPath,
 								editorSession.path,
 								editorSession.modifiedRef,
 							)
@@ -137,7 +143,7 @@ export function WorkspaceEditorSurface({
 		return () => {
 			cancelled = true;
 		};
-	}, [canRenderDiff, canRenderFile, editorSession, workspaceRootPath]);
+	}, [canRenderDiff, canRenderFile, editorSession, effectiveWorkspaceRootPath]);
 
 	// Dispose editors on unmount (separate from the switching effect so the
 	// fast-path can skip cleanup without leaking on unmount).

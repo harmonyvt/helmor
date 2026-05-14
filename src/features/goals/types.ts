@@ -1,4 +1,5 @@
 import type React from "react";
+import type { DiffOpenOptions } from "@/lib/editor-session";
 
 /** The three physical states of the Pi AI surface within a goal context. */
 export type GoalPiPhysicalState = "panel" | "dock" | "sheet";
@@ -23,5 +24,7 @@ export type GoalWorkspaceContainerProps = {
 	headerLeading?: React.ReactNode;
 	onSelectWorkspace?: (workspaceId: string) => void;
 	onSelectWorkspaceSession?: (workspaceId: string, sessionId: string) => void;
+	activeEditorPath?: string | null;
+	onOpenEditorFile?: (path: string, options?: DiffOpenOptions) => void;
 	renderAiSurface?: (props: GoalAiSurfaceProps) => React.ReactNode;
 };

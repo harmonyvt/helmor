@@ -1144,7 +1144,8 @@ function AppShell({
 			return;
 		}
 
-		if (isPathWithinRoot(editorSession.path, workspaceRootPath)) {
+		const editorRootPath = editorSession.workspaceRootPath ?? workspaceRootPath;
+		if (isPathWithinRoot(editorSession.path, editorRootPath)) {
 			return;
 		}
 
@@ -1212,7 +1213,8 @@ function AppShell({
 
 	const handleOpenEditorFile = useCallback(
 		(path: string, options?: DiffOpenOptions) => {
-			if (!workspaceRootPath) {
+			const editorRootPath = options?.workspaceRootPath ?? workspaceRootPath;
+			if (!editorRootPath) {
 				pushWorkspaceToast(
 					"Open a workspace with a resolved root path before using the in-app editor.",
 					"Editor unavailable",
@@ -1231,8 +1233,9 @@ function AppShell({
 			const status = options?.fileStatus ?? "M";
 
 			// Background fetch so the next view reflects latest remote state
-			if (selectedWorkspaceId) {
-				triggerWorkspaceFetch(selectedWorkspaceId);
+			const fetchWorkspaceId = options?.workspaceId ?? selectedWorkspaceId;
+			if (fetchWorkspaceId) {
+				triggerWorkspaceFetch(fetchWorkspaceId);
 			}
 
 			setWorkspaceViewMode("editor");
@@ -1244,6 +1247,7 @@ function AppShell({
 				fileStatus: status,
 				originalRef: options?.originalRef,
 				modifiedRef: options?.modifiedRef,
+				workspaceRootPath: editorRootPath,
 			});
 		},
 		[
@@ -2733,6 +2737,8 @@ function AppShell({
 															onSelectWorkspaceSession={
 																handleSelectWorkspaceSession
 															}
+															activeEditorPath={editorSession?.path ?? null}
+															onOpenEditorFile={handleOpenEditorFile}
 														/>
 													) : null}
 													<div
