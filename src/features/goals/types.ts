@@ -1,5 +1,8 @@
 import type React from "react";
 
+/** The three physical states of the Pi AI surface within a goal context. */
+export type GoalPiPhysicalState = "panel" | "dock" | "sheet";
+
 export type GoalAiSurfaceContext = {
 	workspaceId: string;
 	goalTitle: string | null;
