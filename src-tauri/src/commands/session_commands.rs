@@ -28,13 +28,39 @@ pub async fn list_session_thread_messages(
 #[tauri::command]
 pub async fn create_session(
     workspace_id: String,
+    options: Option<sessions::CreateSessionOptions>,
     action_kind: Option<ActionKind>,
     permission_mode: Option<String>,
 ) -> CmdResult<sessions::CreateSessionResponse> {
     run_blocking(move || {
-        sessions::create_session(&workspace_id, action_kind, permission_mode.as_deref())
+        let resolved_options = options.or(Some(sessions::CreateSessionOptions {
+            action_kind,
+            permission_mode,
+            surface_mode: None,
+            runtime: None,
+        }));
+        sessions::create_user_session(&workspace_id, resolved_options)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn update_session_control(
+    app: tauri::AppHandle,
+    session_id: String,
+    control_owner: sessions::SessionControlOwner,
+    input_policy: sessions::SessionInputPolicy,
+) -> CmdResult<()> {
+    let workspace_id = run_blocking(move || {
+        sessions::update_session_control(&session_id, control_owner, input_policy)
+    })
+    .await?;
+
+    crate::ui_sync::publish(
+        &app,
+        crate::ui_sync::UiMutationEvent::SessionModeChanged { workspace_id },
+    );
+    Ok(())
 }
 
 #[tauri::command]

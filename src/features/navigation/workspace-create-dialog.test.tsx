@@ -174,12 +174,11 @@ describe("WorkspaceCreateDialog", () => {
 		await user.click(screen.getByRole("tab", { name: "Goal" }));
 		await waitFor(() => {
 			expect(
-				screen.getByRole("option", { name: /Reverse Lookup Goal/ }),
+				screen.getByRole("button", { name: /Reverse Lookup Goal/ }),
 			).toBeInTheDocument();
 		});
-		await user.selectOptions(
-			screen.getByRole("combobox", { name: "Pull request" }),
-			"43",
+		await user.click(
+			screen.getByRole("button", { name: /Reverse Lookup Goal/ }),
 		);
 
 		expect(screen.getByRole("combobox", { name: "Branch" })).toHaveValue(
@@ -191,10 +190,6 @@ describe("WorkspaceCreateDialog", () => {
 		expect(screen.getByLabelText("Goal description")).toHaveValue(
 			"Reverse PR body",
 		);
-		expect(
-			screen.getByText(/Using PR #43: https:\/\/github.com\/octocat/),
-		).toBeInTheDocument();
-
 		await user.click(screen.getByRole("button", { name: "Create Goal" }));
 
 		expect(onCreateGoalWorkspace).toHaveBeenCalledWith(

@@ -1,17 +1,27 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { WorkspaceDetail, WorkspaceSessionSummary } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { terminalDefaultTitle } from "./session-terminal-labels";
 
 export function buildOptimisticSession(
 	workspaceId: string,
 	sessionId: string,
 	createdAt: string,
+	mode: "thread" | "terminal" = "thread",
+	runtime: string | null = null,
 ): WorkspaceSessionSummary {
+	const isTerminal = mode === "terminal";
 	return {
 		id: sessionId,
 		workspaceId,
-		title: "Untitled",
-		agentType: null,
+		title: isTerminal
+			? terminalDefaultTitle({
+					surfaceMode: mode,
+					terminalRuntime: runtime ?? "shell",
+					agentType: runtime ?? "shell",
+				})
+			: "Untitled",
+		agentType: isTerminal ? (runtime ?? "shell") : null,
 		status: "idle",
 		model: null,
 		permissionMode: "default",
@@ -24,6 +34,16 @@ export function buildOptimisticSession(
 		lastUserMessageAt: null,
 		isHidden: false,
 		actionKind: null,
+		surfaceKind: isTerminal ? "terminal" : "chat",
+		surfaceMode: mode,
+		controlOwner: "user",
+		inputPolicy: "writable",
+		createdBy: "user",
+		terminalRuntime: isTerminal ? (runtime ?? "shell") : null,
+		terminalCwd: null,
+		terminalStartedAt: null,
+		terminalStoppedAt: null,
+		terminalExitCode: null,
 		active: true,
 	};
 }
@@ -35,6 +55,8 @@ type SeedNewSessionInCacheOptions = {
 	workspace?: WorkspaceDetail | null;
 	existingSessions?: WorkspaceSessionSummary[];
 	createdAt?: string;
+	mode?: "thread" | "terminal";
+	runtime?: string | null;
 };
 
 export function seedNewSessionInCache({
@@ -44,11 +66,15 @@ export function seedNewSessionInCache({
 	workspace = null,
 	existingSessions,
 	createdAt = new Date().toISOString(),
+	mode = "thread",
+	runtime = null,
 }: SeedNewSessionInCacheOptions): WorkspaceSessionSummary {
 	const optimisticSession = buildOptimisticSession(
 		workspaceId,
 		sessionId,
 		createdAt,
+		mode,
+		runtime,
 	);
 
 	queryClient.setQueryData(
@@ -62,8 +88,8 @@ export function seedNewSessionInCache({
 			return {
 				...base,
 				activeSessionId: sessionId,
-				activeSessionTitle: "Untitled",
-				activeSessionAgentType: null,
+				activeSessionTitle: optimisticSession.title,
+				activeSessionAgentType: optimisticSession.agentType,
 				activeSessionStatus: "idle",
 				sessionCount:
 					base.activeSessionId === sessionId

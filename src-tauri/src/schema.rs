@@ -226,6 +226,16 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         ("stale_reason", "TEXT"),
         ("last_supervisor_message_id", "TEXT"),
         ("last_milestone_report_id", "TEXT"),
+        ("surface_kind", "TEXT NOT NULL DEFAULT 'chat'"),
+        ("surface_mode", "TEXT NOT NULL DEFAULT 'thread'"),
+        ("control_owner", "TEXT NOT NULL DEFAULT 'user'"),
+        ("input_policy", "TEXT NOT NULL DEFAULT 'writable'"),
+        ("created_by", "TEXT NOT NULL DEFAULT 'user'"),
+        ("terminal_runtime", "TEXT"),
+        ("terminal_cwd", "TEXT"),
+        ("terminal_started_at", "TEXT"),
+        ("terminal_stopped_at", "TEXT"),
+        ("terminal_exit_code", "INTEGER"),
     ] {
         if has_table(connection, "sessions") && !has_column(connection, "sessions", column) {
             connection
@@ -235,6 +245,25 @@ fn run_migrations(connection: &Connection) -> Result<()> {
                 .with_context(|| format!("Failed to add sessions.{column}"))?;
         }
     }
+
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_command_audit_log (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                command TEXT NOT NULL,
+                approval_state TEXT NOT NULL DEFAULT 'not_required',
+                exit_code INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_command_audit_log_session
+                ON session_command_audit_log(session_id, created_at);
+            "#,
+        )
+        .context("Failed to create session command audit table")?;
 
     // Migration: wrap plain-text user prompts as JSON.
     //
@@ -655,8 +684,29 @@ CREATE TABLE IF NOT EXISTS sessions (
     stale_reason TEXT,
     last_supervisor_message_id TEXT,
     last_milestone_report_id TEXT,
+    surface_kind TEXT NOT NULL DEFAULT 'chat',
+    surface_mode TEXT NOT NULL DEFAULT 'thread',
+    control_owner TEXT NOT NULL DEFAULT 'user',
+    input_policy TEXT NOT NULL DEFAULT 'writable',
+    created_by TEXT NOT NULL DEFAULT 'user',
+    terminal_runtime TEXT,
+    terminal_cwd TEXT,
+    terminal_started_at TEXT,
+    terminal_stopped_at TEXT,
+    terminal_exit_code INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS session_command_audit_log (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    command TEXT NOT NULL,
+    approval_state TEXT NOT NULL DEFAULT 'not_required',
+    exit_code INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session_messages (
@@ -688,6 +738,7 @@ CREATE TABLE IF NOT EXISTS session_delegations (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_session_command_audit_log_session ON session_command_audit_log(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_session_delegations_parent ON session_delegations(parent_session_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_child ON session_delegations(child_session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_parent_message ON session_delegations(parent_message_id);
@@ -1322,6 +1373,46 @@ mod tests {
         let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
         assert!(column_exists(&connection, "sessions", "context_usage_meta"));
+    }
+
+    #[test]
+    fn session_surface_columns_and_audit_log_are_migrated() {
+        let (connection, _dir) = open_test_db();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT,
+                    status TEXT DEFAULT 'idle'
+                );
+                CREATE TABLE session_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    role TEXT,
+                    content TEXT
+                );
+                "#,
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+
+        for column in [
+            "surface_kind",
+            "surface_mode",
+            "control_owner",
+            "input_policy",
+            "created_by",
+            "terminal_runtime",
+            "terminal_cwd",
+            "terminal_started_at",
+            "terminal_stopped_at",
+            "terminal_exit_code",
+        ] {
+            assert!(column_exists(&connection, "sessions", column));
+        }
+        assert!(table_exists(&connection, "session_command_audit_log"));
     }
 
     #[test]

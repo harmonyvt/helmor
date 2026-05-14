@@ -60,6 +60,9 @@ pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSe
         .session_id
         .clone()
         .context("Background agent sends require an explicit session_id")?;
+    let streaming = session_is_streaming(&session_id).unwrap_or(false);
+    let send_model_id = params.model.clone();
+    let send_permission_mode = params.permission_mode.clone();
     let task_id = Uuid::new_v4().to_string();
     let queued = QueuedSend {
         task_id: task_id.clone(),
@@ -71,7 +74,6 @@ pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSe
         },
     };
 
-    let streaming = session_is_streaming(&session_id).unwrap_or(false);
     let should_start = {
         let queues = SESSION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()));
         let running = SESSION_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
@@ -89,6 +91,25 @@ pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSe
         }
         should_start
     };
+
+    if should_start {
+        let model_id = send_model_id.unwrap_or_else(|| {
+            crate::models::sessions::get_session_model(&session_id)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "default".to_string())
+        });
+        let model = crate::agents::resolve_model(&model_id);
+        if let Err(error) = crate::models::sessions::record_session_send_start_metadata(
+            &session_id,
+            &model.id,
+            &model.provider,
+            send_permission_mode.as_deref(),
+        ) {
+            remove_queued_send(&session_id, &task_id);
+            return Err(error);
+        }
+    }
 
     remember_runtime(
         &session_id,
@@ -223,6 +244,26 @@ fn pop_expected(expected_task_id: &str) -> Option<QueuedSend> {
             .then(|| session_id.clone())
     })?;
     queues.get_mut(&session_id)?.pop_front()
+}
+
+fn remove_queued_send(session_id: &str, task_id: &str) {
+    let queues = SESSION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut queues = queues
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(queue) = queues.get_mut(session_id) {
+        queue.retain(|send| send.task_id != task_id);
+        if queue.is_empty() {
+            queues.remove(session_id);
+        }
+    }
+    drop(queues);
+
+    let running = SESSION_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
+    running
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(session_id);
 }
 
 fn maybe_spawn_followup(app: AppHandle, session_id: String) {

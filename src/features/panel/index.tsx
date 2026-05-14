@@ -10,6 +10,7 @@ import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { CompactThreadContext } from "./compact-thread-context";
 import { WorkspacePanelHeader } from "./header";
 import { EmptyState, preloadStreamdown } from "./message-components";
+import { SessionTerminalSurface } from "./session-terminal-surface";
 import {
 	ActiveThreadViewport,
 	ConversationColdPlaceholder,
@@ -85,6 +86,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionId) ?? null;
+	const isTerminalSession = selectedSession?.surfaceKind === "terminal";
 	const activePane =
 		sessionPanes.find((pane) => pane.presentationState === "presented") ??
 		sessionPanes[0] ??
@@ -144,7 +146,13 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
 					<CompactThreadContext.Provider value={compact}>
-						{activePane?.hasLoaded ? (
+						{isTerminalSession && selectedSession ? (
+							<SessionTerminalSurface
+								workspace={workspace}
+								session={selectedSession}
+								onSessionRenamed={onSessionRenamed}
+							/>
+						) : activePane?.hasLoaded ? (
 							<ActiveThreadViewport
 								hasSession={!!selectedSession}
 								pane={activePane}
