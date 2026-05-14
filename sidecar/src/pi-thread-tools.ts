@@ -12,6 +12,9 @@
  *  - create_thread  — create a new session in a child workspace
  *  - get_thread     — fetch messages for a specific thread
  *  - update_thread  — rename a thread
+ *  - delete_thread  — delete a thread
+ *  - send_thread_message — send a supervisor prompt to a specific thread
+ *  - get_thread_runtime_status — inspect active runtime telemetry
  */
 
 import { defineTool } from "@mariozechner/pi-coding-agent";
@@ -124,6 +127,36 @@ export function createThreadTools(
 		},
 	});
 
+	const getThreadRuntimeStatus = defineTool({
+		name: "get_thread_runtime_status",
+		label: "Get Thread Runtime Status",
+		description:
+			"Inspect runtime telemetry for a specific thread, especially when a thread is marked streaming but has no visible assistant output.",
+		promptSnippet:
+			"get_thread_runtime_status({ workspace_id, thread_id }) → runtime telemetry including model, process state, last event, and stall seconds",
+		parameters: Type.Object({
+			workspace_id: Type.String({
+				description: "The child workspace UUID (card.id)",
+			}),
+			thread_id: Type.String({
+				description: "The session UUID to inspect",
+			}),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const result = await callPiTool(
+				"get_thread_runtime_status",
+				goalWorkspaceId,
+				{
+					workspaceId: params.workspace_id,
+					threadId: params.thread_id,
+				},
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
 	const updateThread = defineTool({
 		name: "update_thread",
 		label: "Update Thread",
@@ -158,5 +191,90 @@ export function createThreadTools(
 		},
 	});
 
-	return [listThreads, createThread, getThread, updateThread];
+	const sendThreadMessage = defineTool({
+		name: "send_thread_message",
+		label: "Send Thread Message",
+		description:
+			"Queue an async supervisor update into a specific thread in a Goal card child workspace using the current Goals Pi model. Use this for stale-thread recovery or when a card has multiple sessions and you must target an exact conversation.",
+		promptSnippet:
+			"send_thread_message({ workspace_id, thread_id, message, priority?, permission_mode? }) → { queued, started, sessionId, workspaceId }",
+		promptGuidelines: [
+			"Prefer this over send_assignee_message when recovering from a stale or failed assignee thread.",
+			"Use list_threads first if you are unsure which thread should receive the update.",
+		],
+		parameters: Type.Object({
+			workspace_id: Type.String({
+				description: "The child workspace UUID (card.id)",
+			}),
+			thread_id: Type.String({ description: "The session UUID to message" }),
+			message: Type.String({ description: "Supervisor update to queue" }),
+			priority: Type.Optional(
+				Type.String({
+					description: "Optional priority label such as normal, high, urgent",
+				}),
+			),
+			permission_mode: Type.Optional(
+				Type.String({ description: "Optional permission mode override" }),
+			),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const result = await callPiTool(
+				"send_thread_message",
+				goalWorkspaceId,
+				{
+					workspaceId: params.workspace_id,
+					threadId: params.thread_id,
+					message: params.message,
+					priority: params.priority ?? null,
+					modelId: null,
+					permissionMode: params.permission_mode ?? null,
+				},
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
+	const deleteThread = defineTool({
+		name: "delete_thread",
+		label: "Delete Thread",
+		description:
+			"Delete a specific conversation thread from a Goal card child workspace. Use sparingly; prefer set_card_assignee_thread to supersede stale threads when history should be preserved.",
+		promptSnippet:
+			"delete_thread({ workspace_id, thread_id }) → { threadId, workspaceId, deleted }",
+		promptGuidelines: [
+			"Do not delete the active assignee thread unless you have already selected a replacement thread.",
+			"Use this only for scratch/accidental threads or explicit cleanup requests.",
+		],
+		parameters: Type.Object({
+			workspace_id: Type.String({
+				description: "The child workspace UUID (card.id)",
+			}),
+			thread_id: Type.String({ description: "The session UUID to delete" }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const result = await callPiTool(
+				"delete_thread",
+				goalWorkspaceId,
+				{
+					workspaceId: params.workspace_id,
+					threadId: params.thread_id,
+				},
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
+	return [
+		listThreads,
+		createThread,
+		getThread,
+		getThreadRuntimeStatus,
+		updateThread,
+		deleteThread,
+		sendThreadMessage,
+	];
 }

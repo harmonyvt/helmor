@@ -55,6 +55,7 @@ pub(crate) fn delegate_agent_blocking(
     app: AppHandle,
     sidecar: &crate::sidecar::ManagedSidecar,
     request: DelegateAgentRequest,
+    parent_prompt_prefix: Option<&str>,
 ) -> Result<DelegateAgentResponse> {
     let task = request.task.trim();
     if task.is_empty() {
@@ -101,6 +102,7 @@ pub(crate) fn delegate_agent_blocking(
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_secs(30 * 60));
     let schema_text = serde_json::to_string_pretty(&request.output_schema)?;
+    let delegated_debug_prefix = debug_prompt_prefix_for_delegation(parent_prompt_prefix);
     let prompt = format!(
         "{task}\n\nReturn only JSON that validates against this JSON Schema. Do not wrap it in Markdown.\n\nJSON Schema:\n{schema_text}"
     );
@@ -116,6 +118,7 @@ pub(crate) fn delegate_agent_blocking(
         request.permission_mode.as_deref(),
         timeout,
         None,
+        delegated_debug_prefix.as_deref(),
     );
 
     let mut final_output = match first {
@@ -153,6 +156,7 @@ pub(crate) fn delegate_agent_blocking(
             request.permission_mode.as_deref(),
             timeout,
             final_output.provider_session_id.as_deref(),
+            delegated_debug_prefix.as_deref(),
         )?;
         parse_structured_json(&final_output.assistant_text)
     });
@@ -218,11 +222,19 @@ fn run_child_turn(
     permission_mode: Option<&str>,
     timeout: Duration,
     resume_session_id: Option<&str>,
+    hidden_prompt_prefix: Option<&str>,
 ) -> Result<ChildTurnOutput> {
     let request_id = Uuid::new_v4().to_string();
+    let wire_prompt = match hidden_prompt_prefix
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(prefix) => format!("{prefix}\n\nDelegated task:\n{prompt}"),
+        None => prompt.to_string(),
+    };
     let params = build_send_message_params(BuildSendMessageParamsInput {
         sidecar_session_id: &created.child_session_id,
-        prompt,
+        prompt: &wire_prompt,
         cli_model: &model.cli_model,
         cwd: &working_directory.display().to_string(),
         resume_session_id,
@@ -385,6 +397,17 @@ fn run_child_turn(
     }
 }
 
+fn debug_prompt_prefix_for_delegation(parent_prompt_prefix: Option<&str>) -> Option<String> {
+    let prefix = parent_prompt_prefix?.trim();
+    let debug_start = prefix.find("[DEBUG MODE ACTIVE]")?;
+    let debug_prefix = prefix[debug_start..].trim();
+    if debug_prefix.is_empty() {
+        None
+    } else {
+        Some(debug_prefix.to_string())
+    }
+}
+
 fn persist_pending_turns(
     pipeline: &mut crate::pipeline::MessagePipeline,
     ctx: &ExchangeContext,
@@ -521,6 +544,26 @@ fn publish_delegation_updates(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracts_debug_prompt_prefix_for_delegated_agents() {
+        let parent_prefix = "Repo preference\n\n[DEBUG MODE ACTIVE]\nUse evidence.\n\n[DEBUG INGEST SERVER]\nPOST JSON evidence to http://127.0.0.1:4321/ingest?token=t";
+
+        let prefix = debug_prompt_prefix_for_delegation(Some(parent_prefix)).unwrap();
+
+        assert!(prefix.starts_with("[DEBUG MODE ACTIVE]"));
+        assert!(prefix.contains("POST JSON evidence to http://127.0.0.1:4321/ingest?token=t"));
+        assert!(!prefix.contains("Repo preference"));
+    }
+
+    #[test]
+    fn omits_delegated_debug_prefix_when_parent_is_not_debug() {
+        assert_eq!(
+            debug_prompt_prefix_for_delegation(Some("Repo preference")),
+            None
+        );
+        assert_eq!(debug_prompt_prefix_for_delegation(None), None);
+    }
 
     #[test]
     fn resolve_session_working_directory_uses_helmor_workspace_dir() {

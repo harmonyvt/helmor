@@ -6,6 +6,7 @@ import type { PendingDeferredTool } from "@/features/conversation/pending-deferr
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import type {
 	AgentModelOption,
+	DebugIngestStatus,
 	ThreadMessageLike,
 	ToolCallPart,
 } from "@/lib/api";
@@ -191,6 +192,7 @@ describe("useConversationStreaming", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.clearAllMocks();
 	});
 
@@ -257,6 +259,169 @@ describe("useConversationStreaming", () => {
 			}),
 			expect.any(Function),
 		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"create temporary instrumentation that points back to this ingest endpoint",
+				),
+			}),
+			expect.any(Function),
+		);
+	});
+
+	it("shows the submitted debug message before debug ingest finishes starting", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(async () => undefined);
+		let resolveIngest!: (status: DebugIngestStatus) => void;
+		const ingestPromise = new Promise<DebugIngestStatus>((resolve) => {
+			resolveIngest = resolve;
+		});
+		const ensureDebugIngestForSubmit = vi.fn(() => ingestPromise);
+
+		const { Wrapper, queryClient } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					ensureDebugIngestForSubmit,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		let submitPromise!: Promise<void>;
+		await act(async () => {
+			submitPromise = result.current.handleComposerSubmit({
+				prompt: "Debug the missing send bubble",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+				debugMode: true,
+			});
+			await Promise.resolve();
+		});
+
+		const optimistic = queryClient.getQueryData<ThreadMessageLike[]>(
+			sessionThreadCacheKey("session-1"),
+		);
+		expect(optimistic).toHaveLength(2);
+		expect(optimistic?.[0]?.role).toBe("user");
+		expect(optimistic?.[0]?.content).toEqual([
+			expect.objectContaining({
+				type: "text",
+				text: "Debug the missing send bubble",
+			}),
+		]);
+		expect(optimistic?.[1]?.role).toBe("assistant");
+		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+		resolveIngest({
+			workspaceId: "workspace-1",
+			running: true,
+			url: "http://127.0.0.1:4321",
+			ingestUrl: "http://127.0.0.1:4321/ingest",
+			publicUrl: null,
+			publicIngestUrl: null,
+			tunnelProvider: null,
+			tunnelError: null,
+			host: "127.0.0.1",
+			port: 4321,
+			entryCount: 0,
+		});
+		await act(async () => {
+			await submitPromise;
+		});
+
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Debug the missing send bubble",
+				promptPrefix: expect.stringContaining("[DEBUG MODE ACTIVE]"),
+			}),
+			expect.any(Function),
+		);
+	});
+
+	it("continues sending when debug ingest startup hangs", async () => {
+		vi.useFakeTimers();
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				onEvent({
+					kind: "done",
+					provider: "codex",
+					modelId: MODEL.id,
+					resolvedModel: MODEL.cliModel,
+					sessionId: "provider-session-1",
+					workingDirectory: "/tmp/helmor",
+					persisted: false,
+				});
+			},
+		);
+		const ensureDebugIngestForSubmit = vi.fn(
+			() => new Promise<DebugIngestStatus | null>(() => {}),
+		);
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					ensureDebugIngestForSubmit,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		let submitPromise!: Promise<void>;
+		await act(async () => {
+			submitPromise = result.current.handleComposerSubmit({
+				prompt: "Debug the stuck working state",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+				debugMode: true,
+			});
+			await Promise.resolve();
+		});
+
+		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+		await act(async () => {
+			vi.advanceTimersByTime(2_500);
+			await Promise.resolve();
+		});
+		await act(async () => {
+			await submitPromise;
+		});
+
+		expect(ensureDebugIngestForSubmit).toHaveBeenCalledWith("workspace-1");
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Debug the stuck working state",
+				promptPrefix: expect.stringContaining("[DEBUG MODE ACTIVE]"),
+			}),
+			expect.any(Function),
+		);
+		warnSpy.mockRestore();
 	});
 
 	it("keeps approval requests scoped to their session context", async () => {

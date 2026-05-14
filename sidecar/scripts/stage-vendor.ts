@@ -63,9 +63,9 @@ const FD_SHA256 = {
 // must match THAT version — bump them together (or staging cross-arch will
 // abort with a clear error).
 const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
-	"0.124.0": {
-		arm64: "8221653b5f1592007ff19a756cfd00afaa4005b3e944412a3ca2372d0abb3b5a",
-		x64: "eb9c0cf46fc9aa58592cd103f0cbc9535667087eb3369d0b99ae62b49f9133da",
+	"0.130.0": {
+		arm64: "f6fef2ceee8977079ad3b3296b4c14c2707934e6b4ec1aa1a32d6e512196b12d",
+		x64: "21f161ffd79fab88c5bd91e40d14c894fe6d4ad61ea4ebc80d4fcf20130960c2",
 	},
 };
 

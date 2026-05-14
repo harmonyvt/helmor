@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, X } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { History, ListTree, X } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import type {
@@ -12,6 +12,8 @@ import type {
 } from "@/lib/api";
 import {
 	createGoalChildWorkspaceAndStart,
+	deleteSession,
+	getThreadRuntimeStatus,
 	listAssignees,
 	listGoalChildWorkspaces,
 	loadSessionThreadMessages,
@@ -20,6 +22,8 @@ import {
 	renameSession,
 	sendAssigneeMessage,
 	sendKanbanToolResult,
+	sendThreadMessage,
+	setCardAssigneeThread,
 	setGoalChildWorkspaceStatus,
 	summarizeAssigneeStatus,
 } from "@/lib/api";
@@ -27,9 +31,9 @@ import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
 } from "@/lib/query-client";
-import { useSettings } from "@/lib/settings";
-import { resolvePiHandoffModel } from "../pi-handoff-models";
+import { canonicalPiModelId } from "../pi-handoff-models";
 import { HistoryView } from "./history-view";
+import { ThreadManagerView } from "./thread-manager-view";
 
 type GoalsAiPanelProps = {
 	workspaceId: string;
@@ -47,9 +51,30 @@ type GoalsAiPanelProps = {
 
 const piOnlyModelFilter = (model: AgentModelOption) => model.provider === "pi";
 
+function buildKanbanToolError(
+	event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
+	error: unknown,
+) {
+	const args = event.args;
+	const message = error instanceof Error ? error.message : String(error);
+	return {
+		tool: event.tool,
+		toolCallId: event.toolCallId,
+		workspaceId: event.workspaceId,
+		cardTitle: typeof args.title === "string" ? args.title : null,
+		cardId:
+			typeof args.cardId === "string"
+				? args.cardId
+				: typeof args.card_id === "string"
+					? args.card_id
+					: null,
+		message,
+	};
+}
+
 export function GoalsAiPanel({
 	workspaceId,
-	cards: _cards,
+	cards,
 	kanbanSnapshot,
 	goalTitle,
 	goalDescription,
@@ -58,7 +83,6 @@ export function GoalsAiPanel({
 	onCardCreated,
 }: GoalsAiPanelProps) {
 	const queryClient = useQueryClient();
-	const { settings } = useSettings();
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 	const piModels = useMemo(
 		() =>
@@ -72,11 +96,24 @@ export function GoalsAiPanel({
 	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
 		null,
 	);
-	const [showHistory, setShowHistory] = useState(false);
+	const [overlayMode, setOverlayMode] = useState<"history" | "threads" | null>(
+		null,
+	);
+	const activeSupervisorModelIdRef = useRef<string | null>(null);
+	const kanbanMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
 
 	const handleSelectSession = useCallback((sessionId: string | null) => {
 		setSelectedSessionId(sessionId);
 		setDisplayedSessionId(sessionId);
+	}, []);
+
+	const enqueueKanbanMutation = useCallback(<T,>(fn: () => Promise<T>) => {
+		const next = kanbanMutationQueueRef.current.then(fn, fn);
+		kanbanMutationQueueRef.current = next.then(
+			() => undefined,
+			() => undefined,
+		);
+		return next;
 	}, []);
 
 	const handleResolveDisplayedSession = useCallback(
@@ -90,15 +127,26 @@ export function GoalsAiPanel({
 	const handleRestoreSession = useCallback(
 		(session: WorkspaceSessionSummary) => {
 			handleSelectSession(session.id);
-			setShowHistory(false);
+			setOverlayMode(null);
 		},
 		[handleSelectSession],
 	);
 
 	const handleNewSession = useCallback(() => {
 		handleSelectSession(null);
-		setShowHistory(false);
+		setOverlayMode(null);
 	}, [handleSelectSession]);
+
+	const handleOpenManagedThread = useCallback(
+		(_card: WorkspaceDetail, session: WorkspaceSessionSummary) => {
+			handleSelectSession(session.id);
+			setOverlayMode(null);
+		},
+		[handleSelectSession],
+	);
+
+	const overlayTitle =
+		overlayMode === "threads" ? "Goal threads" : "Conversations";
 
 	const handleKanbanToolCall = useCallback(
 		async (event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>) => {
@@ -118,45 +166,59 @@ export function GoalsAiPanel({
 							"Goal setup must finish before Pi can create cards.",
 						);
 					}
-					const requestedProvider =
-						typeof args.assignedProvider === "string"
-							? args.assignedProvider
-							: null;
 					const requestedModelId =
 						typeof args.assignedModelId === "string"
 							? args.assignedModelId
 							: null;
-					const handoffModel = resolvePiHandoffModel({
-						assignedProvider: requestedProvider,
-						assignedModelId: requestedModelId,
-						allowedModelIds: settings.piHandoffModelIds,
-						piModels,
-					});
-					const created = await createGoalChildWorkspaceAndStart({
-						goalWorkspace: workspaceId,
-						title: String(args.title ?? "Untitled"),
-						description:
-							typeof args.description === "string" ? args.description : null,
-						lane: String(args.lane ?? "backlog") as WorkspaceStatus,
-						targetBranch:
-							typeof args.targetBranch === "string" ? args.targetBranch : null,
-						assignedProvider: handoffModel.assignedProvider,
-						assignedModelId: handoffModel.assignedModelId,
-						assignedEffortLevel:
-							typeof args.assignedEffortLevel === "string"
-								? args.assignedEffortLevel
-								: null,
-						prompt: typeof args.prompt === "string" ? args.prompt : null,
-						permissionMode:
-							typeof args.permissionMode === "string"
-								? args.permissionMode
-								: null,
-						finalize: true,
-					});
-					await invalidateBoard();
-					const children = await listGoalChildWorkspaces(workspaceId);
-					const newWorkspace = children.find(
-						(child) => child.id === created.workspaceId,
+					const assignedModelId =
+						activeSupervisorModelIdRef.current ??
+						(requestedModelId
+							? canonicalPiModelId(requestedModelId, piModels)
+							: null);
+					const handoffModel = {
+						assignedProvider: "pi",
+						assignedModelId,
+						requestedModelId,
+						resolvedModelId: assignedModelId,
+						fallbackUsed: false,
+						policyApplied: false,
+						allowedModelIds: assignedModelId ? [assignedModelId] : [],
+						suggestedModelIds: assignedModelId ? [assignedModelId] : [],
+					};
+					const { created, newWorkspace } = await enqueueKanbanMutation(
+						async () => {
+							const created = await createGoalChildWorkspaceAndStart({
+								goalWorkspace: workspaceId,
+								title: String(args.title ?? "Untitled"),
+								description:
+									typeof args.description === "string"
+										? args.description
+										: null,
+								lane: String(args.lane ?? "backlog") as WorkspaceStatus,
+								targetBranch:
+									typeof args.targetBranch === "string"
+										? args.targetBranch
+										: null,
+								assignedProvider: handoffModel.assignedProvider,
+								assignedModelId: handoffModel.assignedModelId,
+								assignedEffortLevel:
+									typeof args.assignedEffortLevel === "string"
+										? args.assignedEffortLevel
+										: null,
+								prompt: typeof args.prompt === "string" ? args.prompt : null,
+								permissionMode:
+									typeof args.permissionMode === "string"
+										? args.permissionMode
+										: null,
+								finalize: true,
+							});
+							await invalidateBoard();
+							const children = await listGoalChildWorkspaces(workspaceId);
+							const newWorkspace = children.find(
+								(child) => child.id === created.workspaceId,
+							);
+							return { created, newWorkspace };
+						},
 					);
 					if (newWorkspace) {
 						onCardCreated?.(newWorkspace);
@@ -168,26 +230,30 @@ export function GoalsAiPanel({
 					const childWorkspaceId = String(
 						args.cardId ?? args.workspaceId ?? "",
 					);
-					await setGoalChildWorkspaceStatus(
-						workspaceId,
-						childWorkspaceId,
-						String(args.lane) as WorkspaceStatus,
-					);
-					await invalidateBoard();
-					result = { workspaceId: childWorkspaceId, lane: args.lane };
+					result = await enqueueKanbanMutation(async () => {
+						await setGoalChildWorkspaceStatus(
+							workspaceId,
+							childWorkspaceId,
+							String(args.lane) as WorkspaceStatus,
+						);
+						await invalidateBoard();
+						return { workspaceId: childWorkspaceId, lane: args.lane };
+					});
 				} else if (event.tool === "update_kanban_card") {
-					const childWorkspaceId = String(
-						args.cardId ?? args.workspaceId ?? "",
-					);
-					if (args.title) {
-						const sessions = await loadWorkspaceSessions(childWorkspaceId);
-						const primary = sessions[0];
-						if (primary) {
-							await renameSession(primary.id, String(args.title));
+					result = await enqueueKanbanMutation(async () => {
+						const childWorkspaceId = String(
+							args.cardId ?? args.workspaceId ?? "",
+						);
+						if (args.title) {
+							const sessions = await loadWorkspaceSessions(childWorkspaceId);
+							const primary = sessions[0];
+							if (primary) {
+								await renameSession(primary.id, String(args.title));
+							}
 						}
-					}
-					await invalidateBoard();
-					result = { workspaceId: childWorkspaceId };
+						await invalidateBoard();
+						return { workspaceId: childWorkspaceId };
+					});
 				} else if (event.tool === "list_threads") {
 					result = await loadWorkspaceSessions(String(args.workspaceId));
 				} else if (event.tool === "create_thread") {
@@ -204,6 +270,12 @@ export function GoalsAiPanel({
 					});
 				} else if (event.tool === "get_thread") {
 					result = await loadSessionThreadMessages(String(args.threadId));
+				} else if (event.tool === "get_thread_runtime_status") {
+					result = await getThreadRuntimeStatus({
+						goalWorkspaceId: workspaceId,
+						workspaceId: String(args.workspaceId ?? args.workspace_id ?? ""),
+						threadId: String(args.threadId ?? args.thread_id ?? ""),
+					});
 				} else if (event.tool === "update_thread") {
 					await renameSession(String(args.threadId), String(args.title));
 					result = { threadId: args.threadId, title: args.title };
@@ -211,6 +283,16 @@ export function GoalsAiPanel({
 						queryKey: helmorQueryKeys.workspaceSessions(
 							String(args.workspaceId),
 						),
+					});
+				} else if (event.tool === "delete_thread") {
+					const workspaceRef = String(
+						args.workspaceId ?? args.workspace_id ?? "",
+					);
+					const threadId = String(args.threadId ?? args.thread_id ?? "");
+					await deleteSession(threadId);
+					result = { threadId, workspaceId: workspaceRef, deleted: true };
+					await queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(workspaceRef),
 					});
 				} else if (event.tool === "send_assignee_message") {
 					const cardId = String(args.cardId ?? args.card_id ?? "");
@@ -220,14 +302,67 @@ export function GoalsAiPanel({
 						cardId,
 						message,
 						priority: typeof args.priority === "string" ? args.priority : null,
+						threadId:
+							typeof args.threadId === "string"
+								? args.threadId
+								: typeof args.thread_id === "string"
+									? args.thread_id
+									: null,
 					});
 					await queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceSessions(cardId),
+					});
+				} else if (event.tool === "send_thread_message") {
+					const workspaceRef = String(
+						args.workspaceId ?? args.workspace_id ?? "",
+					);
+					result = await sendThreadMessage({
+						goalWorkspaceId: workspaceId,
+						workspaceId: workspaceRef,
+						threadId: String(args.threadId ?? args.thread_id ?? ""),
+						message: String(args.message ?? ""),
+						priority: typeof args.priority === "string" ? args.priority : null,
+						modelId: activeSupervisorModelIdRef.current,
+						permissionMode:
+							typeof args.permissionMode === "string"
+								? args.permissionMode
+								: typeof args.permission_mode === "string"
+									? args.permission_mode
+									: null,
+					});
+					await queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(workspaceRef),
+					});
+				} else if (event.tool === "set_card_assignee_thread") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					result = await enqueueKanbanMutation(async () => {
+						const result = await setCardAssigneeThread({
+							goalWorkspaceId: workspaceId,
+							cardId,
+							threadId: String(args.threadId ?? args.thread_id ?? ""),
+							reason: typeof args.reason === "string" ? args.reason : null,
+							supersedesThreadId:
+								typeof args.supersedesThreadId === "string"
+									? args.supersedesThreadId
+									: typeof args.supersedes_thread_id === "string"
+										? args.supersedes_thread_id
+										: null,
+						});
+						await queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceSessions(cardId),
+						});
+						return result;
 					});
 				} else if (event.tool === "read_assignee_thread") {
 					result = await readAssigneeThread({
 						goalWorkspaceId: workspaceId,
 						cardId: String(args.cardId ?? args.card_id ?? ""),
+						threadId:
+							typeof args.threadId === "string"
+								? args.threadId
+								: typeof args.thread_id === "string"
+									? args.thread_id
+									: null,
 						sinceMessageId:
 							typeof args.sinceMessageId === "string"
 								? args.sinceMessageId
@@ -253,7 +388,7 @@ export function GoalsAiPanel({
 			} catch (error) {
 				await sendKanbanToolResult(
 					event.toolCallId,
-					String(error instanceof Error ? error.message : error),
+					buildKanbanToolError(event, error),
 					true,
 				);
 			}
@@ -263,8 +398,8 @@ export function GoalsAiPanel({
 			queryClient,
 			onCardCreated,
 			canCreateCards,
-			settings.piHandoffModelIds,
 			piModels,
+			enqueueKanbanMutation,
 		],
 	);
 
@@ -278,12 +413,15 @@ export function GoalsAiPanel({
 				onSelectSession={handleSelectSession}
 				onResolveDisplayedSession={handleResolveDisplayedSession}
 				modelFilter={piOnlyModelFilter}
-				buildSendRequestExtras={() => ({
-					kanbanWorkspaceId: workspaceId,
-					kanbanSnapshot,
-					goalTitle: goalTitle ?? null,
-					goalDescription: goalDescription ?? null,
-				})}
+				buildSendRequestExtras={({ model }) => {
+					activeSupervisorModelIdRef.current = model.id;
+					return {
+						kanbanWorkspaceId: workspaceId,
+						kanbanSnapshot,
+						goalTitle: goalTitle ?? null,
+						goalDescription: goalDescription ?? null,
+					};
+				}}
 				onKanbanToolCall={handleKanbanToolCall}
 				compact
 				headerLeading={
@@ -298,7 +436,17 @@ export function GoalsAiPanel({
 							variant="ghost"
 							size="icon"
 							className="size-7 cursor-pointer"
-							onClick={() => setShowHistory(true)}
+							onClick={() => setOverlayMode("threads")}
+							aria-label="Manage goal card threads"
+						>
+							<ListTree className="size-3.5" />
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="size-7 cursor-pointer"
+							onClick={() => setOverlayMode("history")}
 							aria-label="View conversation history"
 						>
 							<History className="size-3.5" />
@@ -316,29 +464,37 @@ export function GoalsAiPanel({
 					</>
 				}
 			/>
-			{showHistory && (
+			{overlayMode && (
 				<div className="absolute inset-0 z-10 flex flex-col bg-background">
 					<div className="flex h-10 shrink-0 items-center justify-between border-b px-3">
 						<span className="text-[11px] font-medium tracking-[0.04em] text-muted-foreground/70">
-							Conversations
+							{overlayTitle}
 						</span>
 						<Button
 							type="button"
 							variant="ghost"
 							size="icon"
 							className="size-7 cursor-pointer"
-							onClick={() => setShowHistory(false)}
+							onClick={() => setOverlayMode(null)}
 							aria-label="Back to conversation"
 						>
 							<X className="size-3.5" />
 						</Button>
 					</div>
-					<HistoryView
-						workspaceId={workspaceId}
-						activeSessionId={displayedSessionId}
-						onRestore={handleRestoreSession}
-						onNewSession={handleNewSession}
-					/>
+					{overlayMode === "threads" ? (
+						<ThreadManagerView
+							goalWorkspaceId={workspaceId}
+							cards={cards}
+							onOpenThread={handleOpenManagedThread}
+						/>
+					) : (
+						<HistoryView
+							workspaceId={workspaceId}
+							activeSessionId={displayedSessionId}
+							onRestore={handleRestoreSession}
+							onNewSession={handleNewSession}
+						/>
+					)}
 				</div>
 			)}
 		</div>

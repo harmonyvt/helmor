@@ -754,6 +754,17 @@ fn get_table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
 /// Used during import to bridge schema renames.
 const COLUMN_RENAMES: &[(&str, &str)] = &[("claude_session_id", "provider_session_id")];
 
+fn import_column_default(table: &str, column: &str) -> Option<&'static str> {
+    match (table, column) {
+        ("sessions", "surface_kind") => Some("'chat'"),
+        ("sessions", "surface_mode") => Some("'thread'"),
+        ("sessions", "control_owner") => Some("'user'"),
+        ("sessions", "input_policy") => Some("'writable'"),
+        ("sessions", "created_by") => Some("'user'"),
+        _ => None,
+    }
+}
+
 /// Build INSERT-SELECT column lists that handle renamed columns between
 /// source (Conductor) and main (Helmor) schemas.
 ///
@@ -781,7 +792,11 @@ fn import_column_lists(conn: &Connection, table: &str) -> Result<(String, String
         if source_set.contains(col.as_str()) {
             // Column exists in both with the same name
             main_parts.push(col.clone());
-            source_parts.push(col.clone());
+            if let Some(default) = import_column_default(table, col) {
+                source_parts.push(format!("COALESCE({col}, {default}) AS {col}"));
+            } else {
+                source_parts.push(col.clone());
+            }
         } else {
             // Check if it was renamed
             let old_name = COLUMN_RENAMES

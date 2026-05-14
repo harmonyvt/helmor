@@ -66,6 +66,7 @@ import { buildDebugPromptPrefix } from "../debug-mode";
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
 const STREAM_START_PLACEHOLDER_TEXT = "Working…";
+const DEBUG_INGEST_PROMPT_TIMEOUT_MS = 2_500;
 
 function buildTitleSeed(prompt: string): string {
 	const normalized = prompt
@@ -95,6 +96,48 @@ function createStreamStartPlaceholder(id: string): ThreadMessageLike {
 		}),
 		streaming: true,
 	};
+}
+
+async function resolveDebugIngestStatusForPrompt({
+	debugMode,
+	targetWorkspaceId,
+	ensureDebugIngestForSubmit,
+}: {
+	debugMode: boolean;
+	targetWorkspaceId: string | null;
+	ensureDebugIngestForSubmit?: (
+		workspaceId: string,
+	) => Promise<DebugIngestStatus | null>;
+}): Promise<DebugIngestStatus | null> {
+	if (!debugMode || !targetWorkspaceId || !ensureDebugIngestForSubmit) {
+		return null;
+	}
+
+	let timedOut = false;
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	const ingestPromise = Promise.resolve()
+		.then(() => ensureDebugIngestForSubmit(targetWorkspaceId))
+		.catch((error) => {
+			if (!timedOut) {
+				console.warn("[conversation] debug ingest startup failed:", error);
+			}
+			return null;
+		});
+	const timeoutPromise = new Promise<null>((resolve) => {
+		timeoutId = setTimeout(() => {
+			timedOut = true;
+			console.warn(
+				"[conversation] debug ingest startup timed out; continuing without an ingest endpoint.",
+			);
+			resolve(null);
+		}, DEBUG_INGEST_PROMPT_TIMEOUT_MS);
+	});
+
+	const status = await Promise.race([ingestPromise, timeoutPromise]);
+	if (timeoutId !== null) {
+		clearTimeout(timeoutId);
+	}
+	return status;
 }
 
 function hasAssistantProgress(messages: ThreadMessageLike[]): boolean {
@@ -1330,33 +1373,7 @@ export function useConversationStreaming({
 			const isFirstUserMessage =
 				(currentThread ?? []).every((message) => message.role !== "user") &&
 				(currentTitle == null || currentTitle === "Untitled");
-			const repoPreferences = repoId ? await loadRepoPreferences(repoId) : null;
-			// The general-preference preamble is prepended ONLY on the wire
-			// to the agent (Rust side stitches it onto `prompt_prefix`).
-			// `trimmedPrompt` is what the user typed — that's what we
-			// optimistically render in the chat bubble and what the Rust
-			// side persists to `session_messages` as the user_prompt body.
-			const repoPreferencePrefix =
-				isFirstUserMessage && !isCompactCommand
-					? resolveGeneralPreferencePrefix(repoPreferences)
-					: null;
-			// Combine the (optional) context-transfer history, repo preference
-			// preamble, and debug-mode guidance. All ride as `promptPrefix` —
-			// none appears in the chat bubble or DB. Context transfer goes first;
-			// turn-scoped debug guidance lands closest to the user's actual prompt.
 			const contextTransferTrimmed = contextTransferPrefix?.trim() || null;
-			const debugIngestStatus =
-				debugMode && targetWorkspaceId && ensureDebugIngestForSubmit
-					? await ensureDebugIngestForSubmit(targetWorkspaceId)
-					: null;
-			const debugPromptPrefix = buildDebugPromptPrefix(
-				debugMode,
-				debugIngestStatus,
-			);
-			const promptPrefix =
-				[contextTransferTrimmed, repoPreferencePrefix, debugPromptPrefix]
-					.filter(Boolean)
-					.join("\n\n") || null;
 			const now = new Date().toISOString();
 			const userMessageId = crypto.randomUUID();
 			const streamStartPlaceholderId = crypto.randomUUID();
@@ -1506,6 +1523,36 @@ export function useConversationStreaming({
 						prompt: trimmedPrompt,
 						model,
 					}) ?? {};
+
+				const repoPreferences = repoId
+					? await loadRepoPreferences(repoId)
+					: null;
+				// The general-preference preamble is prepended ONLY on the wire
+				// to the agent (Rust side stitches it onto `prompt_prefix`).
+				// `trimmedPrompt` is what the user typed — that's what we
+				// optimistically render in the chat bubble and what the Rust
+				// side persists to `session_messages` as the user_prompt body.
+				const repoPreferencePrefix =
+					isFirstUserMessage && !isCompactCommand
+						? resolveGeneralPreferencePrefix(repoPreferences)
+						: null;
+				const debugIngestStatus = await resolveDebugIngestStatusForPrompt({
+					debugMode,
+					targetWorkspaceId,
+					ensureDebugIngestForSubmit,
+				});
+				const debugPromptPrefix = buildDebugPromptPrefix(
+					debugMode,
+					debugIngestStatus,
+				);
+				// Combine the (optional) context-transfer history, repo preference
+				// preamble, and debug-mode guidance. All ride as `promptPrefix` —
+				// none appears in the chat bubble or DB. Context transfer goes first;
+				// turn-scoped debug guidance lands closest to the user's actual prompt.
+				const promptPrefix =
+					[contextTransferTrimmed, repoPreferencePrefix, debugPromptPrefix]
+						.filter(Boolean)
+						.join("\n\n") || null;
 
 				await startAgentMessageStream(
 					{

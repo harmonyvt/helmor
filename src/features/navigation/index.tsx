@@ -10,15 +10,7 @@ import {
 	Plus,
 	Target,
 } from "lucide-react";
-import {
-	memo,
-	useCallback,
-	useEffect,
-	useLayoutEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -502,46 +494,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		},
 		overscan: 12,
 	});
-
-	// ── Scroll selected into view ─────────────────────────────────────
-	useLayoutEffect(() => {
-		if (!selectedWorkspaceId) return;
-
-		const targetIndex = isPrMode
-			? prFlatItems.findIndex(
-					(item) =>
-						item.kind === "pr-row" &&
-						item.stacked.row.id === selectedWorkspaceId,
-				)
-			: isGoalMode
-				? goalFlatItems.findIndex(
-						(item) =>
-							(item.kind === "goal-header" &&
-								item.goalGroup.goalWorkspaceId === selectedWorkspaceId) ||
-							(item.kind === "goal-child" &&
-								item.row.id === selectedWorkspaceId) ||
-							(item.kind === "ungrouped-row" &&
-								item.row.id === selectedWorkspaceId) ||
-							(item.kind === "archived-goal-row" &&
-								item.row.id === selectedWorkspaceId),
-					)
-				: flatItems.findIndex(
-						(item) =>
-							item.kind === "row" && item.row.id === selectedWorkspaceId,
-					);
-		if (targetIndex === -1) return;
-
-		virtualizer.scrollToIndex(targetIndex, { align: "auto" });
-	}, [
-		selectedWorkspaceId,
-		sectionOpenState,
-		flatItems,
-		prFlatItems,
-		goalFlatItems,
-		isPrMode,
-		isGoalMode,
-		virtualizer,
-	]);
 
 	const workspaceActionsBusy = Boolean(
 		addingRepository || markingUnreadWorkspaceId || restoringWorkspaceId,

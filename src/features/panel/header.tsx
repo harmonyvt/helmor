@@ -10,6 +10,8 @@ import {
 	Copy,
 	GitBranch,
 	History,
+	MessageSquare,
+	MonitorUp,
 	Pencil,
 	Plus,
 	RotateCcw,
@@ -24,6 +26,9 @@ import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { HyperText } from "@/components/ui/hyper-text";
@@ -60,6 +65,7 @@ import {
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { seedNewSessionInCache } from "./session-cache";
 import { closeWorkspaceSession } from "./session-close";
+import { terminalDefaultTitle } from "./session-terminal-labels";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
 type WorkspacePanelHeaderProps = {
@@ -132,6 +138,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 	const [editingTitle, setEditingTitle] = useState("");
 	const [editingBranch, setEditingBranch] = useState<string | null>(null);
+	const [newSessionOpen, setNewSessionOpen] = useState(false);
 	const [branchCopied, setBranchCopied] = useState(false);
 	const tabsScrollRef = useRef<HTMLDivElement>(null);
 	const [hasRightOverflow, setHasRightOverflow] = useState(false);
@@ -199,30 +206,49 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		setEditingBranch(null);
 	}, []);
 
-	const handleCreateSession = useCallback(async () => {
-		if (!workspace) {
-			return;
-		}
-		try {
-			const result = await createSession(workspace.id);
-			seedNewSessionInCache({
-				queryClient,
-				workspaceId: workspace.id,
-				sessionId: result.sessionId,
-				workspace,
-				existingSessions: sessions,
-				createdAt: new Date().toISOString(),
-			});
+	const handleCreateSession = useCallback(
+		async (mode: "thread" | "terminal") => {
+			if (!workspace) {
+				return;
+			}
+			const runtime = mode === "terminal" ? "shell" : null;
+			try {
+				const result = await createSession(workspace.id, {
+					surfaceMode: mode,
+					runtime,
+				});
+				seedNewSessionInCache({
+					queryClient,
+					workspaceId: workspace.id,
+					sessionId: result.sessionId,
+					workspace,
+					existingSessions: sessions,
+					createdAt: new Date().toISOString(),
+					mode,
+					runtime,
+				});
 
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.repoScripts(workspace.repoId, workspace.id),
-			});
-			onSessionsChanged?.();
-			onSelectSession?.(result.sessionId);
-		} catch (error) {
-			console.error("Failed to create session:", error);
-		}
-	}, [onSelectSession, onSessionsChanged, queryClient, sessions, workspace]);
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.repoScripts(workspace.repoId, workspace.id),
+				});
+				onSessionsChanged?.();
+				onSelectSession?.(result.sessionId);
+			} catch (error) {
+				console.error("Failed to create session:", error);
+			}
+		},
+		[onSelectSession, onSessionsChanged, queryClient, sessions, workspace],
+	);
+
+	const handleCreateThread = useCallback(() => {
+		setNewSessionOpen(false);
+		void handleCreateSession("thread");
+	}, [handleCreateSession]);
+
+	const handleCreateTerminal = useCallback(() => {
+		setNewSessionOpen(false);
+		void handleCreateSession("terminal");
+	}, [handleCreateSession]);
 
 	const handleHideSession = useCallback(
 		async (sessionId: string, event: React.MouseEvent) => {
@@ -413,6 +439,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																sessionDisplayProviders?.[session.id] ??
 																session.agentType
 															}
+															surfaceKind={session.surfaceKind}
 															active={isActive}
 														/>
 														<span
@@ -468,15 +495,12 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						</div>
 					</div>
 
-					<Button
-						aria-label="New session"
-						onClick={handleCreateSession}
-						variant="ghost"
-						size="icon-sm"
-						className="ml-0.5 shrink-0 cursor-pointer text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-					>
-						<Plus className="size-3.5" strokeWidth={1.8} />
-					</Button>
+					<NewSessionMenu
+						open={newSessionOpen}
+						onOpenChange={setNewSessionOpen}
+						onCreateThread={handleCreateThread}
+						onCreateTerminal={handleCreateTerminal}
+					/>
 
 					{headerActions ? (
 						<div className="flex shrink-0 items-center">{headerActions}</div>
@@ -757,6 +781,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	sessionDisplayProviders?.[session.id] ??
 																	session.agentType
 																}
+																surfaceKind={session.surfaceKind}
 																active={isActive}
 															/>
 															{isEditing ? (
@@ -855,32 +880,13 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					</div>
 				</div>
 
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							aria-label="New session"
-							onClick={handleCreateSession}
-							variant="ghost"
-							size="icon-sm"
-							className="ml-0.5 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-						>
-							<Plus className="size-3.5" strokeWidth={1.8} />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent
-						side="bottom"
-						sideOffset={4}
-						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-					>
-						<span>New session</span>
-						{newSessionShortcut ? (
-							<InlineShortcutDisplay
-								hotkey={newSessionShortcut}
-								className="text-background/60"
-							/>
-						) : null}
-					</TooltipContent>
-				</Tooltip>
+				<NewSessionMenu
+					open={newSessionOpen}
+					onOpenChange={setNewSessionOpen}
+					onCreateThread={handleCreateThread}
+					onCreateTerminal={handleCreateTerminal}
+					shortcut={newSessionShortcut}
+				/>
 
 				<DropdownMenu open={showHistory} onOpenChange={handleToggleHistory}>
 					<DropdownMenuTrigger asChild>
@@ -908,6 +914,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											<div className="flex min-w-0 items-center gap-1.5">
 												<SessionProviderIcon
 													agentType={session.agentType}
+													surfaceKind={session.surfaceKind}
 													active={false}
 												/>
 												<span className="truncate">
@@ -974,11 +981,16 @@ function getBranchToneClassName(tone: WorkspaceBranchTone) {
 
 function SessionProviderIcon({
 	agentType,
+	surfaceKind,
 	active,
 }: {
 	agentType?: string | null;
+	surfaceKind?: string | null;
 	active: boolean;
 }) {
+	if (surfaceKind === "terminal") {
+		return <MonitorUp className="size-3 shrink-0 text-muted-foreground" />;
+	}
 	if (active) {
 		return <HelmorThinkingIndicator size={14} />;
 	}
@@ -988,7 +1000,90 @@ function SessionProviderIcon({
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }
 
+function NewSessionMenu({
+	open,
+	onOpenChange,
+	onCreateThread,
+	onCreateTerminal,
+	shortcut,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	onCreateThread: () => void;
+	onCreateTerminal: () => void;
+	shortcut?: string | null;
+}) {
+	return (
+		<DropdownMenu open={open} onOpenChange={onOpenChange}>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<DropdownMenuTrigger asChild>
+						<Button
+							aria-label="New session"
+							variant="ghost"
+							size="icon-sm"
+							className="ml-0.5 shrink-0 cursor-pointer text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+						>
+							<Plus className="size-3.5" strokeWidth={1.8} />
+						</Button>
+					</DropdownMenuTrigger>
+				</TooltipTrigger>
+				<TooltipContent
+					side="bottom"
+					sideOffset={4}
+					className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+				>
+					<span>New session</span>
+					{shortcut ? (
+						<InlineShortcutDisplay
+							hotkey={shortcut}
+							className="text-background/60"
+						/>
+					) : null}
+				</TooltipContent>
+			</Tooltip>
+			<DropdownMenuContent align="end" className="w-48">
+				<DropdownMenuLabel>New session</DropdownMenuLabel>
+				<DropdownMenuItem onSelect={onCreateThread}>
+					<MessageSquare className="size-3.5" strokeWidth={1.8} />
+					<div className="flex flex-col">
+						<span>Chat with AI</span>
+						<span className="text-[11px] text-muted-foreground">
+							Create a Thread
+						</span>
+					</div>
+				</DropdownMenuItem>
+				<DropdownMenuSeparator />
+				<DropdownMenuItem onSelect={onCreateTerminal}>
+					<MonitorUp className="size-3.5" strokeWidth={1.8} />
+					<div className="flex flex-col">
+						<span>Run a terminal</span>
+						<span className="text-[11px] text-muted-foreground">
+							Runtime: shell
+						</span>
+					</div>
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+
 function displaySessionTitle(session: WorkspaceSessionSummary): string {
+	if (session.surfaceMode === "task_monitor") {
+		return session.title && session.title !== "Untitled"
+			? session.title
+			: "Task Monitor";
+	}
+	if (session.surfaceMode === "agent_terminal") {
+		return session.title && session.title !== "Untitled"
+			? session.title
+			: terminalDefaultTitle(session);
+	}
+	if (session.surfaceMode === "terminal") {
+		return session.title && session.title !== "Untitled"
+			? session.title
+			: terminalDefaultTitle(session);
+	}
 	if (session.title && session.title !== "Untitled") {
 		return session.title;
 	}

@@ -20,6 +20,7 @@ type GoalBoardProps = {
 	onSelectWorkspace: (workspace: WorkspaceDetail) => void;
 	onSelectAssignee?: (workspace: WorkspaceDetail) => void;
 	reportByWorkspaceId?: Map<string, AssigneeReportMarker>;
+	orchestratorStatusByWorkspaceId?: Map<string, string>;
 	onMoveWorkspace: (
 		workspace: WorkspaceDetail,
 		status: WorkspaceStatus,
@@ -37,6 +38,7 @@ export function GoalBoard({
 	onSelectWorkspace,
 	onSelectAssignee,
 	reportByWorkspaceId,
+	orchestratorStatusByWorkspaceId,
 	onMoveWorkspace,
 	onDragStart,
 	onDragEnd,
@@ -85,6 +87,7 @@ export function GoalBoard({
 						onCardClick={onSelectWorkspace}
 						onAssigneeClick={onSelectAssignee}
 						reportByWorkspaceId={reportByWorkspaceId}
+						orchestratorStatusByWorkspaceId={orchestratorStatusByWorkspaceId}
 						onDragStart={onDragStart}
 						onDragEnd={onDragEnd}
 						onDragOver={(event) => handleDragOver(lane.id, event)}

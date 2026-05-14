@@ -8,6 +8,10 @@ use crate::{
     workspace_status::WorkspaceStatus,
 };
 
+const MIN_AUTO_START_PROMPT_CHARS: usize = 20;
+const TRUNCATED_PROMPT_ERROR: &str =
+    "create_kanban_card rejected: prompt appears truncated. Please retry with full assignee brief.";
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoalChildWorkspaceCreateParams {
@@ -62,6 +66,9 @@ pub(crate) fn prepare_goal_child_workspace_start(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    if let Some(prompt) = prompt {
+        validate_auto_start_prompt(prompt, params.description.as_deref())?;
+    }
     if prompt.is_some() && params.finalize == Some(false) {
         bail!("Cannot start a Goal child prompt without finalizing the worktree");
     }
@@ -152,6 +159,16 @@ pub(crate) fn prepare_goal_child_workspace_start(
     })
 }
 
+fn validate_auto_start_prompt(prompt: &str, description: Option<&str>) -> Result<()> {
+    let has_description = description
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if !has_description && prompt.chars().count() < MIN_AUTO_START_PROMPT_CHARS {
+        bail!(TRUNCATED_PROMPT_ERROR);
+    }
+    Ok(())
+}
+
 pub fn create_goal_child_workspace_and_start(
     params: GoalChildWorkspaceCreateParams,
     on_event: &mut dyn FnMut(&AgentStreamEvent),
@@ -171,4 +188,26 @@ pub fn create_goal_child_workspace_and_start(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_likely_truncated_auto_start_prompt_without_description() {
+        let error = validate_auto_start_prompt("You are cap", None).unwrap_err();
+
+        assert_eq!(error.to_string(), TRUNCATED_PROMPT_ERROR);
+    }
+
+    #[test]
+    fn allows_short_prompt_when_card_description_carries_context() {
+        validate_auto_start_prompt("Fix it", Some("Implement the auth callback flow")).unwrap();
+    }
+
+    #[test]
+    fn allows_complete_prompt_without_description() {
+        validate_auto_start_prompt("Implement the auth callback flow.", None).unwrap();
+    }
 }

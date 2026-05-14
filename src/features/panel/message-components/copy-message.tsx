@@ -2,10 +2,8 @@ import { Check, Copy } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type {
-	CollapsedGroupPart,
 	ExtendedMessagePart,
 	FileMentionPart,
-	MessagePart,
 	PlanReviewPart,
 	PromptSuggestionPart,
 	SystemNoticePart,
@@ -77,9 +75,7 @@ function serializeFileMentionPart(part: FileMentionPart): string | null {
 	return path.length > 0 ? `@${path}` : null;
 }
 
-function serializeMessagePart(
-	part: MessagePart | CollapsedGroupPart,
-): string | null {
+function serializeMessagePart(part: ExtendedMessagePart): string | null {
 	switch (part.type) {
 		case "text":
 			return serializeTextPart(part);
@@ -97,6 +93,7 @@ function serializeMessagePart(
 		case "tool-call":
 		case "collapsed-group":
 		case "image":
+		case "provider-switch-divider":
 			return null;
 		default:
 			return null;

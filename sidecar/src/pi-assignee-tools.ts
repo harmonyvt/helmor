@@ -29,9 +29,10 @@ export function createAssigneeTools(
 		description:
 			"Queue an async supervisor update into a Goal card assignee's dedicated thread. `card_id` is the child workspace id from list_kanban_cards. Messages are queued by default: running assignees receive the update after the current turn; idle assignees can start on it immediately. This never moves the card lane.",
 		promptSnippet:
-			"send_assignee_message({ card_id, message, priority? }) → { queued, started, sessionId, workspaceId }",
+			"send_assignee_message({ card_id, message, priority?, thread_id? }) → { queued, started, sessionId, workspaceId }",
 		promptGuidelines: [
 			"Use this tool to give assignees extra context, answers, or priority changes.",
+			"If a card has multiple threads, pass thread_id or use send_thread_message so the update goes to the intended conversation.",
 			"Do not treat moving a card lane as execution; explicitly message the assignee instead.",
 			"Queue follow-up context instead of interrupting running work.",
 		],
@@ -41,6 +42,12 @@ export function createAssigneeTools(
 			priority: Type.Optional(
 				Type.String({
 					description: "Optional priority label such as normal, high, urgent",
+				}),
+			),
+			thread_id: Type.Optional(
+				Type.String({
+					description:
+						"Optional explicit thread/session id override within the card workspace",
 				}),
 			),
 		}),
@@ -53,6 +60,7 @@ export function createAssigneeTools(
 					cardId: params.card_id,
 					message: params.message,
 					priority: params.priority,
+					threadId: params.thread_id ?? null,
 				},
 				emitter,
 				requestId,
@@ -70,6 +78,12 @@ export function createAssigneeTools(
 			"read_assignee_thread({ card_id, since_message_id? }) → assigned thread messages",
 		parameters: Type.Object({
 			card_id: Type.String({ description: "Child workspace id / card id" }),
+			thread_id: Type.Optional(
+				Type.String({
+					description:
+						"Optional exact thread/session id to read instead of the active assignee thread",
+				}),
+			),
 			since_message_id: Type.Optional(
 				Type.String({ description: "Only return messages after this id" }),
 			),
@@ -81,6 +95,7 @@ export function createAssigneeTools(
 				{
 					goalWorkspaceId,
 					cardId: params.card_id,
+					threadId: params.thread_id ?? null,
 					sinceMessageId: params.since_message_id,
 				},
 				emitter,
@@ -105,6 +120,47 @@ export function createAssigneeTools(
 				"summarize_assignee_status",
 				goalWorkspaceId,
 				{ goalWorkspaceId, cardId: params.card_id },
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
+	const setCardAssigneeThread = defineTool({
+		name: "set_card_assignee_thread",
+		label: "Set Card Assignee Thread",
+		description:
+			"Set a specific thread as the active assignee thread for a Goal card. Use this after creating or choosing a replacement thread so future implicit assignee tools route to the right session.",
+		promptSnippet:
+			"set_card_assignee_thread({ card_id, thread_id, reason?, supersedes_thread_id? }) → { activeThreadId, supersededThreadId }",
+		promptGuidelines: [
+			"Use this when the original assignee thread is stale, blocked by provider/model failure, or superseded by a clean retry.",
+			"Record a concise reason so future summaries can explain the stale thread.",
+		],
+		parameters: Type.Object({
+			card_id: Type.String({ description: "Child workspace id / card id" }),
+			thread_id: Type.String({
+				description: "Thread/session id to make active",
+			}),
+			reason: Type.Optional(
+				Type.String({ description: "Why this thread is now active" }),
+			),
+			supersedes_thread_id: Type.Optional(
+				Type.String({ description: "Old thread/session id being superseded" }),
+			),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const result = await callPiTool(
+				"set_card_assignee_thread",
+				goalWorkspaceId,
+				{
+					goalWorkspaceId,
+					cardId: params.card_id,
+					threadId: params.thread_id,
+					reason: params.reason ?? null,
+					supersedesThreadId: params.supersedes_thread_id ?? null,
+				},
 				emitter,
 				requestId,
 			);
@@ -142,6 +198,7 @@ export function createAssigneeTools(
 		sendAssigneeMessage,
 		readAssigneeThread,
 		summarizeAssigneeStatus,
+		setCardAssigneeThread,
 		listAssignees,
 	];
 }

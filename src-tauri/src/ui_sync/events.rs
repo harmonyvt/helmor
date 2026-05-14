@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -14,9 +15,17 @@ pub enum UiMutationEvent {
     SessionListChanged {
         workspace_id: String,
     },
+    SessionModeChanged {
+        workspace_id: String,
+    },
     SessionMessagesChanged {
         workspace_id: String,
         session_id: String,
+    },
+    SessionStreamEvent {
+        workspace_id: String,
+        session_id: String,
+        event: Value,
     },
     ContextUsageChanged {
         session_id: String,
@@ -43,6 +52,9 @@ pub enum UiMutationEvent {
     SettingsChanged {
         key: Option<String>,
     },
+    GoalOrchestratorStateChanged {
+        goal_workspace_id: String,
+    },
     PendingCliSendQueued {
         pending_send_id: String,
         workspace_id: String,
@@ -53,7 +65,7 @@ pub enum UiMutationEvent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiMutationEnvelope {
     pub version: u8,
@@ -92,9 +104,17 @@ mod tests {
             UiMutationEvent::SessionListChanged {
                 workspace_id: "w".into(),
             },
+            UiMutationEvent::SessionModeChanged {
+                workspace_id: "w".into(),
+            },
             UiMutationEvent::SessionMessagesChanged {
                 workspace_id: "w".into(),
                 session_id: "s".into(),
+            },
+            UiMutationEvent::SessionStreamEvent {
+                workspace_id: "w".into(),
+                session_id: "s".into(),
+                event: serde_json::json!({"kind": "streamingPartial", "message": {"role": "assistant", "content": []}}),
             },
             UiMutationEvent::ContextUsageChanged {
                 session_id: "s".into(),
@@ -118,6 +138,9 @@ mod tests {
                 repo_id: "r".into(),
             },
             UiMutationEvent::SettingsChanged { key: None },
+            UiMutationEvent::GoalOrchestratorStateChanged {
+                goal_workspace_id: "goal".into(),
+            },
             UiMutationEvent::PendingCliSendQueued {
                 pending_send_id: "p1".into(),
                 workspace_id: "w".into(),
@@ -141,6 +164,24 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "contextUsageChanged");
         assert_eq!(json["sessionId"], "abc");
+        assert!(json.get("session_id").is_none());
+    }
+
+    #[test]
+    fn session_stream_event_carries_agent_event_payload() {
+        let event = UiMutationEvent::SessionStreamEvent {
+            workspace_id: "w".into(),
+            session_id: "s".into(),
+            event: serde_json::json!({
+                "kind": "streamingPartial",
+                "message": {"role": "assistant", "content": []},
+            }),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "sessionStreamEvent");
+        assert_eq!(json["workspaceId"], "w");
+        assert_eq!(json["sessionId"], "s");
+        assert_eq!(json["event"]["kind"], "streamingPartial");
         assert!(json.get("session_id").is_none());
     }
 

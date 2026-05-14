@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	ChangeRequestInfo,
 	ForgeActionItem,
@@ -8,8 +8,72 @@ import type {
 import {
 	changeRequestRefetchInterval,
 	forgeActionStatusRefetchInterval,
+	helmorQueryPersister,
+	resetQueryCacheWriteFailureWarningForTests,
+	shouldDehydrateHelmorQuery,
 	workspaceForgeRefetchInterval,
 } from "./query-client";
+
+const QUERY_CACHE_STORAGE_KEY = "helmor-query-cache";
+
+beforeEach(() => {
+	window.localStorage.clear();
+	resetQueryCacheWriteFailureWarningForTests();
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+	window.localStorage.clear();
+});
+
+describe("helmor query persistence", () => {
+	it("excludes debug ingest overview from persisted query snapshots", () => {
+		expect(
+			shouldDehydrateHelmorQuery({
+				queryKey: ["debugIngestOverview"],
+				state: { status: "success" },
+			}),
+		).toBe(false);
+	});
+
+	it("continues without noisy errors when localStorage quota is exceeded", async () => {
+		const originalSetItem = Storage.prototype.setItem;
+		vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+			this: Storage,
+			key: string,
+			value: string,
+		) {
+			if (key === QUERY_CACHE_STORAGE_KEY) {
+				throw new DOMException(
+					"The quota has been exceeded.",
+					"QuotaExceededError",
+				);
+			}
+			return originalSetItem.call(this, key, value);
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const persistedClient = {
+			timestamp: Date.now(),
+			buster: "",
+			clientState: { queries: [], mutations: [] },
+		};
+
+		await expect(
+			helmorQueryPersister.persistClient(persistedClient),
+		).resolves.toBeUndefined();
+		await expect(
+			helmorQueryPersister.persistClient(persistedClient),
+		).resolves.toBeUndefined();
+
+		expect(window.localStorage.getItem(QUERY_CACHE_STORAGE_KEY)).toBeNull();
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn.mock.calls[0]?.[0]).toContain(
+			"Query cache persistence skipped",
+		);
+		expect(error).not.toHaveBeenCalled();
+	});
+});
 
 const OPEN_CHANGE_REQUEST: ChangeRequestInfo = {
 	url: "https://github.com/acme/repo/pull/1",

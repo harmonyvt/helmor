@@ -81,6 +81,20 @@ const MODEL_SECTIONS = [
 			},
 		],
 	},
+	{
+		id: "codex",
+		label: "Codex",
+		options: [
+			{
+				id: "gpt-5.4",
+				provider: "codex",
+				label: "GPT-5.4",
+				cliModel: "gpt-5.4",
+				effortLevels: ["low", "medium", "high"],
+				supportsFastMode: true,
+			},
+		],
+	},
 ] satisfies import("@/lib/api").AgentModelSection[];
 
 function createAskUserQuestionDeferredTool(): PendingDeferredTool {
@@ -1841,5 +1855,103 @@ describe("WorkspaceComposer", () => {
 
 		await userEvent.click(planButton);
 		expect(onChangePermissionMode).toHaveBeenCalledWith("bypassPermissions");
+	});
+
+	it("shows Goal mode only for Codex and submits as /goal", async () => {
+		const user = userEvent.setup();
+		const handleSubmit = vi.fn();
+
+		function Harness() {
+			const [goalMode, setGoalMode] = useState(false);
+			return (
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<TooltipProvider>
+						<WorkspaceComposer
+							contextKey="session:goal"
+							onSubmit={handleSubmit}
+							disabled={false}
+							submitDisabled={false}
+							sending={false}
+							selectedModelId="gpt-5.4"
+							modelSections={MODEL_SECTIONS}
+							onSelectModel={vi.fn()}
+							provider="codex"
+							agentType="codex"
+							effortLevel="high"
+							onSelectEffort={vi.fn()}
+							permissionMode="bypassPermissions"
+							onChangePermissionMode={vi.fn()}
+							goalMode={goalMode}
+							onChangeGoalMode={setGoalMode}
+							pendingInsertRequests={[
+								{
+									id: "goal-insert",
+									workspaceId: "workspace-1",
+									sessionId: "goal",
+									behavior: "append",
+									createdAt: 0,
+									items: [
+										{
+											kind: "custom-tag",
+											key: "goal-text",
+											label: "Goal Text",
+											submitText: "Ship this",
+										},
+									],
+								},
+							]}
+						/>
+					</TooltipProvider>
+				</QueryClientProvider>
+			);
+		}
+
+		render(<Harness />);
+		await screen.findByText("Goal Text");
+		await user.click(screen.getByRole("button", { name: "Goal mode" }));
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Send" })).toBeEnabled(),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+		expect(handleSubmit).toHaveBeenCalledWith(
+			"/goal Ship this",
+			[],
+			[],
+			expect.arrayContaining([
+				expect.objectContaining({ submitText: "Ship this" }),
+			]),
+		);
+	});
+
+	it("does not show Goal mode for Claude", () => {
+		render(
+			<QueryClientProvider client={createHelmorQueryClient()}>
+				<TooltipProvider>
+					<WorkspaceComposer
+						contextKey="session:claude"
+						onSubmit={vi.fn()}
+						disabled={false}
+						submitDisabled={false}
+						sending={false}
+						selectedModelId="opus-1m"
+						modelSections={MODEL_SECTIONS}
+						onSelectModel={vi.fn()}
+						provider="claude"
+						agentType="claude"
+						effortLevel="high"
+						onSelectEffort={vi.fn()}
+						permissionMode="bypassPermissions"
+						onChangePermissionMode={vi.fn()}
+						goalMode
+						onChangeGoalMode={vi.fn()}
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			screen.queryByRole("button", { name: "Goal mode" }),
+		).not.toBeInTheDocument();
 	});
 });

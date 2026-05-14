@@ -14,8 +14,33 @@ use super::common::CmdResult;
 /// we encode the per-instance UUID into the script_type as
 /// `"terminal:<instance_id>"`. Setup/Run still use the bare `"setup"` and
 /// `"run"` strings, so they're unaffected.
-fn make_script_type(instance_id: &str) -> String {
+fn make_workspace_script_type(instance_id: &str) -> String {
     format!("terminal:{instance_id}")
+}
+
+fn make_session_script_type(instance_id: &str) -> String {
+    format!("session-terminal:{instance_id}")
+}
+
+fn session_terminal_runtime_command(runtime: Option<String>) -> (String, Option<String>) {
+    let runtime_label = runtime
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("shell")
+        .to_string();
+    let normalized = runtime_label
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| !matches!(ch, ' ' | '_' | '-'))
+        .collect::<String>();
+    let command = match normalized.as_str() {
+        "" | "shell" => None,
+        "opencode" => Some("opencode".to_string()),
+        "openai" | "openaicodex" => Some("codex".to_string()),
+        _ => Some(runtime_label.clone()),
+    };
+    (runtime_label, command)
 }
 
 /// Spawn a blank interactive shell ($SHELL -i -l) on a fresh PTY in the
@@ -65,7 +90,7 @@ pub async fn spawn_terminal(
         default_branch: repo.default_branch.clone(),
     };
     let mgr = manager.inner().clone();
-    let script_type = make_script_type(&instance_id);
+    let script_type = make_workspace_script_type(&instance_id);
 
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(e) = crate::workspace::scripts::run_terminal_session(
@@ -76,10 +101,82 @@ pub async fn spawn_terminal(
             &working_dir,
             &context,
             channel.clone(),
+            None,
         ) {
             let _ = channel.send(ScriptEvent::Error {
                 message: e.to_string(),
             });
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn spawn_session_terminal(
+    manager: State<'_, ScriptProcessManager>,
+    repo_id: String,
+    workspace_id: String,
+    session_id: String,
+    runtime: Option<String>,
+    channel: Channel<ScriptEvent>,
+) -> CmdResult<()> {
+    let (repo, workspace) = tauri::async_runtime::spawn_blocking({
+        let repo_id = repo_id.clone();
+        let ws_id = workspace_id.clone();
+        move || -> anyhow::Result<(
+            repos::RepositoryRecord,
+            Option<crate::models::workspaces::WorkspaceRecord>,
+        )> {
+            let repo = repos::load_repository_by_id(&repo_id)?
+                .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_id}"))?;
+            let ws = crate::models::workspaces::load_workspace_record_by_id(&ws_id)?;
+            Ok((repo, ws))
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
+
+    let workspace_root = workspace
+        .as_ref()
+        .and_then(|ws| crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name).ok());
+    let working_dir = workspace_root
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| repo.root_path.clone());
+    crate::sessions::update_terminal_started(&session_id, &working_dir)?;
+
+    let context = ScriptContext {
+        root_path: repo.root_path.clone(),
+        workspace_path: Some(working_dir.clone()),
+        workspace_name: workspace.as_ref().map(|ws| ws.directory_name.clone()),
+        default_branch: repo.default_branch.clone(),
+    };
+    let mgr = manager.inner().clone();
+    let script_type = make_session_script_type(&session_id);
+    let (runtime_label, initial_input) = session_terminal_runtime_command(runtime);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = crate::workspace::scripts::run_terminal_session(
+            &mgr,
+            &repo_id,
+            &script_type,
+            Some(&workspace_id),
+            &working_dir,
+            &context,
+            channel.clone(),
+            initial_input.as_deref(),
+        );
+        match result {
+            Ok(exit_code) => {
+                let _ = crate::sessions::update_terminal_stopped(&session_id, exit_code);
+            }
+            Err(e) => {
+                let _ = crate::sessions::update_terminal_stopped(&session_id, Some(1));
+                let _ = channel.send(ScriptEvent::Error {
+                    message: format!("Failed to start {runtime_label} terminal: {e}"),
+                });
+            }
         }
     });
 
@@ -93,7 +190,26 @@ pub async fn stop_terminal(
     workspace_id: String,
     instance_id: String,
 ) -> CmdResult<bool> {
-    let key = (repo_id, make_script_type(&instance_id), Some(workspace_id));
+    let key = (
+        repo_id,
+        make_workspace_script_type(&instance_id),
+        Some(workspace_id),
+    );
+    Ok(manager.kill(&key))
+}
+
+#[tauri::command]
+pub async fn stop_session_terminal(
+    manager: State<'_, ScriptProcessManager>,
+    repo_id: String,
+    workspace_id: String,
+    session_id: String,
+) -> CmdResult<bool> {
+    let key = (
+        repo_id,
+        make_session_script_type(&session_id),
+        Some(workspace_id),
+    );
     Ok(manager.kill(&key))
 }
 
@@ -105,7 +221,27 @@ pub async fn write_terminal_stdin(
     instance_id: String,
     data: String,
 ) -> CmdResult<bool> {
-    let key = (repo_id, make_script_type(&instance_id), Some(workspace_id));
+    let key = (
+        repo_id,
+        make_workspace_script_type(&instance_id),
+        Some(workspace_id),
+    );
+    Ok(manager.write_stdin(&key, data.as_bytes())?)
+}
+
+#[tauri::command]
+pub async fn write_session_terminal_stdin(
+    manager: State<'_, ScriptProcessManager>,
+    repo_id: String,
+    workspace_id: String,
+    session_id: String,
+    data: String,
+) -> CmdResult<bool> {
+    let key = (
+        repo_id,
+        make_session_script_type(&session_id),
+        Some(workspace_id),
+    );
     Ok(manager.write_stdin(&key, data.as_bytes())?)
 }
 
@@ -118,6 +254,27 @@ pub async fn resize_terminal(
     cols: u16,
     rows: u16,
 ) -> CmdResult<bool> {
-    let key = (repo_id, make_script_type(&instance_id), Some(workspace_id));
+    let key = (
+        repo_id,
+        make_workspace_script_type(&instance_id),
+        Some(workspace_id),
+    );
+    Ok(manager.resize(&key, cols, rows)?)
+}
+
+#[tauri::command]
+pub async fn resize_session_terminal(
+    manager: State<'_, ScriptProcessManager>,
+    repo_id: String,
+    workspace_id: String,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> CmdResult<bool> {
+    let key = (
+        repo_id,
+        make_session_script_type(&session_id),
+        Some(workspace_id),
+    );
     Ok(manager.resize(&key, cols, rows)?)
 }

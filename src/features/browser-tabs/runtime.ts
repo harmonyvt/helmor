@@ -16,6 +16,31 @@ const FALLBACK_BROWSER_USER_AGENT =
 const APP_USER_AGENT_TOKENS =
 	/\s+(?:Helmor|Tauri|Wry|Electron|tauri)\/[\w.-]+/gi;
 
+export type BrowserWebviewGeometrySource =
+	| "create"
+	| "resize"
+	| "poll"
+	| "manual";
+
+export type BrowserWebviewFrame = {
+	logical: BrowserWebviewBounds;
+	physical: BrowserWebviewBounds;
+};
+
+export type BrowserPageViewport = {
+	width: number;
+	height: number;
+	scaleFactor: number;
+};
+
+export type BrowserWebviewGeometry = {
+	requestedBounds: BrowserWebviewBounds;
+	nativeFrame: BrowserWebviewFrame;
+	pageViewport: BrowserPageViewport;
+	measuredAtMs: number;
+	source: BrowserWebviewGeometrySource;
+};
+
 function currentNavigator(): Navigator | null {
 	return typeof navigator === "undefined" ? null : navigator;
 }
@@ -114,6 +139,80 @@ export async function positionBrowserWebview(
 ): Promise<void> {
 	await webview.setPosition(new LogicalPosition(bounds.x, bounds.y));
 	await webview.setSize(new LogicalSize(bounds.width, bounds.height));
+}
+
+function currentScaleFactor(): number {
+	if (typeof window === "undefined") return 1;
+	const scaleFactor = window.devicePixelRatio;
+	return Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
+}
+
+function roundGeometryValue(value: number): number {
+	return Math.round(value * 100) / 100;
+}
+
+function logicalFromPhysical(
+	physical: BrowserWebviewBounds,
+	scaleFactor: number,
+): BrowserWebviewBounds {
+	return {
+		x: roundGeometryValue(physical.x / scaleFactor),
+		y: roundGeometryValue(physical.y / scaleFactor),
+		width: roundGeometryValue(physical.width / scaleFactor),
+		height: roundGeometryValue(physical.height / scaleFactor),
+	};
+}
+
+export async function readBrowserWebviewGeometry(
+	webview: Pick<Webview, "position" | "size">,
+	requestedBounds: BrowserWebviewBounds,
+	source: BrowserWebviewGeometrySource,
+): Promise<BrowserWebviewGeometry> {
+	const scaleFactor = currentScaleFactor();
+	try {
+		const [position, size] = await Promise.all([
+			webview.position(),
+			webview.size(),
+		]);
+		const physical = {
+			x: position.x,
+			y: position.y,
+			width: size.width,
+			height: size.height,
+		};
+		const logical = logicalFromPhysical(physical, scaleFactor);
+		return {
+			requestedBounds,
+			nativeFrame: { logical, physical },
+			pageViewport: {
+				width: logical.width,
+				height: logical.height,
+				scaleFactor,
+			},
+			measuredAtMs: Date.now(),
+			source,
+		};
+	} catch {
+		return {
+			requestedBounds,
+			nativeFrame: {
+				logical: requestedBounds,
+				physical: {
+					x: roundGeometryValue(requestedBounds.x * scaleFactor),
+					y: roundGeometryValue(requestedBounds.y * scaleFactor),
+					width: roundGeometryValue(requestedBounds.width * scaleFactor),
+					height: roundGeometryValue(requestedBounds.height * scaleFactor),
+				},
+			},
+			pageViewport: {
+				width: requestedBounds.width,
+				height: requestedBounds.height,
+				scaleFactor,
+			},
+			measuredAtMs: Date.now(),
+			source,
+		};
+	}
 }
 
 export type BrowserRuntimeMetadataHandlers = {

@@ -56,6 +56,7 @@ fn execute_delegation_tool_call(
     tool_call_id: &str,
     parent_session_id: Option<&str>,
     parent_provider: &str,
+    parent_prompt_prefix: Option<&str>,
     args: Value,
 ) -> anyhow::Result<Value> {
     let parent_session_id = parent_session_id
@@ -79,7 +80,8 @@ fn execute_delegation_tool_call(
         serde_json::from_value(Value::Object(payload)).map_err(|error| {
             anyhow::anyhow!("Invalid delegate_agent arguments for {tool_call_id}: {error}")
         })?;
-    let response = super::delegation::delegate_agent_blocking(app, sidecar, request)?;
+    let response =
+        super::delegation::delegate_agent_blocking(app, sidecar, request, parent_prompt_prefix)?;
     Ok(serde_json::to_value(response)?)
 }
 
@@ -271,6 +273,7 @@ pub(super) fn stream_via_sidecar(
     let hsid_copy = helmor_session_id;
     let effort_copy = request.effort_level.clone();
     let permission_mode_initial = request.permission_mode.clone();
+    let parent_prompt_prefix = request.prompt_prefix.clone();
     let fast_mode = request.fast_mode.unwrap_or(false);
     let user_message_id_copy = request.user_message_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
@@ -1052,6 +1055,7 @@ pub(super) fn stream_via_sidecar(
                             &tool_call_id,
                             hsid_copy.as_deref(),
                             &provider,
+                            parent_prompt_prefix.as_deref(),
                             args,
                         ) {
                             Ok(value) => (value, false),

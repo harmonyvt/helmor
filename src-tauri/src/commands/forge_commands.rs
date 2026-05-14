@@ -105,6 +105,7 @@ pub async fn spawn_forge_cli_auth_terminal(
             &working_dir,
             &context,
             channel.clone(),
+            None,
         ) {
             let _ = channel.send(ScriptEvent::Error {
                 message: error.to_string(),

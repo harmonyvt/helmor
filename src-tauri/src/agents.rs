@@ -22,6 +22,7 @@ mod support;
 pub use self::action_kind::ActionKind;
 pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
 pub use self::delegation::{DelegateAgentRequest, DelegateAgentResponse};
+pub(crate) use self::persistence::persist_collected_turn_message;
 pub use self::queries::{
     fetch_agent_model_sections, fetch_live_context_usage, GenerateSessionTitleRequest,
     GenerateSessionTitleResponse, GetLiveContextUsageRequest, ListSlashCommandsRequest,

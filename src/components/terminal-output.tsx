@@ -26,6 +26,8 @@ type TerminalOutputProps = {
 	 * interactive tools (vim, htop, less) re-layout.
 	 */
 	onResize?: (cols: number, rows: number) => void;
+	/** Called when the PTY emits an OSC terminal title update. */
+	onTitleChange?: (title: string) => void;
 };
 
 export type TerminalHandle = {
@@ -230,6 +232,7 @@ function TerminalOutputImpl({
 	padding = "12px 2px 12px 12px",
 	onData,
 	onResize,
+	onTitleChange,
 }: TerminalOutputProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const xtermRef = useRef<Terminal | null>(null);
@@ -237,8 +240,10 @@ function TerminalOutputImpl({
 	// Refs so xterm effect doesn't recreate on parent rerender.
 	const onDataRef = useRef<typeof onData>(onData);
 	const onResizeRef = useRef<typeof onResize>(onResize);
+	const onTitleChangeRef = useRef<typeof onTitleChange>(onTitleChange);
 	onDataRef.current = onData;
 	onResizeRef.current = onResize;
+	onTitleChangeRef.current = onTitleChange;
 
 	useEffect(() => {
 		const container = containerRef.current;
@@ -353,6 +358,10 @@ function TerminalOutputImpl({
 			onResizeRef.current?.(cols, rows);
 		});
 
+		const titleSub = terminal.onTitleChange((title) => {
+			onTitleChangeRef.current?.(title);
+		});
+
 		const resizeObserver = new ResizeObserver((entries) => {
 			// A caller is animating an ancestor — skip the per-frame reflow and
 			// rely on `refitListener` below to fit once when the animation ends.
@@ -407,6 +416,7 @@ function TerminalOutputImpl({
 			}
 			dataSub.dispose();
 			resizeSub.dispose();
+			titleSub.dispose();
 			linkProviderDisposable?.dispose();
 			themeObserver.disconnect();
 			resizeObserver.disconnect();

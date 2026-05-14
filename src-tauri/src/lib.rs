@@ -11,6 +11,7 @@ pub mod git;
 pub mod global_hotkey;
 pub mod goal_assignees;
 pub mod goal_orchestration;
+pub mod goal_orchestrator;
 pub mod image_store;
 mod import;
 pub mod logging;
@@ -246,12 +247,17 @@ pub fn run() {
             commands::goal_commands::finalize_goal_workspace,
             commands::goal_commands::convert_workspace_to_goal,
             commands::goal_commands::list_goal_cards,
+            commands::goal_commands::get_goal_orchestrator_state,
+            commands::goal_commands::run_goal_orchestrator_tick,
             commands::goal_commands::upsert_goal_card,
             commands::goal_commands::link_goal_card_workspace,
             commands::goal_commands::create_goal_child_workspace,
             commands::goal_commands::create_goal_child_workspace_and_start,
             commands::goal_commands::send_assignee_message,
+            commands::goal_commands::send_thread_message,
+            commands::goal_commands::set_card_assignee_thread,
             commands::goal_commands::read_assignee_thread,
+            commands::goal_commands::get_thread_runtime_status,
             commands::goal_commands::summarize_assignee_status,
             commands::goal_commands::list_assignees,
             commands::goal_commands::set_goal_child_workspace_status,
@@ -284,9 +290,13 @@ pub fn run() {
             commands::script_commands::write_repo_script_stdin,
             commands::script_commands::resize_repo_script,
             commands::terminal_commands::spawn_terminal,
+            commands::terminal_commands::spawn_session_terminal,
             commands::terminal_commands::stop_terminal,
+            commands::terminal_commands::stop_session_terminal,
             commands::terminal_commands::write_terminal_stdin,
+            commands::terminal_commands::write_session_terminal_stdin,
             commands::terminal_commands::resize_terminal,
+            commands::terminal_commands::resize_session_terminal,
             commands::browser_commands::list_workspace_browser_tabs,
             commands::browser_commands::create_browser_tab,
             commands::browser_commands::select_browser_tab,
@@ -326,6 +336,7 @@ pub fn run() {
             commands::agent_commands::delegate_agent,
             commands::session_commands::mark_session_read,
             commands::session_commands::mark_session_unread,
+            commands::session_commands::update_session_control,
             commands::workspace_commands::list_remote_branches,
             commands::workspace_commands::rename_workspace_branch,
             commands::workspace_commands::update_intended_target_branch,
@@ -349,6 +360,7 @@ pub fn run() {
             commands::system_commands::ack_pending_cli_send_started,
             commands::editor_commands::read_editor_file,
             commands::editor_commands::read_file_at_ref,
+            commands::editor_commands::get_file_unified_diff,
             commands::workspace_commands::set_workspace_status,
             commands::workspace_commands::list_workspace_linked_directories,
             commands::workspace_commands::set_workspace_linked_directories,

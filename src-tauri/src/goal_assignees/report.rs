@@ -29,8 +29,46 @@ pub(super) fn latest_report_marker(
     })
 }
 
+pub(super) fn report_marker_from_text(
+    message_id: Option<String>,
+    created_at: Option<String>,
+    text: &str,
+) -> Option<AssigneeReportMarker> {
+    let report_type = detect_report_type(text)?;
+    Some(AssigneeReportMarker {
+        report_type: report_type.to_string(),
+        message_id,
+        created_at,
+        excerpt: excerpt(text),
+    })
+}
+
+pub(super) fn message_text(message: &pipeline::types::ThreadMessageLike) -> String {
+    message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            pipeline::types::ExtendedMessagePart::Basic(pipeline::types::MessagePart::Text {
+                text,
+                ..
+            }) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn detect_report_type(text: &str) -> Option<&'static str> {
-    text.lines().find_map(detect_report_type_in_line)
+    let mut best: Option<&'static str> = None;
+    for report_type in text.lines().filter_map(detect_report_type_in_line) {
+        best = Some(match (best, report_type) {
+            (Some("blocked"), _) | (_, "blocked") => "blocked",
+            (Some("completed"), _) | (_, "completed") => "completed",
+            (Some("handoff"), _) | (_, "handoff") => "handoff",
+            _ => "progress",
+        });
+    }
+    best
 }
 
 fn detect_report_type_in_line(line: &str) -> Option<&'static str> {
@@ -54,22 +92,7 @@ fn normalize_report_marker_line(line: &str) -> String {
     trimmed.to_lowercase()
 }
 
-fn message_text(message: &pipeline::types::ThreadMessageLike) -> String {
-    message
-        .content
-        .iter()
-        .filter_map(|part| match part {
-            pipeline::types::ExtendedMessagePart::Basic(pipeline::types::MessagePart::Text {
-                text,
-                ..
-            }) => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn excerpt(text: &str) -> String {
+pub(super) fn excerpt(text: &str) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     const MAX_LEN: usize = 220;
     if compact.chars().count() <= MAX_LEN {
@@ -97,6 +120,10 @@ mod tests {
         );
         assert_eq!(
             detect_report_type("## Completed\n\nAll set.\n\n## Blocked\nNone."),
+            Some("blocked")
+        );
+        assert_eq!(
+            detect_report_type("## Progress\nWorking\n\n## Completed\nDone."),
             Some("completed")
         );
         assert_eq!(

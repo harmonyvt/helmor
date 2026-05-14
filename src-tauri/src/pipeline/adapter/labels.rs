@@ -243,8 +243,49 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
             ),
         }),
         "codex_reconnecting" => Some(build_codex_reconnecting_notice(parsed, msg_id)),
+        "agent_starting" => Some(build_agent_runtime_notice(
+            parsed,
+            msg_id,
+            NoticeSeverity::Info,
+            "Agent starting",
+        )),
+        "provider_session_opened" => Some(build_agent_runtime_notice(
+            parsed,
+            msg_id,
+            NoticeSeverity::Info,
+            "Provider session opened",
+        )),
+        "agent_start_failed" => Some(build_agent_runtime_notice(
+            parsed,
+            msg_id,
+            NoticeSeverity::Error,
+            "Agent failed to start",
+        )),
         "api_retry" => Some(build_api_retry_notice(parsed, msg_id)),
         _ => None,
+    }
+}
+
+fn build_agent_runtime_notice(
+    parsed: &Value,
+    msg_id: &str,
+    severity: NoticeSeverity,
+    label: &str,
+) -> MessagePart {
+    let body = parsed
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|message| !message.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            let model = parsed.get("model").and_then(Value::as_str)?;
+            Some(format!("Running on {model}"))
+        });
+    MessagePart::SystemNotice {
+        id: notice_part_id(msg_id),
+        severity,
+        label: label.to_string(),
+        body,
     }
 }
 

@@ -74,14 +74,20 @@ pub(super) fn persist_turn_message(
     turn: &CollectedTurn,
     _resolved_model: &str,
 ) -> Result<String> {
-    let now = current_timestamp_string()?;
     // Use the pre-assigned ID from the turn so streaming and historical
     // message IDs are the same UUID.
+    persist_collected_turn_message(conn, &ctx.helmor_session_id, turn)
+}
+
+pub(crate) fn persist_collected_turn_message(
+    conn: &Connection,
+    session_id: &str,
+    turn: &CollectedTurn,
+) -> Result<String> {
+    let now = current_timestamp_string()?;
     let msg_id = turn.id.clone();
-    let content = crate::image_store::prepare_turn_content_for_persist(
-        &ctx.helmor_session_id,
-        &turn.content_json,
-    )?;
+    let content =
+        crate::image_store::prepare_turn_content_for_persist(session_id, &turn.content_json)?;
 
     // Preserve the original `sent_at` / rowid on duplicate ids so historical
     // reload remains ordered by when the item started, not when it completed.
@@ -93,8 +99,11 @@ pub(super) fn persist_turn_message(
             ON CONFLICT(id) DO UPDATE SET
               role = excluded.role,
               content = excluded.content
-            "#,
-        params![msg_id, ctx.helmor_session_id, turn.role, content, now],
+        "#,
+        params![msg_id, session_id, turn.role, content, now],
+    )?;
+    crate::goal_assignees::maybe_deliver_assignee_report(
+        conn, session_id, &msg_id, turn.role, &content,
     )?;
     Ok(msg_id)
 }

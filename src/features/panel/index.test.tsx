@@ -118,6 +118,7 @@ describe("WorkspacePanel", () => {
 		);
 
 		await user.click(screen.getByRole("button", { name: "New session" }));
+		await user.click(screen.getByRole("menuitem", { name: /Chat with AI/ }));
 
 		await waitFor(() => {
 			expect(onSelectSession).toHaveBeenCalledWith("session-new");

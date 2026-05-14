@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { getProviderSwitchParent } from "@/features/composer/provider-switch-parents";
 import { getShortcut } from "@/features/shortcuts/registry";
 import type {
 	AgentModelSection,
@@ -10,7 +11,11 @@ import type {
 	WorkspaceDetail,
 	WorkspaceSessionSummary,
 } from "@/lib/api";
-import { createSession, loadRepoScripts } from "@/lib/api";
+import {
+	buildProviderSwitchDividerMessage,
+	createSession,
+	loadRepoScripts,
+} from "@/lib/api";
 import {
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -194,6 +199,16 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 								lastUserMessageAt: null,
 								isHidden: false,
 								actionKind: null,
+								surfaceKind: "chat",
+								surfaceMode: "thread",
+								controlOwner: "user",
+								inputPolicy: "writable",
+								createdBy: "user",
+								terminalRuntime: null,
+								terminalCwd: null,
+								terminalStartedAt: null,
+								terminalStoppedAt: null,
+								terminalExitCode: null,
 								active: true,
 							},
 						];
@@ -286,6 +301,22 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		...sessionThreadMessagesQueryOptions(threadSessionId ?? "__none__"),
 		enabled: Boolean(threadSessionId),
 	});
+
+	// If this session was created by a provider switch with "Bring history",
+	// also load the parent session's messages so they can be shown above a
+	// visual divider. The lookup is synchronous (localStorage) so it doesn't
+	// need its own effect — it re-runs whenever threadSessionId changes.
+	const parentSessionInfo = useMemo(
+		() => (threadSessionId ? getProviderSwitchParent(threadSessionId) : null),
+		[threadSessionId],
+	);
+	const parentMessagesQuery = useQuery({
+		...sessionThreadMessagesQueryOptions(
+			parentSessionInfo?.parentSessionId ?? "__none__",
+		),
+		enabled: Boolean(parentSessionInfo?.parentSessionId),
+	});
+
 	const repoScriptsQuery = useQuery({
 		queryKey: helmorQueryKeys.repoScripts(
 			workspace?.repoId ?? "__none__",
@@ -296,7 +327,20 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		staleTime: 0,
 	});
 
-	const messages = messagesQuery.data ?? EMPTY_MESSAGES;
+	const currentMessages = messagesQuery.data ?? EMPTY_MESSAGES;
+
+	// Merge parent history + divider + current messages when applicable.
+	const messages = useMemo<ThreadMessageLike[]>(() => {
+		if (!parentSessionInfo || !parentMessagesQuery.data?.length) {
+			return currentMessages;
+		}
+		const divider = buildProviderSwitchDividerMessage(
+			parentSessionInfo.fromProvider,
+			parentSessionInfo.toProvider,
+		);
+		return [...parentMessagesQuery.data, divider, ...currentMessages];
+	}, [parentSessionInfo, parentMessagesQuery.data, currentMessages]);
+
 	const sessionDisplayProviders = useMemo<Record<string, AgentProvider>>(() => {
 		const modelSections =
 			queryClient.getQueryData<AgentModelSection[]>(

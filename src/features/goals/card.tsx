@@ -14,6 +14,7 @@ type WorkspaceCardProps = {
 	onClick: () => void;
 	onAssigneeClick?: () => void;
 	latestReport?: AssigneeReportMarker | null;
+	orchestratorStatus?: string | null;
 	onDragStart: () => void;
 	onDragEnd: () => void;
 };
@@ -83,6 +84,7 @@ export function WorkspaceCard({
 	onClick,
 	onAssigneeClick,
 	latestReport,
+	orchestratorStatus,
 	onDragStart,
 	onDragEnd,
 }: WorkspaceCardProps) {
@@ -149,6 +151,23 @@ export function WorkspaceCard({
 				{ws.sessionCount > 0 ? (
 					<span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
 						{ws.sessionCount} {ws.sessionCount === 1 ? "thread" : "threads"}
+					</span>
+				) : null}
+				{orchestratorStatus ? (
+					<span
+						className={cn(
+							"rounded-md px-1.5 py-0.5 text-[10px] capitalize",
+							orchestratorStatus === "running" ||
+								orchestratorStatus === "claimed"
+								? "bg-accent text-accent-foreground"
+								: orchestratorStatus === "failed" ||
+										orchestratorStatus === "blocked"
+									? "bg-destructive/15 text-destructive"
+									: "bg-muted text-muted-foreground",
+						)}
+						title="Orchestrator state"
+					>
+						{orchestratorStatus.replaceAll("-", " ")}
 					</span>
 				) : null}
 			</div>

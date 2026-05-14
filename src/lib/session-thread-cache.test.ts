@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import type { ThreadMessageLike } from "./api";
 import {
 	appendUserMessage,
+	mergeStreamingPartial,
 	readSessionThread,
 	replaceStreamingTail,
 	restoreSnapshot,
@@ -117,6 +118,49 @@ describe("session-thread-cache", () => {
 		if (latestA1?.type === "text") {
 			expect(latestA1.text).toBe("complete reply");
 		}
+	});
+
+	it("mergeStreamingPartial replaces matching background stream messages", () => {
+		const client = makeClient();
+		const prior = [
+			makeMessage("u1", "user", "background prompt"),
+			{
+				...makeMessage("a1", "assistant", "first chunk"),
+				streaming: true,
+			},
+		];
+		client.setQueryData(sessionThreadCacheKey("session-1"), prior);
+
+		mergeStreamingPartial(client, "session-1", {
+			...makeMessage("a1", "assistant", "second chunk"),
+			streaming: true,
+		});
+
+		const cached = readSessionThread(client, "session-1");
+		expect(cached).toHaveLength(2);
+		expect(cached?.[0]).toBe(prior[0]);
+		expect(cached?.[1]?.id).toBe("a1");
+		const latestPart = cached?.[1]?.content[0];
+		expect(latestPart?.type).toBe("text");
+		if (latestPart?.type === "text") {
+			expect(latestPart.text).toBe("second chunk");
+		}
+	});
+
+	it("mergeStreamingPartial appends new background stream messages", () => {
+		const client = makeClient();
+		const prior = [makeMessage("u1", "user", "background prompt")];
+		client.setQueryData(sessionThreadCacheKey("session-1"), prior);
+
+		mergeStreamingPartial(client, "session-1", {
+			...makeMessage("a1", "assistant", "first chunk"),
+			streaming: true,
+		});
+
+		const cached = readSessionThread(client, "session-1");
+		expect(cached).toHaveLength(2);
+		expect(cached?.[0]).toBe(prior[0]);
+		expect(cached?.[1]?.id).toBe("a1");
 	});
 
 	it("restoreSnapshot reverts to the captured state and removes the entry on undefined", () => {

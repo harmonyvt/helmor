@@ -308,6 +308,7 @@ pub fn run_script(
         working_dir,
         context,
         channel,
+        None,
         &shell,
         &["-i", "-l"],
     )
@@ -333,6 +334,7 @@ pub fn run_terminal_session(
     working_dir: &str,
     context: &ScriptContext,
     channel: Channel<ScriptEvent>,
+    initial_input: Option<&str>,
 ) -> Result<Option<i32>> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     run_script_with_shell(
@@ -344,6 +346,7 @@ pub fn run_terminal_session(
         working_dir,
         context,
         channel,
+        initial_input,
         &shell,
         &["-i", "-l"],
     )
@@ -368,6 +371,7 @@ pub(crate) fn run_script_with_shell(
     working_dir: &str,
     context: &ScriptContext,
     channel: Channel<ScriptEvent>,
+    initial_input: Option<&str>,
     shell_path: &str,
     shell_args: &[&str],
 ) -> Result<Option<i32>> {
@@ -454,7 +458,9 @@ pub(crate) fn run_script_with_shell(
         command: script.map(str::to_string).unwrap_or_else(|| {
             // Terminal mode: no command was fed; report the shell invocation
             // so frontends can show a stable label in the Started event.
-            format!("{shell_path} {}", shell_args.join(" "))
+            initial_input
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{shell_path} {}", shell_args.join(" ")))
         }),
     });
 
@@ -520,6 +526,11 @@ pub(crate) fn run_script_with_shell(
         );
         let mut file = stdin.lock().expect("stdin mutex poisoned");
         if let Err(e) = file.write_all(wrapped.as_bytes()) {
+            tracing::warn!(error = %e, "initial PTY write failed");
+        }
+    } else if let Some(initial_input) = initial_input {
+        let mut file = stdin.lock().expect("stdin mutex poisoned");
+        if let Err(e) = file.write_all(format!("{initial_input}\n").as_bytes()) {
             tracing::warn!(error = %e, "initial PTY write failed");
         }
     }
@@ -741,6 +752,7 @@ mod tests {
                 &tempdir,
                 &ctx,
                 make_channel(),
+                None,
                 "/bin/sh",
                 &[],
             )
@@ -820,6 +832,7 @@ mod tests {
                 &tempdir,
                 &ctx,
                 ch,
+                None,
                 "/bin/sh",
                 &[],
             )
@@ -907,6 +920,7 @@ mod tests {
                 &tempdir,
                 &ctx,
                 ch,
+                None,
                 "/bin/sh",
                 &[],
             )
@@ -969,6 +983,7 @@ mod tests {
             dir.to_str().unwrap(),
             &ctx,
             make_channel(),
+            None,
             // /bin/sh avoids the user's interactive zsh startup cost that
             // makes tests flaky under `cargo test` parallelism.
             "/bin/sh",
@@ -998,6 +1013,50 @@ mod tests {
         };
         let result = run_script(&mgr, "r", "s", None, "  ", "/tmp", &ctx, make_channel());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn terminal_session_writes_initial_input() {
+        let mgr = ScriptProcessManager::new();
+        let dir = std::env::temp_dir();
+        let ctx = ScriptContext {
+            root_path: dir.display().to_string(),
+            workspace_path: None,
+            workspace_name: None,
+            default_branch: None,
+        };
+        let output = Arc::new(Mutex::new(String::new()));
+        let output_for_channel = output.clone();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            output_for_channel.lock().unwrap().push_str(data);
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let exit_code = run_script_with_shell(
+            &mgr,
+            "test-repo",
+            "terminal",
+            Some("ws-test"),
+            None,
+            dir.to_str().unwrap(),
+            &ctx,
+            ch,
+            Some("printf 'INITIAL:%s\\n' ok; exit"),
+            "/bin/sh",
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, Some(0));
+        assert!(output.lock().unwrap().contains("INITIAL:ok"));
     }
 
     // ── write_stdin/resize on unknown key silently succeed ─────────────────

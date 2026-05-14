@@ -498,6 +498,26 @@ export type WorkspaceSessionSummary = {
 	 * inspector commit button (e.g. "create-pr", "commit-and-push"). Drives
 	 * post-stream verifiers and auto-close behavior. */
 	actionKind?: ActionKind | null;
+	threadRole?: string | null;
+	threadStatus?: string | null;
+	supersedesThreadId?: string | null;
+	staleReason?: string | null;
+	lastSupervisorMessageId?: string | null;
+	lastMilestoneReportId?: string | null;
+	surfaceKind?: "chat" | "terminal";
+	surfaceMode?: "thread" | "task_monitor" | "terminal" | "agent_terminal";
+	controlOwner?: "user" | "agent" | "system";
+	inputPolicy?:
+		| "writable"
+		| "read_only"
+		| "request_control"
+		| "blocked_for_approval";
+	createdBy?: "user" | "goal" | "pi" | "system";
+	terminalRuntime?: string | null;
+	terminalCwd?: string | null;
+	terminalStartedAt?: string | null;
+	terminalStoppedAt?: string | null;
+	terminalExitCode?: number | null;
 	parentSessionId?: string | null;
 	parentMessageId?: string | null;
 	delegationStatus?: string | null;
@@ -623,6 +643,107 @@ export type GoalCard = {
 	updatedAt: string;
 };
 
+export type GoalOrchestratorIssueState =
+	| "backlog"
+	| "ready"
+	| "in-progress"
+	| "review"
+	| "done"
+	| "canceled"
+	| "blocked";
+
+export type GoalOrchestratorIssue = {
+	id: string;
+	tracker: "local" | "linear" | "github" | "jira";
+	goalWorkspaceId: string;
+	identifier?: string | null;
+	title: string;
+	description?: string | null;
+	state: GoalOrchestratorIssueState;
+	labels: string[];
+	blockers: string[];
+	priority: number;
+	childWorkspaceId?: string | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	updatedAt?: string | null;
+};
+
+export type GoalOrchestratorRunPhase =
+	| "claimed"
+	| "running"
+	| "succeeded"
+	| "failed"
+	| "released"
+	| "skipped";
+
+export type GoalOrchestratorRunAttempt = {
+	attemptId: string;
+	issueId: string;
+	workspaceId?: string | null;
+	sessionId?: string | null;
+	phase: GoalOrchestratorRunPhase;
+	startedAt: string;
+	finishedAt?: string | null;
+	error?: string | null;
+	provider?: string | null;
+	model?: string | null;
+	pendingSendId?: string | null;
+};
+
+export type GoalOrchestratorRuntimeState = {
+	goalWorkspaceId: string;
+	running: GoalOrchestratorRunAttempt[];
+	claimed: string[];
+	retries: Array<{
+		issueId: string;
+		attempts: number;
+		nextRetryAt: string;
+		lastError?: string | null;
+	}>;
+	completedIssueIds: string[];
+	liveSessions: Array<{
+		workspaceId: string;
+		sessionId: string;
+		status: string;
+		pendingSendId?: string | null;
+		lastEventAt?: string | null;
+	}>;
+	tokenSnapshot?: {
+		provider: string;
+		remainingTokens?: number | null;
+		resetAt?: string | null;
+	} | null;
+	configErrors: string[];
+	updatedAt: string;
+};
+
+export type GoalOrchestratorStatus = {
+	goalWorkspaceId: string;
+	workflowLoaded: boolean;
+	workflowPath?: string | null;
+	trackerType: string;
+	pollingEnabled: boolean;
+	maxConcurrent: number;
+	issueCount: number;
+	dispatchableCount: number;
+	runningCount: number;
+	retryCount: number;
+	completedCount: number;
+	issues: GoalOrchestratorIssue[];
+	runtime: GoalOrchestratorRuntimeState;
+	errors: string[];
+};
+
+export type GoalOrchestratorTickSummary = {
+	goalWorkspaceId: string;
+	dispatched: number;
+	skipped: number;
+	errors: string[];
+	status: GoalOrchestratorStatus;
+};
+
 export type UpsertGoalCardInput = {
 	id?: string | null;
 	goalWorkspaceId: string;
@@ -692,6 +813,23 @@ export type SendAssigneeMessageRequest = {
 	cardId: string;
 	message: string;
 	priority?: string | null;
+	threadId?: string | null;
+};
+
+export type SendThreadMessageRequest = {
+	goalWorkspaceId: string;
+	workspaceId: string;
+	threadId: string;
+	message: string;
+	priority?: string | null;
+	modelId?: string | null;
+	permissionMode?: string | null;
+};
+
+export type ThreadRuntimeStatusRequest = {
+	goalWorkspaceId: string;
+	workspaceId: string;
+	threadId: string;
 };
 
 export type SendAssigneeMessageResult = {
@@ -709,11 +847,13 @@ export type SendAssigneeMessageResult = {
 	workspaceId: string;
 	pendingSendId: string;
 	message?: string | null;
+	supervisorMessageId?: string | null;
 };
 
 export type ReadAssigneeThreadRequest = {
 	goalWorkspaceId: string;
 	cardId: string;
+	threadId?: string | null;
 	sinceMessageId?: string | null;
 };
 
@@ -725,14 +865,61 @@ export type AssigneeThreadResult = {
 	latestReport?: AssigneeReportMarker | null;
 };
 
+export type ThreadRuntimeStatus = {
+	threadId: string;
+	workspaceId: string;
+	status: string;
+	model?: string | null;
+	permissionMode: string;
+	pendingSendId?: string | null;
+	providerSessionId?: string | null;
+	providerSessionPath?: string | null;
+	processState: string;
+	lastSidecarEventAt?: string | null;
+	lastPersistedMessageAt?: string | null;
+	persistedMessageCount: number;
+	persistenceState: string;
+	lastError?: string | null;
+	firstEventReceived: boolean;
+	terminalEventSeen: boolean;
+	stalledSeconds?: number | null;
+};
+
 export type AssigneeStatusSummary = {
 	cardId: string;
 	workspaceId: string;
 	sessionId: string;
+	activeThreadId: string;
+	threadCount: number;
 	assigneeName: string;
 	sessionStatus: string;
+	effectiveStatus: string;
 	latestReport?: AssigneeReportMarker | null;
+	staleThreads: StaleThreadSummary[];
+	recommendedAction: string;
 	summary: string;
+};
+
+export type StaleThreadSummary = {
+	threadId: string;
+	reason: string;
+	lastMessageAt?: string | null;
+};
+
+export type SetCardAssigneeThreadRequest = {
+	goalWorkspaceId: string;
+	cardId: string;
+	threadId: string;
+	reason?: string | null;
+	supersedesThreadId?: string | null;
+};
+
+export type SetCardAssigneeThreadResult = {
+	cardId: string;
+	workspaceId: string;
+	activeThreadId: string;
+	supersededThreadId?: string | null;
+	reason?: string | null;
 };
 
 export type AssigneeSummary = {
@@ -1585,7 +1772,14 @@ export type UiMutationEvent =
 	| { type: "workspaceListChanged" }
 	| { type: "workspaceChanged"; workspaceId: string }
 	| { type: "sessionListChanged"; workspaceId: string }
+	| { type: "sessionModeChanged"; workspaceId: string }
 	| { type: "sessionMessagesChanged"; workspaceId: string; sessionId: string }
+	| {
+			type: "sessionStreamEvent";
+			workspaceId: string;
+			sessionId: string;
+			event: AgentStreamEvent;
+	  }
 	| { type: "contextUsageChanged"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
@@ -1595,6 +1789,7 @@ export type UiMutationEvent =
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
+	| { type: "goalOrchestratorStateChanged"; goalWorkspaceId: string }
 	| {
 			type: "pendingCliSendQueued";
 			pendingSendId: string;
@@ -1816,6 +2011,22 @@ export async function readFileAtRef(
 		workspaceRootPath,
 		filePath,
 		gitRef,
+	});
+}
+
+export async function getFileUnifiedDiff(
+	workspaceRootPath: string,
+	relativePath: string,
+	fromRef?: string | null,
+	toRef?: string | null,
+	cached?: boolean,
+): Promise<string | null> {
+	return await invoke<string | null>("get_file_unified_diff", {
+		workspaceRootPath,
+		relativePath,
+		fromRef: fromRef ?? null,
+		toRef: toRef ?? null,
+		cached: cached ?? false,
 	});
 }
 
@@ -2430,6 +2641,22 @@ export async function listGoalCards(workspaceId: string): Promise<GoalCard[]> {
 	return invoke<GoalCard[]>("list_goal_cards", { workspaceId });
 }
 
+export async function getGoalOrchestratorState(
+	goalWorkspaceId: string,
+): Promise<GoalOrchestratorStatus> {
+	return invoke<GoalOrchestratorStatus>("get_goal_orchestrator_state", {
+		goalWorkspaceId,
+	});
+}
+
+export async function runGoalOrchestratorTick(
+	goalWorkspaceId: string,
+): Promise<GoalOrchestratorTickSummary> {
+	return invoke<GoalOrchestratorTickSummary>("run_goal_orchestrator_tick", {
+		goalWorkspaceId,
+	});
+}
+
 export async function upsertGoalCard(
 	input: UpsertGoalCardInput,
 ): Promise<GoalCard> {
@@ -2471,10 +2698,32 @@ export async function sendAssigneeMessage(
 	});
 }
 
+export async function sendThreadMessage(
+	request: SendThreadMessageRequest,
+): Promise<SendAssigneeMessageResult> {
+	return invoke<SendAssigneeMessageResult>("send_thread_message", {
+		request,
+	});
+}
+
+export async function setCardAssigneeThread(
+	request: SetCardAssigneeThreadRequest,
+): Promise<SetCardAssigneeThreadResult> {
+	return invoke<SetCardAssigneeThreadResult>("set_card_assignee_thread", {
+		request,
+	});
+}
+
 export async function readAssigneeThread(
 	request: ReadAssigneeThreadRequest,
 ): Promise<AssigneeThreadResult> {
 	return invoke<AssigneeThreadResult>("read_assignee_thread", { request });
+}
+
+export async function getThreadRuntimeStatus(
+	request: ThreadRuntimeStatusRequest,
+): Promise<ThreadRuntimeStatus> {
+	return invoke<ThreadRuntimeStatus>("get_thread_runtime_status", { request });
 }
 
 export async function summarizeAssigneeStatus(
@@ -2817,7 +3066,44 @@ export function partKey(part: ExtendedMessagePart): string {
 	return part.id;
 }
 
-export type ExtendedMessagePart = MessagePart | CollapsedGroupPart;
+/**
+ * Frontend-only synthetic part injected between the old session's messages
+ * and the new session's messages after a provider switch with "Bring history".
+ * Never serialized to/from Rust or persisted to the database.
+ */
+export type ProviderSwitchDividerPart = {
+	type: "provider-switch-divider";
+	id: string;
+	fromProvider: AgentProvider;
+	toProvider: AgentProvider;
+};
+
+export type ExtendedMessagePart =
+	| MessagePart
+	| CollapsedGroupPart
+	| ProviderSwitchDividerPart;
+
+/**
+ * Build the synthetic system message that visually separates the old
+ * session's history from the new session's messages after a provider switch.
+ */
+export function buildProviderSwitchDividerMessage(
+	fromProvider: AgentProvider,
+	toProvider: AgentProvider,
+): ThreadMessageLike {
+	return {
+		role: "system",
+		id: "__provider-switch-divider__",
+		content: [
+			{
+				type: "provider-switch-divider",
+				id: "__provider-switch-divider__",
+				fromProvider,
+				toProvider,
+			},
+		],
+	};
+}
 
 /**
  * Mirror of the Rust `MessageRole` enum
@@ -3130,12 +3416,34 @@ export async function createSession(
 	options?: {
 		actionKind?: ActionKind | null;
 		permissionMode?: string | null;
+		surfaceMode?: "thread" | "terminal" | null;
+		runtime?: string | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
-		actionKind: options?.actionKind ?? null,
-		permissionMode: options?.permissionMode ?? null,
+		options: options
+			? {
+					actionKind: options.actionKind ?? null,
+					permissionMode: options.permissionMode ?? null,
+					surfaceMode: options.surfaceMode ?? null,
+					runtime: options.runtime ?? null,
+				}
+			: null,
+		actionKind: null,
+		permissionMode: null,
+	});
+}
+
+export async function updateSessionControl(
+	sessionId: string,
+	controlOwner: NonNullable<WorkspaceSessionSummary["controlOwner"]>,
+	inputPolicy: NonNullable<WorkspaceSessionSummary["inputPolicy"]>,
+): Promise<void> {
+	return invoke("update_session_control", {
+		sessionId,
+		controlOwner,
+		inputPolicy,
 	});
 }
 
@@ -3438,6 +3746,66 @@ export async function spawnTerminal(
 		workspaceId,
 		instanceId,
 		channel,
+	});
+}
+
+export async function spawnSessionTerminal(
+	repoId: string,
+	workspaceId: string,
+	sessionId: string,
+	runtime: string | null,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("spawn_session_terminal", {
+		repoId,
+		workspaceId,
+		sessionId,
+		runtime,
+		channel,
+	});
+}
+
+export async function stopSessionTerminal(
+	repoId: string,
+	workspaceId: string,
+	sessionId: string,
+): Promise<boolean> {
+	return invoke<boolean>("stop_session_terminal", {
+		repoId,
+		workspaceId,
+		sessionId,
+	});
+}
+
+export async function writeSessionTerminalStdin(
+	repoId: string,
+	workspaceId: string,
+	sessionId: string,
+	data: string,
+): Promise<boolean> {
+	return invoke<boolean>("write_session_terminal_stdin", {
+		repoId,
+		workspaceId,
+		sessionId,
+		data,
+	});
+}
+
+export async function resizeSessionTerminal(
+	repoId: string,
+	workspaceId: string,
+	sessionId: string,
+	cols: number,
+	rows: number,
+): Promise<boolean> {
+	return invoke<boolean>("resize_session_terminal", {
+		repoId,
+		workspaceId,
+		sessionId,
+		cols,
+		rows,
 	});
 }
 
