@@ -117,7 +117,7 @@ describe("WorkspacePanel", () => {
 			</TooltipProvider>,
 		);
 
-		await user.click(screen.getByRole("button", { name: "New thread" }));
+		await user.click(screen.getByRole("button", { name: "New session" }));
 		await user.click(screen.getByRole("menuitem", { name: /Chat with AI/ }));
 
 		await waitFor(() => {

@@ -15,6 +15,7 @@ import {
 	getClaudeRateLimits,
 	getCodexRateLimits,
 	getForgeCliStatus,
+	getGoalOrchestratorState,
 	getLiveContextUsage,
 	getSessionContextUsage,
 	getWorkspaceForge,
@@ -60,6 +61,8 @@ export const helmorQueryKeys = {
 	workspaceDetail: (workspaceId: string) =>
 		["workspaceDetail", workspaceId] as const,
 	goalCards: (workspaceId: string) => ["goalCards", workspaceId] as const,
+	goalOrchestratorState: (goalWorkspaceId: string) =>
+		["goalOrchestratorState", goalWorkspaceId] as const,
 	goalChildWorkspaces: (goalWorkspaceId: string) =>
 		["goalChildWorkspaces", goalWorkspaceId] as const,
 	workspaceSessions: (workspaceId: string) =>
@@ -336,6 +339,14 @@ export function goalChildWorkspacesQueryOptions(goalWorkspaceId: string) {
 		queryKey: helmorQueryKeys.goalChildWorkspaces(goalWorkspaceId),
 		queryFn: () => listGoalChildWorkspaces(goalWorkspaceId),
 		initialData: [] as import("./api").WorkspaceDetail[],
+		staleTime: 0,
+	});
+}
+
+export function goalOrchestratorStateQueryOptions(goalWorkspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.goalOrchestratorState(goalWorkspaceId),
+		queryFn: () => getGoalOrchestratorState(goalWorkspaceId),
 		staleTime: 0,
 	});
 }

@@ -11,6 +11,7 @@ pub mod git;
 pub mod global_hotkey;
 pub mod goal_assignees;
 pub mod goal_orchestration;
+pub mod goal_orchestrator;
 pub mod image_store;
 mod import;
 pub mod logging;
@@ -246,6 +247,8 @@ pub fn run() {
             commands::goal_commands::finalize_goal_workspace,
             commands::goal_commands::convert_workspace_to_goal,
             commands::goal_commands::list_goal_cards,
+            commands::goal_commands::get_goal_orchestrator_state,
+            commands::goal_commands::run_goal_orchestrator_tick,
             commands::goal_commands::upsert_goal_card,
             commands::goal_commands::link_goal_card_workspace,
             commands::goal_commands::create_goal_child_workspace,

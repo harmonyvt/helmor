@@ -1,0 +1,12 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: system
+  id: msg-1
+  content_length: 1
+  content:
+    - type: text
+      text: "## Assignee Report Received\n\nCard: Build API\nReport type: completed"
+  status: ~
+  streaming: ~

@@ -52,6 +52,9 @@ pub enum UiMutationEvent {
     SettingsChanged {
         key: Option<String>,
     },
+    GoalOrchestratorStateChanged {
+        goal_workspace_id: String,
+    },
     PendingCliSendQueued {
         pending_send_id: String,
         workspace_id: String,
@@ -135,6 +138,9 @@ mod tests {
                 repo_id: "r".into(),
             },
             UiMutationEvent::SettingsChanged { key: None },
+            UiMutationEvent::GoalOrchestratorStateChanged {
+                goal_workspace_id: "goal".into(),
+            },
             UiMutationEvent::PendingCliSendQueued {
                 pending_send_id: "p1".into(),
                 workspace_id: "w".into(),

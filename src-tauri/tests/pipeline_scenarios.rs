@@ -809,6 +809,21 @@ fn sys_codex_missing_response_item_recovery_notice() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+#[test]
+fn sys_goal_assignee_report_renders_message_body() {
+    let parsed = json!({
+        "type": "goal_assignee_report",
+        "message": "## Assignee Report Received\n\nCard: Build API\nReport type: completed",
+        "excerpt": "## Completed Done"
+    });
+    let msgs = vec![make_record(
+        "s1",
+        "system",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // ============================================================================
 // 7. Merge boundaries
 // ============================================================================

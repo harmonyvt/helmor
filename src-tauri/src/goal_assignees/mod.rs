@@ -2,11 +2,16 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod notifications;
 mod prompt;
 mod report;
 mod resolver;
 mod storage;
 
+pub(crate) use notifications::{
+    maybe_deliver_assignee_report, maybe_notify_missing_report_after_terminal,
+    notify_runtime_issue_for_session,
+};
 use prompt::format_supervisor_update;
 pub use prompt::{assignee_bootstrap_prompt, AssigneeBootstrapPromptInput};
 pub use report::AssigneeReportMarker;
@@ -121,8 +126,11 @@ pub struct ThreadRuntimeStatus {
     pub process_state: String,
     pub last_sidecar_event_at: Option<String>,
     pub last_persisted_message_at: Option<String>,
+    pub persisted_message_count: i64,
+    pub persistence_state: String,
     pub last_error: Option<String>,
     pub first_event_received: bool,
+    pub terminal_event_seen: bool,
     pub stalled_seconds: Option<i64>,
 }
 
@@ -329,10 +337,18 @@ pub fn get_thread_runtime_status(
             |row| row.get(0),
         )
         .unwrap_or(None);
+    let persisted_message_count = persisted_message_count(&conn, &assignee.session.id);
     let stalled_seconds = streaming_stall_seconds(
         &assignee.session,
         runtime.last_sidecar_event_at.as_deref(),
         last_persisted_message_at.as_deref(),
+    );
+    let persistence_state = classify_persistence_state(
+        &assignee.session.status,
+        &runtime.process_state,
+        runtime.terminal_event_seen,
+        runtime.last_error.as_deref(),
+        persisted_message_count,
     );
 
     Ok(ThreadRuntimeStatus {
@@ -343,16 +359,17 @@ pub fn get_thread_runtime_status(
         permission_mode: assignee.session.permission_mode,
         pending_send_id: runtime.pending_send_id,
         provider_session_id: assignee.session.provider_session_id.clone(),
-        provider_session_path: assignee
-            .session
-            .provider_session_id
-            .as_ref()
-            .map(|id| format!("~/.pi/agent/sessions/.../{id}.jsonl")),
+        provider_session_path: provider_session_path(
+            assignee.session.provider_session_id.as_deref(),
+        ),
         process_state: runtime.process_state,
         last_sidecar_event_at: runtime.last_sidecar_event_at,
         last_persisted_message_at,
+        persisted_message_count,
+        persistence_state,
         last_error: runtime.last_error,
         first_event_received: runtime.first_event_received,
+        terminal_event_seen: runtime.terminal_event_seen,
         stalled_seconds,
     })
 }
@@ -424,14 +441,34 @@ pub fn summarize_assignee_status(
     let messages = load_assignee_messages(&assignee.session.id, None)?;
     let latest_report = latest_report_marker(&messages);
     let stale_threads = detect_stale_threads(&sessions, &assignee.session.id)?;
-    let effective_status = latest_report
-        .as_ref()
-        .map(|report| report.report_type.clone())
-        .or_else(|| assignee.session.thread_status.clone())
-        .unwrap_or_else(|| assignee.session.status.clone());
+    let runtime = crate::background_agents::get_runtime_status(&assignee.session.id);
+    let conn = crate::models::db::read_conn()?;
+    let persisted_message_count = persisted_message_count(&conn, &assignee.session.id);
+    let persistence_state = classify_persistence_state(
+        &assignee.session.status,
+        &runtime.process_state,
+        runtime.terminal_event_seen,
+        runtime.last_error.as_deref(),
+        persisted_message_count,
+    );
+    let persistence_problem = matches!(
+        persistence_state.as_str(),
+        "failed_persist" | "provider_completed_db_missing"
+    );
+    let effective_status = if persistence_problem {
+        persistence_state.clone()
+    } else {
+        latest_report
+            .as_ref()
+            .map(|report| report.report_type.clone())
+            .or_else(|| assignee.session.thread_status.clone())
+            .unwrap_or_else(|| assignee.session.status.clone())
+    };
     let recommended_action = if effective_status == "blocked" {
         "Read the blocker and either answer it or start a replacement thread if the issue is unrecoverable."
             .to_string()
+    } else if persistence_problem {
+        "Check the thread runtime status and retry after DB persistence is healthy; provider output may exist outside Helmor's durable thread.".to_string()
     } else if !stale_threads.is_empty() {
         "Continue supervising the active thread and avoid sending follow-ups to stale or superseded threads."
             .to_string()
@@ -441,10 +478,17 @@ pub fn summarize_assignee_status(
     } else {
         "Continue normal supervision on the active assignee thread.".to_string()
     };
-    let summary = latest_report
-        .as_ref()
-        .map(|report| format!("{}: {}", report.report_type, report.excerpt))
-        .unwrap_or_else(|| "No milestone report found yet.".to_string());
+    let summary = if persistence_problem {
+        format!(
+            "{}: provider terminal state and Helmor DB persistence diverged.",
+            persistence_state
+        )
+    } else {
+        latest_report
+            .as_ref()
+            .map(|report| format!("{}: {}", report.report_type, report.excerpt))
+            .unwrap_or_else(|| "No milestone report found yet.".to_string())
+    };
 
     Ok(AssigneeStatusSummary {
         card_id: assignee.card_id,
@@ -545,6 +589,51 @@ fn streaming_stall_seconds(
     Some((chrono::Utc::now() - started_at).num_seconds().max(0))
 }
 
+fn persisted_message_count(conn: &rusqlite::Connection, session_id: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM session_messages WHERE session_id = ?1",
+        rusqlite::params![session_id],
+        |row| row.get(0),
+    )
+    .unwrap_or(0)
+}
+
+fn provider_session_path(provider_session_id: Option<&str>) -> Option<String> {
+    let id = provider_session_id?.trim();
+    if id.is_empty() {
+        return None;
+    }
+    if id.starts_with('/') || id.starts_with("~/") || id.ends_with(".jsonl") {
+        return Some(id.to_string());
+    }
+    Some(format!("~/.pi/agent/sessions/.../{id}.jsonl"))
+}
+
+fn classify_persistence_state(
+    session_status: &str,
+    process_state: &str,
+    terminal_event_seen: bool,
+    last_error: Option<&str>,
+    persisted_message_count: i64,
+) -> String {
+    if process_state == "failed_persist" {
+        return "failed_persist".to_string();
+    }
+    if last_error.is_some() {
+        return "runtime_error".to_string();
+    }
+    if terminal_event_seen && persisted_message_count == 0 {
+        return "provider_completed_db_missing".to_string();
+    }
+    if session_status == "streaming" && persisted_message_count == 0 {
+        return "provider_streaming_db_pending".to_string();
+    }
+    if terminal_event_seen {
+        return "completed".to_string();
+    }
+    "synced".to_string()
+}
+
 fn detect_stale_threads(
     sessions: &[sessions::WorkspaceSessionSummary],
     active_thread_id: &str,
@@ -615,4 +704,29 @@ fn assignee_name(session: &sessions::WorkspaceSessionSummary) -> String {
         .clone()
         .or_else(|| session.model.clone())
         .unwrap_or_else(|| "assignee".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_persistence_state, provider_session_path};
+
+    #[test]
+    fn provider_session_path_preserves_absolute_pi_jsonl_path() {
+        assert_eq!(
+            provider_session_path(Some("/Users/harmony/.pi/agent/sessions/run.jsonl")).as_deref(),
+            Some("/Users/harmony/.pi/agent/sessions/run.jsonl")
+        );
+    }
+
+    #[test]
+    fn persistence_state_reports_terminal_without_durable_rows() {
+        assert_eq!(
+            classify_persistence_state("idle", "completed", true, None, 0),
+            "provider_completed_db_missing"
+        );
+        assert_eq!(
+            classify_persistence_state("idle", "failed_persist", true, None, 2),
+            "failed_persist"
+        );
+    }
 }

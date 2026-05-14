@@ -1,5 +1,7 @@
 use super::support::*;
 use crate::goal_assignees::{self, SendAssigneeMessageRequest};
+use crate::pipeline::types::{CollectedTurn, MessageRole};
+use serde_json::json;
 
 fn insert_goal_with_child(connection: &Connection, repo_id: &str) {
     connection
@@ -39,6 +41,36 @@ fn insert_goal_with_child(connection: &Connection, repo_id: &str) {
             r#"
             INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode)
             VALUES ('session-assignee', '00000000-0000-0000-0000-000000000002', 'Build API', 'codex', 'streaming', 'gpt-5.4', 'default')
+            "#,
+            [],
+        )
+        .unwrap();
+}
+
+fn insert_active_supervisor_session(connection: &Connection) {
+    connection
+        .execute(
+            r#"
+            INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode)
+            VALUES ('session-supervisor', '00000000-0000-0000-0000-000000000001', 'Goal supervisor', 'pi', 'idle', 'gpt-5.4', 'default')
+            "#,
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET active_session_id = 'session-supervisor' WHERE id = '00000000-0000-0000-0000-000000000001'",
+            [],
+        )
+        .unwrap();
+}
+
+fn insert_goal_card(connection: &Connection) {
+    connection
+        .execute(
+            r#"
+            INSERT INTO goal_cards (id, goal_workspace_id, title, lane, child_workspace_id)
+            VALUES ('goal-card-assignee', '00000000-0000-0000-0000-000000000001', 'Build API', 'in-progress', '00000000-0000-0000-0000-000000000002')
             "#,
             [],
         )
@@ -91,6 +123,131 @@ fn send_assignee_message_queues_follow_up_without_changing_lane() {
         )
         .unwrap();
     assert_eq!(lane, "in-progress");
+}
+
+#[test]
+fn persisted_assignee_report_notifies_supervisor_once_with_priority_classification() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+    insert_active_supervisor_session(&connection);
+    insert_goal_card(&connection);
+
+    let content = json!({
+        "type": "assistant",
+        "message": {
+            "id": "turn-report",
+            "role": "assistant",
+            "content": [{
+                "type": "text",
+                "text": "## Progress\nImplemented the storage path.\n\n## Completed\nReady for review."
+            }]
+        }
+    });
+    let turn = CollectedTurn {
+        id: "assistant-report".to_string(),
+        role: MessageRole::Assistant,
+        content_json: content.to_string(),
+    };
+
+    crate::agents::persist_collected_turn_message(&connection, "session-assignee", &turn).unwrap();
+    crate::agents::persist_collected_turn_message(&connection, "session-assignee", &turn).unwrap();
+
+    let (notification_count, report_type): (i64, String) = connection
+        .query_row(
+            "SELECT COUNT(*), MAX(report_type) FROM goal_supervisor_notifications",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(notification_count, 1);
+    assert_eq!(report_type, "completed");
+
+    let supervisor_messages: Vec<String> = connection
+        .prepare(
+            "SELECT content FROM session_messages WHERE session_id = 'session-supervisor' ORDER BY sent_at",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(supervisor_messages.len(), 1);
+    let supervisor_payload: serde_json::Value =
+        serde_json::from_str(&supervisor_messages[0]).unwrap();
+    assert_eq!(supervisor_payload["type"], "goal_assignee_report");
+    assert_eq!(supervisor_payload["reportType"], "completed");
+    assert!(supervisor_payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("## Assignee Report Received"));
+    assert!(supervisor_payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("Card: Build API"));
+
+    let last_report_id: String = connection
+        .query_row(
+            "SELECT last_milestone_report_id FROM sessions WHERE id = 'session-assignee'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(last_report_id, "assistant-report");
+}
+
+#[test]
+fn runtime_issue_notifies_supervisor_when_no_report_was_persisted() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+    insert_active_supervisor_session(&connection);
+    insert_goal_card(&connection);
+
+    let notification_id = goal_assignees::notify_runtime_issue_for_session(
+        "session-assignee",
+        "missing_milestone_report",
+        "Provider completed, but no milestone report was persisted.",
+    )
+    .unwrap()
+    .expect("runtime issue should create a notification");
+    let duplicate = goal_assignees::notify_runtime_issue_for_session(
+        "session-assignee",
+        "missing_milestone_report",
+        "Provider completed, but no milestone report was persisted.",
+    )
+    .unwrap()
+    .expect("existing runtime issue should be returned");
+    assert_eq!(duplicate, notification_id);
+
+    let notification_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM goal_supervisor_notifications WHERE report_type = 'runtime_issue'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(notification_count, 1);
+
+    let supervisor_payload: String = connection
+        .query_row(
+            "SELECT content FROM session_messages WHERE session_id = 'session-supervisor'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let supervisor_payload: serde_json::Value = serde_json::from_str(&supervisor_payload).unwrap();
+    assert_eq!(supervisor_payload["type"], "goal_assignee_runtime_issue");
+    assert!(supervisor_payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("## Assignee Runtime Issue"));
 }
 
 #[test]
@@ -222,6 +379,38 @@ fn read_assignee_thread_resolves_goal_card_child_workspace() {
     assert_eq!(result.session_id, "session-assignee");
     assert_eq!(result.workspace_id, "00000000-0000-0000-0000-000000000002");
     assert_eq!(result.messages.len(), 1);
+}
+
+#[test]
+fn thread_runtime_status_keeps_absolute_pi_session_paths_intact() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+    connection
+        .execute(
+            "UPDATE sessions SET provider_session_id = '/Users/harmony/.pi/agent/sessions/run.jsonl' WHERE id = 'session-assignee'",
+            [],
+        )
+        .unwrap();
+
+    let status = goal_assignees::get_thread_runtime_status(
+        crate::goal_assignees::ThreadRuntimeStatusRequest {
+            goal_workspace_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            workspace_id: "00000000-0000-0000-0000-000000000002".to_string(),
+            thread_id: "session-assignee".to_string(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        status.provider_session_path.as_deref(),
+        Some("/Users/harmony/.pi/agent/sessions/run.jsonl")
+    );
+    assert_eq!(status.persisted_message_count, 0);
+    assert!(!status.terminal_event_seen);
 }
 
 #[test]

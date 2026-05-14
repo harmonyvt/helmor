@@ -124,6 +124,15 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
+        if matches!(
+            msg_type,
+            Some("goal_assignee_report") | Some("goal_assignee_runtime_issue")
+        ) {
+            result.push(convert_goal_assignee_notification_msg(msg, parsed));
+            i += 1;
+            continue;
+        }
+
         // Claude rate-limit notice. The SDK fires this on EVERY user
         // turn to report current 5h/24h utilization with `status =
         // "allowed"`, which is a usage gauge — we hide it because
@@ -423,6 +432,22 @@ fn map_stop_reason(parsed: Option<&Value>) -> MessageStatus {
             reason: Some(other.to_string()),
         },
     }
+}
+
+fn convert_goal_assignee_notification_msg(
+    msg: &IntermediateMessage,
+    parsed: Option<&Value>,
+) -> ThreadMessageLike {
+    let text = parsed
+        .and_then(|p| p.get("message"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            parsed
+                .and_then(|p| p.get("excerpt"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("Assignee orchestration update");
+    make_system(msg, text)
 }
 
 // ---------------------------------------------------------------------------
