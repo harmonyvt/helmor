@@ -71,6 +71,7 @@ export function GoalWorkspaceContainer({
 	activeEditorPath,
 	onOpenEditorFile,
 	renderAiSurface,
+	onSendingWorkspacesChange,
 }: GoalWorkspaceContainerProps) {
 	const queryClient = useQueryClient();
 
@@ -395,6 +396,7 @@ export function GoalWorkspaceContainer({
 		kanbanSnapshot,
 		canCreateCards: isGoalReadyForChildren,
 		onClose: () => setPiState("dock"),
+		onSendingWorkspacesChange,
 	};
 
 	const renderGoalAiSurface =
@@ -408,6 +410,7 @@ export function GoalWorkspaceContainer({
 				goalDescription={props.goalDescription}
 				canCreateCards={isGoalReadyForChildren}
 				onClose={props.onClose}
+				onSendingWorkspacesChange={props.onSendingWorkspacesChange}
 				onCardCreated={(createdWorkspace) => setSelectedId(createdWorkspace.id)}
 			/>
 		));

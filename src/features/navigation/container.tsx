@@ -13,6 +13,7 @@ type WorkspacesSidebarContainerProps = {
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
+	onOpenGoalAiSurface?: (goalWorkspaceId: string) => void;
 	pushWorkspaceToast: (
 		description: string,
 		title?: string,
@@ -32,6 +33,7 @@ export const WorkspacesSidebarContainer = memo(
 		newWorkspaceShortcut,
 		addRepositoryShortcut,
 		onSelectWorkspace,
+		onOpenGoalAiSurface,
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
 		const {
@@ -128,6 +130,7 @@ export const WorkspacesSidebarContainer = memo(
 						status,
 					);
 				}}
+				onOpenGoalAiSurface={onOpenGoalAiSurface}
 			/>
 		);
 	},

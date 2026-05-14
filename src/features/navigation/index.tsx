@@ -141,6 +141,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSetLayoutMode,
 	projectGroups,
 	goalProjection,
+	onOpenGoalAiSurface,
 }: {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
@@ -196,6 +197,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSetLayoutMode?: (mode: SidebarLayoutMode) => void;
 	projectGroups?: ProjectGroup[];
 	goalProjection?: GoalProjection | null;
+	onOpenGoalAiSurface?: (goalWorkspaceId: string) => void;
 }) {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
@@ -998,6 +1000,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										onTogglePin,
 										onSetWorkspaceStatus,
 										onAssignWorkspaceToGoal,
+										onOpenGoalAiSurface,
 										onDragStartWorkspace: handleDragStartWorkspace,
 										onDragEndWorkspace: handleDragEndWorkspace,
 										archivingWorkspaceIds,

@@ -47,6 +47,9 @@ type GoalsAiPanelProps = {
 	onClose: () => void;
 	/** Called when Pi creates a workspace card so the parent can select it. */
 	onCardCreated?: (ws: WorkspaceDetail) => void;
+	/** Reports the set of workspace IDs currently streaming (the goal workspace
+	 *  ID itself) so the sidebar folder ring stays in sync. */
+	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
 };
 
 const piOnlyModelFilter = (model: AgentModelOption) => model.provider === "pi";
@@ -81,6 +84,7 @@ export function GoalsAiPanel({
 	canCreateCards = true,
 	onClose,
 	onCardCreated,
+	onSendingWorkspacesChange,
 }: GoalsAiPanelProps) {
 	const queryClient = useQueryClient();
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
@@ -412,6 +416,7 @@ export function GoalsAiPanel({
 				displayedSessionId={displayedSessionId}
 				onSelectSession={handleSelectSession}
 				onResolveDisplayedSession={handleResolveDisplayedSession}
+				onSendingWorkspacesChange={onSendingWorkspacesChange}
 				modelFilter={piOnlyModelFilter}
 				buildSendRequestExtras={({ model }) => {
 					activeSupervisorModelIdRef.current = model.id;
