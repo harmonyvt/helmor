@@ -51,6 +51,27 @@ type GoalsAiPanelProps = {
 
 const piOnlyModelFilter = (model: AgentModelOption) => model.provider === "pi";
 
+function buildKanbanToolError(
+	event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
+	error: unknown,
+) {
+	const args = event.args;
+	const message = error instanceof Error ? error.message : String(error);
+	return {
+		tool: event.tool,
+		toolCallId: event.toolCallId,
+		workspaceId: event.workspaceId,
+		cardTitle: typeof args.title === "string" ? args.title : null,
+		cardId:
+			typeof args.cardId === "string"
+				? args.cardId
+				: typeof args.card_id === "string"
+					? args.card_id
+					: null,
+		message,
+	};
+}
+
 export function GoalsAiPanel({
 	workspaceId,
 	cards,
@@ -79,10 +100,20 @@ export function GoalsAiPanel({
 		null,
 	);
 	const activeSupervisorModelIdRef = useRef<string | null>(null);
+	const kanbanMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
 
 	const handleSelectSession = useCallback((sessionId: string | null) => {
 		setSelectedSessionId(sessionId);
 		setDisplayedSessionId(sessionId);
+	}, []);
+
+	const enqueueKanbanMutation = useCallback(<T,>(fn: () => Promise<T>) => {
+		const next = kanbanMutationQueueRef.current.then(fn, fn);
+		kanbanMutationQueueRef.current = next.then(
+			() => undefined,
+			() => undefined,
+		);
+		return next;
 	}, []);
 
 	const handleResolveDisplayedSession = useCallback(
@@ -154,31 +185,40 @@ export function GoalsAiPanel({
 						allowedModelIds: assignedModelId ? [assignedModelId] : [],
 						suggestedModelIds: assignedModelId ? [assignedModelId] : [],
 					};
-					const created = await createGoalChildWorkspaceAndStart({
-						goalWorkspace: workspaceId,
-						title: String(args.title ?? "Untitled"),
-						description:
-							typeof args.description === "string" ? args.description : null,
-						lane: String(args.lane ?? "backlog") as WorkspaceStatus,
-						targetBranch:
-							typeof args.targetBranch === "string" ? args.targetBranch : null,
-						assignedProvider: handoffModel.assignedProvider,
-						assignedModelId: handoffModel.assignedModelId,
-						assignedEffortLevel:
-							typeof args.assignedEffortLevel === "string"
-								? args.assignedEffortLevel
-								: null,
-						prompt: typeof args.prompt === "string" ? args.prompt : null,
-						permissionMode:
-							typeof args.permissionMode === "string"
-								? args.permissionMode
-								: null,
-						finalize: true,
-					});
-					await invalidateBoard();
-					const children = await listGoalChildWorkspaces(workspaceId);
-					const newWorkspace = children.find(
-						(child) => child.id === created.workspaceId,
+					const { created, newWorkspace } = await enqueueKanbanMutation(
+						async () => {
+							const created = await createGoalChildWorkspaceAndStart({
+								goalWorkspace: workspaceId,
+								title: String(args.title ?? "Untitled"),
+								description:
+									typeof args.description === "string"
+										? args.description
+										: null,
+								lane: String(args.lane ?? "backlog") as WorkspaceStatus,
+								targetBranch:
+									typeof args.targetBranch === "string"
+										? args.targetBranch
+										: null,
+								assignedProvider: handoffModel.assignedProvider,
+								assignedModelId: handoffModel.assignedModelId,
+								assignedEffortLevel:
+									typeof args.assignedEffortLevel === "string"
+										? args.assignedEffortLevel
+										: null,
+								prompt: typeof args.prompt === "string" ? args.prompt : null,
+								permissionMode:
+									typeof args.permissionMode === "string"
+										? args.permissionMode
+										: null,
+								finalize: true,
+							});
+							await invalidateBoard();
+							const children = await listGoalChildWorkspaces(workspaceId);
+							const newWorkspace = children.find(
+								(child) => child.id === created.workspaceId,
+							);
+							return { created, newWorkspace };
+						},
 					);
 					if (newWorkspace) {
 						onCardCreated?.(newWorkspace);
@@ -190,26 +230,30 @@ export function GoalsAiPanel({
 					const childWorkspaceId = String(
 						args.cardId ?? args.workspaceId ?? "",
 					);
-					await setGoalChildWorkspaceStatus(
-						workspaceId,
-						childWorkspaceId,
-						String(args.lane) as WorkspaceStatus,
-					);
-					await invalidateBoard();
-					result = { workspaceId: childWorkspaceId, lane: args.lane };
+					result = await enqueueKanbanMutation(async () => {
+						await setGoalChildWorkspaceStatus(
+							workspaceId,
+							childWorkspaceId,
+							String(args.lane) as WorkspaceStatus,
+						);
+						await invalidateBoard();
+						return { workspaceId: childWorkspaceId, lane: args.lane };
+					});
 				} else if (event.tool === "update_kanban_card") {
-					const childWorkspaceId = String(
-						args.cardId ?? args.workspaceId ?? "",
-					);
-					if (args.title) {
-						const sessions = await loadWorkspaceSessions(childWorkspaceId);
-						const primary = sessions[0];
-						if (primary) {
-							await renameSession(primary.id, String(args.title));
+					result = await enqueueKanbanMutation(async () => {
+						const childWorkspaceId = String(
+							args.cardId ?? args.workspaceId ?? "",
+						);
+						if (args.title) {
+							const sessions = await loadWorkspaceSessions(childWorkspaceId);
+							const primary = sessions[0];
+							if (primary) {
+								await renameSession(primary.id, String(args.title));
+							}
 						}
-					}
-					await invalidateBoard();
-					result = { workspaceId: childWorkspaceId };
+						await invalidateBoard();
+						return { workspaceId: childWorkspaceId };
+					});
 				} else if (event.tool === "list_threads") {
 					result = await loadWorkspaceSessions(String(args.workspaceId));
 				} else if (event.tool === "create_thread") {
@@ -291,20 +335,23 @@ export function GoalsAiPanel({
 					});
 				} else if (event.tool === "set_card_assignee_thread") {
 					const cardId = String(args.cardId ?? args.card_id ?? "");
-					result = await setCardAssigneeThread({
-						goalWorkspaceId: workspaceId,
-						cardId,
-						threadId: String(args.threadId ?? args.thread_id ?? ""),
-						reason: typeof args.reason === "string" ? args.reason : null,
-						supersedesThreadId:
-							typeof args.supersedesThreadId === "string"
-								? args.supersedesThreadId
-								: typeof args.supersedes_thread_id === "string"
-									? args.supersedes_thread_id
-									: null,
-					});
-					await queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceSessions(cardId),
+					result = await enqueueKanbanMutation(async () => {
+						const result = await setCardAssigneeThread({
+							goalWorkspaceId: workspaceId,
+							cardId,
+							threadId: String(args.threadId ?? args.thread_id ?? ""),
+							reason: typeof args.reason === "string" ? args.reason : null,
+							supersedesThreadId:
+								typeof args.supersedesThreadId === "string"
+									? args.supersedesThreadId
+									: typeof args.supersedes_thread_id === "string"
+										? args.supersedes_thread_id
+										: null,
+						});
+						await queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceSessions(cardId),
+						});
+						return result;
 					});
 				} else if (event.tool === "read_assignee_thread") {
 					result = await readAssigneeThread({
@@ -341,12 +388,19 @@ export function GoalsAiPanel({
 			} catch (error) {
 				await sendKanbanToolResult(
 					event.toolCallId,
-					String(error instanceof Error ? error.message : error),
+					buildKanbanToolError(event, error),
 					true,
 				);
 			}
 		},
-		[workspaceId, queryClient, onCardCreated, canCreateCards, piModels],
+		[
+			workspaceId,
+			queryClient,
+			onCardCreated,
+			canCreateCards,
+			piModels,
+			enqueueKanbanMutation,
+		],
 	);
 
 	return (

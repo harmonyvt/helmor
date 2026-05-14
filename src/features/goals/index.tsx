@@ -68,6 +68,8 @@ export function GoalWorkspaceContainer({
 	headerLeading,
 	onSelectWorkspace,
 	onSelectWorkspaceSession,
+	activeEditorPath,
+	onOpenEditorFile,
 	renderAiSurface,
 }: GoalWorkspaceContainerProps) {
 	const queryClient = useQueryClient();
@@ -533,7 +535,10 @@ export function GoalWorkspaceContainer({
 			{/* ── CHANGES tab ───────────────────────────────────────────────────── */}
 			{activeTab === "changes" && (
 				<GoalChangesView
+					goalWorkspace={workspace}
 					workspaces={childWorkspaces}
+					activeEditorPath={activeEditorPath}
+					onOpenEditorFile={onOpenEditorFile}
 					onSelectWorkspace={(ws) => {
 						setActiveTab("board");
 						handleSelectChildWorkspace(ws);

@@ -1,7 +1,7 @@
 use tauri::AppHandle;
 
 use crate::{
-    git_watcher,
+    db, git_watcher,
     ui_sync::{self, UiMutationEvent},
     workspaces,
 };
@@ -175,7 +175,10 @@ pub async fn create_goal_child_workspace(
     request: workspaces::GoalChildWorkspaceRequest,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
     let goal_workspace_id = request.goal_workspace_id.clone();
-    let result = run_blocking(move || workspaces::create_goal_child_workspace(request)).await?;
+    let result = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || workspaces::create_goal_child_workspace(request)).await?
+    };
     publish_goal_child_workspace_changes(
         &app,
         goal_workspace_id,
@@ -191,10 +194,11 @@ pub async fn create_goal_child_workspace_and_start(
     request: crate::goal_orchestration::GoalChildWorkspaceCreateParams,
 ) -> CmdResult<crate::goal_orchestration::GoalChildWorkspaceCreateResult> {
     let goal_workspace_ref = request.goal_workspace.clone();
-    let prepared = run_blocking(move || {
-        crate::goal_orchestration::prepare_goal_child_workspace_start(request)
-    })
-    .await?;
+    let prepared = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || crate::goal_orchestration::prepare_goal_child_workspace_start(request))
+            .await?
+    };
     let mut result = prepared.result;
     if let Some(send_params) = prepared.send_params {
         let receipt = crate::background_agents::enqueue(app.clone(), send_params)?;

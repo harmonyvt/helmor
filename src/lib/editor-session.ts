@@ -4,6 +4,8 @@ export type DiffOpenOptions = {
 	fileStatus: DiffFileStatus;
 	originalRef?: string;
 	modifiedRef?: string;
+	workspaceRootPath?: string | null;
+	workspaceId?: string | null;
 };
 
 export type EditorSessionState = {
@@ -22,6 +24,8 @@ export type EditorSessionState = {
 	originalRef?: string;
 	/** Git ref for the modified (right) side. Omit to read from working tree. */
 	modifiedRef?: string;
+	/** Root to use for git-backed reads when opening a diff outside the selected workspace. */
+	workspaceRootPath?: string | null;
 };
 
 export type InspectorFileItem = {
