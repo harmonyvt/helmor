@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type TerminalHandle,
@@ -5,6 +6,8 @@ import {
 } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
 import {
+	captureSessionTerminal,
+	getSessionTerminalStatus,
 	renameSession,
 	updateSessionControl,
 	type WorkspaceDetail,
@@ -58,6 +61,28 @@ export function SessionTerminalSurface({
 	const inputPolicy = session.inputPolicy ?? "writable";
 	const isAgentOwned = controlOwner !== "user";
 	const writable = inputPolicy === "writable";
+	const tmuxStatusQuery = useQuery({
+		queryKey: ["sessionTerminalStatus", workspaceId, session.id],
+		queryFn: () => getSessionTerminalStatus(workspaceId!, session.id),
+		enabled: Boolean(workspaceId),
+		refetchInterval: status === "running" ? 3000 : false,
+	});
+	const tmuxStatus = tmuxStatusQuery.data;
+	// Show current command only when it differs from the expected runtime
+	// (e.g. agent launched a sub-process). Hide client count and other
+	// technical tmux details — they're noise for the vast majority of users.
+	const tmuxLabel = (() => {
+		if (!tmuxStatus?.available) return null;
+		if (tmuxStatus.dead) return null; // rendered separately as a "pane dead" badge
+		if (
+			tmuxStatus.exists &&
+			tmuxStatus.currentCommand &&
+			tmuxStatus.currentCommand !== runtime
+		) {
+			return tmuxStatus.currentCommand;
+		}
+		return null;
+	})();
 
 	useEffect(() => {
 		lastQueuedTitleRef.current = session.title;
@@ -134,6 +159,17 @@ export function SessionTerminalSurface({
 		stopSessionTerminalProcess(repoId, workspaceId, session.id);
 	}, [repoId, session.id, workspaceId]);
 
+	const handleCapture = useCallback(async () => {
+		if (!workspaceId) return;
+		const tail = await captureSessionTerminal(workspaceId, session.id, 120);
+		const terminal = termRef.current;
+		if (!terminal) return;
+		terminal.clear();
+		terminal.write(
+			tail || "\r\n\x1b[2mNo tmux pane output captured.\x1b[0m\r\n",
+		);
+	}, [session.id, workspaceId]);
+
 	const handleTakeControl = useCallback(() => {
 		void updateSessionControl(session.id, "user", "writable");
 	}, [session.id]);
@@ -184,13 +220,41 @@ export function SessionTerminalSurface({
 					</span>
 				</div>
 				<div className="flex shrink-0 items-center gap-2">
-					<span className="text-muted-foreground">
+					<span
+						className={cn(
+							"text-muted-foreground",
+							status === "new" && "animate-pulse",
+						)}
+					>
 						{status === "running"
 							? "Running"
 							: status === "exited"
 								? "Exited"
-								: "Starting"}
+								: "Starting…"}
 					</span>
+					{tmuxStatus?.dead ? (
+						<span className="text-[11px] text-destructive/80">pane dead</span>
+					) : tmuxLabel ? (
+						<span className="text-muted-foreground">{tmuxLabel}</span>
+					) : null}
+					{/* Keep Capture visible but disabled when tmux is available yet the
+					    session hasn't started — this ensures users can discover it. */}
+					{tmuxStatus?.available ? (
+						<Button
+							size="xs"
+							variant="ghost"
+							className="cursor-pointer"
+							disabled={!tmuxStatus.exists}
+							onClick={handleCapture}
+							title={
+								tmuxStatus.exists
+									? "Capture the last 120 lines from the tmux pane"
+									: "Available once the terminal is running"
+							}
+						>
+							Capture
+						</Button>
+					) : null}
 					{isAgentOwned ? (
 						<Button
 							size="xs"
@@ -215,8 +279,9 @@ export function SessionTerminalSurface({
 			</div>
 			{isAgentOwned ? (
 				<div className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-950 dark:text-amber-100">
-					{ownerLabel(session)} controls this terminal. Request control before
-					typing.
+					Controlled by {ownerLabel(session)} — click{" "}
+					<strong className="font-semibold">Take Control</strong> to type in
+					this terminal.
 				</div>
 			) : null}
 			<div className="min-h-0 flex-1">
