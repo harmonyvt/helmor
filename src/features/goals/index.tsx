@@ -23,6 +23,8 @@ import { createGoalKanbanSnapshot } from "./board-model";
 import { GoalHeader } from "./header";
 import { GoalMetaSheet } from "./metadata-sheet";
 import { AddWorkspacePanel, WorkspaceDetailPanel } from "./panels";
+import { GoalPiChip } from "./pi-chip";
+import { useGoalPiState } from "./pi-state-context";
 import type { GoalAiSurfaceProps, GoalWorkspaceContainerProps } from "./types";
 
 const GOALS_AI_PANEL_WIDTH_KEY = "helmor.goalsAiPanelWidth";
@@ -61,9 +63,13 @@ export function GoalWorkspaceContainer({
 	renderAiSurface,
 }: GoalWorkspaceContainerProps) {
 	const queryClient = useQueryClient();
+
+	// Pi state lives in context (GoalPiStateProvider) so it survives navigation
+	// between this goal board and child workspace views.
+	const { piState, setPiState, unreadCount } = useGoalPiState();
+
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [showAddPanel, setShowAddPanel] = useState(false);
-	const [showAiPanel, setShowAiPanel] = useState(false);
 	const [showGoalSheet, setShowGoalSheet] = useState(false);
 	const [newWorkspaceTitle, setNewWorkspaceTitle] = useState("");
 	const [dragState, setDragState] = useState<DragState>(null);
@@ -267,9 +273,10 @@ export function GoalWorkspaceContainer({
 		(childWorkspace: WorkspaceDetail) => {
 			setSelectedId(childWorkspace.id);
 			setShowAddPanel(false);
-			setShowAiPanel(false);
+			// Minimise Pi to dock — don't destroy it. The chip stays in the header.
+			setPiState("dock");
 		},
-		[],
+		[setPiState],
 	);
 
 	const handleSelectAssignee = useCallback(
@@ -284,7 +291,11 @@ export function GoalWorkspaceContainer({
 		[handleSelectChildWorkspace, onSelectWorkspaceSession],
 	);
 
-	const isPanelOpen = selectedWorkspace !== null || showAddPanel || showAiPanel;
+	// Panel is open when a card is selected, the add-card form is open, or Pi is
+	// in expanded (panel) mode.
+	const isPanelOpen =
+		selectedWorkspace !== null || showAddPanel || piState === "panel";
+
 	const goalTitle = workspace?.goalTitle ?? workspace?.title ?? "Goal";
 	const goalDescription = workspace?.goalDescription ?? null;
 	const isGoalReadyForChildren = Boolean(
@@ -304,7 +315,7 @@ export function GoalWorkspaceContainer({
 		goalDescription,
 		kanbanSnapshot,
 		canCreateCards: isGoalReadyForChildren,
-		onClose: () => setShowAiPanel(false),
+		onClose: () => setPiState("dock"),
 	};
 
 	const renderGoalAiSurface =
@@ -321,6 +332,18 @@ export function GoalWorkspaceContainer({
 				onCardCreated={(createdWorkspace) => setSelectedId(createdWorkspace.id)}
 			/>
 		));
+
+	const handlePiChipClick = useCallback(() => {
+		if (!isGoalReadyForChildren) return;
+		if (piState === "panel") {
+			setPiState("dock");
+		} else {
+			// Expanding Pi to panel clears card selection / add panel.
+			setSelectedId(null);
+			setShowAddPanel(false);
+			setPiState("panel");
+		}
+	}, [isGoalReadyForChildren, piState, setPiState]);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
@@ -346,18 +369,20 @@ export function GoalWorkspaceContainer({
 				setupScriptState={setupScriptState}
 				canCreateCards={isGoalReadyForChildren}
 				onEditGoal={() => setShowGoalSheet(true)}
-				onShowAi={() => {
-					if (!isGoalReadyForChildren) return;
-					setShowAiPanel((isOpen) => !isOpen);
-					setSelectedId(null);
-					setShowAddPanel(false);
-				}}
 				onShowAddCard={() => {
 					if (!isGoalReadyForChildren) return;
 					setShowAddPanel(true);
 					setSelectedId(null);
-					setShowAiPanel(false);
+					setPiState("dock");
 				}}
+				headerActions={
+					<GoalPiChip
+						piState={piState}
+						unreadCount={unreadCount}
+						disabled={!isGoalReadyForChildren}
+						onClick={handlePiChipClick}
+					/>
+				}
 			/>
 
 			<div className="flex min-h-0 flex-1 overflow-hidden">
@@ -383,9 +408,9 @@ export function GoalWorkspaceContainer({
 				{isPanelOpen ? (
 					<aside
 						className="relative flex min-h-0 shrink-0 flex-col border-l border-border/70 bg-sidebar/70"
-						style={{ width: showAiPanel ? aiPanelWidth : 288 }}
+						style={{ width: piState === "panel" ? aiPanelWidth : 288 }}
 					>
-						{showAiPanel ? (
+						{piState === "panel" ? (
 							<>
 								<div
 									role="separator"

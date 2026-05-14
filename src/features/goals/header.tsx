@@ -1,5 +1,4 @@
 import {
-	Bot,
 	CircleAlert,
 	GitPullRequestDraft,
 	LoaderCircle,
@@ -31,9 +30,10 @@ type GoalHeaderProps = {
 	hasBranch?: boolean;
 	hasTargetBranch?: boolean;
 	onEditGoal: () => void;
-	onShowAi: () => void;
 	onShowAddCard: () => void;
 	canCreateCards?: boolean;
+	/** Rendered in the right action area — use this to pass the Pi chip. */
+	headerActions?: React.ReactNode;
 };
 
 function prAccentClass(prSyncState?: PrSyncState | null) {
@@ -153,9 +153,9 @@ export function GoalHeader({
 	hasBranch = false,
 	hasTargetBranch = false,
 	onEditGoal,
-	onShowAi,
 	onShowAddCard,
 	canCreateCards = true,
+	headerActions,
 }: GoalHeaderProps) {
 	const parsedPr = parsePrUrl(prUrl);
 	const setup = setupStatus({
@@ -202,21 +202,7 @@ export function GoalHeader({
 							</a>
 						</Button>
 					) : null}
-					<Button
-						variant="outline"
-						size="sm"
-						className="cursor-pointer"
-						onClick={onShowAi}
-						title={
-							canCreateCards
-								? "Pi AI assistant"
-								: "Goal setup must finish before Pi can create cards"
-						}
-						disabled={!canCreateCards}
-					>
-						<Bot className="size-3.5" />
-						AI
-					</Button>
+					{headerActions}
 					<Button
 						variant="outline"
 						size="sm"
