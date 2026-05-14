@@ -46,7 +46,6 @@ type GoalsAiPanelProps = {
 	goalTitle?: string | null;
 	goalDescription?: string | null;
 	canCreateCards?: boolean;
-	onClose: () => void;
 	/** Called when Pi creates a workspace card so the parent can select it. */
 	onCardCreated?: (ws: WorkspaceDetail) => void;
 };
@@ -60,7 +59,6 @@ export function GoalsAiPanel({
 	goalTitle,
 	goalDescription,
 	canCreateCards = true,
-	onClose,
 	onCardCreated,
 }: GoalsAiPanelProps) {
 	const queryClient = useQueryClient();
@@ -416,16 +414,6 @@ export function GoalsAiPanel({
 							aria-label="View conversation history"
 						>
 							<History className="size-3.5" />
-						</Button>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							className="size-7 cursor-pointer"
-							onClick={onClose}
-							aria-label="Close Pi panel"
-						>
-							<X className="size-3.5" />
 						</Button>
 					</>
 				}

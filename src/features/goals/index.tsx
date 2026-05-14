@@ -63,7 +63,7 @@ export function GoalWorkspaceContainer({
 	const queryClient = useQueryClient();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [showAddPanel, setShowAddPanel] = useState(false);
-	const [showAiPanel, setShowAiPanel] = useState(false);
+	const [showAiPanel, setShowAiPanel] = useState(true);
 	const [showGoalSheet, setShowGoalSheet] = useState(false);
 	const [newWorkspaceTitle, setNewWorkspaceTitle] = useState("");
 	const [dragState, setDragState] = useState<DragState>(null);
@@ -267,7 +267,6 @@ export function GoalWorkspaceContainer({
 		(childWorkspace: WorkspaceDetail) => {
 			setSelectedId(childWorkspace.id);
 			setShowAddPanel(false);
-			setShowAiPanel(false);
 		},
 		[],
 	);
@@ -304,7 +303,7 @@ export function GoalWorkspaceContainer({
 		goalDescription,
 		kanbanSnapshot,
 		canCreateCards: isGoalReadyForChildren,
-		onClose: () => setShowAiPanel(false),
+		onClose: () => {},
 	};
 
 	const renderGoalAiSurface =
@@ -317,7 +316,6 @@ export function GoalWorkspaceContainer({
 				goalTitle={props.goalTitle}
 				goalDescription={props.goalDescription}
 				canCreateCards={isGoalReadyForChildren}
-				onClose={props.onClose}
 				onCardCreated={(createdWorkspace) => setSelectedId(createdWorkspace.id)}
 			/>
 		));
@@ -348,7 +346,7 @@ export function GoalWorkspaceContainer({
 				onEditGoal={() => setShowGoalSheet(true)}
 				onShowAi={() => {
 					if (!isGoalReadyForChildren) return;
-					setShowAiPanel((isOpen) => !isOpen);
+					setShowAiPanel(true);
 					setSelectedId(null);
 					setShowAddPanel(false);
 				}}
@@ -356,7 +354,6 @@ export function GoalWorkspaceContainer({
 					if (!isGoalReadyForChildren) return;
 					setShowAddPanel(true);
 					setSelectedId(null);
-					setShowAiPanel(false);
 				}}
 			/>
 
