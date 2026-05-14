@@ -398,7 +398,22 @@ fn session_is_streaming(session_id: &str) -> Result<bool> {
 
 fn publish_event(app: &AppHandle, workspace_id: &str, session_id: &str, event: &AgentStreamEvent) {
     if progress::should_publish_event(session_id, event) {
-        publish_session_changed(app, workspace_id, session_id);
+        match event {
+            AgentStreamEvent::Update { .. } | AgentStreamEvent::StreamingPartial { .. } => {
+                if let Ok(value) = serde_json::to_value(event) {
+                    ui_sync::publish(
+                        app,
+                        UiMutationEvent::SessionStreamEvent {
+                            workspace_id: workspace_id.to_string(),
+                            session_id: session_id.to_string(),
+                            event: value,
+                        },
+                    );
+                }
+                publish_session_list_changed(app, workspace_id);
+            }
+            _ => publish_session_changed(app, workspace_id, session_id),
+        }
     }
 }
 
@@ -410,6 +425,10 @@ fn publish_session_changed(app: &AppHandle, workspace_id: &str, session_id: &str
             session_id: session_id.to_string(),
         },
     );
+    publish_session_list_changed(app, workspace_id);
+}
+
+fn publish_session_list_changed(app: &AppHandle, workspace_id: &str) {
     ui_sync::publish(
         app,
         UiMutationEvent::SessionListChanged {
