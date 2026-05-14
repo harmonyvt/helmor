@@ -192,6 +192,7 @@ describe("useConversationStreaming", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.clearAllMocks();
 	});
 
@@ -347,6 +348,80 @@ describe("useConversationStreaming", () => {
 			}),
 			expect.any(Function),
 		);
+	});
+
+	it("continues sending when debug ingest startup hangs", async () => {
+		vi.useFakeTimers();
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				onEvent({
+					kind: "done",
+					provider: "codex",
+					modelId: MODEL.id,
+					resolvedModel: MODEL.cliModel,
+					sessionId: "provider-session-1",
+					workingDirectory: "/tmp/helmor",
+					persisted: false,
+				});
+			},
+		);
+		const ensureDebugIngestForSubmit = vi.fn(
+			() => new Promise<DebugIngestStatus | null>(() => {}),
+		);
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					ensureDebugIngestForSubmit,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		let submitPromise!: Promise<void>;
+		await act(async () => {
+			submitPromise = result.current.handleComposerSubmit({
+				prompt: "Debug the stuck working state",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+				debugMode: true,
+			});
+			await Promise.resolve();
+		});
+
+		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+		await act(async () => {
+			vi.advanceTimersByTime(2_500);
+			await Promise.resolve();
+		});
+		await act(async () => {
+			await submitPromise;
+		});
+
+		expect(ensureDebugIngestForSubmit).toHaveBeenCalledWith("workspace-1");
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Debug the stuck working state",
+				promptPrefix: expect.stringContaining("[DEBUG MODE ACTIVE]"),
+			}),
+			expect.any(Function),
+		);
+		warnSpy.mockRestore();
 	});
 
 	it("keeps approval requests scoped to their session context", async () => {

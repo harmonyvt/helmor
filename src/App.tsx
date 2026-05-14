@@ -158,6 +158,7 @@ import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-f
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 const EMPTY_SENDING_SESSION_IDS = new Set<string>();
+const DEBUG_INGEST_STARTUP_TIMEOUT_MS = 5_000;
 
 type DebugIngestViewState = {
 	active: boolean;
@@ -179,6 +180,29 @@ function debugIngestPublicForwardAttemptKey(settings: AppSettings): string {
 	if (!settings.debugIngestPublicForward) return "local";
 	const domain = settings.debugIngestNgrokDomain.trim();
 	return `ngrok:${domain || "dynamic"}`;
+}
+
+function withDebugIngestStartupTimeout<T>(promise: Promise<T>): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timeoutId = setTimeout(() => {
+			reject(
+				new Error(
+					"Debug ingest startup timed out. Continuing without an ingest endpoint.",
+				),
+			);
+		}, DEBUG_INGEST_STARTUP_TIMEOUT_MS);
+
+		promise.then(
+			(value) => {
+				clearTimeout(timeoutId);
+				resolve(value);
+			},
+			(error) => {
+				clearTimeout(timeoutId);
+				reject(error);
+			},
+		);
+	});
 }
 const MOBILE_SHELL_QUERY = "(max-width: 1023.98px)";
 
@@ -578,12 +602,14 @@ function AppShell({
 				publicForwardAttemptKey: currentDebugIngestPublicForwardAttemptKey,
 			}));
 			try {
-				const status = await ensureDebugIngestServer(workspaceId, {
-					publicForward: {
-						enabled: appSettings.debugIngestPublicForward,
-						ngrokDomain: appSettings.debugIngestNgrokDomain || null,
-					},
-				});
+				const status = await withDebugIngestStartupTimeout(
+					ensureDebugIngestServer(workspaceId, {
+						publicForward: {
+							enabled: appSettings.debugIngestPublicForward,
+							ngrokDomain: appSettings.debugIngestNgrokDomain || null,
+						},
+					}),
+				);
 				updateDebugIngestState(workspaceId, (current) => ({
 					...current,
 					active: true,
