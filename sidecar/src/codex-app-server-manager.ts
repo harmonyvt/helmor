@@ -13,6 +13,7 @@ import {
 	type JsonRpcNotification,
 	type JsonRpcRequest,
 } from "./codex-app-server.js";
+import { ensureCodexGoalsFeatureEnabled } from "./codex-config.js";
 import { buildCodexStoredMeta } from "./context-usage.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { resolveGitAccessDirectories } from "./git-access.js";
@@ -35,6 +36,44 @@ import {
 } from "./title.js";
 
 const CODEX_BIN_PATH = process.env.HELMOR_CODEX_BIN_PATH || "codex";
+
+export type GoalCommand =
+	| { kind: "set"; objective: string }
+	| { kind: "resume" };
+
+export function parseGoalCommand(prompt: string): GoalCommand | null {
+	const match = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
+	if (!match) return null;
+	const arg = (match[1] ?? "").trim();
+	if (arg === "") return null;
+	if (arg === "resume") return { kind: "resume" };
+	return { kind: "set", objective: arg };
+}
+
+function dispatchGoalCommand(
+	server: CodexAppServer,
+	threadId: string,
+	command: GoalCommand,
+): { method: string; promise: Promise<unknown> } {
+	if (command.kind === "resume") {
+		return {
+			method: "thread/goal/set",
+			promise: server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "active" },
+				20_000,
+			),
+		};
+	}
+	return {
+		method: "thread/goal/set",
+		promise: server.sendRequest(
+			"thread/goal/set",
+			{ threadId, objective: command.objective },
+			20_000,
+		),
+	};
+}
 
 /** How long after a "Reconnecting…" stderr line we keep emitting
  *  synthetic heartbeats while Codex owns its retry loop. */
@@ -318,10 +357,23 @@ export class CodexAppServerManager implements SessionManager {
 			promptLen: prompt.length,
 		});
 
+		const goalCommand = parseGoalCommand(prompt);
+		let effectiveResume = resume;
+		if (goalCommand) {
+			effectiveResume = await this.ensureCodexGoalsReady(
+				sessionId,
+				effectiveResume,
+			);
+			effectiveResume = this.recycleIdleContextForGoal(
+				sessionId,
+				effectiveResume,
+			);
+		}
+
 		const ctx = await this.ensureContext(
 			sessionId,
 			workDir,
-			resume,
+			effectiveResume,
 			model,
 			permissionMode,
 			effectiveFastMode,
@@ -341,7 +393,7 @@ export class CodexAppServerManager implements SessionManager {
 			prompt,
 			resolvedAdditionalDirectories,
 		);
-		const isCompactCommand = prompt.trim() === "/compact";
+		const isCompactCommand = !goalCommand && prompt.trim() === "/compact";
 		const input = buildTurnInput(promptWithContext, images);
 		const turnStartParams: Record<string, unknown> = {
 			threadId: ctx.providerThreadId,
@@ -433,6 +485,34 @@ export class CodexAppServerManager implements SessionManager {
 						logger.error(`${label} failed`, errorDetails(err));
 						reject(err);
 					});
+			};
+
+			const dispatchPrompt = (): {
+				method: string;
+				promise: Promise<unknown>;
+			} => {
+				if (isCompactCommand) {
+					return {
+						method: "thread/compact/start",
+						promise: ctx.server.sendRequest(
+							"thread/compact/start",
+							{ threadId: ctx.providerThreadId },
+							20_000,
+						),
+					};
+				}
+				if (goalCommand) {
+					return dispatchGoalCommand(
+						ctx.server,
+						ctx.providerThreadId as string,
+						goalCommand,
+					);
+				}
+				turnStartParams.threadId = ctx.providerThreadId;
+				return {
+					method: "turn/start",
+					promise: ctx.server.sendRequest("turn/start", turnStartParams),
+				};
 			};
 
 			const forkThreadForRecovery = async () => {
@@ -742,24 +822,30 @@ export class CodexAppServerManager implements SessionManager {
 			ctx.server.setHandlers(handleNotification, handleRequest);
 			ctx.server.setActiveRequestId(requestId);
 
-			if (isCompactCommand && !ctx.providerThreadId) {
-				reject(new Error("Cannot compact before a Codex thread has started"));
+			if ((isCompactCommand || goalCommand) && !ctx.providerThreadId) {
+				reject(
+					new Error(
+						`Cannot run /${isCompactCommand ? "compact" : "goal"} before a Codex thread has started`,
+					),
+				);
 				return;
 			}
 
-			if (isCompactCommand) {
-				ctx.server
-					.sendRequest(
-						"thread/compact/start",
-						{ threadId: ctx.providerThreadId },
-						20_000,
-					)
+			if (!isCompactCommand && !goalCommand) {
+				startTurn("turn/start");
+			} else {
+				const { method, promise } = dispatchPrompt();
+				promise
+					.then((response) => {
+						const turnId = deepGet(response, "turn", "id");
+						if (typeof turnId === "string") {
+							ctx.activeTurnId = turnId;
+						}
+					})
 					.catch((err) => {
-						logger.error("thread/compact/start failed", errorDetails(err));
+						logger.error(`${method} failed`, errorDetails(err));
 						reject(err);
 					});
-			} else {
-				startTurn("turn/start");
 			}
 		}).finally(() => {
 			if (recoveryCompactionTimeout) {
@@ -1056,6 +1142,75 @@ export class CodexAppServerManager implements SessionManager {
 	}
 
 	// ── Private ──────────────────────────────────────────────────────────
+
+	private async ensureCodexGoalsReady(
+		sessionId: string,
+		callerResume: string | undefined,
+	): Promise<string | undefined> {
+		let result: Awaited<ReturnType<typeof ensureCodexGoalsFeatureEnabled>>;
+		try {
+			result = await ensureCodexGoalsFeatureEnabled();
+		} catch (err) {
+			logger.error("ensureCodexGoalsFeatureEnabled failed", errorDetails(err));
+			return callerResume;
+		}
+		if (result.kind !== "modified") return callerResume;
+
+		const stale = this.sessions.get(sessionId);
+		if (!stale) {
+			logger.info("Enabled codex goals feature", {
+				sessionId,
+				path: result.path,
+			});
+			return callerResume;
+		}
+
+		logger.info("Enabled codex goals feature; recycling stale session", {
+			sessionId,
+			path: result.path,
+			providerThreadId: stale.providerThreadId ?? "(none)",
+		});
+		const reuseThread = stale.providerThreadId ?? undefined;
+		stale.server.kill();
+		this.sessions.delete(sessionId);
+		this.clearPendingSessionState(sessionId);
+		return callerResume ?? reuseThread;
+	}
+
+	private clearPendingSessionState(sessionId: string): void {
+		for (const [id, pending] of this.pendingApprovals) {
+			if (pending.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, pending] of this.pendingUserInputs) {
+			if (pending.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+	}
+
+	private recycleIdleContextForGoal(
+		sessionId: string,
+		callerResume: string | undefined,
+	): string | undefined {
+		const stale = this.sessions.get(sessionId);
+		if (!stale || stale.server.killed) return callerResume;
+		if (stale.turnResolve || stale.turnReject || stale.activeTurnId) {
+			logger.info("Skipping /goal context recycle while turn is active", {
+				sessionId,
+				providerThreadId: stale.providerThreadId ?? "(none)",
+				activeTurnId: stale.activeTurnId ?? "(none)",
+			});
+			return callerResume;
+		}
+
+		const reuseThread = stale.providerThreadId ?? undefined;
+		logger.info("Recycling idle Codex context before /goal", {
+			sessionId,
+			providerThreadId: reuseThread ?? "(none)",
+		});
+		stale.server.kill();
+		this.sessions.delete(sessionId);
+		this.clearPendingSessionState(sessionId);
+		return callerResume ?? reuseThread;
+	}
 
 	/**
 	 * Get an existing session context or create a new one. When `resume`

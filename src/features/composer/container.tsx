@@ -165,12 +165,14 @@ type WorkspaceComposerContainerProps = {
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
 	fastModes: Record<string, boolean>;
+	goalModes?: Record<string, boolean>;
 	debugModes?: Record<string, boolean>;
 	activeFastPreludes?: Record<string, boolean>;
 	onSelectModel: (contextKey: string, modelId: string) => void;
 	onSelectEffort: (contextKey: string, level: string) => void;
 	onChangePermissionMode: (contextKey: string, mode: string) => void;
 	onChangeFastMode: (contextKey: string, enabled: boolean) => void;
+	onChangeGoalMode?: (contextKey: string, enabled: boolean) => void;
 	onChangeDebugMode?: (contextKey: string, enabled: boolean) => void;
 	onSwitchSession?: (sessionId: string) => void;
 	onSubmit: (payload: {
@@ -251,12 +253,14 @@ export const WorkspaceComposerContainer = memo(
 		effortLevels = {},
 		permissionModes = {},
 		fastModes = {},
+		goalModes = {},
 		debugModes = {},
 		activeFastPreludes = {},
 		onSelectModel,
 		onSelectEffort,
 		onChangePermissionMode,
 		onChangeFastMode,
+		onChangeGoalMode,
 		onChangeDebugMode,
 		onSwitchSession,
 		onSubmit,
@@ -515,6 +519,8 @@ export const WorkspaceComposerContainer = memo(
 		const fastMode = supportsFastMode
 			? (cachedFastMode ?? sessionFastMode ?? settings.defaultFastMode ?? false)
 			: false;
+		const goalMode =
+			provider === "codex" ? (goalModes[composerContextKey] ?? false) : false;
 		const debugMode = debugModes[composerContextKey] ?? false;
 		const showFastModePrelude = activeFastPreludes[composerContextKey] === true;
 		const loadingConversationContext =
@@ -1234,6 +1240,13 @@ export const WorkspaceComposerContainer = memo(
 			[onChangeFastMode, composerContextKey],
 		);
 
+		const handleChangeGoalModeInner = useCallback(
+			(enabled: boolean) => {
+				onChangeGoalMode?.(composerContextKey, enabled);
+			},
+			[onChangeGoalMode, composerContextKey],
+		);
+
 		const handleChangeDebugModeInner = useCallback(
 			(enabled: boolean) => {
 				onChangeDebugMode?.(composerContextKey, enabled);
@@ -1363,6 +1376,10 @@ export const WorkspaceComposerContainer = memo(
 							onSelectEffort={handleSelectEffortInner}
 							permissionMode={effectivePermissionMode}
 							onChangePermissionMode={handleChangePermissionModeInner}
+							goalMode={goalMode}
+							onChangeGoalMode={
+								onChangeGoalMode ? handleChangeGoalModeInner : undefined
+							}
 							fastMode={fastMode}
 							showFastModePrelude={showFastModePrelude}
 							onChangeFastMode={
