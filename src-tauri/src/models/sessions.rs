@@ -167,8 +167,8 @@ impl CreateSessionOptions {
                 options.surface_kind = SessionSurfaceKind::Terminal;
                 options.surface_mode = SessionSurfaceMode::Terminal;
                 options.terminal_runtime = Some(runtime.clone());
-                options.agent_type = Some(runtime);
-                options.title = Some("Terminal".to_string());
+                options.agent_type = Some(runtime.clone());
+                options.title = Some(default_terminal_title(&runtime));
             }
             SessionSurfaceMode::TaskMonitor | SessionSurfaceMode::AgentTerminal => {
                 bail!("{mode:?} sessions can only be created by internal system flows");
@@ -176,6 +176,27 @@ impl CreateSessionOptions {
         }
 
         Ok(options)
+    }
+}
+
+fn default_terminal_title(runtime: &str) -> String {
+    format!("{} Terminal", terminal_runtime_label(runtime))
+}
+
+fn terminal_runtime_label(runtime: &str) -> String {
+    let normalized = runtime
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| !matches!(ch, ' ' | '_' | '-'))
+        .collect::<String>();
+    match normalized.as_str() {
+        "claude" => "Claude".to_string(),
+        "codex" | "openai" | "openaicodex" => "Codex".to_string(),
+        "opencode" => "OpenCode".to_string(),
+        "pi" => "Pi".to_string(),
+        "" | "shell" => "Shell".to_string(),
+        _ => runtime.trim().to_string(),
     }
 }
 
@@ -852,6 +873,40 @@ pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
     Ok(model.filter(|s| !s.is_empty()))
 }
 
+/// Persist the runtime selection as soon as a background send is accepted.
+///
+/// The streaming path later writes the visible user message and runtime notice;
+/// this intentionally updates only session metadata so `list_threads` cannot
+/// observe `model = NULL` for an already-started send.
+pub fn record_session_send_start_metadata(
+    session_id: &str,
+    model_id: &str,
+    provider: &str,
+    permission_mode: Option<&str>,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    let timestamp = db::current_timestamp()?;
+    let rows = connection
+        .execute(
+            r#"
+			UPDATE sessions
+			SET status = 'streaming',
+			    model = ?2,
+			    agent_type = ?3,
+			    permission_mode = COALESCE(?4, permission_mode),
+			    last_user_message_at = ?5,
+			    updated_at = ?5
+			WHERE id = ?1
+			"#,
+            (session_id, model_id, provider, permission_mode, &timestamp),
+        )
+        .with_context(|| format!("Failed to record send metadata for session {session_id}"))?;
+    if rows == 0 {
+        bail!("Session {session_id} does not exist");
+    }
+    Ok(())
+}
+
 /// Read the opaque `context_usage_meta` JSON for the composer's
 /// context-usage ring. Returns `Ok(None)` for missing rows OR empty meta —
 /// the ring renders a placeholder either way and the frontend RPC contract
@@ -1220,13 +1275,21 @@ mod tests {
         )
         .unwrap();
 
-        let row: (String, String, String, String, String, Option<String>) = conn
+        let row: (
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+        ) = conn
             .query_row(
                 r#"
-                SELECT surface_kind, surface_mode, control_owner, input_policy,
-                       created_by, terminal_runtime
-                FROM sessions WHERE id = ?1
-                "#,
+	                SELECT surface_kind, surface_mode, control_owner, input_policy,
+	                       created_by, terminal_runtime, title
+	                FROM sessions WHERE id = ?1
+	                "#,
                 [response.session_id],
                 |row| {
                     Ok((
@@ -1236,6 +1299,7 @@ mod tests {
                         row.get(3)?,
                         row.get(4)?,
                         row.get(5)?,
+                        row.get(6)?,
                     ))
                 },
             )
@@ -1247,6 +1311,42 @@ mod tests {
         assert_eq!(row.3, "writable");
         assert_eq!(row.4, "user");
         assert_eq!(row.5.as_deref(), Some("shell"));
+        assert_eq!(row.6, "Shell Terminal");
+    }
+
+    #[test]
+    fn terminal_titles_are_runtime_aware() {
+        assert_eq!(default_terminal_title("claude"), "Claude Terminal");
+        assert_eq!(default_terminal_title("codex"), "Codex Terminal");
+        assert_eq!(default_terminal_title("open-code"), "OpenCode Terminal");
+        assert_eq!(default_terminal_title("pi"), "Pi Terminal");
+    }
+
+    #[test]
+    fn send_start_metadata_updates_listed_thread_runtime() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let dir = TestDataDir::new("send-start-listed-runtime");
+        let conn = dir.connection();
+        seed(&conn);
+
+        record_session_send_start_metadata(
+            "s1",
+            "pi:azure-openai-responses/gpt-5.5",
+            "pi",
+            Some("auto"),
+        )
+        .unwrap();
+
+        let sessions = list_workspace_sessions("w1").unwrap();
+        let session = sessions.iter().find(|session| session.id == "s1").unwrap();
+        assert_eq!(session.status, "streaming");
+        assert_eq!(
+            session.model.as_deref(),
+            Some("pi:azure-openai-responses/gpt-5.5")
+        );
+        assert_eq!(session.agent_type.as_deref(), Some("pi"));
+        assert_eq!(session.permission_mode, "auto");
+        assert!(session.last_user_message_at.is_some());
     }
 
     #[test]

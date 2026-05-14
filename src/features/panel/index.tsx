@@ -150,6 +150,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 							<SessionTerminalSurface
 								workspace={workspace}
 								session={selectedSession}
+								onSessionRenamed={onSessionRenamed}
 							/>
 						) : activePane?.hasLoaded ? (
 							<ActiveThreadViewport

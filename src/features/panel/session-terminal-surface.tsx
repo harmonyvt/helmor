@@ -5,11 +5,18 @@ import {
 } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
 import {
+	renameSession,
 	updateSessionControl,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import {
+	formatLiveTerminalTitle,
+	shouldAutoUpdateTerminalTitle,
+	terminalModeLabel,
+	terminalRuntimeLabel,
+} from "./session-terminal-labels";
 import {
 	attachSessionTerminal,
 	detachSessionTerminal,
@@ -24,13 +31,8 @@ import {
 type SessionTerminalSurfaceProps = {
 	workspace: WorkspaceDetail | null;
 	session: WorkspaceSessionSummary;
+	onSessionRenamed?: (sessionId: string, title: string) => void;
 };
-
-function modeLabel(session: WorkspaceSessionSummary) {
-	return session.surfaceMode === "agent_terminal"
-		? "Agent Terminal"
-		: "Terminal";
-}
 
 function ownerLabel(session: WorkspaceSessionSummary) {
 	if (session.controlOwner === "agent") return session.agentType ?? "agent";
@@ -41,8 +43,11 @@ function ownerLabel(session: WorkspaceSessionSummary) {
 export function SessionTerminalSurface({
 	workspace,
 	session,
+	onSessionRenamed,
 }: SessionTerminalSurfaceProps) {
 	const termRef = useRef<TerminalHandle | null>(null);
+	const titleUpdateTimerRef = useRef<number | null>(null);
+	const lastQueuedTitleRef = useRef(session.title);
 	const [status, setStatus] = useState<SessionTerminalStatus>(
 		session.terminalStoppedAt ? "exited" : "new",
 	);
@@ -53,6 +58,25 @@ export function SessionTerminalSurface({
 	const inputPolicy = session.inputPolicy ?? "writable";
 	const isAgentOwned = controlOwner !== "user";
 	const writable = inputPolicy === "writable";
+
+	useEffect(() => {
+		lastQueuedTitleRef.current = session.title;
+		if (
+			!shouldAutoUpdateTerminalTitle(session.title) &&
+			titleUpdateTimerRef.current !== null
+		) {
+			window.clearTimeout(titleUpdateTimerRef.current);
+			titleUpdateTimerRef.current = null;
+		}
+	}, [session.title]);
+
+	useEffect(() => {
+		return () => {
+			if (titleUpdateTimerRef.current !== null) {
+				window.clearTimeout(titleUpdateTimerRef.current);
+			}
+		};
+	}, []);
 
 	useEffect(() => {
 		const existing = attachSessionTerminal(session.id, {
@@ -114,6 +138,27 @@ export function SessionTerminalSurface({
 		void updateSessionControl(session.id, "user", "writable");
 	}, [session.id]);
 
+	const handleTerminalTitleChange = useCallback(
+		(title: string) => {
+			if (!shouldAutoUpdateTerminalTitle(session.title)) return;
+			const nextTitle = formatLiveTerminalTitle(session, title);
+			if (nextTitle === lastQueuedTitleRef.current) return;
+			lastQueuedTitleRef.current = nextTitle;
+			onSessionRenamed?.(session.id, nextTitle);
+			if (titleUpdateTimerRef.current !== null) {
+				window.clearTimeout(titleUpdateTimerRef.current);
+			}
+			titleUpdateTimerRef.current = window.setTimeout(() => {
+				titleUpdateTimerRef.current = null;
+				void renameSession(session.id, nextTitle).catch(() => {
+					lastQueuedTitleRef.current = session.title;
+					onSessionRenamed?.(session.id, session.title);
+				});
+			}, 400);
+		},
+		[onSessionRenamed, session],
+	);
+
 	return (
 		<div
 			className={cn(
@@ -130,8 +175,10 @@ export function SessionTerminalSurface({
 				)}
 			>
 				<div className="flex min-w-0 items-center gap-2">
-					<span className="font-medium">{modeLabel(session)}</span>
-					<span className="text-muted-foreground">{runtime}</span>
+					<span className="font-medium">{terminalModeLabel(session)}</span>
+					<span className="text-muted-foreground">
+						{terminalRuntimeLabel(runtime)}
+					</span>
 					<span className="truncate text-muted-foreground">
 						{session.terminalCwd ?? workspace?.rootPath ?? "workspace"}
 					</span>
@@ -178,6 +225,7 @@ export function SessionTerminalSurface({
 					className="h-full"
 					onData={handleData}
 					onResize={handleResize}
+					onTitleChange={handleTerminalTitleChange}
 				/>
 			</div>
 		</div>

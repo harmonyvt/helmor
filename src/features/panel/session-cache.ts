@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { WorkspaceDetail, WorkspaceSessionSummary } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { terminalDefaultTitle } from "./session-terminal-labels";
 
 export function buildOptimisticSession(
 	workspaceId: string,
@@ -13,7 +14,13 @@ export function buildOptimisticSession(
 	return {
 		id: sessionId,
 		workspaceId,
-		title: isTerminal ? "Terminal" : "Untitled",
+		title: isTerminal
+			? terminalDefaultTitle({
+					surfaceMode: mode,
+					terminalRuntime: runtime ?? "shell",
+					agentType: runtime ?? "shell",
+				})
+			: "Untitled",
 		agentType: isTerminal ? (runtime ?? "shell") : null,
 		status: "idle",
 		model: null,

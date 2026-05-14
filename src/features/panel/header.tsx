@@ -65,6 +65,7 @@ import {
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { seedNewSessionInCache } from "./session-cache";
 import { closeWorkspaceSession } from "./session-close";
+import { terminalDefaultTitle } from "./session-terminal-labels";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
 type WorkspacePanelHeaderProps = {
@@ -438,6 +439,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																sessionDisplayProviders?.[session.id] ??
 																session.agentType
 															}
+															surfaceKind={session.surfaceKind}
 															active={isActive}
 														/>
 														<span
@@ -779,6 +781,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	sessionDisplayProviders?.[session.id] ??
 																	session.agentType
 																}
+																surfaceKind={session.surfaceKind}
 																active={isActive}
 															/>
 															{isEditing ? (
@@ -911,6 +914,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											<div className="flex min-w-0 items-center gap-1.5">
 												<SessionProviderIcon
 													agentType={session.agentType}
+													surfaceKind={session.surfaceKind}
 													active={false}
 												/>
 												<span className="truncate">
@@ -977,11 +981,16 @@ function getBranchToneClassName(tone: WorkspaceBranchTone) {
 
 function SessionProviderIcon({
 	agentType,
+	surfaceKind,
 	active,
 }: {
 	agentType?: string | null;
+	surfaceKind?: string | null;
 	active: boolean;
 }) {
+	if (surfaceKind === "terminal") {
+		return <MonitorUp className="size-3 shrink-0 text-muted-foreground" />;
+	}
 	if (active) {
 		return <HelmorThinkingIndicator size={14} />;
 	}
@@ -1068,12 +1077,12 @@ function displaySessionTitle(session: WorkspaceSessionSummary): string {
 	if (session.surfaceMode === "agent_terminal") {
 		return session.title && session.title !== "Untitled"
 			? session.title
-			: "Agent Terminal";
+			: terminalDefaultTitle(session);
 	}
 	if (session.surfaceMode === "terminal") {
 		return session.title && session.title !== "Untitled"
 			? session.title
-			: "Terminal";
+			: terminalDefaultTitle(session);
 	}
 	if (session.title && session.title !== "Untitled") {
 		return session.title;
