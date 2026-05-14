@@ -1,5 +1,5 @@
-import { act } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentModelOption, AgentStreamEvent } from "@/lib/api";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
 import { renderWithProviders } from "@/test/render-with-providers";
@@ -62,6 +62,13 @@ const otherModel: AgentModelOption = {
 };
 
 describe("GoalsAiPanel", () => {
+	beforeEach(() => {
+		apiMockState.createGoalChildWorkspaceAndStart.mockReset();
+		apiMockState.listGoalChildWorkspaces.mockReset();
+		apiMockState.sendKanbanToolResult.mockReset();
+		conversationMockState.props = null;
+	});
+
 	it("forces child card starts to use the active Pi supervisor model", async () => {
 		apiMockState.createGoalChildWorkspaceAndStart.mockResolvedValue({
 			workspaceId: "child-1",
@@ -124,5 +131,87 @@ describe("GoalsAiPanel", () => {
 				}),
 			}),
 		);
+	});
+
+	it("serializes parallel create-card tool calls for the same goal", async () => {
+		let resolveFirstCreate:
+			| ((value: { workspaceId: string; sessionId: string }) => void)
+			| null = null;
+		apiMockState.createGoalChildWorkspaceAndStart
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						resolveFirstCreate = resolve;
+					}),
+			)
+			.mockResolvedValueOnce({
+				workspaceId: "child-2",
+				sessionId: "session-2",
+			});
+		apiMockState.listGoalChildWorkspaces.mockResolvedValue([
+			{ id: "child-1", title: "First" },
+			{ id: "child-2", title: "Second" },
+		]);
+
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
+			{ id: "pi", label: "Pi", options: [parentModel] },
+		]);
+
+		renderWithProviders(
+			<GoalsAiPanel
+				workspaceId="goal-1"
+				cards={[]}
+				kanbanSnapshot="[]"
+				onClose={() => {}}
+			/>,
+			{ queryClient },
+		);
+
+		const first = conversationMockState.props?.onKanbanToolCall?.({
+			kind: "kanbanToolCall",
+			toolCallId: "tool-1",
+			tool: "create_kanban_card",
+			workspaceId: "goal-1",
+			args: { title: "First", lane: "backlog" },
+		}) as unknown as Promise<void>;
+		const second = conversationMockState.props?.onKanbanToolCall?.({
+			kind: "kanbanToolCall",
+			toolCallId: "tool-2",
+			tool: "create_kanban_card",
+			workspaceId: "goal-1",
+			args: { title: "Second", lane: "backlog" },
+		}) as unknown as Promise<void>;
+
+		await waitFor(() => {
+			expect(
+				apiMockState.createGoalChildWorkspaceAndStart,
+			).toHaveBeenCalledTimes(1);
+		});
+
+		await act(async () => {
+			resolveFirstCreate?.({
+				workspaceId: "child-1",
+				sessionId: "session-1",
+			});
+			await first;
+		});
+
+		await waitFor(() => {
+			expect(
+				apiMockState.createGoalChildWorkspaceAndStart,
+			).toHaveBeenCalledTimes(2);
+		});
+
+		await act(async () => {
+			await second;
+		});
+
+		expect(
+			apiMockState.createGoalChildWorkspaceAndStart,
+		).toHaveBeenNthCalledWith(1, expect.objectContaining({ title: "First" }));
+		expect(
+			apiMockState.createGoalChildWorkspaceAndStart,
+		).toHaveBeenNthCalledWith(2, expect.objectContaining({ title: "Second" }));
 	});
 });
