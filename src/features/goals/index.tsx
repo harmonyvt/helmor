@@ -335,12 +335,10 @@ export function GoalWorkspaceContainer({
 
 	// Add card: always switches to board tab first.
 	const handleShowAddCard = useCallback(() => {
-		if (!isGoalReadyForChildren) return;
 		setActiveTab("board");
 		setSelectedId(null);
 		setShowAddPanel(true);
 		setPiState("dock");
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [setPiState]);
 
 	// Panel is open when a card is selected, the add-card form is open, or Pi is
