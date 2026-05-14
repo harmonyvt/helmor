@@ -15,7 +15,7 @@ mod common;
 
 use common::*;
 use helmor_lib::pipeline::types::{ExtendedMessagePart, MessagePart};
-use helmor_lib::pipeline::PipelineEmit;
+use helmor_lib::pipeline::{PipelineEmit, StreamingTextDeltaPartType};
 use serde_json::{json, Value};
 
 /// Feed an event and return the fully rendered thread snapshot.
@@ -479,4 +479,48 @@ fn codex_context_compaction_renders_started_and_completed_notices() {
     assert_eq!(notices[0].1, "Compacting context");
     assert_eq!(notices[1].1, "Context compacted");
     assert_ne!(started_part_id, notices[1].0);
+}
+
+#[test]
+fn append_only_text_growth_emits_compact_delta() {
+    let mut pipeline = MessagePipeline::new("claude", "opus", "ctx", "sess");
+
+    for event in [
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": { "type": "text", "text": "" }
+            }
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "text_delta", "text": "Hello" }
+            }
+        }),
+    ] {
+        let line = serde_json::to_string(&event).unwrap();
+        let _ = pipeline.push_event(&event, &line);
+    }
+
+    let event = json!({
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "text_delta", "text": " world" }
+        }
+    });
+    let line = serde_json::to_string(&event).unwrap();
+    match pipeline.push_event(&event, &line) {
+        PipelineEmit::Delta(delta) => {
+            assert_eq!(delta.part_type, StreamingTextDeltaPartType::Text);
+            assert_eq!(delta.text_delta, " world");
+        }
+        _ => panic!("expected compact text delta"),
+    }
 }

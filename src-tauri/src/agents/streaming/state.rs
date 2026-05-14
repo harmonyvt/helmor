@@ -357,6 +357,9 @@ impl TurnSession {
             PipelineEmit::Partial(message) => Ok(vec![Action::EmitToFrontend(
                 AgentStreamEvent::StreamingPartial { message },
             )]),
+            PipelineEmit::Delta(delta) => Ok(vec![Action::EmitToFrontend(
+                AgentStreamEvent::StreamingDelta { delta },
+            )]),
             PipelineEmit::None => Ok(vec![]),
         }
     }

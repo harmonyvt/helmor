@@ -461,7 +461,9 @@ fn session_is_streaming(session_id: &str) -> Result<bool> {
 fn publish_event(app: &AppHandle, workspace_id: &str, session_id: &str, event: &AgentStreamEvent) {
     if progress::should_publish_event(session_id, event) {
         match event {
-            AgentStreamEvent::Update { .. } | AgentStreamEvent::StreamingPartial { .. } => {
+            AgentStreamEvent::Update { .. }
+            | AgentStreamEvent::StreamingPartial { .. }
+            | AgentStreamEvent::StreamingDelta { .. } => {
                 if let Ok(value) = serde_json::to_value(event) {
                     ui_sync::publish(
                         app,
@@ -472,7 +474,9 @@ fn publish_event(app: &AppHandle, workspace_id: &str, session_id: &str, event: &
                         },
                     );
                 }
-                publish_session_list_changed(app, workspace_id);
+                if matches!(event, AgentStreamEvent::Update { .. }) {
+                    publish_session_list_changed(app, workspace_id);
+                }
             }
             _ => publish_session_changed(app, workspace_id, session_id),
         }

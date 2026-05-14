@@ -523,6 +523,9 @@ pub fn send_message(
                         PipelineEmit::Partial(message) => {
                             on_event(&AgentStreamEvent::StreamingPartial { message });
                         }
+                        PipelineEmit::Delta(delta) => {
+                            on_event(&AgentStreamEvent::StreamingDelta { delta });
+                        }
                         PipelineEmit::None => {}
                     }
                 }

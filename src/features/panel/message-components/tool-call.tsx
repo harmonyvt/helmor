@@ -635,8 +635,8 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 				) : null}
 
 				<div className="flex flex-col gap-0.5">
-					{visibleParts.map((part) => {
-						const key = partKey(part);
+					{visibleParts.map((part, index) => {
+						const key = `${index}:${partKey(part) ?? part.type}`;
 						if (isToolCallPart(part)) {
 							return (
 								<AssistantToolCall

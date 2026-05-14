@@ -126,6 +126,12 @@ fn replay_stream(provider: &str, lines: &[Value]) -> StreamBridgeSnapshot {
             PipelineEmit::Partial(message) => {
                 latest_messages.push(message);
             }
+            PipelineEmit::Delta(delta) => {
+                control_events.push(serde_json::json!({
+                    "kind": "streamingDelta",
+                    "delta": delta,
+                }));
+            }
             PipelineEmit::None => {}
         }
     }

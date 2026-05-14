@@ -15,7 +15,7 @@
  */
 
 import type { QueryClient } from "@tanstack/react-query";
-import type { ThreadMessageLike } from "./api";
+import type { StreamingTextDelta, ThreadMessageLike } from "./api";
 import { helmorQueryKeys } from "./query-client";
 import { messagesStructurallyEqual } from "./structural-equality";
 
@@ -177,6 +177,58 @@ export function mergeStreamingPartial(
 
 		next.push(message);
 		return shareMessages(prior, next);
+	});
+}
+
+/**
+ * Patch an append-only text delta into a cached background stream.
+ *
+ * Foreground streams batch deltas in `useConversationStreaming`; background
+ * streams arrive through UI sync and need the same compact cache update here.
+ * If the matching message/part is not present, leave the cache unchanged so a
+ * later structural `streamingPartial` can re-anchor the stream safely.
+ */
+export function mergeStreamingDelta(
+	queryClient: QueryClient,
+	sessionId: string,
+	delta: StreamingTextDelta,
+): void {
+	const cacheKey = sessionThreadCacheKey(sessionId);
+	queryClient.setQueryData<ThreadMessageLike[]>(cacheKey, (prev) => {
+		const prior = prev ?? [];
+		let changed = false;
+		const next = prior.map((message) => {
+			if (message.id !== delta.messageId) return message;
+
+			let partChanged = false;
+			const content = message.content.map((part) => {
+				if (
+					delta.partType === "text" &&
+					part.type === "text" &&
+					part.id === delta.partId
+				) {
+					partChanged = true;
+					return { ...part, text: `${part.text}${delta.textDelta}` };
+				}
+
+				if (
+					delta.partType === "reasoning" &&
+					part.type === "reasoning" &&
+					part.id === delta.partId
+				) {
+					partChanged = true;
+					return { ...part, text: `${part.text}${delta.textDelta}` };
+				}
+
+				return part;
+			});
+
+			if (!partChanged) return message;
+			changed = true;
+			return { ...message, content, streaming: true };
+		});
+
+		return changed ? shareMessages(prior, next) : prior;
 	});
 }
 

@@ -194,6 +194,10 @@ function ChatThread({
 		},
 		[scrollRef],
 	);
+	const scrollToBottomRef = useRef(scrollToBottom);
+	useLayoutEffect(() => {
+		scrollToBottomRef.current = scrollToBottom;
+	}, [scrollToBottom]);
 	// Track streaming start time per session so the timer survives session switches.
 	if (sending && !streamingStartTimes.has(sessionId)) {
 		streamingStartTimes.set(sessionId, Date.now());
@@ -209,11 +213,55 @@ function ChatThread({
 		previousSendingRef.current = sending;
 	}, [sending]);
 
-	useEffect(() => {
-		if (sendingJustStarted) {
-			void scrollToBottom("instant");
+	// Initial scroll when sending starts: synchronous (useLayoutEffect) so the
+	// user message + streaming footer appear already scrolled-to on the same
+	// paint, rather than jumping on the next frame via the library's RAF path.
+	useLayoutEffect(() => {
+		if (!sendingJustStarted) return;
+		const scrollParent = scrollParentRef.current;
+		if (scrollParent) {
+			// Scroll to the library's target (scrollHeight - clientHeight - 1) to
+			// avoid triggering its overscroll correction on the next RO callback.
+			const target = Math.max(
+				0,
+				scrollParent.scrollHeight - scrollParent.clientHeight - 1,
+			);
+			scrollParent.scrollTop = target;
 		}
-	}, [scrollToBottom, sendingJustStarted]);
+		// Also update the library's internal isAtBottom state.
+		void scrollToBottomRef.current("instant");
+	}, [sendingJustStarted]);
+
+	// Per-delta scroll sync: snaps to bottom synchronously in the same frame as
+	// the React content commit, before the browser paints.  This eliminates the
+	// double-paint caused by use-stick-to-bottom's ResizeObserver → RAF → paint
+	// cycle (the library fires after paint, schedules a rAF, then a second paint
+	// corrects the position — visible as a scroll flash on every new line).
+	//
+	// We deliberately do NOT use `isAtBottom` from the library here — during fast
+	// streams the library's React state lags: the ResizeObserver fires *after*
+	// this effect, sees the new scrollHeight, and internally marks isAtBottom=false
+	// before scheduling its own correction via rAF (post-paint). Gating on that
+	// stale value caused the per-delta snap to skip frames, leaving the library
+	// to play catch-up one frame late — exactly the sluggish-velocity feel.
+	//
+	// Instead we read scrollTop/scrollHeight from the DOM directly (always fresh
+	// in useLayoutEffect) and apply a 150 px threshold: if the user has scrolled
+	// more than 150 px above the bottom they're deliberately reading history, so
+	// we leave them alone; otherwise we snap so the next paint is already correct.
+	useLayoutEffect(() => {
+		if (!sending) return;
+		const scrollParent = scrollParentRef.current;
+		if (!scrollParent) return;
+		const maxScrollTop = scrollParent.scrollHeight - scrollParent.clientHeight;
+		// Use scrollHeight - clientHeight - 1 to match the library's internal
+		// targetScrollTop so its subsequent overscroll-correction check is a no-op.
+		const target = Math.max(0, maxScrollTop - 1);
+		if (scrollParent.scrollTop < maxScrollTop - 150) return;
+		if (scrollParent.scrollTop < target) {
+			scrollParent.scrollTop = target;
+		}
+	}, [threadMessages, sending]);
 
 	useLayoutEffect(() => {
 		if (typeof window === "undefined") {
@@ -230,8 +278,8 @@ function ChatThread({
 			return;
 		}
 
-		void scrollToBottom("instant");
-	}, [scrollToBottom, sessionId, usePlainThread]);
+		void scrollToBottomRef.current("instant");
+	}, [sessionId, usePlainThread]);
 
 	const itemContent = useCallback(
 		(index: number, message: RenderedMessage) => {
@@ -376,26 +424,24 @@ function ConversationViewport({
 				className="conversation-scroll-viewport h-full w-full overflow-x-hidden overflow-y-auto"
 			>
 				{usePlainThread ? (
-					<>
-						<div ref={contentRef} className="flex min-h-full flex-col">
-							{Header ? createElement(Header) : null}
-							{data.length === 0
-								? EmptyPlaceholder
-									? createElement(EmptyPlaceholder)
-									: null
-								: data.map((message, index) => (
-										<ConversationRowShell
-											key={message.id ?? `${message.role}:${index}`}
-										>
-											{itemContent(index, message)}
-										</ConversationRowShell>
-									))}
-							<ConversationBottomSpacer />
-						</div>
+					<div ref={contentRef} className="flex min-h-full flex-col">
+						{Header ? createElement(Header) : null}
+						{data.length === 0
+							? EmptyPlaceholder
+								? createElement(EmptyPlaceholder)
+								: null
+							: data.map((message, index) => (
+									<ConversationRowShell
+										key={message.id ?? `${message.role}:${index}`}
+									>
+										{itemContent(index, message)}
+									</ConversationRowShell>
+								))}
 						{showStreamingFooter ? (
 							<StreamingFooter startTime={sendingStartTime} />
 						) : null}
-					</>
+						<ConversationBottomSpacer />
+					</div>
 				) : (
 					<ProgressiveConversationViewport
 						contentRef={contentRef}

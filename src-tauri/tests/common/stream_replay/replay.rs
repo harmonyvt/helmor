@@ -4,7 +4,7 @@
 //! `stabilize` sibling module converts it to snapshot-stable shape.
 
 use helmor_lib::pipeline::types::{HistoricalRecord, MessageRole, ThreadMessageLike};
-use helmor_lib::pipeline::MessagePipeline;
+use helmor_lib::pipeline::{MessagePipeline, StreamingTextDelta};
 use serde_json::Value;
 
 /// A single emission observed while replaying stream events. Kept in raw
@@ -16,6 +16,11 @@ pub enum RawStreamEmission {
         line_index: usize,
         event_type: String,
         message: ThreadMessageLike,
+    },
+    Delta {
+        line_index: usize,
+        event_type: String,
+        delta: StreamingTextDelta,
     },
     Full {
         line_index: usize,
@@ -86,6 +91,13 @@ pub fn replay_stream_events(provider: &str, events: &[Value]) -> StreamReplayFin
                     line_index,
                     event_type,
                     messages,
+                });
+            }
+            PipelineEmit::Delta(delta) => {
+                emissions.push(RawStreamEmission::Delta {
+                    line_index,
+                    event_type,
+                    delta,
                 });
             }
             PipelineEmit::None => {}

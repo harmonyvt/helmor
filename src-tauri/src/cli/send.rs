@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 
 use crate::agents::AgentStreamEvent;
 use crate::pipeline::types::{ExtendedMessagePart, MessagePart};
+use crate::pipeline::StreamingTextDeltaPartType;
 use crate::service;
 
 use super::args::{Cli, ModelsAction, SendArgs};
@@ -51,6 +52,12 @@ pub fn send(args: &SendArgs, cli: &Cli) -> Result<()> {
                         let _ = stdout.flush();
                     }
                 }
+            }
+            AgentStreamEvent::StreamingDelta { delta }
+                if delta.part_type == StreamingTextDeltaPartType::Text =>
+            {
+                let _ = write!(stdout, "{}", delta.text_delta);
+                let _ = stdout.flush();
             }
             AgentStreamEvent::Done {
                 provider,

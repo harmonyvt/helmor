@@ -6,7 +6,7 @@ use crate::agents::AgentStreamEvent;
 
 static LIVE_PROGRESS_PUBLISHED_AT: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
 
-const LIVE_PROGRESS_PUBLISH_INTERVAL: Duration = Duration::from_millis(750);
+const LIVE_PROGRESS_PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) fn should_publish_event(session_id: &str, event: &AgentStreamEvent) -> bool {
     match event {
@@ -20,7 +20,9 @@ pub(super) fn should_publish_event(session_id: &str, event: &AgentStreamEvent) -
             remember_live_progress_publish(session_id);
             true
         }
-        AgentStreamEvent::StreamingPartial { .. } => should_publish_throttled_progress(session_id),
+        AgentStreamEvent::StreamingPartial { .. } | AgentStreamEvent::StreamingDelta { .. } => {
+            should_publish_throttled_progress(session_id)
+        }
         _ => false,
     }
 }
@@ -64,6 +66,7 @@ mod tests {
 
     use super::*;
     use crate::pipeline::types::{MessageRole, ThreadMessageLike};
+    use crate::pipeline::{StreamingTextDelta, StreamingTextDeltaPartType};
 
     fn empty_message() -> ThreadMessageLike {
         ThreadMessageLike {
@@ -103,5 +106,20 @@ mod tests {
 
         assert!(should_publish_event("session-progress-partial", &event));
         assert!(!should_publish_event("session-progress-partial", &event));
+    }
+
+    #[test]
+    fn streaming_delta_progress_is_throttled() {
+        let event = AgentStreamEvent::StreamingDelta {
+            delta: StreamingTextDelta {
+                message_id: "message-1".into(),
+                part_id: "part-1".into(),
+                part_type: StreamingTextDeltaPartType::Text,
+                text_delta: "delta".into(),
+            },
+        };
+
+        assert!(should_publish_event("session-progress-delta", &event));
+        assert!(!should_publish_event("session-progress-delta", &event));
     }
 }

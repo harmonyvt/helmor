@@ -1,0 +1,10 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::StreamingDelta\n{\n    delta: StreamingTextDelta\n    {\n        message_id: \"msg-1\".into(), part_id: \"part-1\".into(), part_type:\n        StreamingTextDeltaPartType::Text, text_delta: \" world\".into(),\n    },\n})"
+---
+delta:
+  messageId: msg-1
+  partId: part-1
+  partType: text
+  textDelta: " world"
+kind: streamingDelta

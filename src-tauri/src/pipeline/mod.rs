@@ -25,7 +25,11 @@ pub mod types;
 use serde_json::Value;
 
 use accumulator::PushOutcome;
-use types::{HistoricalRecord, IntermediateMessage, ThreadMessageLike};
+use serde::{Deserialize, Serialize};
+
+use types::{
+    ExtendedMessagePart, HistoricalRecord, IntermediateMessage, MessagePart, ThreadMessageLike,
+};
 
 // ---------------------------------------------------------------------------
 // Pipeline output
@@ -39,8 +43,30 @@ pub enum PipelineEmit {
     /// Only the streaming partial changed — sent on stream deltas.
     /// The frontend replaces only the trailing streaming message.
     Partial(ThreadMessageLike),
+    /// Append-only text growth inside the current trailing streaming message.
+    /// The frontend can patch its local tail without receiving the whole
+    /// accumulated message again.
+    Delta(StreamingTextDelta),
     /// Nothing changed (e.g. event didn't affect visible output).
     None,
+}
+
+/// Which text-bearing part kind changed in a streaming delta.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamingTextDeltaPartType {
+    Text,
+    Reasoning,
+}
+
+/// Compact append-only update for the current streaming assistant tail.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamingTextDelta {
+    pub message_id: String,
+    pub part_id: String,
+    pub part_type: StreamingTextDeltaPartType,
+    pub text_delta: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +77,7 @@ pub struct MessagePipeline {
     pub accumulator: accumulator::StreamAccumulator,
     context_key: String,
     session_id: String,
+    last_partial: Option<ThreadMessageLike>,
 }
 
 impl MessagePipeline {
@@ -59,6 +86,7 @@ impl MessagePipeline {
             accumulator: accumulator::StreamAccumulator::new(provider, fallback_model),
             context_key: context_key.to_string(),
             session_id: session_id.to_string(),
+            last_partial: None,
         }
     }
 
@@ -118,6 +146,8 @@ impl MessagePipeline {
             .build_partial(&self.context_key, &self.session_id);
         let collected = self.accumulator.collected();
 
+        self.last_partial = None;
+
         match partial {
             Some(p) => {
                 let mut all = Vec::with_capacity(collected.len() + 1);
@@ -155,7 +185,108 @@ impl MessagePipeline {
         };
         msg.streaming = Some(true);
 
-        PipelineEmit::Partial(msg)
+        let delta = self
+            .last_partial
+            .as_ref()
+            .and_then(|previous| derive_streaming_text_delta(previous, &msg));
+        self.last_partial = Some(msg.clone());
+
+        match delta {
+            Some(delta) => PipelineEmit::Delta(delta),
+            None => PipelineEmit::Partial(msg),
+        }
+    }
+}
+
+fn derive_streaming_text_delta(
+    previous: &ThreadMessageLike,
+    next: &ThreadMessageLike,
+) -> Option<StreamingTextDelta> {
+    let message_id = match (&previous.id, &next.id) {
+        (Some(previous_id), Some(next_id)) if previous_id == next_id => next_id.clone(),
+        _ => return None,
+    };
+    if previous.role != next.role || previous.content.len() != next.content.len() {
+        return None;
+    }
+
+    let mut delta: Option<StreamingTextDelta> = None;
+    for (previous_part, next_part) in previous.content.iter().zip(next.content.iter()) {
+        if let Some(next_delta) = text_part_append_delta(&message_id, previous_part, next_part) {
+            if delta.is_some() {
+                return None;
+            }
+            delta = Some(next_delta);
+            continue;
+        }
+
+        if parts_equal(previous_part, next_part) {
+            continue;
+        }
+
+        return None;
+    }
+
+    delta
+}
+
+fn parts_equal(left: &ExtendedMessagePart, right: &ExtendedMessagePart) -> bool {
+    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
+}
+
+fn text_part_append_delta(
+    message_id: &str,
+    previous: &ExtendedMessagePart,
+    next: &ExtendedMessagePart,
+) -> Option<StreamingTextDelta> {
+    match (previous, next) {
+        (
+            ExtendedMessagePart::Basic(MessagePart::Text {
+                id: previous_id,
+                text: previous_text,
+            }),
+            ExtendedMessagePart::Basic(MessagePart::Text {
+                id: next_id,
+                text: next_text,
+            }),
+        ) if previous_id == next_id
+            && next_text.len() > previous_text.len()
+            && next_text.starts_with(previous_text) =>
+        {
+            Some(StreamingTextDelta {
+                message_id: message_id.to_string(),
+                part_id: next_id.clone(),
+                part_type: StreamingTextDeltaPartType::Text,
+                text_delta: next_text[previous_text.len()..].to_string(),
+            })
+        }
+        (
+            ExtendedMessagePart::Basic(MessagePart::Reasoning {
+                id: previous_id,
+                text: previous_text,
+                streaming: previous_streaming,
+                duration_ms: previous_duration_ms,
+            }),
+            ExtendedMessagePart::Basic(MessagePart::Reasoning {
+                id: next_id,
+                text: next_text,
+                streaming: next_streaming,
+                duration_ms: next_duration_ms,
+            }),
+        ) if previous_id == next_id
+            && previous_streaming == next_streaming
+            && previous_duration_ms == next_duration_ms
+            && next_text.len() > previous_text.len()
+            && next_text.starts_with(previous_text) =>
+        {
+            Some(StreamingTextDelta {
+                message_id: message_id.to_string(),
+                part_id: next_id.clone(),
+                part_type: StreamingTextDeltaPartType::Reasoning,
+                text_delta: next_text[previous_text.len()..].to_string(),
+            })
+        }
+        _ => None,
     }
 }
 

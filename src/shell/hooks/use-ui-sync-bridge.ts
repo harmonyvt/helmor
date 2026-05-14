@@ -7,6 +7,7 @@ import {
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
+	mergeStreamingDelta,
 	mergeStreamingPartial,
 	sessionThreadCacheKey,
 	shareMessages,
@@ -113,6 +114,7 @@ function handleUiMutation(
 			invalidateWorkspaceLists(queryClient);
 			{
 				const streamEvent = event.event;
+				let shouldInvalidateWorkspaceSessions = true;
 				if (streamEvent.kind === "update") {
 					queryClient.setQueryData<ThreadMessageLike[]>(
 						sessionThreadCacheKey(event.sessionId),
@@ -150,11 +152,19 @@ function handleUiMutation(
 						streamEvent.message,
 					);
 					options.streamCacheGuard.activeStreamingSessions.add(event.sessionId);
+					shouldInvalidateWorkspaceSessions = false;
+				} else if (streamEvent.kind === "streamingDelta") {
+					mergeStreamingDelta(queryClient, event.sessionId, streamEvent.delta);
+					options.streamCacheGuard.activeStreamingSessions.add(event.sessionId);
+					shouldInvalidateWorkspaceSessions = false;
+				}
+
+				if (shouldInvalidateWorkspaceSessions) {
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
+					});
 				}
 			}
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
-			});
 			return;
 		case "contextUsageChanged":
 			void queryClient.invalidateQueries({
