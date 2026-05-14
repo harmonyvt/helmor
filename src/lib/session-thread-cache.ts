@@ -143,6 +143,44 @@ export function replaceStreamingTail(
 }
 
 /**
+ * Merge a live partial from a background stream into the cached thread.
+ *
+ * Foreground composer streams know the just-sent user message id and can use
+ * `replaceStreamingTail`. Background assignee streams arrive through global UI
+ * sync, so they only know the session id and the latest rendered assistant
+ * partial. Prefer id replacement, then fall back to replacing the current
+ * trailing streaming assistant row, otherwise append the partial.
+ */
+export function mergeStreamingPartial(
+	queryClient: QueryClient,
+	sessionId: string,
+	message: ThreadMessageLike,
+): void {
+	const cacheKey = sessionThreadCacheKey(sessionId);
+	queryClient.setQueryData<ThreadMessageLike[]>(cacheKey, (prev) => {
+		const prior = prev ?? [];
+		const next = [...prior];
+		const id = message.id;
+		const idMatch = id ? next.findIndex((entry) => entry.id === id) : -1;
+
+		if (idMatch >= 0) {
+			next[idMatch] = message;
+			return shareMessages(prior, next);
+		}
+
+		const tailIndex = next.length - 1;
+		const tail = tailIndex >= 0 ? next[tailIndex] : null;
+		if (tail?.role === "assistant" && tail.streaming === true) {
+			next[tailIndex] = message;
+			return shareMessages(prior, next);
+		}
+
+		next.push(message);
+		return shareMessages(prior, next);
+	});
+}
+
+/**
  * Restore a previously captured snapshot. Used for full rollback when
  * a stream errors out before any messages are persisted server-side.
  */

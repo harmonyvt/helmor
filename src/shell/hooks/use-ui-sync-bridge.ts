@@ -1,7 +1,16 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { subscribeUiMutations, type UiMutationEvent } from "@/lib/api";
+import {
+	subscribeUiMutations,
+	type ThreadMessageLike,
+	type UiMutationEvent,
+} from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import {
+	mergeStreamingPartial,
+	sessionThreadCacheKey,
+	shareMessages,
+} from "@/lib/session-thread-cache";
 
 type Options = {
 	queryClient: QueryClient;
@@ -71,6 +80,27 @@ function handleUiMutation(
 					"thread",
 				],
 			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
+			});
+			return;
+		case "sessionStreamEvent":
+			invalidateWorkspaceLists(queryClient);
+			{
+				const streamEvent = event.event;
+				if (streamEvent.kind === "update") {
+					queryClient.setQueryData<ThreadMessageLike[]>(
+						sessionThreadCacheKey(event.sessionId),
+						(prev) => shareMessages(prev ?? [], streamEvent.messages),
+					);
+				} else if (streamEvent.kind === "streamingPartial") {
+					mergeStreamingPartial(
+						queryClient,
+						event.sessionId,
+						streamEvent.message,
+					);
+				}
+			}
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
 			});
