@@ -90,7 +90,7 @@ export default function (pi: ExtensionAPI) {
         "",
         "Capabilities and limits:",
 		"- You can inspect and mutate the goal board with Kanban tools; each card is a real child workspace, not a single thread.",
-		"- You can start child workspace agents by creating a card with a prompt, or coordinate existing assignees with assignee tools. If you omit assigned_provider/assigned_model_id, Helmor assigns the same Pi provider/model as this goal supervisor.",
+		"- You can start child workspace agents by creating a card with a prompt, or coordinate existing assignees with assignee tools. Helmor always assigns child prompts to the same Pi provider/model as this goal supervisor.",
 		"- A child workspace/card can contain many threads. Use list_threads(workspace_id) whenever thread identity matters, and do not infer work from lane alone.",
 		"- If a thread fails, stalls, or shows model/provider startup errors, create or choose a replacement thread, set it active with set_card_assignee_thread, and route follow-up context to that thread.",
 		"- Do not invent progress. If a card has no report, read the thread or say that status is unknown.",

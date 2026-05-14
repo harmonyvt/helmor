@@ -195,9 +195,9 @@ export function createThreadTools(
 		name: "send_thread_message",
 		label: "Send Thread Message",
 		description:
-			"Queue an async supervisor update into a specific thread in a Goal card child workspace. Use this for stale-thread recovery or when a card has multiple sessions and you must target an exact conversation.",
+			"Queue an async supervisor update into a specific thread in a Goal card child workspace using the current Goals Pi model. Use this for stale-thread recovery or when a card has multiple sessions and you must target an exact conversation.",
 		promptSnippet:
-			"send_thread_message({ workspace_id, thread_id, message, priority?, model_id?, permission_mode? }) → { queued, started, sessionId, workspaceId }",
+			"send_thread_message({ workspace_id, thread_id, message, priority?, permission_mode? }) → { queued, started, sessionId, workspaceId }",
 		promptGuidelines: [
 			"Prefer this over send_assignee_message when recovering from a stale or failed assignee thread.",
 			"Use list_threads first if you are unsure which thread should receive the update.",
@@ -213,9 +213,6 @@ export function createThreadTools(
 					description: "Optional priority label such as normal, high, urgent",
 				}),
 			),
-			model_id: Type.Optional(
-				Type.String({ description: "Optional model override for this send" }),
-			),
 			permission_mode: Type.Optional(
 				Type.String({ description: "Optional permission mode override" }),
 			),
@@ -229,7 +226,7 @@ export function createThreadTools(
 					threadId: params.thread_id,
 					message: params.message,
 					priority: params.priority ?? null,
-					modelId: params.model_id ?? null,
+					modelId: null,
 					permissionMode: params.permission_mode ?? null,
 				},
 				emitter,

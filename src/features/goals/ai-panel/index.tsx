@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, ListTree, SlidersHorizontal, X } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { History, ListTree, X } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import type {
@@ -31,9 +31,7 @@ import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
 } from "@/lib/query-client";
-import { useSettings } from "@/lib/settings";
-import { resolvePiHandoffModel } from "../pi-handoff-models";
-import { HandoffModelsView } from "./handoff-models-view";
+import { canonicalPiModelId } from "../pi-handoff-models";
 import { HistoryView } from "./history-view";
 import { ThreadManagerView } from "./thread-manager-view";
 
@@ -64,7 +62,6 @@ export function GoalsAiPanel({
 	onCardCreated,
 }: GoalsAiPanelProps) {
 	const queryClient = useQueryClient();
-	const { settings } = useSettings();
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 	const piModels = useMemo(
 		() =>
@@ -78,9 +75,10 @@ export function GoalsAiPanel({
 	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
 		null,
 	);
-	const [overlayMode, setOverlayMode] = useState<
-		"history" | "models" | "threads" | null
-	>(null);
+	const [overlayMode, setOverlayMode] = useState<"history" | "threads" | null>(
+		null,
+	);
+	const activeSupervisorModelIdRef = useRef<string | null>(null);
 
 	const handleSelectSession = useCallback((sessionId: string | null) => {
 		setSelectedSessionId(sessionId);
@@ -117,11 +115,7 @@ export function GoalsAiPanel({
 	);
 
 	const overlayTitle =
-		overlayMode === "threads"
-			? "Goal threads"
-			: overlayMode === "models"
-				? "Handoff models"
-				: "Conversations";
+		overlayMode === "threads" ? "Goal threads" : "Conversations";
 
 	const handleKanbanToolCall = useCallback(
 		async (event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>) => {
@@ -141,20 +135,25 @@ export function GoalsAiPanel({
 							"Goal setup must finish before Pi can create cards.",
 						);
 					}
-					const requestedProvider =
-						typeof args.assignedProvider === "string"
-							? args.assignedProvider
-							: null;
 					const requestedModelId =
 						typeof args.assignedModelId === "string"
 							? args.assignedModelId
 							: null;
-					const handoffModel = resolvePiHandoffModel({
-						assignedProvider: requestedProvider,
-						assignedModelId: requestedModelId,
-						allowedModelIds: settings.piHandoffModelIds,
-						piModels,
-					});
+					const assignedModelId =
+						activeSupervisorModelIdRef.current ??
+						(requestedModelId
+							? canonicalPiModelId(requestedModelId, piModels)
+							: null);
+					const handoffModel = {
+						assignedProvider: "pi",
+						assignedModelId,
+						requestedModelId,
+						resolvedModelId: assignedModelId,
+						fallbackUsed: false,
+						policyApplied: false,
+						allowedModelIds: assignedModelId ? [assignedModelId] : [],
+						suggestedModelIds: assignedModelId ? [assignedModelId] : [],
+					};
 					const created = await createGoalChildWorkspaceAndStart({
 						goalWorkspace: workspaceId,
 						title: String(args.title ?? "Untitled"),
@@ -279,12 +278,7 @@ export function GoalsAiPanel({
 						threadId: String(args.threadId ?? args.thread_id ?? ""),
 						message: String(args.message ?? ""),
 						priority: typeof args.priority === "string" ? args.priority : null,
-						modelId:
-							typeof args.modelId === "string"
-								? args.modelId
-								: typeof args.model_id === "string"
-									? args.model_id
-									: null,
+						modelId: activeSupervisorModelIdRef.current,
 						permissionMode:
 							typeof args.permissionMode === "string"
 								? args.permissionMode
@@ -352,14 +346,7 @@ export function GoalsAiPanel({
 				);
 			}
 		},
-		[
-			workspaceId,
-			queryClient,
-			onCardCreated,
-			canCreateCards,
-			settings.piHandoffModelIds,
-			piModels,
-		],
+		[workspaceId, queryClient, onCardCreated, canCreateCards, piModels],
 	);
 
 	return (
@@ -372,12 +359,15 @@ export function GoalsAiPanel({
 				onSelectSession={handleSelectSession}
 				onResolveDisplayedSession={handleResolveDisplayedSession}
 				modelFilter={piOnlyModelFilter}
-				buildSendRequestExtras={() => ({
-					kanbanWorkspaceId: workspaceId,
-					kanbanSnapshot,
-					goalTitle: goalTitle ?? null,
-					goalDescription: goalDescription ?? null,
-				})}
+				buildSendRequestExtras={({ model }) => {
+					activeSupervisorModelIdRef.current = model.id;
+					return {
+						kanbanWorkspaceId: workspaceId,
+						kanbanSnapshot,
+						goalTitle: goalTitle ?? null,
+						goalDescription: goalDescription ?? null,
+					};
+				}}
 				onKanbanToolCall={handleKanbanToolCall}
 				compact
 				headerLeading={
@@ -387,16 +377,6 @@ export function GoalsAiPanel({
 				}
 				headerActions={
 					<>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							className="size-7 cursor-pointer"
-							onClick={() => setOverlayMode("models")}
-							aria-label="Manage handoff models"
-						>
-							<SlidersHorizontal className="size-3.5" />
-						</Button>
 						<Button
 							type="button"
 							variant="ghost"
@@ -453,8 +433,6 @@ export function GoalsAiPanel({
 							cards={cards}
 							onOpenThread={handleOpenManagedThread}
 						/>
-					) : overlayMode === "models" ? (
-						<HandoffModelsView piModels={piModels} />
 					) : (
 						<HistoryView
 							workspaceId={workspaceId}

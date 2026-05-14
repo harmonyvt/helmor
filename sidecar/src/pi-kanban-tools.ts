@@ -126,9 +126,9 @@ export function createKanbanTools(
 		name: "create_kanban_card",
 		label: "Create Goal Board Workspace",
 		description:
-			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. `assigned_provider` is optional and must be one of: claude, codex, pi; when omitted, Helmor uses the current Goals Pi supervisor provider/model, subject to the user's Goal handoff model allowlist. Include `prompt` when the child workspace should immediately start an agent thread in the background.",
+			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. Child workspace prompts always use the same Pi provider/model as the current Goals supervisor. Include `prompt` when the child workspace should immediately start an agent thread in the background.",
 		promptSnippet:
-			"create_kanban_card({ title, lane, description?, assigned_provider?, assigned_model_id?, assigned_effort_level?, prompt? }) → new child workspace card and optional background-started thread",
+			"create_kanban_card({ title, lane, description?, assigned_effort_level?, prompt? }) → new child workspace card and optional background-started thread using the current Goals Pi model",
 		promptGuidelines: [
 			"Use create_kanban_card when the user asks to add, create, or track a new goal task workspace.",
 			"Default lane is 'backlog' when unspecified.",
@@ -142,16 +142,6 @@ export function createKanbanTools(
 			}),
 			description: Type.Optional(
 				Type.String({ description: "Optional card description / details" }),
-			),
-			assigned_provider: Type.Optional(
-				Type.String({
-					description: "Optional agent provider: claude | codex | pi",
-				}),
-			),
-			assigned_model_id: Type.Optional(
-				Type.String({
-					description: "Optional Helmor model id for the first thread",
-				}),
 			),
 			assigned_effort_level: Type.Optional(
 				Type.String({
@@ -187,10 +177,8 @@ export function createKanbanTools(
 					title: params.title,
 					lane: params.lane || "backlog",
 					description: params.description,
-					assignedProvider:
-						params.assigned_provider ?? defaults?.assignedProvider ?? null,
-					assignedModelId:
-						params.assigned_model_id ?? defaults?.assignedModelId ?? null,
+					assignedProvider: defaults?.assignedProvider ?? null,
+					assignedModelId: defaults?.assignedModelId ?? null,
 					assignedEffortLevel:
 						params.assigned_effort_level ??
 						defaults?.assignedEffortLevel ??
