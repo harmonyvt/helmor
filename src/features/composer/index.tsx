@@ -12,6 +12,7 @@ import {
 	Check,
 	ChevronDown,
 	ClipboardList,
+	Goal,
 	MessageSquareMore,
 	Paperclip,
 	Square,
@@ -120,6 +121,8 @@ type WorkspaceComposerProps = {
 	onSelectEffort: (level: string) => void;
 	permissionMode: string;
 	onChangePermissionMode: (mode: string) => void;
+	goalMode?: boolean;
+	onChangeGoalMode?: (enabled: boolean) => void;
 	fastMode?: boolean;
 	showFastModePrelude?: boolean;
 	onChangeFastMode?: (enabled: boolean) => void;
@@ -218,6 +221,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	onSelectEffort,
 	permissionMode,
 	onChangePermissionMode,
+	goalMode = false,
+	onChangeGoalMode,
 	fastMode = false,
 	showFastModePrelude = false,
 	onChangeFastMode,
@@ -505,12 +510,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				customTags.length === 0
 			)
 				return;
+			const submittedPrompt = goalMode ? `/goal ${prompt.trim()}` : prompt;
 			if (options?.oppositeFollowUp) {
-				onSubmit(prompt, images, files, customTags, {
+				onSubmit(submittedPrompt, images, files, customTags, {
 					oppositeFollowUp: true,
 				});
 			} else {
-				onSubmit(prompt, images, files, customTags);
+				onSubmit(submittedPrompt, images, files, customTags);
 			}
 			editor.update(() => {
 				$getRoot().clear();
@@ -518,7 +524,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			clearPersistedDraft(contextKey);
 			setHasContent(false);
 		},
-		[onSubmit, contextKey],
+		[onSubmit, contextKey, goalMode],
 	);
 
 	const handleSubmit = useCallback(() => {
@@ -573,11 +579,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			if (togglePlanShortcut && hotkey === togglePlanShortcut) {
 				event.preventDefault();
 				event.stopPropagation();
+				if (goalMode) onChangeGoalMode?.(false);
 				onChangePermissionMode(permissionMode === "plan" ? "default" : "plan");
 			}
 		},
 		[
+			goalMode,
 			inputDisabled,
+			onChangeGoalMode,
 			onChangePermissionMode,
 			permissionMode,
 			togglePlanShortcut,
@@ -1033,13 +1042,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													? "text-plan hover:text-plan"
 													: "text-muted-foreground/70 hover:text-muted-foreground/70",
 											)}
-											onClick={() =>
+											onClick={() => {
+												if (goalMode) onChangeGoalMode?.(false);
 												onChangePermissionMode(
 													permissionMode === "plan"
 														? "bypassPermissions"
 														: "plan",
-												)
-											}
+												);
+											}}
 										>
 											<ClipboardList
 												className="size-[13px]"
@@ -1047,6 +1057,39 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											/>
 											<span>Plan</span>
 										</ComposerButton>
+										{agentType === "codex" && onChangeGoalMode ? (
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<ComposerButton
+														aria-label="Goal mode"
+														aria-pressed={goalMode}
+														disabled={toolbarDisabled}
+														className={cn(
+															`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
+															goalMode
+																? "text-primary hover:text-primary"
+																: "text-muted-foreground/70 hover:text-muted-foreground/70",
+														)}
+														onClick={() => {
+															const next = !goalMode;
+															onChangeGoalMode(next);
+															if (next && permissionMode === "plan") {
+																onChangePermissionMode("bypassPermissions");
+															}
+														}}
+													>
+														<Goal className="size-[13px]" strokeWidth={1.8} />
+														<span>Goal</span>
+													</ComposerButton>
+												</TooltipTrigger>
+												<TooltipContent side="top" sideOffset={4}>
+													<span>
+														Goal mode{goalMode ? " (on)" : ""}: submit as a
+														Codex /goal
+													</span>
+												</TooltipContent>
+											</Tooltip>
+										) : null}
 										{onChangeDebugMode ? (
 											<Tooltip>
 												<TooltipTrigger asChild>
