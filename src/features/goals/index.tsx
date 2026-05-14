@@ -20,12 +20,19 @@ import {
 import { GoalsAiPanel } from "./ai-panel";
 import { GoalBoard } from "./board";
 import { createGoalKanbanSnapshot } from "./board-model";
+import { GoalChangesView } from "./changes-view";
+import { GoalTabBar } from "./goal-tab-bar";
 import { GoalHeader } from "./header";
 import { GoalMetaSheet } from "./metadata-sheet";
 import { AddWorkspacePanel, WorkspaceDetailPanel } from "./panels";
-import { GoalPiChip } from "./pi-chip";
 import { useGoalPiState } from "./pi-state-context";
-import type { GoalAiSurfaceProps, GoalWorkspaceContainerProps } from "./types";
+import { GoalTeamView } from "./team-view";
+import { GoalTimelineView } from "./timeline-view";
+import type {
+	GoalAiSurfaceProps,
+	GoalTabView,
+	GoalWorkspaceContainerProps,
+} from "./types";
 
 const GOALS_AI_PANEL_WIDTH_KEY = "helmor.goalsAiPanelWidth";
 const GOALS_AI_PANEL_DEFAULT_WIDTH = 420;
@@ -68,6 +75,7 @@ export function GoalWorkspaceContainer({
 	// between this goal board and child workspace views.
 	const { piState, setPiState, unreadCount } = useGoalPiState();
 
+	const [activeTab, setActiveTab] = useState<GoalTabView>("board");
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [showAddPanel, setShowAddPanel] = useState(false);
 	const [showGoalSheet, setShowGoalSheet] = useState(false);
@@ -129,6 +137,7 @@ export function GoalWorkspaceContainer({
 		scriptsLoaded: repoScriptsQuery.isSuccess,
 	});
 
+	// Persist AI panel width
 	useEffect(() => {
 		try {
 			window.localStorage.setItem(
@@ -140,6 +149,7 @@ export function GoalWorkspaceContainer({
 		}
 	}, [aiPanelWidth]);
 
+	// AI panel resize drag
 	useEffect(() => {
 		if (!aiPanelResizeState) return;
 		let pendingWidth: number | null = null;
@@ -221,8 +231,7 @@ export function GoalWorkspaceContainer({
 	);
 
 	const selectedWorkspace = useMemo(
-		() =>
-			childWorkspaces.find((workspace) => workspace.id === selectedId) ?? null,
+		() => childWorkspaces.find((ws) => ws.id === selectedId) ?? null,
 		[childWorkspaces, selectedId],
 	);
 
@@ -273,7 +282,7 @@ export function GoalWorkspaceContainer({
 		(childWorkspace: WorkspaceDetail) => {
 			setSelectedId(childWorkspace.id);
 			setShowAddPanel(false);
-			// Minimise Pi to dock — don't destroy it. The chip stays in the header.
+			// Minimise Pi to dock — don't destroy it. The chip stays in the tab bar.
 			setPiState("dock");
 		},
 		[setPiState],
@@ -291,10 +300,52 @@ export function GoalWorkspaceContainer({
 		[handleSelectChildWorkspace, onSelectWorkspaceSession],
 	);
 
+	// Switch tabs — dock Pi and clear board-only panel state when leaving the
+	// board tab so the other views have the full width.
+	const handleTabChange = useCallback(
+		(tab: GoalTabView) => {
+			setActiveTab(tab);
+			if (tab !== "board") {
+				setSelectedId(null);
+				setShowAddPanel(false);
+				if (piState === "panel") setPiState("dock");
+			}
+		},
+		[piState, setPiState],
+	);
+
+	// Pi chip click: on non-board tabs, jump to board first and open the panel.
+	// On the board tab, toggle between panel and dock.
+	const handlePiChipClick = useCallback(() => {
+		if (activeTab !== "board") {
+			setActiveTab("board");
+			setSelectedId(null);
+			setShowAddPanel(false);
+			setPiState("panel");
+			return;
+		}
+		if (piState === "panel") {
+			setPiState("dock");
+		} else {
+			setSelectedId(null);
+			setShowAddPanel(false);
+			setPiState("panel");
+		}
+	}, [activeTab, piState, setPiState]);
+
+	// Add card: always switches to board tab first.
+	const handleShowAddCard = useCallback(() => {
+		setActiveTab("board");
+		setSelectedId(null);
+		setShowAddPanel(true);
+		setPiState("dock");
+	}, [setPiState]);
+
 	// Panel is open when a card is selected, the add-card form is open, or Pi is
-	// in expanded (panel) mode.
-	const isPanelOpen =
-		selectedWorkspace !== null || showAddPanel || piState === "panel";
+	// in expanded (panel) mode — but only while on the board tab.
+	const isBoardPanelOpen =
+		activeTab === "board" &&
+		(selectedWorkspace !== null || showAddPanel || piState === "panel");
 
 	const goalTitle = workspace?.goalTitle ?? workspace?.title ?? "Goal";
 	const goalDescription = workspace?.goalDescription ?? null;
@@ -333,18 +384,6 @@ export function GoalWorkspaceContainer({
 			/>
 		));
 
-	const handlePiChipClick = useCallback(() => {
-		if (!isGoalReadyForChildren) return;
-		if (piState === "panel") {
-			setPiState("dock");
-		} else {
-			// Expanding Pi to panel clears card selection / add panel.
-			setSelectedId(null);
-			setShowAddPanel(false);
-			setPiState("panel");
-		}
-	}, [isGoalReadyForChildren, piState, setPiState]);
-
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
 			<GoalMetaSheet
@@ -355,6 +394,7 @@ export function GoalWorkspaceContainer({
 				onSave={saveGoalMeta}
 			/>
 
+			{/* Title + description rows */}
 			<GoalHeader
 				headerLeading={headerLeading}
 				goalTitle={goalTitle}
@@ -367,92 +407,132 @@ export function GoalWorkspaceContainer({
 				hasSetupScript={hasSetupScript}
 				setupScriptsLoaded={repoScriptsQuery.isSuccess}
 				setupScriptState={setupScriptState}
-				canCreateCards={isGoalReadyForChildren}
 				onEditGoal={() => setShowGoalSheet(true)}
-				onShowAddCard={() => {
-					if (!isGoalReadyForChildren) return;
-					setShowAddPanel(true);
-					setSelectedId(null);
-					setPiState("dock");
-				}}
-				headerActions={
-					<GoalPiChip
-						piState={piState}
-						unreadCount={unreadCount}
-						disabled={!isGoalReadyForChildren}
-						onClick={handlePiChipClick}
-					/>
-				}
 			/>
 
-			<div className="flex min-h-0 flex-1 overflow-hidden">
-				<GoalBoard
-					workspaces={childWorkspaces}
-					selectedId={selectedId}
-					dragState={dragState}
-					dragOverLane={dragOverLane}
-					onSelectWorkspace={handleSelectChildWorkspace}
-					onSelectAssignee={handleSelectAssignee}
-					reportByWorkspaceId={reportByWorkspaceId}
-					onMoveWorkspace={handleMoveWorkspace}
-					onDragStart={(childWorkspaceId, sourceLane) => {
-						setDragState({ workspaceId: childWorkspaceId, sourceLane });
-					}}
-					onDragEnd={() => {
-						setDragState(null);
-						setDragOverLane(null);
-					}}
-					onDragOverLane={setDragOverLane}
-				/>
+			{/* Tab bar: Board | Changes | Team | Timeline  ···  [Pi]  [+ Add] */}
+			<GoalTabBar
+				activeTab={activeTab}
+				onTabChange={handleTabChange}
+				piState={piState}
+				unreadCount={unreadCount}
+				onPiChipClick={handlePiChipClick}
+				canCreateCards={isGoalReadyForChildren}
+				onAddCard={handleShowAddCard}
+			/>
 
-				{isPanelOpen ? (
-					<aside
-						className="relative flex min-h-0 shrink-0 flex-col border-l border-border/70 bg-sidebar/70"
-						style={{ width: piState === "panel" ? aiPanelWidth : 288 }}
-					>
-						{piState === "panel" ? (
-							<>
-								<div
-									role="separator"
-									aria-orientation="vertical"
-									aria-label="Resize AI panel"
-									aria-valuemin={GOALS_AI_PANEL_MIN_WIDTH}
-									aria-valuemax={GOALS_AI_PANEL_MAX_WIDTH}
-									aria-valuenow={aiPanelWidth}
-									tabIndex={0}
-									onMouseDown={handleAiPanelResizeStart}
-									className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-									style={{
-										left: `${-(GOALS_AI_PANEL_HIT_AREA / 2)}px`,
-										width: `${GOALS_AI_PANEL_HIT_AREA}px`,
-									}}
+			{/* ── BOARD tab ─────────────────────────────────────────────────────── */}
+			{activeTab === "board" && (
+				<div className="flex min-h-0 flex-1 overflow-hidden">
+					<GoalBoard
+						workspaces={childWorkspaces}
+						selectedId={selectedId}
+						dragState={dragState}
+						dragOverLane={dragOverLane}
+						onSelectWorkspace={handleSelectChildWorkspace}
+						onSelectAssignee={handleSelectAssignee}
+						reportByWorkspaceId={reportByWorkspaceId}
+						onMoveWorkspace={handleMoveWorkspace}
+						onDragStart={(childWorkspaceId, sourceLane) => {
+							setDragState({ workspaceId: childWorkspaceId, sourceLane });
+						}}
+						onDragEnd={() => {
+							setDragState(null);
+							setDragOverLane(null);
+						}}
+						onDragOverLane={setDragOverLane}
+					/>
+
+					{isBoardPanelOpen ? (
+						<aside
+							className="relative flex min-h-0 shrink-0 flex-col border-l border-border/70 bg-sidebar/70"
+							style={{
+								width: piState === "panel" ? aiPanelWidth : 288,
+							}}
+						>
+							{piState === "panel" ? (
+								<>
+									<div
+										role="separator"
+										aria-orientation="vertical"
+										aria-label="Resize AI panel"
+										aria-valuemin={GOALS_AI_PANEL_MIN_WIDTH}
+										aria-valuemax={GOALS_AI_PANEL_MAX_WIDTH}
+										aria-valuenow={aiPanelWidth}
+										tabIndex={0}
+										onMouseDown={handleAiPanelResizeStart}
+										className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+										style={{
+											left: `${-(GOALS_AI_PANEL_HIT_AREA / 2)}px`,
+											width: `${GOALS_AI_PANEL_HIT_AREA}px`,
+										}}
+									/>
+									{renderGoalAiSurface(aiSurfaceProps)}
+								</>
+							) : selectedWorkspace ? (
+								<WorkspaceDetailPanel
+									workspace={selectedWorkspace}
+									parentWorkspaceTitle={workspace?.title ?? "Goal"}
+									onClose={() => setSelectedId(null)}
+									onMove={(lane) =>
+										handleMoveWorkspace(selectedWorkspace, lane)
+									}
+									onOpen={
+										onSelectWorkspace
+											? () => onSelectWorkspace(selectedWorkspace.id)
+											: undefined
+									}
 								/>
-								{renderGoalAiSurface(aiSurfaceProps)}
-							</>
-						) : selectedWorkspace ? (
-							<WorkspaceDetailPanel
-								workspace={selectedWorkspace}
-								parentWorkspaceTitle={workspace?.title ?? "Goal"}
-								onClose={() => setSelectedId(null)}
-								onMove={(lane) => handleMoveWorkspace(selectedWorkspace, lane)}
-								onOpen={
-									onSelectWorkspace
-										? () => onSelectWorkspace(selectedWorkspace.id)
-										: undefined
-								}
-							/>
-						) : showAddPanel ? (
-							<AddWorkspacePanel
-								value={newWorkspaceTitle}
-								onChange={setNewWorkspaceTitle}
-								onClose={() => setShowAddPanel(false)}
-								onSubmit={addWorkspace}
-								busy={createMutation.isPending}
-							/>
-						) : null}
-					</aside>
-				) : null}
-			</div>
+							) : showAddPanel ? (
+								<AddWorkspacePanel
+									value={newWorkspaceTitle}
+									onChange={setNewWorkspaceTitle}
+									onClose={() => setShowAddPanel(false)}
+									onSubmit={addWorkspace}
+									busy={createMutation.isPending}
+								/>
+							) : null}
+						</aside>
+					) : null}
+				</div>
+			)}
+
+			{/* ── CHANGES tab ───────────────────────────────────────────────────── */}
+			{activeTab === "changes" && (
+				<GoalChangesView
+					workspaces={childWorkspaces}
+					onSelectWorkspace={(ws) => {
+						setActiveTab("board");
+						handleSelectChildWorkspace(ws);
+					}}
+				/>
+			)}
+
+			{/* ── TEAM tab ──────────────────────────────────────────────────────── */}
+			{activeTab === "team" && (
+				<GoalTeamView
+					workspaces={childWorkspaces}
+					assignees={assigneesQuery.data ?? []}
+					onSelectWorkspace={(wsId) => {
+						const ws = childWorkspaces.find((w) => w.id === wsId);
+						if (!ws) return;
+						setActiveTab("board");
+						handleSelectChildWorkspace(ws);
+					}}
+				/>
+			)}
+
+			{/* ── TIMELINE tab ──────────────────────────────────────────────────── */}
+			{activeTab === "timeline" && (
+				<GoalTimelineView
+					workspaces={childWorkspaces}
+					reportByWorkspaceId={reportByWorkspaceId}
+					onSelectWorkspace={(ws) => {
+						setActiveTab("board");
+						handleSelectChildWorkspace(ws);
+					}}
+				/>
+			)}
 		</div>
 	);
 }
