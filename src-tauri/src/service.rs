@@ -314,29 +314,13 @@ pub fn send_message(
     // 6. Persist user message + set session streaming before starting the
     // provider. This makes a just-spawned background handoff visible even if
     // the model takes a long time to emit its first assistant/tool event.
-    let conn = crate::models::db::write_conn()?;
-    let timestamp = crate::models::db::current_timestamp()?;
-    persist_send_start_on(
-        &conn,
+    persist_standalone_send_start(
         &session_id,
         model_id,
         &model.provider,
         params.permission_mode.as_deref(),
         &params.prompt,
-        &timestamp,
-    )?;
-    persist_runtime_notice_on(
-        &conn,
-        &session_id,
-        RuntimeNoticeInput {
-            subtype: "agent_starting",
-            model_id,
-            provider: &model.provider,
-            permission_mode: params.permission_mode.as_deref(),
-            pending_send_id: Some(&request_id),
-            provider_session_id: None,
-            message: Some("Agent process spawned. Waiting for first model output."),
-        },
+        &request_id,
     )?;
 
     if let Ok(historical) = crate::sessions::list_session_historical_records(&session_id) {
@@ -347,8 +331,7 @@ pub fn send_message(
 
     if let Err(error) = sidecar.send(&sidecar_req) {
         let error_text = error.to_string();
-        let _ = persist_runtime_notice_on(
-            &conn,
+        let _ = persist_runtime_notice(
             &session_id,
             RuntimeNoticeInput {
                 subtype: "agent_start_failed",
@@ -360,10 +343,7 @@ pub fn send_message(
                 message: Some(&error_text),
             },
         );
-        let _ = conn.execute(
-            "UPDATE sessions SET status = 'idle', updated_at = datetime('now') WHERE id = ?1",
-            params![session_id],
-        );
+        let _ = set_session_idle(&session_id);
         return Err(error).context("Failed to send request to sidecar");
     }
 
@@ -377,6 +357,7 @@ pub fn send_message(
     let mut persisted_turn_count: usize = 0;
     let mut resolved_model = model.cli_model.to_string();
     let mut resolved_session_id: Option<String> = None;
+    let mut last_persist_error: Option<String> = None;
 
     for event in rx.iter() {
         // Match streaming.rs: only Claude's `system.init` carries an
@@ -390,13 +371,9 @@ pub fn send_message(
             if let Some(sid) = event.session_id() {
                 if resolved_session_id.is_none() {
                     resolved_session_id = Some(sid.to_string());
-                    let _ = conn.execute(
-                        "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
-                        params![session_id, sid, model.provider],
-                    );
-                    let _ = persist_runtime_notice_on(
-                        &conn,
+                    let _ = persist_provider_session_opened(
                         &session_id,
+                        sid,
                         RuntimeNoticeInput {
                             subtype: "provider_session_opened",
                             model_id,
@@ -427,10 +404,12 @@ pub fn send_message(
                 // Persist remaining turns
                 while persisted_turn_count < pipeline.accumulator.turns_len() {
                     let turn = pipeline.accumulator.turn_at(persisted_turn_count);
-                    if let Err(e) = persist_turn(&conn, &session_id, turn) {
+                    if let Err(e) = persist_turn(&session_id, turn) {
+                        last_persist_error = Some(e.to_string());
                         tracing::error!("Failed to persist turn: {e}");
                         break;
                     }
+                    last_persist_error = None;
                     persisted_turn_count += 1;
                 }
 
@@ -442,7 +421,6 @@ pub fn send_message(
                 }
 
                 let _ = finalize_session(
-                    &conn,
                     &session_id,
                     &model.id,
                     &model.provider,
@@ -467,7 +445,7 @@ pub fn send_message(
                         resolved_model: resolved_model.clone(),
                         session_id: resolved_session_id.clone(),
                         working_directory: cwd.clone(),
-                        persisted: true,
+                        persisted: last_persist_error.is_none(),
                         reason,
                     });
                 } else {
@@ -477,7 +455,7 @@ pub fn send_message(
                         resolved_model: resolved_model.clone(),
                         session_id: resolved_session_id.clone(),
                         working_directory: cwd.clone(),
-                        persisted: true,
+                        persisted: last_persist_error.is_none(),
                     });
                 }
                 break;
@@ -508,7 +486,6 @@ pub fn send_message(
                     .unwrap_or("Unknown sidecar error")
                     .to_string();
                 let _ = finalize_session(
-                    &conn,
                     &session_id,
                     &model.id,
                     &model.provider,
@@ -530,10 +507,12 @@ pub fn send_message(
 
                     while persisted_turn_count < pipeline.accumulator.turns_len() {
                         let turn = pipeline.accumulator.turn_at(persisted_turn_count);
-                        if let Err(e) = persist_turn(&conn, &session_id, turn) {
+                        if let Err(e) = persist_turn(&session_id, turn) {
+                            last_persist_error = Some(e.to_string());
                             tracing::error!("Failed to persist turn: {e}");
                             break;
                         }
+                        last_persist_error = None;
                         persisted_turn_count += 1;
                     }
 
@@ -559,12 +538,75 @@ pub fn send_message(
         session_id,
         provider: model.provider.to_string(),
         model: resolved_model,
-        persisted: true,
+        persisted: last_persist_error.is_none(),
         app_running: false,
         queued: false,
         pending_send_id: None,
         agent_started: true,
     })
+}
+
+fn persist_standalone_send_start(
+    session_id: &str,
+    model_id: &str,
+    provider: &str,
+    permission_mode: Option<&str>,
+    prompt: &str,
+    request_id: &str,
+) -> Result<()> {
+    let conn = crate::models::db::write_conn()?;
+    let timestamp = crate::models::db::current_timestamp()?;
+    persist_send_start_on(
+        &conn,
+        session_id,
+        model_id,
+        provider,
+        permission_mode,
+        prompt,
+        &timestamp,
+    )?;
+    persist_runtime_notice_on(
+        &conn,
+        session_id,
+        RuntimeNoticeInput {
+            subtype: "agent_starting",
+            model_id,
+            provider,
+            permission_mode,
+            pending_send_id: Some(request_id),
+            provider_session_id: None,
+            message: Some("Agent process spawned. Waiting for first model output."),
+        },
+    )?;
+    Ok(())
+}
+
+fn persist_provider_session_opened(
+    session_id: &str,
+    provider_session_id: &str,
+    input: RuntimeNoticeInput<'_>,
+) -> Result<()> {
+    let conn = crate::models::db::write_conn()?;
+    conn.execute(
+        "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
+        params![session_id, provider_session_id, input.provider],
+    )?;
+    persist_runtime_notice_on(&conn, session_id, input)?;
+    Ok(())
+}
+
+fn persist_runtime_notice(session_id: &str, input: RuntimeNoticeInput<'_>) -> Result<String> {
+    let conn = crate::models::db::write_conn()?;
+    persist_runtime_notice_on(&conn, session_id, input)
+}
+
+fn set_session_idle(session_id: &str) -> Result<()> {
+    let conn = crate::models::db::write_conn()?;
+    conn.execute(
+        "UPDATE sessions SET status = 'idle', updated_at = datetime('now') WHERE id = ?1",
+        params![session_id],
+    )?;
+    Ok(())
 }
 
 fn persist_send_start_on(
@@ -642,32 +684,28 @@ fn persist_runtime_notice_on(
     Ok(notice_id)
 }
 
-fn persist_turn(
+fn persist_turn(session_id: &str, turn: &crate::pipeline::types::CollectedTurn) -> Result<()> {
+    let conn = crate::models::db::write_conn()?;
+    persist_turn_on(&conn, session_id, turn)
+}
+
+fn persist_turn_on(
     conn: &rusqlite::Connection,
     session_id: &str,
     turn: &crate::pipeline::types::CollectedTurn,
 ) -> Result<()> {
-    let now = crate::models::db::current_timestamp()?;
-    let msg_id = turn.id.clone();
-    let content =
-        crate::image_store::prepare_turn_content_for_persist(session_id, &turn.content_json)?;
-    conn.execute(
-        r#"INSERT INTO session_messages
-           (id, session_id, role, content, created_at, sent_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?5)"#,
-        params![msg_id, session_id, turn.role, content, now],
-    )?;
+    crate::agents::persist_collected_turn_message(conn, session_id, turn)?;
     Ok(())
 }
 
 fn finalize_session(
-    conn: &rusqlite::Connection,
     session_id: &str,
     model_id: &str,
     provider: &str,
     status: &str,
     permission_mode: Option<&str>,
 ) -> Result<()> {
+    let conn = crate::models::db::write_conn()?;
     let now = crate::models::db::current_timestamp()?;
     conn.execute(
         "UPDATE sessions SET status = ?2, model = ?3, agent_type = ?4, last_user_message_at = ?5, updated_at = ?5, permission_mode = COALESCE(?6, permission_mode) WHERE id = ?1",
@@ -1066,6 +1104,73 @@ mod tests {
         assert_eq!(parsed["model"], "pi:azure-openai-responses/gpt-5.5");
         assert_eq!(parsed["permissionMode"], "auto");
         assert_eq!(parsed["pendingSendId"], "send-1");
+    }
+
+    #[test]
+    fn persist_turn_updates_duplicate_item_id_without_moving_order() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT,
+                content TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                sent_at TEXT
+            );
+            "#,
+        )
+        .unwrap();
+
+        let started = crate::pipeline::types::CollectedTurn {
+            id: "codex-item-1".to_string(),
+            role: crate::pipeline::types::MessageRole::Assistant,
+            content_json: serde_json::json!({
+                "type": "item.completed",
+                "item": {
+                    "id": "codex-item-1",
+                    "type": "reasoning",
+                    "status": "in_progress"
+                }
+            })
+            .to_string(),
+        };
+        persist_turn_on(&conn, "session-1", &started).unwrap();
+        conn.execute(
+            "UPDATE session_messages SET sent_at = 'reserved-order', created_at = 'reserved-created' WHERE id = 'codex-item-1'",
+            [],
+        )
+        .unwrap();
+
+        let completed = crate::pipeline::types::CollectedTurn {
+            id: "codex-item-1".to_string(),
+            role: crate::pipeline::types::MessageRole::Assistant,
+            content_json: serde_json::json!({
+                "type": "item.completed",
+                "item": {
+                    "id": "codex-item-1",
+                    "type": "reasoning",
+                    "status": "completed",
+                    "summary": [{"type": "summary_text", "text": "done"}]
+                }
+            })
+            .to_string(),
+        };
+        persist_turn_on(&conn, "session-1", &completed).unwrap();
+
+        let row: (i64, String, String, String) = conn
+            .query_row(
+                "SELECT COUNT(*), content, sent_at, created_at FROM session_messages WHERE id = 'codex-item-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&row.1).unwrap();
+        assert_eq!(row.0, 1);
+        assert_eq!(parsed["item"]["status"], "completed");
+        assert_eq!(row.2, "reserved-order");
+        assert_eq!(row.3, "reserved-created");
     }
 
     #[test]

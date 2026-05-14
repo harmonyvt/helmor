@@ -14,6 +14,7 @@ import {
 } from "@/lib/api";
 import {
 	goalChildWorkspacesQueryOptions,
+	goalOrchestratorStateQueryOptions,
 	helmorQueryKeys,
 	workspaceDetailQueryOptions,
 } from "@/lib/query-client";
@@ -92,6 +93,9 @@ export function GoalWorkspaceContainer({
 
 	const detailQuery = useQuery(workspaceDetailQueryOptions(workspaceId));
 	const childQuery = useQuery(goalChildWorkspacesQueryOptions(workspaceId));
+	const orchestratorQuery = useQuery(
+		goalOrchestratorStateQueryOptions(workspaceId),
+	);
 	const assigneesQuery = useQuery({
 		queryKey: [
 			...helmorQueryKeys.goalChildWorkspaces(workspaceId),
@@ -103,6 +107,28 @@ export function GoalWorkspaceContainer({
 	});
 	const workspace = detailQuery.data;
 	const childWorkspaces = childQuery.data ?? [];
+	const orchestratorStatusByWorkspaceId = useMemo(() => {
+		const map = new Map<string, string>();
+		for (const issue of orchestratorQuery.data?.issues ?? []) {
+			if (issue.childWorkspaceId) {
+				map.set(issue.childWorkspaceId, issue.state);
+			}
+		}
+		for (const retry of orchestratorQuery.data?.runtime.retries ?? []) {
+			const issue = orchestratorQuery.data?.issues.find(
+				(candidate) => candidate.id === retry.issueId,
+			);
+			if (issue?.childWorkspaceId) {
+				map.set(issue.childWorkspaceId, "retry");
+			}
+		}
+		for (const run of orchestratorQuery.data?.runtime.running ?? []) {
+			if (run.workspaceId) {
+				map.set(run.workspaceId, run.phase);
+			}
+		}
+		return map;
+	}, [orchestratorQuery.data]);
 	const reportByWorkspaceId = useMemo(() => {
 		const reports = new Map<string, AssigneeReportMarker>();
 		for (const assignee of assigneesQuery.data ?? []) {
@@ -421,6 +447,12 @@ export function GoalWorkspaceContainer({
 				onAddCard={handleShowAddCard}
 			/>
 
+			{orchestratorQuery.data?.errors.length ? (
+				<div className="border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+					{orchestratorQuery.data.errors[0]}
+				</div>
+			) : null}
+
 			{/* ── BOARD tab ─────────────────────────────────────────────────────── */}
 			{activeTab === "board" && (
 				<div className="flex min-h-0 flex-1 overflow-hidden">
@@ -432,6 +464,7 @@ export function GoalWorkspaceContainer({
 						onSelectWorkspace={handleSelectChildWorkspace}
 						onSelectAssignee={handleSelectAssignee}
 						reportByWorkspaceId={reportByWorkspaceId}
+						orchestratorStatusByWorkspaceId={orchestratorStatusByWorkspaceId}
 						onMoveWorkspace={handleMoveWorkspace}
 						onDragStart={(childWorkspaceId, sourceLane) => {
 							setDragState({ workspaceId: childWorkspaceId, sourceLane });

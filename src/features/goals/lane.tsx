@@ -17,6 +17,7 @@ type GoalLaneProps = {
 	onCardClick: (workspace: WorkspaceDetail) => void;
 	onAssigneeClick?: (workspace: WorkspaceDetail) => void;
 	reportByWorkspaceId?: Map<string, AssigneeReportMarker>;
+	orchestratorStatusByWorkspaceId?: Map<string, string>;
 	onDragStart: (id: string, lane: WorkspaceStatus) => void;
 	onDragEnd: () => void;
 	onDragOver: (event: React.DragEvent) => void;
@@ -33,6 +34,7 @@ export function GoalLane({
 	onCardClick,
 	onAssigneeClick,
 	reportByWorkspaceId,
+	orchestratorStatusByWorkspaceId,
 	onDragStart,
 	onDragEnd,
 	onDragOver,
@@ -77,6 +79,9 @@ export function GoalLane({
 							onAssigneeClick ? () => onAssigneeClick(workspace) : undefined
 						}
 						latestReport={reportByWorkspaceId?.get(workspace.id) ?? null}
+						orchestratorStatus={
+							orchestratorStatusByWorkspaceId?.get(workspace.id) ?? null
+						}
 						onDragStart={() => onDragStart(workspace.id, workspace.status)}
 						onDragEnd={onDragEnd}
 					/>

@@ -1,8 +1,9 @@
 import { QueryClient } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { UiMutationEvent } from "@/lib/api";
+import type { ThreadMessageLike, UiMutationEvent } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { useUiSyncBridge } from "./use-ui-sync-bridge";
 
 const apiMocks = vi.hoisted(() => ({
@@ -27,6 +28,21 @@ function makeClient() {
 	return new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
+}
+
+function makeMessage(
+	id: string,
+	role: "user" | "assistant",
+	text: string,
+	streaming = false,
+): ThreadMessageLike {
+	return {
+		id,
+		role,
+		createdAt: "2026-05-14T00:00:00Z",
+		streaming,
+		content: [{ type: "text", id: `${id}:txt:0`, text }],
+	};
 }
 
 describe("useUiSyncBridge", () => {
@@ -135,6 +151,62 @@ describe("useUiSyncBridge", () => {
 			expect(invalidateQueries).toHaveBeenCalledWith({
 				queryKey: [...helmorQueryKeys.sessionMessages("session-1"), "thread"],
 			});
+		});
+	});
+
+	it("defers thread refetches that would overwrite active stream cache", async () => {
+		const queryClient = makeClient();
+		const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+		const threadKey = sessionThreadCacheKey("session-1");
+
+		renderHook(() =>
+			useUiSyncBridge({
+				queryClient,
+				processPendingCliSends: vi.fn(),
+				reloadSettings: vi.fn(),
+				refreshGithubIdentity: vi.fn(),
+			}),
+		);
+
+		act(() => {
+			capturedSubscription?.({
+				type: "sessionStreamEvent",
+				workspaceId: "child-workspace-1",
+				sessionId: "session-1",
+				event: {
+					kind: "streamingPartial",
+					message: makeMessage("assistant-1", "assistant", "partial", true),
+				},
+			});
+		});
+
+		act(() => {
+			capturedSubscription?.({
+				type: "sessionMessagesChanged",
+				workspaceId: "child-workspace-1",
+				sessionId: "session-1",
+			});
+		});
+
+		expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: threadKey });
+		expect(queryClient.getQueryData<ThreadMessageLike[]>(threadKey)).toEqual([
+			expect.objectContaining({ id: "assistant-1", streaming: true }),
+		]);
+
+		act(() => {
+			capturedSubscription?.({
+				type: "sessionStreamEvent",
+				workspaceId: "child-workspace-1",
+				sessionId: "session-1",
+				event: {
+					kind: "update",
+					messages: [makeMessage("assistant-1", "assistant", "final", false)],
+				},
+			});
+		});
+
+		await waitFor(() => {
+			expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: threadKey });
 		});
 	});
 

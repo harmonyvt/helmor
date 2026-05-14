@@ -42,6 +42,7 @@ pub struct BackgroundRuntimeStatus {
     pub process_state: String,
     pub last_sidecar_event_at: Option<String>,
     pub first_event_received: bool,
+    pub terminal_event_seen: bool,
     pub last_error: Option<String>,
 }
 
@@ -51,6 +52,7 @@ struct RuntimeTelemetry {
     process_state: String,
     last_sidecar_event_at: Option<String>,
     first_event_received: bool,
+    terminal_event_seen: bool,
     last_error: Option<String>,
 }
 
@@ -118,6 +120,7 @@ pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSe
             process_state: if should_start { "spawned" } else { "queued" }.to_string(),
             last_sidecar_event_at: None,
             first_event_received: false,
+            terminal_event_seen: false,
             last_error: None,
         },
     );
@@ -203,6 +206,7 @@ fn spawn_next(app: AppHandle, expected_task_id: String) {
                 process_state: "running".to_string(),
                 last_sidecar_event_at: None,
                 first_event_received: false,
+                terminal_event_seen: false,
                 last_error: None,
             },
         );
@@ -216,16 +220,36 @@ fn spawn_next(app: AppHandle, expected_task_id: String) {
             publish_event(&app, &workspace_id, &session_id, event);
         };
 
-        if let Err(error) = service::send_message(send.params, &mut on_event) {
-            remember_runtime_error(&session_id, &error.to_string());
-            tracing::error!(
-                task_id = %send.task_id,
-                workspace_id = %workspace_id,
-                session_id = %session_id,
-                error = ?error,
-                "background agent send failed"
-            );
-            publish_session_changed(&app, &workspace_id, &session_id);
+        match service::send_message(send.params, &mut on_event) {
+            Ok(result) => {
+                if !result.persisted {
+                    let _ = crate::goal_assignees::notify_runtime_issue_for_session(
+                        &session_id,
+                        "persist_failed",
+                        "Provider completed, but one or more Helmor DB writes failed.",
+                    );
+                } else if result.agent_started {
+                    let _ = crate::goal_assignees::maybe_notify_missing_report_after_terminal(
+                        &session_id,
+                    );
+                }
+            }
+            Err(error) => {
+                remember_runtime_error(&session_id, &error.to_string());
+                let _ = crate::goal_assignees::notify_runtime_issue_for_session(
+                    &session_id,
+                    "background_send_failed",
+                    &format!("Background agent send failed: {error}"),
+                );
+                tracing::error!(
+                    task_id = %send.task_id,
+                    workspace_id = %workspace_id,
+                    session_id = %session_id,
+                    error = ?error,
+                    "background agent send failed"
+                );
+                publish_session_changed(&app, &workspace_id, &session_id);
+            }
         }
 
         maybe_spawn_followup(app, session_id);
@@ -290,7 +314,7 @@ fn maybe_spawn_followup(app: AppHandle, session_id: String) {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         running.remove(&session_id);
-        update_runtime_process_state(&session_id, "idle");
+        settle_runtime_after_send(&session_id);
     }
 }
 
@@ -316,6 +340,9 @@ pub fn get_runtime_status(session_id: &str) -> BackgroundRuntimeStatus {
         first_event_received: telemetry
             .as_ref()
             .is_some_and(|status| status.first_event_received),
+        terminal_event_seen: telemetry
+            .as_ref()
+            .is_some_and(|status| status.terminal_event_seen),
         last_error: telemetry.and_then(|status| status.last_error),
     }
 }
@@ -340,14 +367,40 @@ fn remember_runtime_event(session_id: &str, event: &AgentStreamEvent) {
             process_state: "running".to_string(),
             last_sidecar_event_at: None,
             first_event_received: false,
+            terminal_event_seen: false,
             last_error: None,
         });
     telemetry.last_sidecar_event_at = crate::models::db::current_timestamp().ok();
     telemetry.first_event_received = true;
     match event {
-        AgentStreamEvent::Done { .. } => telemetry.process_state = "completed".to_string(),
-        AgentStreamEvent::Aborted { .. } => telemetry.process_state = "aborted".to_string(),
+        AgentStreamEvent::Done { persisted, .. } => {
+            telemetry.terminal_event_seen = true;
+            if *persisted {
+                telemetry.process_state = "provider_completed".to_string();
+                telemetry.last_error = None;
+            } else {
+                telemetry.process_state = "failed_persist".to_string();
+                telemetry.last_error = Some(
+                    "Provider completed, but one or more Helmor DB writes failed.".to_string(),
+                );
+            }
+        }
+        AgentStreamEvent::Aborted { persisted, .. } => {
+            telemetry.terminal_event_seen = true;
+            telemetry.process_state = if *persisted {
+                "aborted".to_string()
+            } else {
+                "failed_persist".to_string()
+            };
+            if !*persisted {
+                telemetry.last_error =
+                    Some("Provider aborted, but one or more Helmor DB writes failed.".to_string());
+            } else {
+                telemetry.last_error = None;
+            }
+        }
         AgentStreamEvent::Error { message, .. } => {
+            telemetry.terminal_event_seen = true;
             telemetry.process_state = "failed".to_string();
             telemetry.last_error = Some(message.clone());
         }
@@ -367,20 +420,29 @@ fn remember_runtime_error(session_id: &str, error: &str) {
             process_state: "failed".to_string(),
             last_sidecar_event_at: None,
             first_event_received: false,
+            terminal_event_seen: true,
             last_error: None,
         });
     telemetry.process_state = "failed".to_string();
+    telemetry.terminal_event_seen = true;
     telemetry.last_error = Some(error.to_string());
 }
 
-fn update_runtime_process_state(session_id: &str, process_state: &str) {
+fn settle_runtime_after_send(session_id: &str) {
     let runtime = SESSION_RUNTIME.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(telemetry) = runtime
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get_mut(session_id)
     {
-        telemetry.process_state = process_state.to_string();
+        if telemetry.process_state == "provider_completed" {
+            telemetry.process_state = "completed".to_string();
+        } else if !matches!(
+            telemetry.process_state.as_str(),
+            "completed" | "aborted" | "failed" | "failed_persist"
+        ) {
+            telemetry.process_state = "idle".to_string();
+        }
     }
 }
 

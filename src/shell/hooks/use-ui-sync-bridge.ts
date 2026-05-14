@@ -19,6 +19,17 @@ type Options = {
 	refreshGithubIdentity: () => Promise<void> | void;
 };
 
+type StreamCacheGuard = {
+	activeStreamingSessions: Set<string>;
+	deferredMessageInvalidations: Map<string, string>;
+};
+
+function hasStreamingMessage(
+	messages: ThreadMessageLike[] | undefined,
+): boolean {
+	return (messages ?? []).some((message) => message.streaming === true);
+}
+
 function invalidateAllWorkspaceChanges(queryClient: QueryClient) {
 	void queryClient.invalidateQueries({
 		predicate: (query) => query.queryKey[0] === "workspaceChanges",
@@ -40,7 +51,9 @@ function invalidateWorkspaceLists(queryClient: QueryClient) {
 function handleUiMutation(
 	event: UiMutationEvent,
 	queryClient: QueryClient,
-	options: Omit<Options, "queryClient">,
+	options: Omit<Options, "queryClient"> & {
+		streamCacheGuard: StreamCacheGuard;
+	},
 ) {
 	switch (event.type) {
 		case "workspaceListChanged":
@@ -74,12 +87,24 @@ function handleUiMutation(
 			return;
 		case "sessionMessagesChanged":
 			invalidateWorkspaceLists(queryClient);
-			void queryClient.invalidateQueries({
-				queryKey: [
-					...helmorQueryKeys.sessionMessages(event.sessionId),
-					"thread",
-				],
-			});
+			{
+				const cacheKey = sessionThreadCacheKey(event.sessionId);
+				const liveMessages =
+					queryClient.getQueryData<ThreadMessageLike[]>(cacheKey);
+				if (
+					options.streamCacheGuard.activeStreamingSessions.has(
+						event.sessionId,
+					) &&
+					hasStreamingMessage(liveMessages)
+				) {
+					options.streamCacheGuard.deferredMessageInvalidations.set(
+						event.sessionId,
+						event.workspaceId,
+					);
+				} else {
+					void queryClient.invalidateQueries({ queryKey: cacheKey });
+				}
+			}
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
 			});
@@ -93,12 +118,38 @@ function handleUiMutation(
 						sessionThreadCacheKey(event.sessionId),
 						(prev) => shareMessages(prev ?? [], streamEvent.messages),
 					);
+					if (hasStreamingMessage(streamEvent.messages)) {
+						options.streamCacheGuard.activeStreamingSessions.add(
+							event.sessionId,
+						);
+					} else {
+						options.streamCacheGuard.activeStreamingSessions.delete(
+							event.sessionId,
+						);
+						const deferredWorkspaceId =
+							options.streamCacheGuard.deferredMessageInvalidations.get(
+								event.sessionId,
+							);
+						if (deferredWorkspaceId) {
+							options.streamCacheGuard.deferredMessageInvalidations.delete(
+								event.sessionId,
+							);
+							void queryClient.invalidateQueries({
+								queryKey: sessionThreadCacheKey(event.sessionId),
+							});
+							void queryClient.invalidateQueries({
+								queryKey:
+									helmorQueryKeys.workspaceSessions(deferredWorkspaceId),
+							});
+						}
+					}
 				} else if (streamEvent.kind === "streamingPartial") {
 					mergeStreamingPartial(
 						queryClient,
 						event.sessionId,
 						streamEvent.message,
 					);
+					options.streamCacheGuard.activeStreamingSessions.add(event.sessionId);
 				}
 			}
 			void queryClient.invalidateQueries({
@@ -212,6 +263,14 @@ function handleUiMutation(
 				});
 			}
 			return;
+		case "goalOrchestratorStateChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.goalOrchestratorState(event.goalWorkspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.goalChildWorkspaces(event.goalWorkspaceId),
+			});
+			return;
 		case "pendingCliSendQueued":
 			void options.processPendingCliSends();
 			return;
@@ -227,6 +286,10 @@ export function useUiSyncBridge({
 	const processPendingCliSendsRef = useRef(processPendingCliSends);
 	const reloadSettingsRef = useRef(reloadSettings);
 	const refreshGithubIdentityRef = useRef(refreshGithubIdentity);
+	const streamCacheGuardRef = useRef<StreamCacheGuard>({
+		activeStreamingSessions: new Set(),
+		deferredMessageInvalidations: new Map(),
+	});
 
 	useEffect(() => {
 		processPendingCliSendsRef.current = processPendingCliSends;
@@ -246,6 +309,7 @@ export function useUiSyncBridge({
 				processPendingCliSends: () => processPendingCliSendsRef.current(),
 				reloadSettings: () => reloadSettingsRef.current(),
 				refreshGithubIdentity: () => refreshGithubIdentityRef.current(),
+				streamCacheGuard: streamCacheGuardRef.current,
 			});
 		});
 

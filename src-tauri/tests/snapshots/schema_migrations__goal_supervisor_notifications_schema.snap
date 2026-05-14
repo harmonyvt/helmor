@@ -1,0 +1,62 @@
+---
+source: tests/schema_migrations.rs
+expression: goal_supervisor_notifications_schema(&connection)
+---
+columns:
+  - default: ~
+    name: id
+    notNull: false
+    primaryKey: true
+    type: TEXT
+  - default: ~
+    name: goal_workspace_id
+    notNull: true
+    primaryKey: false
+    type: TEXT
+  - default: ~
+    name: card_workspace_id
+    notNull: true
+    primaryKey: false
+    type: TEXT
+  - default: ~
+    name: assignee_session_id
+    notNull: true
+    primaryKey: false
+    type: TEXT
+  - default: ~
+    name: message_id
+    notNull: true
+    primaryKey: false
+    type: TEXT
+  - default: ~
+    name: report_type
+    notNull: true
+    primaryKey: false
+    type: TEXT
+  - default: ~
+    name: excerpt
+    notNull: true
+    primaryKey: false
+    type: TEXT
+  - default: ~
+    name: delivered_to_session_id
+    notNull: false
+    primaryKey: false
+    type: TEXT
+  - default: ~
+    name: delivered_at
+    notNull: false
+    primaryKey: false
+    type: TEXT
+  - default: "datetime('now')"
+    name: created_at
+    notNull: true
+    primaryKey: false
+    type: TEXT
+indexes:
+  - name: idx_goal_supervisor_notifications_goal
+    sql: "CREATE INDEX idx_goal_supervisor_notifications_goal ON goal_supervisor_notifications(goal_workspace_id, created_at)"
+  - name: sqlite_autoindex_goal_supervisor_notifications_1
+    sql: ~
+  - name: sqlite_autoindex_goal_supervisor_notifications_2
+    sql: ~

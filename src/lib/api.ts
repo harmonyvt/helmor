@@ -643,6 +643,107 @@ export type GoalCard = {
 	updatedAt: string;
 };
 
+export type GoalOrchestratorIssueState =
+	| "backlog"
+	| "ready"
+	| "in-progress"
+	| "review"
+	| "done"
+	| "canceled"
+	| "blocked";
+
+export type GoalOrchestratorIssue = {
+	id: string;
+	tracker: "local" | "linear" | "github" | "jira";
+	goalWorkspaceId: string;
+	identifier?: string | null;
+	title: string;
+	description?: string | null;
+	state: GoalOrchestratorIssueState;
+	labels: string[];
+	blockers: string[];
+	priority: number;
+	childWorkspaceId?: string | null;
+	assignedProvider?: string | null;
+	assignedModelId?: string | null;
+	assignedEffortLevel?: string | null;
+	updatedAt?: string | null;
+};
+
+export type GoalOrchestratorRunPhase =
+	| "claimed"
+	| "running"
+	| "succeeded"
+	| "failed"
+	| "released"
+	| "skipped";
+
+export type GoalOrchestratorRunAttempt = {
+	attemptId: string;
+	issueId: string;
+	workspaceId?: string | null;
+	sessionId?: string | null;
+	phase: GoalOrchestratorRunPhase;
+	startedAt: string;
+	finishedAt?: string | null;
+	error?: string | null;
+	provider?: string | null;
+	model?: string | null;
+	pendingSendId?: string | null;
+};
+
+export type GoalOrchestratorRuntimeState = {
+	goalWorkspaceId: string;
+	running: GoalOrchestratorRunAttempt[];
+	claimed: string[];
+	retries: Array<{
+		issueId: string;
+		attempts: number;
+		nextRetryAt: string;
+		lastError?: string | null;
+	}>;
+	completedIssueIds: string[];
+	liveSessions: Array<{
+		workspaceId: string;
+		sessionId: string;
+		status: string;
+		pendingSendId?: string | null;
+		lastEventAt?: string | null;
+	}>;
+	tokenSnapshot?: {
+		provider: string;
+		remainingTokens?: number | null;
+		resetAt?: string | null;
+	} | null;
+	configErrors: string[];
+	updatedAt: string;
+};
+
+export type GoalOrchestratorStatus = {
+	goalWorkspaceId: string;
+	workflowLoaded: boolean;
+	workflowPath?: string | null;
+	trackerType: string;
+	pollingEnabled: boolean;
+	maxConcurrent: number;
+	issueCount: number;
+	dispatchableCount: number;
+	runningCount: number;
+	retryCount: number;
+	completedCount: number;
+	issues: GoalOrchestratorIssue[];
+	runtime: GoalOrchestratorRuntimeState;
+	errors: string[];
+};
+
+export type GoalOrchestratorTickSummary = {
+	goalWorkspaceId: string;
+	dispatched: number;
+	skipped: number;
+	errors: string[];
+	status: GoalOrchestratorStatus;
+};
+
 export type UpsertGoalCardInput = {
 	id?: string | null;
 	goalWorkspaceId: string;
@@ -776,8 +877,11 @@ export type ThreadRuntimeStatus = {
 	processState: string;
 	lastSidecarEventAt?: string | null;
 	lastPersistedMessageAt?: string | null;
+	persistedMessageCount: number;
+	persistenceState: string;
 	lastError?: string | null;
 	firstEventReceived: boolean;
+	terminalEventSeen: boolean;
 	stalledSeconds?: number | null;
 };
 
@@ -1685,6 +1789,7 @@ export type UiMutationEvent =
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
+	| { type: "goalOrchestratorStateChanged"; goalWorkspaceId: string }
 	| {
 			type: "pendingCliSendQueued";
 			pendingSendId: string;
@@ -2534,6 +2639,22 @@ export async function convertWorkspaceToGoal(
 
 export async function listGoalCards(workspaceId: string): Promise<GoalCard[]> {
 	return invoke<GoalCard[]>("list_goal_cards", { workspaceId });
+}
+
+export async function getGoalOrchestratorState(
+	goalWorkspaceId: string,
+): Promise<GoalOrchestratorStatus> {
+	return invoke<GoalOrchestratorStatus>("get_goal_orchestrator_state", {
+		goalWorkspaceId,
+	});
+}
+
+export async function runGoalOrchestratorTick(
+	goalWorkspaceId: string,
+): Promise<GoalOrchestratorTickSummary> {
+	return invoke<GoalOrchestratorTickSummary>("run_goal_orchestrator_tick", {
+		goalWorkspaceId,
+	});
 }
 
 export async function upsertGoalCard(

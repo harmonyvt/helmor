@@ -479,6 +479,9 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     connection
         .execute_batch(GOAL_CARDS_SCHEMA)
         .context("Failed to ensure goal_cards schema")?;
+    connection
+        .execute_batch(GOAL_SUPERVISOR_NOTIFICATIONS_SCHEMA)
+        .context("Failed to ensure goal_supervisor_notifications schema")?;
 
     if has_table(connection, "pending_cli_sends") {
         for (column, definition) in [
@@ -563,6 +566,24 @@ CREATE TABLE IF NOT EXISTS goal_cards (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+"#;
+
+const GOAL_SUPERVISOR_NOTIFICATIONS_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS goal_supervisor_notifications (
+    id TEXT PRIMARY KEY,
+    goal_workspace_id TEXT NOT NULL,
+    card_workspace_id TEXT NOT NULL,
+    assignee_session_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    report_type TEXT NOT NULL,
+    excerpt TEXT NOT NULL,
+    delivered_to_session_id TEXT,
+    delivered_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(goal_workspace_id, card_workspace_id, assignee_session_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_goal_supervisor_notifications_goal
+    ON goal_supervisor_notifications(goal_workspace_id, created_at);
 "#;
 
 const SCHEMA_SQL: &str = r#"
@@ -735,6 +756,20 @@ CREATE TABLE IF NOT EXISTS session_delegations (
     completed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS goal_supervisor_notifications (
+    id TEXT PRIMARY KEY,
+    goal_workspace_id TEXT NOT NULL,
+    card_workspace_id TEXT NOT NULL,
+    assignee_session_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    report_type TEXT NOT NULL,
+    excerpt TEXT NOT NULL,
+    delivered_to_session_id TEXT,
+    delivered_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(goal_workspace_id, card_workspace_id, assignee_session_id, message_id)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
@@ -742,6 +777,7 @@ CREATE INDEX IF NOT EXISTS idx_session_command_audit_log_session ON session_comm
 CREATE INDEX IF NOT EXISTS idx_session_delegations_parent ON session_delegations(parent_session_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_child ON session_delegations(child_session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_parent_message ON session_delegations(parent_message_id);
+CREATE INDEX IF NOT EXISTS idx_goal_supervisor_notifications_goal ON goal_supervisor_notifications(goal_workspace_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_browser_tabs_workspace_order ON workspace_browser_tabs(workspace_id, display_order);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_browser_tabs_one_active ON workspace_browser_tabs(workspace_id) WHERE active = 1;
