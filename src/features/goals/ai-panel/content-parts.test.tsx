@@ -45,12 +45,12 @@ describe("Goals AI panel content parts", () => {
 				level: 3,
 			}),
 		).toBeInTheDocument();
-		expect(screen.getByText("Card:", { exact: false })).toBeInTheDocument();
+		expect(screen.getByText("Capybara joke test 4")).toBeInTheDocument();
 		expect(
 			screen.queryByText(/full spa-cial punchline/),
 		).not.toBeInTheDocument();
 
-		fireEvent.click(screen.getByRole("button", { name: "Show full excerpt" }));
+		fireEvent.click(screen.getByRole("button", { name: /Show full excerpt/ }));
 
 		expect(
 			await screen.findByRole("heading", { name: "Completed", level: 2 }),

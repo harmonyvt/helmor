@@ -8,6 +8,7 @@ export type GoalPiPhysicalState = "panel" | "dock" | "sheet";
 export type GoalTabView =
 	| "board"
 	| "changes"
+	| "comments"
 	| "team"
 	| "timeline"
 	| "terminal"

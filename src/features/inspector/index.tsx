@@ -468,7 +468,9 @@ export function WorkspaceInspectorSidebar({
 		showIngestTab,
 	]);
 
-	// Only allow hover-to-zoom when the active tab has real terminal output.
+	// Only allow hover-to-zoom when the active tab has substantial scrollable
+	// content. Comments can hold long review threads; script placeholders do not
+	// benefit from enlargement.
 	// "idle" = script configured but never run; "no-script" = nothing to run.
 	// In both cases the body is a placeholder (Run / Open-settings button)
 	// that doesn't benefit from — and shouldn't trigger — the enlargement.
@@ -479,13 +481,15 @@ export function WorkspaceInspectorSidebar({
 				? archiveScriptState
 				: runScriptState;
 	const canHoverExpand =
-		activeTab === "comments" || activeTab === "ingest"
-			? false
-			: isTerminalTabActive
-				? true
-				: scriptTabState === "running" ||
-					scriptTabState === "success" ||
-					scriptTabState === "failure";
+		activeTab === "comments"
+			? showCommentsTab
+			: activeTab === "ingest"
+				? false
+				: isTerminalTabActive
+					? true
+					: scriptTabState === "running" ||
+						scriptTabState === "success" ||
+						scriptTabState === "failure";
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 

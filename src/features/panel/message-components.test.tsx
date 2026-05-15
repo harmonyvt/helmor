@@ -279,7 +279,7 @@ describe("MemoConversationMessage plan review", () => {
 		).toBeInTheDocument();
 		expect(screen.queryByText("spa-cial")).not.toBeInTheDocument();
 
-		fireEvent.click(screen.getByRole("button", { name: "Show full excerpt" }));
+		fireEvent.click(screen.getByRole("button", { name: /Show full excerpt/ }));
 
 		expect(
 			await screen.findByRole("heading", { name: "Completed", level: 2 }),
