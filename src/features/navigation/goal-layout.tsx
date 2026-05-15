@@ -1,7 +1,6 @@
 import {
 	Archive,
 	ArrowRight,
-	Bot,
 	ChevronRight,
 	Circle,
 	Folder,
@@ -74,14 +73,14 @@ export type GoalVirtualItem =
 	| { kind: "group-gap"; size: number }
 	| { kind: "bottom-padding" };
 
-export const GOAL_PROJECT_HEADER_HEIGHT = 34;
-export const GOAL_HEADER_HEIGHT = 32;
-export const GOAL_CHILD_HEIGHT = 30;
+export const GOAL_PROJECT_HEADER_HEIGHT = 36;
+export const GOAL_HEADER_HEIGHT = 36;
+export const GOAL_CHILD_HEIGHT = 32;
 export const GOAL_LANE_DROP_HEIGHT = 30;
-export const GOAL_UNGROUPED_HEADER_HEIGHT = 34;
+export const GOAL_UNGROUPED_HEADER_HEIGHT = 36;
 export const GOAL_ROW_HEIGHT = 32;
-export const GOAL_GROUP_GAP = 10;
-export const GOAL_PROJECT_GAP = 6;
+export const GOAL_GROUP_GAP = 16;
+export const GOAL_PROJECT_GAP = 10;
 export const GOAL_BOTTOM_PADDING = 8;
 
 export const GOAL_UNGROUPED_KEY = "goal:__ungrouped__";
@@ -323,7 +322,7 @@ function GoalProjectHeader({
 		<button
 			type="button"
 			onClick={onToggle}
-			className="group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60"
+			className="group/trigger flex h-9 w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60"
 		>
 			<span className="flex min-w-0 items-center gap-2">
 				<WorkspaceAvatar
@@ -435,8 +434,8 @@ function GoalFolderHeader({
 				<div
 					style={indent ? { paddingLeft: `${indent}px` } : undefined}
 					className={cn(
-						"group/folder flex items-center gap-0.5 rounded-md px-1 transition-colors",
-						isOpen && (hasChildren || isDragTarget) && "bg-muted/30",
+						"group/folder flex h-9 items-center gap-1 rounded-md px-1 transition-colors",
+						isOpen && (hasChildren || isDragTarget) && "bg-accent/25",
 						isDragTarget && "ring-1 ring-ring/40",
 					)}
 					onDragEnter={onDragEnter}
@@ -468,17 +467,17 @@ function GoalFolderHeader({
 						type="button"
 						onClick={onToggle}
 						className={cn(
-							"flex min-w-0 flex-1 cursor-pointer select-none items-center gap-1.5 rounded-md px-1.5 py-1 text-[12.5px] font-semibold leading-tight tracking-[-0.01em] transition-colors",
+							"flex min-w-0 flex-1 cursor-pointer select-none items-center gap-2 rounded-md px-1.5 py-1.5 text-[13px] font-semibold leading-tight tracking-[-0.01em] transition-colors",
 							selected
 								? "workspace-row-selected text-foreground"
-								: "text-foreground/75 hover:text-foreground",
+								: "text-foreground/85 hover:text-foreground",
 						)}
 					>
 						<span className="relative inline-flex shrink-0 items-center justify-center">
 							<FolderIcon
 								className={cn(
-									"size-[13px] transition-colors",
-									selected ? "text-foreground/80" : "text-muted-foreground/70",
+									"size-3.5 transition-colors",
+									selected ? "text-foreground/80" : "text-muted-foreground/60",
 								)}
 								strokeWidth={1.7}
 							/>
@@ -499,30 +498,10 @@ function GoalFolderHeader({
 						<span className="truncate">{goalGroup.goalTitle}</span>
 					</button>
 
-					{/* Pi button — navigate to goal AND open the AI surface */}
-					{actions.onOpenGoalAiSurface ? (
-						<button
-							type="button"
-							onClick={() =>
-								actions.onOpenGoalAiSurface?.(goalGroup.goalWorkspaceId)
-							}
-							className={cn(
-								"flex size-5 shrink-0 cursor-pointer items-center justify-center rounded transition-all hover:bg-accent hover:text-foreground",
-								isGoalAiRunning
-									? "text-chart-2 opacity-100"
-									: "text-muted-foreground/30 opacity-0 group-hover/folder:opacity-100",
-							)}
-							aria-label="Open Goal AI surface"
-							title="Open Goal AI surface"
-						>
-							<Bot className="size-3" strokeWidth={2.2} />
-						</button>
-					) : null}
-
 					<button
 						type="button"
 						onClick={() => onSelect?.(goalGroup.goalWorkspaceId)}
-						className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/30 opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover/folder:opacity-100"
+						className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/40 opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover/folder:opacity-100"
 						aria-label="Open goal workspace"
 						title="Open goal workspace"
 					>
@@ -532,7 +511,7 @@ function GoalFolderHeader({
 					{hasChildren ? (
 						<Badge
 							variant="secondary"
-							className="mr-0.5 h-4 min-w-[16px] shrink-0 justify-center rounded-full px-1 text-[9.5px] leading-none"
+							className="mr-0.5 h-4 min-w-[16px] shrink-0 justify-center rounded-full px-1 text-[9.5px] leading-none opacity-60 group-hover/folder:opacity-0"
 						>
 							{goalGroup.childRows.length}
 						</Badge>
@@ -692,33 +671,33 @@ function GoalChildRow({
 				}
 			}}
 			className={cn(
-				"group/child relative flex h-[30px] w-full cursor-pointer select-none items-center gap-2 rounded-md pl-8 pr-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
+				"group/child relative flex h-8 w-full cursor-pointer select-none items-center gap-2 rounded-md pl-8 pr-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
 				selected
 					? "workspace-row-selected font-medium text-foreground"
-					: "text-foreground/65 hover:bg-accent/50 hover:text-foreground/90",
+					: "text-foreground/75 hover:bg-accent/50 hover:text-foreground/95",
 			)}
 		>
 			{/* Tree connector — vertical spine, capped at midpoint for the last item */}
 			<div
 				className={cn(
-					"pointer-events-none absolute left-[23px] w-px bg-border/50",
+					"pointer-events-none absolute left-[23px] w-px bg-border/65",
 					isLast ? "bottom-1/2 top-0" : "inset-y-0",
 				)}
 			/>
 			{/* Horizontal branch stub */}
-			<div className="pointer-events-none absolute left-[23px] top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/50" />
+			<div className="pointer-events-none absolute left-[23px] top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/65" />
 
 			{/* Status icon — colored by workspace status */}
 			<GroupIcon tone={statusTone} />
 
 			{/* Title */}
-			<span className="row-content-fade min-w-0 flex-1 truncate text-[12.5px] font-medium leading-tight">
+			<span className="row-content-fade min-w-0 flex-1 truncate text-[13px] font-medium leading-tight">
 				{displayTitle}
 			</span>
 
 			{/* PR badge — fades on hover to make room for archive button */}
 			{prNumber !== null ? (
-				<span className="shrink-0 rounded px-1 py-0 text-[10px] tabular-nums font-medium text-foreground/35 transition-opacity group-hover/child:opacity-0">
+				<span className="shrink-0 rounded px-1 py-0 text-[10px] tabular-nums font-medium text-foreground/45 transition-opacity group-hover/child:opacity-0">
 					#{prNumber}
 				</span>
 			) : null}
@@ -951,7 +930,7 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 		return (
 			<button
 				type="button"
-				className="group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 disabled:cursor-default"
+				className="group/trigger flex h-9 w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 disabled:cursor-default"
 				disabled={item.count === 0}
 				onClick={handleUngroupedToggle}
 			>
@@ -987,7 +966,7 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 		return (
 			<button
 				type="button"
-				className="group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 disabled:cursor-default"
+				className="group/trigger flex h-9 w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 disabled:cursor-default"
 				disabled={item.count === 0}
 				onClick={handleArchivedToggle}
 			>
