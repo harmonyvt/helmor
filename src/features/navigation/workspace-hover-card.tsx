@@ -487,16 +487,26 @@ export function WorkspaceHoverCard({
 	row,
 	isSending,
 	children,
+	disabled = false,
 }: {
 	row: WorkspaceRow;
 	isSending?: boolean;
 	children: React.ReactNode;
+	/** When true the hover card is suppressed (e.g. during drag). */
+	disabled?: boolean;
 }) {
 	const [isOpen, setIsOpen] = useState(false);
 	// Measured on open so the card's left edge snaps to the sidebar divider.
 	const [sideOffset, setSideOffset] = useState(HOVER_CARD_DEFAULT_SIDE_OFFSET);
+
+	// Close immediately whenever the card becomes disabled (drag started).
+	useEffect(() => {
+		if (disabled) setIsOpen(false);
+	}, [disabled]);
+
 	const handleOpenChange = useCallback(
 		(open: boolean) => {
+			if (disabled) return;
 			setIsOpen(open);
 			if (!open) return;
 			const rowEl = document.querySelector<HTMLElement>(
@@ -515,7 +525,7 @@ export function WorkspaceHoverCard({
 			);
 			setSideOffset(offset);
 		},
-		[row.id],
+		[row.id, disabled],
 	);
 
 	const branch = row.branch ?? null;
@@ -568,6 +578,7 @@ export function WorkspaceHoverCard({
 		<HoverCardRoot
 			openDelay={400}
 			closeDelay={80}
+			open={isOpen}
 			onOpenChange={handleOpenChange}
 		>
 			<HoverCardTrigger asChild>{children}</HoverCardTrigger>

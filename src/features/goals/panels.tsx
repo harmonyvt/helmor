@@ -2,7 +2,12 @@ import { GitBranch, LoaderCircle, Plus, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { WorkspaceDetail, WorkspaceStatus } from "@/lib/api";
-import { GOAL_LANES } from "./board-model";
+import {
+	GOAL_LANES,
+	goalLaneForWorkspace,
+	isMergedGoalWorkspace,
+	isMovableGoalLaneId,
+} from "./board-model";
 
 export function WorkspaceDetailPanel({
 	workspace: ws,
@@ -17,7 +22,12 @@ export function WorkspaceDetailPanel({
 	onMove: (lane: WorkspaceStatus) => void;
 	onOpen?: () => void;
 }) {
-	const currentLane = GOAL_LANES.find((lane) => lane.id === ws.status);
+	const currentLaneId = goalLaneForWorkspace(ws);
+	const currentLane = GOAL_LANES.find((lane) => lane.id === currentLaneId);
+	const moveLanes = GOAL_LANES.filter(
+		(lane): lane is (typeof GOAL_LANES)[number] & { id: WorkspaceStatus } =>
+			isMovableGoalLaneId(lane.id) && lane.id !== ws.status,
+	);
 
 	return (
 		<div className="flex min-h-0 flex-col">
@@ -75,16 +85,22 @@ export function WorkspaceDetailPanel({
 						<span className="text-sm">{currentLane?.label ?? ws.status}</span>
 					</div>
 					<div className="flex flex-wrap gap-1.5 pt-0.5">
-						{GOAL_LANES.filter((lane) => lane.id !== ws.status).map((lane) => (
-							<button
-								key={lane.id}
-								type="button"
-								onClick={() => onMove(lane.id)}
-								className="cursor-pointer rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-							>
-								→ {lane.label}
-							</button>
-						))}
+						{isMergedGoalWorkspace(ws) ? (
+							<span className="text-[11px] text-muted-foreground">
+								Moved by PR state
+							</span>
+						) : (
+							moveLanes.map((lane) => (
+								<button
+									key={lane.id}
+									type="button"
+									onClick={() => onMove(lane.id)}
+									className="cursor-pointer rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+								>
+									→ {lane.label}
+								</button>
+							))
+						)}
 					</div>
 				</div>
 

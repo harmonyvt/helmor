@@ -104,6 +104,7 @@ function parseToolResultObject(
 
 function extractGoalToolAudit(
 	toolName: string,
+	args: Record<string, unknown>,
 	result: unknown,
 ): GoalToolAudit | null {
 	const parsed = parseToolResultObject(result);
@@ -112,12 +113,9 @@ function extractGoalToolAudit(
 	if (toolName === "send_assignee_message") {
 		const message = typeof parsed.message === "string" ? parsed.message : null;
 		if (!message?.trim()) return null;
-		const workspaceId =
-			typeof parsed.workspaceId === "string" ? parsed.workspaceId : null;
+		const preview = message.length > 48 ? `${message.slice(0, 48)}…` : message;
 		return {
-			label: workspaceId
-				? `Audit: sent assignee update to ${workspaceId}`
-				: "Audit: sent assignee update",
+			label: `Sent to assignee · ${preview}`,
 			body: message,
 		};
 	}
@@ -126,12 +124,12 @@ function extractGoalToolAudit(
 		const prompt =
 			typeof parsed.assigneePrompt === "string" ? parsed.assigneePrompt : null;
 		if (!prompt?.trim()) return null;
-		const workspaceId =
-			typeof parsed.workspaceId === "string" ? parsed.workspaceId : null;
+		const title =
+			typeof args.title === "string" && args.title.trim()
+				? args.title.trim()
+				: null;
 		return {
-			label: workspaceId
-				? `Audit: assigned new workspace ${workspaceId}`
-				: "Audit: assigned new workspace",
+			label: title ? `Assignee notified · ${title}` : "Assignee prompt",
 			body: prompt,
 		};
 	}
@@ -141,10 +139,7 @@ function extractGoalToolAudit(
 
 function GoalToolAuditBlock({ audit }: { audit: GoalToolAudit }) {
 	return (
-		<details
-			open
-			className="ml-5 max-w-full rounded-md border border-border/35 bg-accent/25 text-[11px] leading-5"
-		>
+		<details className="ml-5 max-w-full rounded-md border border-border/35 bg-accent/25 text-[11px] leading-5">
 			<summary className="cursor-pointer px-2 py-1 font-medium text-muted-foreground [&::-webkit-details-marker]:hidden">
 				{audit.label}
 			</summary>
@@ -192,8 +187,8 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 		[result],
 	);
 	const goalAudit = useMemo(
-		() => extractGoalToolAudit(toolName, result),
-		[toolName, result],
+		() => extractGoalToolAudit(toolName, args, result),
+		[toolName, args, result],
 	);
 	const hasChildren = (childParts?.length ?? 0) > 0;
 	const resultText =
@@ -687,7 +682,7 @@ export function CollapsedToolGroup({
 }: {
 	group: import("@/lib/api").CollapsedGroupPart;
 }) {
-	const [open, setOpen] = useState(true);
+	const [open, setOpen] = useState(group.active);
 	const collapsedGroupIconClassName = "size-3.5 text-muted-foreground";
 
 	const icon =

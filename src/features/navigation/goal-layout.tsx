@@ -23,7 +23,7 @@ import {
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { ShineBorder } from "@/components/ui/shine-border";
-import { GOAL_LANES } from "@/features/goals/board-model";
+import { GOAL_LANES, isMovableGoalLaneId } from "@/features/goals/board-model";
 import type { WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { WorkspaceAvatar } from "./avatar";
@@ -197,6 +197,7 @@ export function buildGoalViewVirtualItems(
 					// Inject lane drop targets first when this goal is drag-expanded
 					if (isDragExpanded) {
 						for (const lane of GOAL_LANES) {
+							if (!isMovableGoalLaneId(lane.id)) continue;
 							items.push({
 								kind: "goal-lane-drop",
 								lane: lane.id,

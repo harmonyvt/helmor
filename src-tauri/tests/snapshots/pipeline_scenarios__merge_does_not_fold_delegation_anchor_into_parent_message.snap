@@ -1,0 +1,40 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: text
+      text: Starting delegation.
+  status:
+    type: complete
+    reason: stop
+  streaming: ~
+- role: assistant
+  id: msg-2
+  content_length: 1
+  content:
+    - type: delegation-anchor
+      delegation_id: "<redacted-delegation-id>"
+      parent_session_id: "<redacted-parent-session-id>"
+      child_session_id: "<redacted-child-session-id>"
+      title: Inspect parser
+      provider: codex
+      model_id: ~
+      status: running
+      has_structured_result: false
+      has_error: false
+  status: ~
+  streaming: ~
+- role: assistant
+  id: msg-3
+  content_length: 1
+  content:
+    - type: text
+      text: Delegation result received.
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

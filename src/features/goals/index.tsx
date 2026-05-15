@@ -1,5 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { useScriptStatus } from "@/features/inspector/hooks/use-script-status";
 import { useSetupAutoRun } from "@/features/inspector/hooks/use-setup-auto-run";
 import {
@@ -7,6 +15,7 @@ import {
 	createGoalChildWorkspaceAndStart,
 	listAssignees,
 	loadRepoScripts,
+	mergeWorkspaceChangeRequest,
 	setGoalChildWorkspaceStatus,
 	updateGoalWorkspaceMeta,
 	type WorkspaceDetail,
@@ -18,50 +27,46 @@ import {
 	helmorQueryKeys,
 	workspaceDetailQueryOptions,
 } from "@/lib/query-client";
-import { GoalsAiPanel } from "./ai-panel";
 import { GoalBoard } from "./board";
-import { createGoalKanbanSnapshot } from "./board-model";
+import { createGoalKanbanSnapshot, type GoalLaneId } from "./board-model";
+import { GoalCardDetailPanel } from "./card-detail";
 import { GoalChangesView } from "./changes-view";
 import { GoalTabBar } from "./goal-tab-bar";
 import { GoalHeader } from "./header";
 import { GoalMetaSheet } from "./metadata-sheet";
-import { AddWorkspacePanel, WorkspaceDetailPanel } from "./panels";
-import { useGoalPiState } from "./pi-state-context";
+import { AddWorkspacePanel } from "./panels";
+import { GoalSidebar } from "./sidebar";
 import { GoalTeamView } from "./team-view";
 import { GoalTerminalView } from "./terminal-view";
 import { GoalTimelineView } from "./timeline-view";
-import type {
-	GoalAiSurfaceProps,
-	GoalTabView,
-	GoalWorkspaceContainerProps,
-} from "./types";
+import type { GoalTabView, GoalWorkspaceContainerProps } from "./types";
 
-const GOALS_AI_PANEL_WIDTH_KEY = "helmor.goalsAiPanelWidth";
-const GOALS_AI_PANEL_DEFAULT_WIDTH = 420;
-const GOALS_AI_PANEL_MIN_WIDTH = 320;
-const GOALS_AI_PANEL_MAX_WIDTH = 720;
-const GOALS_AI_PANEL_HIT_AREA = 20;
+const GOAL_CARD_DETAIL_WIDTH_KEY = "helmor.goalCardDetailWidth";
+const GOAL_CARD_DETAIL_DEFAULT_WIDTH = 380;
+const GOAL_CARD_DETAIL_MIN_WIDTH = 320;
+const GOAL_CARD_DETAIL_MAX_WIDTH = 560;
+const GOAL_CARD_DETAIL_HIT_AREA = 20;
 
-function getInitialGoalsAiPanelWidth() {
-	if (typeof window === "undefined") return GOALS_AI_PANEL_DEFAULT_WIDTH;
+function getInitialCardDetailWidth() {
+	if (typeof window === "undefined") return GOAL_CARD_DETAIL_DEFAULT_WIDTH;
 	try {
-		const stored = window.localStorage.getItem(GOALS_AI_PANEL_WIDTH_KEY);
-		if (!stored) return GOALS_AI_PANEL_DEFAULT_WIDTH;
+		const stored = window.localStorage.getItem(GOAL_CARD_DETAIL_WIDTH_KEY);
+		if (!stored) return GOAL_CARD_DETAIL_DEFAULT_WIDTH;
 		const parsed = Number.parseInt(stored, 10);
 		return Number.isFinite(parsed)
 			? Math.min(
-					GOALS_AI_PANEL_MAX_WIDTH,
-					Math.max(GOALS_AI_PANEL_MIN_WIDTH, parsed),
+					GOAL_CARD_DETAIL_MAX_WIDTH,
+					Math.max(GOAL_CARD_DETAIL_MIN_WIDTH, parsed),
 				)
-			: GOALS_AI_PANEL_DEFAULT_WIDTH;
+			: GOAL_CARD_DETAIL_DEFAULT_WIDTH;
 	} catch {
-		return GOALS_AI_PANEL_DEFAULT_WIDTH;
+		return GOAL_CARD_DETAIL_DEFAULT_WIDTH;
 	}
 }
 
 type DragState = {
 	workspaceId: string;
-	sourceLane: WorkspaceStatus;
+	sourceLane: GoalLaneId;
 } | null;
 
 export function GoalWorkspaceContainer({
@@ -71,15 +76,10 @@ export function GoalWorkspaceContainer({
 	onSelectWorkspaceSession,
 	activeEditorPath,
 	onOpenEditorFile,
-	renderAiSurface,
 	onSendingWorkspacesChange,
 	onOpenSettings,
 }: GoalWorkspaceContainerProps) {
 	const queryClient = useQueryClient();
-
-	// Pi state lives in context (GoalPiStateProvider) so it survives navigation
-	// between this goal board and child workspace views.
-	const { piState, setPiState, unreadCount } = useGoalPiState();
 
 	const [activeTab, setActiveTab] = useState<GoalTabView>("board");
 	const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -87,11 +87,18 @@ export function GoalWorkspaceContainer({
 	const [showGoalSheet, setShowGoalSheet] = useState(false);
 	const [newWorkspaceTitle, setNewWorkspaceTitle] = useState("");
 	const [dragState, setDragState] = useState<DragState>(null);
-	const [dragOverLane, setDragOverLane] = useState<WorkspaceStatus | null>(
+	const [dragOverLane, setDragOverLane] = useState<GoalLaneId | null>(null);
+	/** Workspace waiting for merge confirmation (has open PR). */
+	const [pendingMerge, setPendingMerge] = useState<WorkspaceDetail | null>(
 		null,
 	);
-	const [aiPanelWidth, setAiPanelWidth] = useState(getInitialGoalsAiPanelWidth);
-	const [aiPanelResizeState, setAiPanelResizeState] = useState<{
+	/** Workspace that was dropped on Merged but has no open PR. */
+	const [pendingMergeRejected, setPendingMergeRejected] =
+		useState<WorkspaceDetail | null>(null);
+	const [cardDetailWidth, setCardDetailWidth] = useState(
+		getInitialCardDetailWidth,
+	);
+	const [cardDetailResizeState, setCardDetailResizeState] = useState<{
 		pointerX: number;
 		startWidth: number;
 	} | null>(null);
@@ -110,39 +117,36 @@ export function GoalWorkspaceContainer({
 		enabled: childQuery.isSuccess,
 		staleTime: 5_000,
 	});
+
 	const workspace = detailQuery.data;
 	const childWorkspaces = childQuery.data ?? [];
+
 	const orchestratorStatusByWorkspaceId = useMemo(() => {
 		const map = new Map<string, string>();
 		for (const issue of orchestratorQuery.data?.issues ?? []) {
-			if (issue.childWorkspaceId) {
-				map.set(issue.childWorkspaceId, issue.state);
-			}
+			if (issue.childWorkspaceId) map.set(issue.childWorkspaceId, issue.state);
 		}
 		for (const retry of orchestratorQuery.data?.runtime.retries ?? []) {
 			const issue = orchestratorQuery.data?.issues.find(
 				(candidate) => candidate.id === retry.issueId,
 			);
-			if (issue?.childWorkspaceId) {
-				map.set(issue.childWorkspaceId, "retry");
-			}
+			if (issue?.childWorkspaceId) map.set(issue.childWorkspaceId, "retry");
 		}
 		for (const run of orchestratorQuery.data?.runtime.running ?? []) {
-			if (run.workspaceId) {
-				map.set(run.workspaceId, run.phase);
-			}
+			if (run.workspaceId) map.set(run.workspaceId, run.phase);
 		}
 		return map;
 	}, [orchestratorQuery.data]);
+
 	const reportByWorkspaceId = useMemo(() => {
 		const reports = new Map<string, AssigneeReportMarker>();
 		for (const assignee of assigneesQuery.data ?? []) {
-			if (assignee.latestReport) {
+			if (assignee.latestReport)
 				reports.set(assignee.workspaceId, assignee.latestReport);
-			}
 		}
 		return reports;
 	}, [assigneesQuery.data]);
+
 	const repoScriptsQuery = useQuery({
 		queryKey: helmorQueryKeys.repoScripts(
 			workspace?.repoId ?? "__none__",
@@ -168,21 +172,21 @@ export function GoalWorkspaceContainer({
 		scriptsLoaded: repoScriptsQuery.isSuccess,
 	});
 
-	// Persist AI panel width
+	// Persist card detail panel width
 	useEffect(() => {
 		try {
 			window.localStorage.setItem(
-				GOALS_AI_PANEL_WIDTH_KEY,
-				String(aiPanelWidth),
+				GOAL_CARD_DETAIL_WIDTH_KEY,
+				String(cardDetailWidth),
 			);
 		} catch {
 			// ignore
 		}
-	}, [aiPanelWidth]);
+	}, [cardDetailWidth]);
 
-	// AI panel resize drag
+	// Card detail panel resize drag
 	useEffect(() => {
-		if (!aiPanelResizeState) return;
+		if (!cardDetailResizeState) return;
 		let pendingWidth: number | null = null;
 		let rafId: number | null = null;
 		const flush = () => {
@@ -190,14 +194,14 @@ export function GoalWorkspaceContainer({
 			if (pendingWidth === null) return;
 			const next = pendingWidth;
 			pendingWidth = null;
-			setAiPanelWidth(next);
+			setCardDetailWidth(next);
 		};
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
-			const deltaX = event.clientX - aiPanelResizeState.pointerX;
-			const raw = aiPanelResizeState.startWidth - deltaX;
+			const deltaX = event.clientX - cardDetailResizeState.pointerX;
+			const raw = cardDetailResizeState.startWidth - deltaX;
 			pendingWidth = Math.min(
-				GOALS_AI_PANEL_MAX_WIDTH,
-				Math.max(GOALS_AI_PANEL_MIN_WIDTH, raw),
+				GOAL_CARD_DETAIL_MAX_WIDTH,
+				Math.max(GOAL_CARD_DETAIL_MIN_WIDTH, raw),
 			);
 			if (rafId === null) rafId = window.requestAnimationFrame(flush);
 		};
@@ -207,7 +211,7 @@ export function GoalWorkspaceContainer({
 				rafId = null;
 			}
 			flush();
-			setAiPanelResizeState(null);
+			setCardDetailResizeState(null);
 		};
 		const prevCursor = document.body.style.cursor;
 		const prevSelect = document.body.style.userSelect;
@@ -222,17 +226,17 @@ export function GoalWorkspaceContainer({
 			window.removeEventListener("mousemove", handleMouseMove);
 			window.removeEventListener("mouseup", handleMouseUp);
 		};
-	}, [aiPanelResizeState]);
+	}, [cardDetailResizeState]);
 
-	const handleAiPanelResizeStart = useCallback(
+	const handleCardDetailResizeStart = useCallback(
 		(event: { clientX: number; preventDefault(): void }) => {
 			event.preventDefault();
-			setAiPanelResizeState({
+			setCardDetailResizeState({
 				pointerX: event.clientX,
-				startWidth: aiPanelWidth,
+				startWidth: cardDetailWidth,
 			});
 		},
-		[aiPanelWidth],
+		[cardDetailWidth],
 	);
 
 	const invalidateBoard = useCallback(async () => {
@@ -284,6 +288,26 @@ export function GoalWorkspaceContainer({
 		[moveMutation],
 	);
 
+	const mergeMutation = useMutation({
+		mutationFn: (childWorkspaceId: string) =>
+			mergeWorkspaceChangeRequest(childWorkspaceId),
+		onSuccess: () => {
+			setPendingMerge(null);
+			invalidateBoard();
+		},
+		onError: () => {
+			setPendingMerge(null);
+		},
+	});
+
+	const handleMergeWorkspace = useCallback((workspace: WorkspaceDetail) => {
+		setPendingMerge(workspace);
+	}, []);
+
+	const handleMergeRejected = useCallback((workspace: WorkspaceDetail) => {
+		setPendingMergeRejected(workspace);
+	}, []);
+
 	const createMutation = useMutation({
 		mutationFn: async (title: string) =>
 			createGoalChildWorkspaceAndStart({
@@ -313,10 +337,8 @@ export function GoalWorkspaceContainer({
 		(childWorkspace: WorkspaceDetail) => {
 			setSelectedId(childWorkspace.id);
 			setShowAddPanel(false);
-			// Minimise Pi to dock — don't destroy it. The chip stays in the tab bar.
-			setPiState("dock");
 		},
-		[setPiState],
+		[],
 	);
 
 	const handleSelectAssignee = useCallback(
@@ -331,52 +353,19 @@ export function GoalWorkspaceContainer({
 		[handleSelectChildWorkspace, onSelectWorkspaceSession],
 	);
 
-	// Switch tabs — dock Pi and clear board-only panel state when leaving the
-	// board tab so the other views have the full width.
-	const handleTabChange = useCallback(
-		(tab: GoalTabView) => {
-			setActiveTab(tab);
-			if (tab !== "board") {
-				setSelectedId(null);
-				setShowAddPanel(false);
-				if (piState === "panel") setPiState("dock");
-			}
-		},
-		[piState, setPiState],
-	);
-
-	// Pi chip click: on non-board tabs, jump to board first and open the panel.
-	// On the board tab, toggle between panel and dock.
-	const handlePiChipClick = useCallback(() => {
-		if (activeTab !== "board") {
-			setActiveTab("board");
+	const handleTabChange = useCallback((tab: GoalTabView) => {
+		setActiveTab(tab);
+		if (tab !== "board") {
 			setSelectedId(null);
 			setShowAddPanel(false);
-			setPiState("panel");
-			return;
 		}
-		if (piState === "panel") {
-			setPiState("dock");
-		} else {
-			setSelectedId(null);
-			setShowAddPanel(false);
-			setPiState("panel");
-		}
-	}, [activeTab, piState, setPiState]);
+	}, []);
 
-	// Add card: always switches to board tab first.
 	const handleShowAddCard = useCallback(() => {
 		setActiveTab("board");
 		setSelectedId(null);
 		setShowAddPanel(true);
-		setPiState("dock");
-	}, [setPiState]);
-
-	// Panel is open when a card is selected, the add-card form is open, or Pi is
-	// in expanded (panel) mode — but only while on the board tab.
-	const isBoardPanelOpen =
-		activeTab === "board" &&
-		(selectedWorkspace !== null || showAddPanel || piState === "panel");
+	}, []);
 
 	const goalTitle = workspace?.goalTitle ?? workspace?.title ?? "Goal";
 	const goalDescription = workspace?.goalDescription ?? null;
@@ -391,34 +380,8 @@ export function GoalWorkspaceContainer({
 		[childWorkspaces],
 	);
 
-	const aiSurfaceProps: GoalAiSurfaceProps = {
-		workspaceId,
-		goalTitle: workspace?.goalTitle ?? null,
-		goalDescription,
-		kanbanSnapshot,
-		canCreateCards: isGoalReadyForChildren,
-		onClose: () => setPiState("dock"),
-		onSendingWorkspacesChange,
-	};
-
-	const renderGoalAiSurface =
-		renderAiSurface ??
-		((props: GoalAiSurfaceProps) => (
-			<GoalsAiPanel
-				workspaceId={props.workspaceId}
-				cards={childWorkspaces}
-				kanbanSnapshot={props.kanbanSnapshot}
-				goalTitle={props.goalTitle}
-				goalDescription={props.goalDescription}
-				canCreateCards={isGoalReadyForChildren}
-				onClose={props.onClose}
-				onSendingWorkspacesChange={props.onSendingWorkspacesChange}
-				onCardCreated={(createdWorkspace) => setSelectedId(createdWorkspace.id)}
-			/>
-		));
-
 	return (
-		<div className="flex min-h-0 flex-1 flex-col bg-background">
+		<div className="flex min-h-0 flex-1 overflow-hidden bg-background">
 			<GoalMetaSheet
 				open={showGoalSheet}
 				onOpenChange={setShowGoalSheet}
@@ -427,92 +390,188 @@ export function GoalWorkspaceContainer({
 				onSave={saveGoalMeta}
 			/>
 
-			{/* Title + description rows */}
-			<GoalHeader
-				headerLeading={headerLeading}
+			{/* Merge confirmation — shown when a card with an open PR is dropped on Merged */}
+			<ConfirmDialog
+				open={pendingMerge !== null}
+				onOpenChange={(open) => {
+					if (!open) setPendingMerge(null);
+				}}
+				title="Merge pull request"
+				description={
+					<>
+						Merge the pull request for{" "}
+						<span className="font-medium text-foreground">
+							{pendingMerge?.title}
+						</span>
+						? This cannot be undone.
+					</>
+				}
+				confirmLabel="Merge"
+				cancelLabel="Cancel"
+				onConfirm={() => {
+					if (pendingMerge) mergeMutation.mutate(pendingMerge.id);
+				}}
+				loading={mergeMutation.isPending}
+			/>
+
+			{/* Rejection notice — shown when a card without an open PR is dropped on Merged */}
+			<Dialog
+				open={pendingMergeRejected !== null}
+				onOpenChange={(open) => {
+					if (!open) setPendingMergeRejected(null);
+				}}
+			>
+				<DialogContent
+					className="max-w-[320px] gap-0 p-4"
+					showCloseButton={false}
+				>
+					<DialogTitle className="text-[13px] font-semibold">
+						Cannot merge
+					</DialogTitle>
+					<DialogDescription className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
+						<span className="font-medium text-foreground">
+							{pendingMergeRejected?.title}
+						</span>{" "}
+						doesn&apos;t have an open pull request and cannot be moved to
+						Merged.
+					</DialogDescription>
+					<div className="mt-3 flex justify-end">
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setPendingMergeRejected(null)}
+						>
+							Got it
+						</Button>
+					</div>
+				</DialogContent>
+			</Dialog>
+
+			{/* Permanent left sidebar — Pi + Assignees */}
+			<GoalSidebar
+				workspaceId={workspaceId}
+				cards={childWorkspaces}
+				kanbanSnapshot={kanbanSnapshot}
 				goalTitle={goalTitle}
 				goalDescription={goalDescription}
-				prUrl={workspace?.prUrl}
-				prSyncState={workspace?.prSyncState ?? null}
-				workspaceState={workspace?.state ?? null}
-				hasBranch={Boolean(workspace?.branch)}
-				hasTargetBranch={Boolean(workspace?.intendedTargetBranch)}
-				hasSetupScript={hasSetupScript}
-				setupScriptsLoaded={repoScriptsQuery.isSuccess}
-				setupScriptState={setupScriptState}
-				onEditGoal={() => setShowGoalSheet(true)}
-			/>
-
-			{/* Tab bar: Board | Changes | Team | Timeline  ···  [Pi]  [+ Add] */}
-			<GoalTabBar
-				activeTab={activeTab}
-				onTabChange={handleTabChange}
-				piState={piState}
-				unreadCount={unreadCount}
-				onPiChipClick={handlePiChipClick}
 				canCreateCards={isGoalReadyForChildren}
-				onAddCard={handleShowAddCard}
+				assignees={assigneesQuery.data ?? []}
+				onSendingWorkspacesChange={onSendingWorkspacesChange}
+				onCardCreated={(created) => setSelectedId(created.id)}
+				onSelectAssignee={handleSelectAssignee}
 			/>
 
-			{orchestratorQuery.data?.errors.length ? (
-				<div className="border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-xs text-destructive">
-					{orchestratorQuery.data.errors[0]}
-				</div>
-			) : null}
+			{/* Main content column */}
+			<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+				{/* Header */}
+				<GoalHeader
+					headerLeading={headerLeading}
+					goalTitle={goalTitle}
+					goalDescription={goalDescription}
+					prUrl={workspace?.prUrl}
+					prSyncState={workspace?.prSyncState ?? null}
+					workspaceState={workspace?.state ?? null}
+					hasBranch={Boolean(workspace?.branch)}
+					hasTargetBranch={Boolean(workspace?.intendedTargetBranch)}
+					hasSetupScript={hasSetupScript}
+					setupScriptsLoaded={repoScriptsQuery.isSuccess}
+					setupScriptState={setupScriptState}
+					onEditGoal={() => setShowGoalSheet(true)}
+				/>
 
-			{/* ── BOARD tab ─────────────────────────────────────────────────────── */}
-			{activeTab === "board" && (
-				<div className="flex min-h-0 flex-1 overflow-hidden">
-					<GoalBoard
-						workspaces={childWorkspaces}
-						selectedId={selectedId}
-						dragState={dragState}
-						dragOverLane={dragOverLane}
-						onSelectWorkspace={handleSelectChildWorkspace}
-						onSelectAssignee={handleSelectAssignee}
-						reportByWorkspaceId={reportByWorkspaceId}
-						orchestratorStatusByWorkspaceId={orchestratorStatusByWorkspaceId}
-						onMoveWorkspace={handleMoveWorkspace}
-						onDragStart={(childWorkspaceId, sourceLane) => {
-							setDragState({ workspaceId: childWorkspaceId, sourceLane });
-						}}
-						onDragEnd={() => {
-							setDragState(null);
-							setDragOverLane(null);
-						}}
-						onDragOverLane={setDragOverLane}
-					/>
+				{/* Tab bar */}
+				<GoalTabBar
+					activeTab={activeTab}
+					onTabChange={handleTabChange}
+					canCreateCards={isGoalReadyForChildren}
+					onAddCard={handleShowAddCard}
+				/>
 
-					{isBoardPanelOpen ? (
-						<aside
-							className="relative flex min-h-0 shrink-0 flex-col border-l border-border/70 bg-sidebar/70"
-							style={{
-								width: piState === "panel" ? aiPanelWidth : 288,
+				{orchestratorQuery.data?.errors.length ? (
+					<div className="border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+						{orchestratorQuery.data.errors[0]}
+					</div>
+				) : null}
+
+				{/* Board tab */}
+				{activeTab === "board" && (
+					<div className="flex min-h-0 flex-1 overflow-hidden">
+						<GoalBoard
+							workspaces={childWorkspaces}
+							selectedId={selectedId}
+							dragState={dragState}
+							dragOverLane={dragOverLane}
+							onSelectWorkspace={handleSelectChildWorkspace}
+							onSelectAssignee={handleSelectAssignee}
+							reportByWorkspaceId={reportByWorkspaceId}
+							orchestratorStatusByWorkspaceId={orchestratorStatusByWorkspaceId}
+							onMoveWorkspace={handleMoveWorkspace}
+							onMergeWorkspace={handleMergeWorkspace}
+							onMergeRejected={handleMergeRejected}
+							onDragStart={(childWorkspaceId, sourceLane) =>
+								setDragState({ workspaceId: childWorkspaceId, sourceLane })
+							}
+							onDragEnd={() => {
+								setDragState(null);
+								setDragOverLane(null);
 							}}
-						>
-							{piState === "panel" ? (
-								<>
-									<div
-										role="separator"
-										aria-orientation="vertical"
-										aria-label="Resize AI panel"
-										aria-valuemin={GOALS_AI_PANEL_MIN_WIDTH}
-										aria-valuemax={GOALS_AI_PANEL_MAX_WIDTH}
-										aria-valuenow={aiPanelWidth}
-										tabIndex={0}
-										onMouseDown={handleAiPanelResizeStart}
-										className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-										style={{
-											left: `${-(GOALS_AI_PANEL_HIT_AREA / 2)}px`,
-											width: `${GOALS_AI_PANEL_HIT_AREA}px`,
-										}}
-									/>
-									{renderGoalAiSurface(aiSurfaceProps)}
-								</>
-							) : selectedWorkspace ? (
-								<WorkspaceDetailPanel
+							onDragOverLane={setDragOverLane}
+						/>
+
+						{/* Add card form (no selected workspace) */}
+						{showAddPanel && !selectedWorkspace && (
+							<aside
+								className="relative flex h-full shrink-0 flex-col border-l border-border/60 bg-sidebar/60"
+								style={{ width: cardDetailWidth }}
+							>
+								<div
+									role="separator"
+									aria-orientation="vertical"
+									aria-label="Resize panel"
+									aria-valuemin={GOAL_CARD_DETAIL_MIN_WIDTH}
+									aria-valuemax={GOAL_CARD_DETAIL_MAX_WIDTH}
+									aria-valuenow={cardDetailWidth}
+									tabIndex={0}
+									onMouseDown={handleCardDetailResizeStart}
+									className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+									style={{
+										left: `${-(GOAL_CARD_DETAIL_HIT_AREA / 2)}px`,
+										width: `${GOAL_CARD_DETAIL_HIT_AREA}px`,
+									}}
+								/>
+								<AddWorkspacePanel
+									value={newWorkspaceTitle}
+									onChange={setNewWorkspaceTitle}
+									onClose={() => setShowAddPanel(false)}
+									onSubmit={addWorkspace}
+									busy={createMutation.isPending}
+								/>
+							</aside>
+						)}
+
+						{/* Card detail panel */}
+						{selectedWorkspace && (
+							<aside
+								className="relative flex h-full shrink-0 flex-col"
+								style={{ width: cardDetailWidth }}
+							>
+								<div
+									role="separator"
+									aria-orientation="vertical"
+									aria-label="Resize card detail"
+									aria-valuemin={GOAL_CARD_DETAIL_MIN_WIDTH}
+									aria-valuemax={GOAL_CARD_DETAIL_MAX_WIDTH}
+									aria-valuenow={cardDetailWidth}
+									tabIndex={0}
+									onMouseDown={handleCardDetailResizeStart}
+									className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+									style={{
+										left: `${-(GOAL_CARD_DETAIL_HIT_AREA / 2)}px`,
+										width: `${GOAL_CARD_DETAIL_HIT_AREA}px`,
+									}}
+								/>
+								<GoalCardDetailPanel
 									workspace={selectedWorkspace}
-									parentWorkspaceTitle={workspace?.title ?? "Goal"}
 									onClose={() => setSelectedId(null)}
 									onMove={(lane) =>
 										handleMoveWorkspace(selectedWorkspace, lane)
@@ -522,69 +581,64 @@ export function GoalWorkspaceContainer({
 											? () => onSelectWorkspace(selectedWorkspace.id)
 											: undefined
 									}
+									activeEditorPath={activeEditorPath}
+									onOpenEditorFile={onOpenEditorFile}
+									onOpenSettings={onOpenSettings}
 								/>
-							) : showAddPanel ? (
-								<AddWorkspacePanel
-									value={newWorkspaceTitle}
-									onChange={setNewWorkspaceTitle}
-									onClose={() => setShowAddPanel(false)}
-									onSubmit={addWorkspace}
-									busy={createMutation.isPending}
-								/>
-							) : null}
-						</aside>
-					) : null}
-				</div>
-			)}
+							</aside>
+						)}
+					</div>
+				)}
 
-			{/* ── CHANGES tab ───────────────────────────────────────────────────── */}
-			{activeTab === "changes" && (
-				<GoalChangesView
-					goalWorkspace={workspace}
-					workspaces={childWorkspaces}
-					activeEditorPath={activeEditorPath}
-					onOpenEditorFile={onOpenEditorFile}
-					onSelectWorkspace={(ws) => {
-						setActiveTab("board");
-						handleSelectChildWorkspace(ws);
-					}}
-				/>
-			)}
+				{/* Changes tab */}
+				{activeTab === "changes" && (
+					<GoalChangesView
+						goalWorkspace={workspace}
+						workspaces={childWorkspaces}
+						activeEditorPath={activeEditorPath}
+						onOpenEditorFile={onOpenEditorFile}
+						onSelectWorkspace={(ws) => {
+							setActiveTab("board");
+							handleSelectChildWorkspace(ws);
+						}}
+					/>
+				)}
 
-			{/* ── TEAM tab ──────────────────────────────────────────────────────── */}
-			{activeTab === "team" && (
-				<GoalTeamView
-					workspaces={childWorkspaces}
-					assignees={assigneesQuery.data ?? []}
-					onSelectWorkspace={(wsId) => {
-						const ws = childWorkspaces.find((w) => w.id === wsId);
-						if (!ws) return;
-						setActiveTab("board");
-						handleSelectChildWorkspace(ws);
-					}}
-				/>
-			)}
+				{/* Team tab */}
+				{activeTab === "team" && (
+					<GoalTeamView
+						workspaces={childWorkspaces}
+						assignees={assigneesQuery.data ?? []}
+						onSelectWorkspace={(wsId) => {
+							const ws = childWorkspaces.find((w) => w.id === wsId);
+							if (!ws) return;
+							setActiveTab("board");
+							handleSelectChildWorkspace(ws);
+						}}
+					/>
+				)}
 
-			{/* ── TIMELINE tab ──────────────────────────────────────────────────── */}
-			{activeTab === "timeline" && (
-				<GoalTimelineView
-					workspaces={childWorkspaces}
-					reportByWorkspaceId={reportByWorkspaceId}
-					onSelectWorkspace={(ws) => {
-						setActiveTab("board");
-						handleSelectChildWorkspace(ws);
-					}}
-				/>
-			)}
+				{/* Timeline tab */}
+				{activeTab === "timeline" && (
+					<GoalTimelineView
+						workspaces={childWorkspaces}
+						reportByWorkspaceId={reportByWorkspaceId}
+						onSelectWorkspace={(ws) => {
+							setActiveTab("board");
+							handleSelectChildWorkspace(ws);
+						}}
+					/>
+				)}
 
-			{/* ── TERMINAL tab ──────────────────────────────────────────────────── */}
-			{activeTab === "terminal" && (
-				<GoalTerminalView
-					workspaceId={workspaceId}
-					repoId={workspace?.repoId ?? null}
-					onOpenSettings={onOpenSettings ?? (() => {})}
-				/>
-			)}
+				{/* Terminal tab */}
+				{activeTab === "terminal" && (
+					<GoalTerminalView
+						workspaceId={workspaceId}
+						repoId={workspace?.repoId ?? null}
+						onOpenSettings={onOpenSettings ?? (() => {})}
+					/>
+				)}
+			</div>
 		</div>
 	);
 }

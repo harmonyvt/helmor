@@ -73,7 +73,7 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 		<div
 			data-message-id={message.id}
 			data-message-role="user"
-			className="group/user flex min-w-0 justify-end"
+			className="group/user mt-2 flex min-w-0 justify-end"
 		>
 			<div className="relative flex max-w-[75%] min-w-0 flex-col items-end gap-2 pb-5">
 				{imageMentions.length > 0 && (
@@ -85,7 +85,7 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 				)}
 				{(hasTextContent || hasOtherFileMentions) && (
 					<div
-						className="conversation-body-text w-full overflow-hidden rounded-md bg-accent/55 px-3 py-2 leading-7"
+						className="conversation-body-text w-full overflow-hidden rounded-md bg-accent/55 px-3 py-2 leading-[1.5]"
 						style={{ fontSize: `${settings.fontSize}px` }}
 					>
 						<p className="whitespace-pre-wrap break-words">

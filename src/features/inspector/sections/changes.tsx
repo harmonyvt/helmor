@@ -57,7 +57,7 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 
 type ChangesSectionProps = {
 	sectionRef?: React.RefObject<HTMLElement | null>;
-	bodyHeight: number;
+	bodyHeight?: number;
 	workspaceId: string | null;
 	workspaceRootPath: string | null;
 	workspaceTargetBranch: string | null;
@@ -359,8 +359,13 @@ export function ChangesSection({
 		<section
 			ref={sectionRef}
 			aria-label="Inspector section Git"
-			className="flex min-h-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
-			style={{ height: `${bodyHeight}px` }}
+			className={cn(
+				"flex min-h-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar",
+				bodyHeight === undefined && "flex-1",
+			)}
+			style={
+				bodyHeight !== undefined ? { height: `${bodyHeight}px` } : undefined
+			}
 		>
 			<GitSectionHeader
 				commitButtonMode={commitButtonMode}

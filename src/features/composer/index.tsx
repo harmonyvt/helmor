@@ -690,7 +690,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									/>
 								}
 								placeholder={
-									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground/70">
+									<div
+										className={cn(
+											"pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground/70",
+											showFocusHint && "pr-28",
+										)}
+									>
 										{hasActivePlanReview && permissionMode === "plan"
 											? "Describe what to change, then click Request Changes"
 											: "Ask to make changes, @mention files, run /commands"}

@@ -36,12 +36,14 @@ import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import { getUnresolvedPlanReview } from "@/lib/plan-review";
 import {
 	helmorQueryKeys,
+	sessionDelegationsQueryOptions,
 	sessionThreadMessagesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { EMPTY_QUEUE, useSubmitQueue } from "@/lib/use-submit-queue";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
+import { DelegationsBar } from "./delegations-bar";
 import { useConversationStreaming } from "./hooks/use-streaming";
 import {
 	adaptPermissionToDeferredTool,
@@ -268,6 +270,11 @@ export const WorkspaceConversationContainer = memo(
 			...sessionThreadMessagesQueryOptions(displayedSessionId ?? "__none__"),
 			enabled: Boolean(displayedSessionId),
 		});
+		const delegationsQuery = useQuery({
+			...sessionDelegationsQueryOptions(displayedSessionId ?? "__none__"),
+			enabled: Boolean(displayedSessionId),
+		});
+		const delegations = delegationsQuery.data ?? [];
 		const planReview = useMemo<PlanReviewPart | null>(
 			() => getUnresolvedPlanReview(threadQuery.data ?? []),
 			[threadQuery.data],
@@ -395,6 +402,13 @@ export const WorkspaceConversationContainer = memo(
 			},
 			[handleComposerSubmit],
 		);
+		const handleFocusDelegatedSession = useCallback(
+			(sessionId: string) => {
+				onResolveDisplayedSession(sessionId);
+				onSelectSession(sessionId);
+			},
+			[onResolveDisplayedSession, onSelectSession],
+		);
 		const relevantPendingInsertRequests = pendingInsertRequests.filter(
 			(request) =>
 				insertRequestMatchesComposer(request, {
@@ -420,10 +434,14 @@ export const WorkspaceConversationContainer = memo(
 			pendingDeferredTool ?? permissionAsDeferredTool;
 
 		const effectiveComposerAccessory =
-			composerAccessory || piUiAccessory ? (
+			composerAccessory || piUiAccessory || delegations.length > 0 ? (
 				<>
 					{composerAccessory}
 					{piUiAccessory}
+					<DelegationsBar
+						delegations={delegations}
+						onFocusChild={handleFocusDelegatedSession}
+					/>
 				</>
 			) : null;
 		const selectedSession = sessionsQuery.data?.find(

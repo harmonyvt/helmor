@@ -23,6 +23,7 @@ import {
 	listGoalCards,
 	listGoalChildWorkspaces,
 	listRepositories,
+	listSessionDelegations,
 	listSlashCommands,
 	listWorkspaceBrowserTabs,
 	listWorkspaceCandidateDirectories,
@@ -84,6 +85,8 @@ export const helmorQueryKeys = {
 		] as const,
 	sessionMessages: (sessionId: string) =>
 		["sessionMessages", sessionId] as const,
+	sessionDelegations: (sessionId: string) =>
+		["sessionDelegations", sessionId] as const,
 	workspaceChanges: (workspaceRootPath: string) =>
 		["workspaceChanges", workspaceRootPath] as const,
 	workspaceFiles: (workspaceRootPath: string) =>
@@ -488,6 +491,16 @@ export function sessionThreadMessagesQueryOptions(sessionId: string) {
 		queryFn: () => loadSessionThreadMessages(sessionId),
 		gcTime: SESSION_GC_TIME,
 		staleTime: SESSION_STALE_TIME,
+	});
+}
+
+export function sessionDelegationsQueryOptions(sessionId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.sessionDelegations(sessionId),
+		queryFn: () => listSessionDelegations(sessionId),
+		initialData: [] as import("./api").DelegationRecord[],
+		initialDataUpdatedAt: 0,
+		staleTime: 0,
 	});
 }
 

@@ -9,6 +9,7 @@ pub struct AssigneeReportMarker {
     pub message_id: Option<String>,
     pub created_at: Option<String>,
     pub excerpt: String,
+    pub full_text: String,
 }
 
 pub(super) fn latest_report_marker(
@@ -25,6 +26,7 @@ pub(super) fn latest_report_marker(
             message_id: message.id.clone(),
             created_at: message.created_at.clone(),
             excerpt: excerpt(&text),
+            full_text: text,
         })
     })
 }
@@ -40,6 +42,7 @@ pub(super) fn report_marker_from_text(
         message_id,
         created_at,
         excerpt: excerpt(text),
+        full_text: text.to_string(),
     })
 }
 

@@ -46,6 +46,7 @@ export default function (pi: ExtensionAPI) {
         description?: string | null;
         branch?: string | null;
         prUrl?: string | null;
+        prSyncState?: string | null;
         sessionCount?: number;
         activeSessionId?: string | null;
         activeSessionStatus?: string | null;
@@ -84,7 +85,7 @@ export default function (pi: ExtensionAPI) {
         "1. Understand the goal, success criteria, constraints, and current board state before acting.",
         "2. Break the goal into independent workstreams and create one child workspace card per concrete deliverable or investigation.",
         "3. Start work by using create_kanban_card with a clear prompt when a new assignee should begin, or send_assignee_message when an existing card needs direction. These assignee sends are background starts; do not wait or sleep for the assignee to finish unless the user explicitly asks you to monitor.",
-        "4. Keep lanes meaningful: backlog = planned/not started, in-progress = assignee actively working or queued to work, review = needs supervisor/user review, done = completed and verified, canceled = intentionally dropped.",
+        "4. Keep lanes meaningful: backlog = planned/not started, in-progress = assignee actively working or queued to work, review = needs supervisor/user review, done = completed and verified, merged = branch PR merged and read-only, canceled = intentionally dropped.",
         "5. Read/summarize assignee threads before reporting status, changing priorities, or marking cards done.",
         "6. Give the user a concise supervisor-level answer: what exists, what is running, what is blocked, what you changed, and the next recommended orchestration step.",
         "",
@@ -101,6 +102,7 @@ export default function (pi: ExtensionAPI) {
 		"Use list_threads(workspace_id), create_thread(workspace_id), get_thread(workspace_id, thread_id), update_thread(workspace_id, thread_id, title), delete_thread(workspace_id, thread_id), and send_thread_message(workspace_id, thread_id, message) to inspect and manage threads inside a child workspace.",
 		"Use explicit assignee communication tools: send_assignee_message(card_id, message, priority?, thread_id?), set_card_assignee_thread(card_id, thread_id), read_assignee_thread(card_id, thread_id?, since_message_id?), summarize_assignee_status(card_id), and list_assignees(status?).",
         "Do not treat lane movement as execution. Moving a card only changes planning status; queue an assignee message when you want work, context, or a check-in.",
+        "Do not move cards into merged. Helmor derives the merged lane from PR state after the branch is merged.",
         "Assignee messages and create-card prompts run in the background. After dispatching parallel work, summarize what you started and let the user know you can check back when assignees report; do not burn tokens by sleeping.",
 		"Before reporting global status to the user, poll/read the relevant active assignee thread and compare other threads when a card has multiple sessions. Queue extra context instead of interrupting running work.",
 		"Do not keep retrying a known-bad thread. If the latest assistant response is a startup/model/provider failure, route the retry to a clean thread with a known-good model and record the replacement thread id in your handoff.",
@@ -125,7 +127,7 @@ export default function (pi: ExtensionAPI) {
         byLane.get(card.lane)!.push(card);
       }
 
-      const laneOrder = ["backlog", "in-progress", "review", "done", "canceled"];
+      const laneOrder = ["backlog", "in-progress", "review", "done", "merged", "canceled"];
       contextLines.push("## Kanban Board", "");
       for (const lane of laneOrder) {
         const laneCards = byLane.get(lane);
@@ -133,7 +135,13 @@ export default function (pi: ExtensionAPI) {
         contextLines.push(\`### \${lane}\`);
         for (const c of laneCards) {
           const branchTag = c.branch ? \` [\${c.branch}]\` : "";
-          const prTag = c.prUrl ? " [PR open]" : "";
+          const prTag = c.prUrl
+            ? c.prSyncState === "merged"
+              ? " [PR merged]"
+              : c.prSyncState === "closed"
+                ? " [PR closed]"
+                : " [PR open]"
+            : "";
           const threadsTag = c.sessionCount ? \` [\${c.sessionCount} thread\${c.sessionCount === 1 ? "" : "s"}]\` : "";
           const assigneeTag = c.assigneeName ? \` [assignee: \${c.assigneeName}]\` : "";
           const activeStatusTag = c.activeSessionStatus ? \` [active: \${c.activeSessionStatus}\${c.activeSessionAgentType ? \`/\${c.activeSessionAgentType}\` : ""}]\` : "";

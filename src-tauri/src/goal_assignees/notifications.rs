@@ -212,6 +212,7 @@ fn ensure_delivered_report_notification(
         .unwrap_or(notification.created_at.as_str());
     let recommended_action =
         "Review this report, update the card lane if appropriate, and summarize any blockers or completion back to the user.";
+    let report_text = marker.full_text.trim();
     let message = format!(
         "## Assignee Report Received\n\nCard: {}\nCard workspace: {}\nAssignee thread: {}\nReport type: {}\nReported at: {}\n\nExcerpt:\n{}\n\nRecommended supervisor action:\n{}",
         target.card_title,
@@ -219,7 +220,7 @@ fn ensure_delivered_report_notification(
         assignee_session_id,
         marker.report_type,
         reported_at,
-        marker.excerpt,
+        report_text,
         recommended_action
     );
     let payload = serde_json::json!({
@@ -231,6 +232,7 @@ fn ensure_delivered_report_notification(
         "reportType": marker.report_type,
         "title": "Assignee Report Received",
         "excerpt": marker.excerpt,
+        "fullText": report_text,
         "recommendedAction": recommended_action,
         "message": message,
     });

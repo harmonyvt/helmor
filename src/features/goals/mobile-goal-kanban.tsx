@@ -1,15 +1,34 @@
-import { GitBranch, X } from "lucide-react";
+import { GitBranch, GitMerge, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { GroupIcon, workspaceStatusToTone } from "@/features/navigation/shared";
 import type { WorkspaceDetail, WorkspaceStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { GOAL_LANES, groupGoalChildWorkspacesByLane } from "./board-model";
+import {
+	GOAL_LANES,
+	type GoalLaneDefinition,
+	groupGoalChildWorkspacesByLane,
+	isMergedGoalWorkspace,
+	isMovableGoalLaneId,
+} from "./board-model";
 
 export type MobileGoalKanbanProps = {
 	workspaces: WorkspaceDetail[];
 	onOpenWorkspace: (workspaceId: string) => void;
 	onMoveWorkspace: (workspace: WorkspaceDetail, lane: WorkspaceStatus) => void;
 };
+
+function LaneIcon({ lane }: { lane: GoalLaneDefinition }) {
+	if (lane.id === "merged") {
+		return (
+			<GitMerge
+				className="shrink-0 text-[var(--workspace-pr-merged-accent)]"
+				size={14}
+				strokeWidth={2}
+			/>
+		);
+	}
+	return <GroupIcon tone={workspaceStatusToTone(lane.id)} />;
+}
 
 export default function MobileGoalKanban({
 	workspaces,
@@ -44,7 +63,6 @@ export default function MobileGoalKanban({
 			<div className="flex shrink-0 overflow-x-auto border-b border-border [scrollbar-width:none]">
 				{GOAL_LANES.map((lane, i) => {
 					const count = byLane.get(lane.id)?.length ?? 0;
-					const tone = workspaceStatusToTone(lane.id);
 					return (
 						<button
 							key={lane.id}
@@ -57,7 +75,7 @@ export default function MobileGoalKanban({
 									: "text-muted-foreground hover:text-foreground",
 							)}
 						>
-							<GroupIcon tone={tone} />
+							<LaneIcon lane={lane} />
 							<span>{lane.label}</span>
 							{count > 0 && (
 								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums">
@@ -145,10 +163,20 @@ function MobileWorkspaceCard({
 			<p className="line-clamp-2 text-sm font-medium leading-snug">
 				{ws.title}
 			</p>
-			{ws.branch ? (
-				<div className="mt-1.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-					<GitBranch className="size-2.5 shrink-0" />
-					<span className="truncate font-mono">{ws.branch}</span>
+			{ws.branch || isMergedGoalWorkspace(ws) ? (
+				<div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+					{ws.branch ? (
+						<span className="inline-flex min-w-0 items-center gap-1">
+							<GitBranch className="size-2.5 shrink-0" />
+							<span className="truncate font-mono">{ws.branch}</span>
+						</span>
+					) : null}
+					{isMergedGoalWorkspace(ws) ? (
+						<span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_10%,transparent)] px-1.5 py-0.5 text-[var(--workspace-pr-merged-accent)]">
+							<GitMerge className="size-2.5" />
+							Merged
+						</span>
+					) : null}
 				</div>
 			) : null}
 		</button>
@@ -166,7 +194,11 @@ function MobileLaneActionSheet({
 	onMove: (lane: WorkspaceStatus) => void;
 	onClose: () => void;
 }) {
-	const otherLanes = GOAL_LANES.filter((l) => l.id !== workspace.status);
+	const isMerged = isMergedGoalWorkspace(workspace);
+	const otherLanes = GOAL_LANES.filter(
+		(lane): lane is GoalLaneDefinition & { id: WorkspaceStatus } =>
+			isMovableGoalLaneId(lane.id) && lane.id !== workspace.status,
+	);
 	return (
 		<div
 			className="shrink-0 border-t border-border bg-sidebar px-4 pt-3"
@@ -189,7 +221,11 @@ function MobileLaneActionSheet({
 			>
 				Open conversation
 			</button>
-			{otherLanes.length > 0 && (
+			{isMerged ? (
+				<p className="text-xs text-muted-foreground">
+					Merged branches are moved by PR state and cannot be changed here.
+				</p>
+			) : otherLanes.length > 0 ? (
 				<div className="flex flex-wrap gap-2">
 					{otherLanes.map((lane) => (
 						<button
@@ -202,7 +238,7 @@ function MobileLaneActionSheet({
 						</button>
 					))}
 				</div>
-			)}
+			) : null}
 		</div>
 	);
 }

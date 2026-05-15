@@ -828,8 +828,9 @@ fn sys_codex_goal_status_notice() {
 fn sys_goal_assignee_report_renders_message_body() {
     let parsed = json!({
         "type": "goal_assignee_report",
-        "message": "## Assignee Report Received\n\nCard: Build API\nReport type: completed",
-        "excerpt": "## Completed Done"
+        "message": "## Assignee Report Received\n\nCard: Build API\nReport type: completed\n\nExcerpt:\n## Completed\nDone with the implementation.\n\nRecommended supervisor action:\nReview the card.",
+        "excerpt": "## Completed Done",
+        "fullText": "## Completed\nDone with the implementation."
     });
     let msgs = vec![make_record(
         "s1",
@@ -1768,5 +1769,38 @@ fn asst_delegation_anchor_historical() {
         "assistant",
         &serde_json::to_string(&parsed).unwrap(),
     )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn merge_does_not_fold_delegation_anchor_into_parent_message() {
+    let anchor = json!({
+        "type": "delegation_anchor",
+        "delegationId": "delegation-1",
+        "parentSessionId": "parent-1",
+        "childSessionId": "child-1",
+        "title": "Inspect parser",
+        "provider": "codex",
+        "status": "running",
+        "outputSchema": { "type": "object" },
+        "startedAt": "2026-05-08T00:00:00Z"
+    });
+    let msgs = vec![
+        assistant_json(
+            "parent-before",
+            json!([{ "type": "text", "text": "Starting delegation." }]),
+            None,
+        ),
+        make_record(
+            "delegation-anchor-message",
+            "assistant",
+            &serde_json::to_string(&anchor).unwrap(),
+        ),
+        assistant_json(
+            "parent-after",
+            json!([{ "type": "text", "text": "Delegation result received." }]),
+            None,
+        ),
+    ];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
