@@ -479,15 +479,13 @@ export function WorkspaceInspectorSidebar({
 				? archiveScriptState
 				: runScriptState;
 	const canHoverExpand =
-		activeTab === "comments"
-			? prCommentData.comments.length > 0
-			: activeTab === "ingest"
-				? false
-				: isTerminalTabActive
-					? true
-					: scriptTabState === "running" ||
-						scriptTabState === "success" ||
-						scriptTabState === "failure";
+		activeTab === "comments" || activeTab === "ingest"
+			? false
+			: isTerminalTabActive
+				? true
+				: scriptTabState === "running" ||
+					scriptTabState === "success" ||
+					scriptTabState === "failure";
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 
