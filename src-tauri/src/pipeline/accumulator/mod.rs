@@ -466,6 +466,14 @@ impl StreamAccumulator {
                 codex::handle_thread_compacted(self, raw_line, value);
                 PushOutcome::Finalized
             }
+            Some("thread/goal/status") => {
+                codex::handle_thread_goal_status(self, raw_line, value);
+                PushOutcome::Finalized
+            }
+            Some(t) if t.starts_with("thread/goal/") => {
+                codex::handle_thread_goal_status(self, raw_line, value);
+                PushOutcome::Finalized
+            }
             Some("thread/started") => {
                 if let Some(tid) = value
                     .get("thread")

@@ -1029,6 +1029,48 @@ pub(super) fn handle_thread_compacted(acc: &mut StreamAccumulator, _raw_line: &s
     });
 }
 
+pub(super) fn handle_thread_goal_status(
+    acc: &mut StreamAccumulator,
+    _raw_line: &str,
+    value: &Value,
+) {
+    let objective = value
+        .get("objective")
+        .or_else(|| value.pointer("/goal/objective"))
+        .or_else(|| value.pointer("/response/goal/objective"))
+        .cloned();
+    let status = value
+        .get("status")
+        .or_else(|| value.pointer("/goal/status"))
+        .or_else(|| value.pointer("/response/goal/status"))
+        .cloned();
+    let action = value.get("action").cloned();
+    let thread_id = value
+        .get("threadId")
+        .or_else(|| value.get("thread_id"))
+        .or_else(|| value.pointer("/thread/id"))
+        .or_else(|| value.pointer("/response/thread/id"))
+        .cloned();
+    let source_type = value.get("type").cloned();
+    let synthetic = serde_json::json!({
+        "type": "system",
+        "subtype": "codex_goal_status",
+        "action": action,
+        "status": status,
+        "objective": objective,
+        "thread_id": thread_id,
+        "source_type": source_type,
+    });
+    let synthetic_str = synthetic.to_string();
+    let id = format!("codex-goal-status:{}", acc.line_count);
+    acc.collect_message(&synthetic_str, &synthetic, MessageRole::System, Some(&id));
+    acc.turns.push(CollectedTurn {
+        id,
+        role: MessageRole::System,
+        content_json: synthetic_str,
+    });
+}
+
 /// Handle `turn/plan/updated`: map plan steps to a TodoList via synthetic
 /// `TodoWrite` tool_use. Uses a stable override_id so each update replaces
 /// the previous.
