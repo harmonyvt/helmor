@@ -1,4 +1,11 @@
-import { Activity, GitBranch, LayoutGrid, Plus, Users } from "lucide-react";
+import {
+	Activity,
+	GitBranch,
+	LayoutGrid,
+	Plus,
+	Terminal,
+	Users,
+} from "lucide-react";
 import type React from "react";
 import { cn } from "@/lib/utils";
 import { GoalPiChip } from "./pi-chip";
@@ -15,6 +22,7 @@ const GOAL_TABS: TabDef[] = [
 	{ id: "changes", label: "Changes", icon: GitBranch },
 	{ id: "team", label: "Team", icon: Users },
 	{ id: "timeline", label: "Timeline", icon: Activity },
+	{ id: "terminal", label: "Terminal", icon: Terminal },
 ];
 
 type GoalTabBarProps = {

@@ -4,8 +4,13 @@ import type { DiffOpenOptions } from "@/lib/editor-session";
 /** The three physical states of the Pi AI surface within a goal context. */
 export type GoalPiPhysicalState = "panel" | "dock" | "sheet";
 
-/** The four view tabs available on the goal board. */
-export type GoalTabView = "board" | "changes" | "team" | "timeline";
+/** The five view tabs available on the goal board. */
+export type GoalTabView =
+	| "board"
+	| "changes"
+	| "team"
+	| "timeline"
+	| "terminal";
 
 export type GoalAiSurfaceContext = {
 	workspaceId: string;
@@ -32,4 +37,8 @@ export type GoalWorkspaceContainerProps = {
 	 *  the goal workspace ID in/out of the app-level sendingWorkspaceIds set
 	 *  so the sidebar folder ring stays in sync. */
 	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
+	/** Opens the repository / app settings dialog. Forwarded to the Terminal
+	 *  tab's Setup / Run / Archive sections so the user can configure scripts
+	 *  without leaving the goal view. */
+	onOpenSettings?: () => void;
 };

@@ -28,6 +28,7 @@ import { GoalMetaSheet } from "./metadata-sheet";
 import { AddWorkspacePanel, WorkspaceDetailPanel } from "./panels";
 import { useGoalPiState } from "./pi-state-context";
 import { GoalTeamView } from "./team-view";
+import { GoalTerminalView } from "./terminal-view";
 import { GoalTimelineView } from "./timeline-view";
 import type {
 	GoalAiSurfaceProps,
@@ -72,6 +73,7 @@ export function GoalWorkspaceContainer({
 	onOpenEditorFile,
 	renderAiSurface,
 	onSendingWorkspacesChange,
+	onOpenSettings,
 }: GoalWorkspaceContainerProps) {
 	const queryClient = useQueryClient();
 
@@ -572,6 +574,15 @@ export function GoalWorkspaceContainer({
 						setActiveTab("board");
 						handleSelectChildWorkspace(ws);
 					}}
+				/>
+			)}
+
+			{/* ── TERMINAL tab ──────────────────────────────────────────────────── */}
+			{activeTab === "terminal" && (
+				<GoalTerminalView
+					workspaceId={workspaceId}
+					repoId={workspace?.repoId ?? null}
+					onOpenSettings={onOpenSettings ?? (() => {})}
 				/>
 			)}
 		</div>
