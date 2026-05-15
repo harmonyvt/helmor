@@ -139,59 +139,49 @@ export function GoalPiSheet({ goalWorkspaceId }: GoalPiSheetProps) {
 	// Don't mount anything when there's no active sheet.
 	if (!isOpen) return null;
 
+	// No backdrop — the sheet is meant to be a persistent right-edge overlay on
+	// child workspaces and dimming the whole screen would be intrusive.
 	return createPortal(
-		<>
-			{/* Backdrop: dims content behind the sheet, click to dismiss. */}
+		<aside
+			aria-label="Pi goal assistant"
+			className={[
+				"fixed inset-y-0 right-0 z-50 flex flex-col",
+				"border-l border-border/70 bg-sidebar shadow-2xl",
+				"transition-transform duration-200 ease-out",
+				visible ? "translate-x-0" : "translate-x-full",
+			].join(" ")}
+			style={{ width }}
+		>
+			{/* Resize handle — same ew-resize hit area as the sidebar panel. */}
 			<div
-				className="fixed inset-0 z-40 bg-background/40 backdrop-blur-[1px]"
-				onClick={handleClose}
-				aria-hidden
+				role="separator"
+				aria-orientation="vertical"
+				aria-label="Resize Pi panel"
+				aria-valuemin={PI_SHEET_MIN_WIDTH}
+				aria-valuemax={PI_SHEET_MAX_WIDTH}
+				aria-valuenow={width}
+				tabIndex={0}
+				onMouseDown={(e) => {
+					e.preventDefault();
+					setResizeState({ pointerX: e.clientX, startWidth: width });
+				}}
+				className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+				style={{
+					left: `${-(PI_SHEET_HIT_AREA / 2)}px`,
+					width: `${PI_SHEET_HIT_AREA}px`,
+				}}
 			/>
 
-			{/* Sheet panel */}
-			<aside
-				aria-label="Pi goal assistant"
-				className={[
-					"fixed inset-y-0 right-0 z-50 flex flex-col",
-					"border-l border-border/70 bg-sidebar shadow-2xl",
-					"transition-transform duration-200 ease-out",
-					visible ? "translate-x-0" : "translate-x-full",
-				].join(" ")}
-				style={{ width }}
-				// Prevent backdrop click from firing when clicking inside the panel.
-				onClick={(e) => e.stopPropagation()}
-			>
-				{/* Resize handle — same ew-resize hit area as the sidebar panel. */}
-				<div
-					role="separator"
-					aria-orientation="vertical"
-					aria-label="Resize Pi panel"
-					aria-valuemin={PI_SHEET_MIN_WIDTH}
-					aria-valuemax={PI_SHEET_MAX_WIDTH}
-					aria-valuenow={width}
-					tabIndex={0}
-					onMouseDown={(e) => {
-						e.preventDefault();
-						setResizeState({ pointerX: e.clientX, startWidth: width });
-					}}
-					className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-					style={{
-						left: `${-(PI_SHEET_HIT_AREA / 2)}px`,
-						width: `${PI_SHEET_HIT_AREA}px`,
-					}}
-				/>
-
-				<GoalsAiPanel
-					workspaceId={goalWorkspaceId}
-					cards={cards}
-					kanbanSnapshot={kanbanSnapshot}
-					goalTitle={goalTitle}
-					goalDescription={goalDescription}
-					canCreateCards={canCreateCards}
-					onClose={handleClose}
-				/>
-			</aside>
-		</>,
+			<GoalsAiPanel
+				workspaceId={goalWorkspaceId}
+				cards={cards}
+				kanbanSnapshot={kanbanSnapshot}
+				goalTitle={goalTitle}
+				goalDescription={goalDescription}
+				canCreateCards={canCreateCards}
+				onClose={handleClose}
+			/>
+		</aside>,
 		document.body,
 	);
 }
