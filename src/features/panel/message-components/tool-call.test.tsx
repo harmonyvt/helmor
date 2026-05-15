@@ -62,11 +62,23 @@ describe("AssistantToolCall goal audit", () => {
 			/>,
 		);
 
+		const audit = screen.getByText(
+			/Sent to assignee · Supervisor update from Goals Pi \(priority: high\)/,
+		);
+		expect(audit).toBeInTheDocument();
+		const details = audit.closest("details") as HTMLDetailsElement | null;
+		expect(details).not.toBeNull();
+		details!.open = true;
+		fireEvent(details!, new Event("toggle"));
 		expect(
-			screen.getByText("Audit: sent assignee update to workspace-child"),
-		).toBeInTheDocument();
-		expect(
-			screen.getByText(/Supervisor update from Goals Pi \(priority: high\)/),
+			screen.getByText((_, element) => {
+				return (
+					element?.tagName.toLowerCase() === "pre" &&
+					element.textContent?.includes(
+						"Supervisor update from Goals Pi (priority: high):",
+					) === true
+				);
+			}),
 		).toBeInTheDocument();
 	});
 });
@@ -134,6 +146,7 @@ function makeGroup(
 				toolCallId: "tc1",
 				toolName: "Read",
 				args: { file_path: "/src/App.tsx" },
+				argsText: '{"file_path":"/src/App.tsx"}',
 				result: "content",
 				isError: false,
 			},
@@ -142,6 +155,7 @@ function makeGroup(
 				toolCallId: "tc2",
 				toolName: "Read",
 				args: { file_path: "/src/main.tsx" },
+				argsText: '{"file_path":"/src/main.tsx"}',
 				result: "content",
 				isError: false,
 			},
@@ -150,6 +164,7 @@ function makeGroup(
 				toolCallId: "tc3",
 				toolName: "Read",
 				args: { file_path: "/src/lib/api.ts" },
+				argsText: '{"file_path":"/src/lib/api.ts"}',
 				result: "content",
 				isError: false,
 			},

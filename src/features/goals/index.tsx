@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	useMutation,
+	useQueries,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -26,12 +31,14 @@ import {
 	goalOrchestratorStateQueryOptions,
 	helmorQueryKeys,
 	workspaceDetailQueryOptions,
+	workspacePrCommentsQueryOptions,
 } from "@/lib/query-client";
 import { GoalBoard } from "./board";
 import { createGoalKanbanSnapshot, type GoalLaneId } from "./board-model";
 import { BranchTreeView } from "./branch-tree-view";
 import { GoalCardDetailPanel } from "./card-detail";
 import { GoalChangesView } from "./changes-view";
+import { GoalCommentsView } from "./comments-view";
 import { GoalTabBar } from "./goal-tab-bar";
 import { GoalHeader } from "./header";
 import { GoalMetaSheet } from "./metadata-sheet";
@@ -147,6 +154,33 @@ export function GoalWorkspaceContainer({
 		}
 		return reports;
 	}, [assigneesQuery.data]);
+
+	// Compute unresolved PR comment count for the Comments tab badge.
+	// Only query workspaces (and the goal itself) that already have an open PR
+	// so we don't fire extra requests for every card on every render.
+	const openPrWorkspaceIds = useMemo(() => {
+		const ids: string[] = [];
+		if (workspace?.prSyncState === "open") ids.push(workspace.id);
+		for (const ws of childWorkspaces) {
+			if (ws.prSyncState === "open") ids.push(ws.id);
+		}
+		return ids;
+	}, [workspace, childWorkspaces]);
+
+	const prCommentResults = useQueries({
+		queries: openPrWorkspaceIds.map((id) =>
+			workspacePrCommentsQueryOptions(id),
+		),
+	});
+
+	const unresolvedCommentsCount = useMemo(
+		() =>
+			prCommentResults.reduce((sum, r) => {
+				if (!r.data) return sum;
+				return sum + r.data.comments.filter((c) => !c.isThreadResolved).length;
+			}, 0),
+		[prCommentResults],
+	);
 
 	const repoScriptsQuery = useQuery({
 		queryKey: helmorQueryKeys.repoScripts(
@@ -486,6 +520,11 @@ export function GoalWorkspaceContainer({
 					onTabChange={handleTabChange}
 					canCreateCards={isGoalReadyForChildren}
 					onAddCard={handleShowAddCard}
+					tabBadges={
+						unresolvedCommentsCount > 0
+							? { comments: unresolvedCommentsCount }
+							: undefined
+					}
 				/>
 
 				{orchestratorQuery.data?.errors.length ? (
@@ -598,6 +637,18 @@ export function GoalWorkspaceContainer({
 						workspaces={childWorkspaces}
 						activeEditorPath={activeEditorPath}
 						onOpenEditorFile={onOpenEditorFile}
+						onSelectWorkspace={(ws) => {
+							setActiveTab("board");
+							handleSelectChildWorkspace(ws);
+						}}
+					/>
+				)}
+
+				{/* Comments tab */}
+				{activeTab === "comments" && (
+					<GoalCommentsView
+						goalWorkspace={workspace}
+						workspaces={childWorkspaces}
 						onSelectWorkspace={(ws) => {
 							setActiveTab("board");
 							handleSelectChildWorkspace(ws);

@@ -3,6 +3,7 @@ import {
 	GitBranch,
 	GitFork,
 	LayoutGrid,
+	MessageSquare,
 	Plus,
 	Terminal,
 	Users,
@@ -20,6 +21,7 @@ type TabDef = {
 const GOAL_TABS: TabDef[] = [
 	{ id: "board", label: "Board", icon: LayoutGrid },
 	{ id: "changes", label: "Changes", icon: GitBranch },
+	{ id: "comments", label: "Comments", icon: MessageSquare },
 	{ id: "branch-tree", label: "Branches", icon: GitFork },
 	{ id: "team", label: "Team", icon: Users },
 	{ id: "timeline", label: "Timeline", icon: Activity },
@@ -31,6 +33,8 @@ type GoalTabBarProps = {
 	onTabChange: (tab: GoalTabView) => void;
 	canCreateCards?: boolean;
 	onAddCard: () => void;
+	/** Optional count badges keyed by tab id. Shown as a small pill next to the tab label. */
+	tabBadges?: Partial<Record<GoalTabView, number>>;
 };
 
 export function GoalTabBar({
@@ -38,6 +42,7 @@ export function GoalTabBar({
 	onTabChange,
 	canCreateCards = false,
 	onAddCard,
+	tabBadges,
 }: GoalTabBarProps) {
 	return (
 		<div
@@ -49,6 +54,7 @@ export function GoalTabBar({
 				{GOAL_TABS.map((tab) => {
 					const Icon = tab.icon;
 					const isActive = activeTab === tab.id;
+					const badge = tabBadges?.[tab.id] ?? 0;
 					return (
 						<button
 							key={tab.id}
@@ -65,6 +71,11 @@ export function GoalTabBar({
 						>
 							<Icon className="size-3.5 shrink-0" strokeWidth={1.8} />
 							<span>{tab.label}</span>
+							{badge > 0 && (
+								<span className="inline-flex min-w-[14px] items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--workspace-pr-conflicts-accent)_15%,transparent)] px-1 py-px text-[9px] font-semibold tabular-nums text-[var(--workspace-pr-conflicts-accent)]">
+									{badge > 99 ? "99+" : badge}
+								</span>
+							)}
 							{isActive && (
 								<span
 									aria-hidden="true"
