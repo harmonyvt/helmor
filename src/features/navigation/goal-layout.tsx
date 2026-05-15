@@ -1,11 +1,13 @@
 import {
 	Archive,
 	ArrowRight,
+	Bot,
 	ChevronRight,
 	Circle,
 	Folder,
 	FolderOpen,
 	Layers,
+	LoaderCircle,
 	Trash2,
 } from "lucide-react";
 import { memo, useCallback, useState } from "react";
@@ -496,20 +498,44 @@ function GoalFolderHeader({
 							<span className="truncate">{goalGroup.goalTitle}</span>
 						</button>
 
+						{actions.onOpenGoalAiSurface ? (
+							<button
+								type="button"
+								onClick={() =>
+									actions.onOpenGoalAiSurface?.(goalGroup.goalWorkspaceId)
+								}
+								className={cn(
+									"flex size-5 shrink-0 cursor-pointer items-center justify-center rounded transition-all hover:bg-accent hover:text-foreground",
+									isGoalAiRunning
+										? "text-chart-2 opacity-100"
+										: "text-muted-foreground/30 opacity-0 group-hover/folder:opacity-100",
+								)}
+								aria-label="Open Goal AI surface"
+								title="Open Goal AI surface"
+							>
+								<Bot className="size-3" strokeWidth={2.2} />
+							</button>
+						) : null}
+
 						<button
 							type="button"
 							onClick={() => onSelect?.(goalGroup.goalWorkspaceId)}
-							className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/40 opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover/folder:opacity-100"
+							className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/30 opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover/folder:opacity-100"
 							aria-label="Open goal workspace"
 							title="Open goal workspace"
 						>
 							<ArrowRight className="size-3" strokeWidth={2.2} />
 						</button>
 
-						{hasChildren ? (
+						{isBusy ? (
+							<LoaderCircle
+								className="mr-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground"
+								strokeWidth={2.1}
+							/>
+						) : hasChildren ? (
 							<Badge
 								variant="secondary"
-								className="mr-0.5 h-4 min-w-[16px] shrink-0 justify-center rounded-full px-1 text-[9.5px] leading-none opacity-60 group-hover/folder:opacity-0"
+								className="mr-0.5 h-4 min-w-[16px] shrink-0 justify-center rounded-full px-1 text-[9.5px] leading-none"
 							>
 								{goalGroup.childRows.length}
 							</Badge>
@@ -701,18 +727,30 @@ function GoalChildRow({
 				{displayTitle}
 			</span>
 
-			{/* PR badge — fades on hover to make room for archive button */}
+			{/* PR badge — fades on hover (or while busy) to make room for action button */}
 			{prNumber !== null ? (
-				<span className="shrink-0 rounded px-1 py-0 text-[10px] tabular-nums font-medium text-foreground/45 transition-opacity group-hover/child:opacity-0">
+				<span
+					className={cn(
+						"shrink-0 rounded px-1 py-0 text-[10px] tabular-nums font-medium text-foreground/35 transition-opacity",
+						isBusy ? "opacity-0" : "group-hover/child:opacity-0",
+					)}
+				>
 					#{prNumber}
 				</span>
 			) : null}
 
-			{/* Hover-reveal archive button */}
+			{/* Archive button — always visible while busy (shows spinner), hover-reveal otherwise */}
 			{actions.onArchiveWorkspace ? (
-				<span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 opacity-0 transition-opacity group-hover/child:pointer-events-auto group-hover/child:opacity-100">
+				<span
+					className={cn(
+						"pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 transition-opacity",
+						isBusy
+							? "pointer-events-auto opacity-100"
+							: "opacity-0 group-hover/child:pointer-events-auto group-hover/child:opacity-100",
+					)}
+				>
 					<Button
-						aria-label="Archive workspace"
+						aria-label={isBusy ? "Archiving…" : "Archive workspace"}
 						disabled={workspaceActionsDisabled || isBusy}
 						onClick={(e) => {
 							e.stopPropagation();
@@ -725,11 +763,18 @@ function GoalChildRow({
 						className={cn(
 							"size-5 rounded-md p-0 text-muted-foreground",
 							workspaceActionsDisabled || isBusy
-								? "cursor-not-allowed opacity-60"
+								? "cursor-not-allowed"
 								: "cursor-pointer hover:text-foreground",
 						)}
 					>
-						<Archive className="size-3.5" strokeWidth={1.9} />
+						{isBusy ? (
+							<LoaderCircle
+								className="size-3.5 animate-spin"
+								strokeWidth={2.1}
+							/>
+						) : (
+							<Archive className="size-3.5" strokeWidth={1.9} />
+						)}
 					</Button>
 				</span>
 			) : null}
