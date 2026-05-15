@@ -1,6 +1,7 @@
 import {
 	Activity,
 	GitBranch,
+	GitFork,
 	LayoutGrid,
 	Plus,
 	Terminal,
@@ -19,6 +20,7 @@ type TabDef = {
 const GOAL_TABS: TabDef[] = [
 	{ id: "board", label: "Board", icon: LayoutGrid },
 	{ id: "changes", label: "Changes", icon: GitBranch },
+	{ id: "branch-tree", label: "Branches", icon: GitFork },
 	{ id: "team", label: "Team", icon: Users },
 	{ id: "timeline", label: "Timeline", icon: Activity },
 	{ id: "terminal", label: "Terminal", icon: Terminal },

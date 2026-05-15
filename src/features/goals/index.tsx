@@ -29,6 +29,7 @@ import {
 } from "@/lib/query-client";
 import { GoalBoard } from "./board";
 import { createGoalKanbanSnapshot, type GoalLaneId } from "./board-model";
+import { BranchTreeView } from "./branch-tree-view";
 import { GoalCardDetailPanel } from "./card-detail";
 import { GoalChangesView } from "./changes-view";
 import { GoalTabBar } from "./goal-tab-bar";
@@ -636,6 +637,18 @@ export function GoalWorkspaceContainer({
 						workspaceId={workspaceId}
 						repoId={workspace?.repoId ?? null}
 						onOpenSettings={onOpenSettings ?? (() => {})}
+					/>
+				)}
+
+				{/* Branch tree tab */}
+				{activeTab === "branch-tree" && (
+					<BranchTreeView
+						goalWorkspace={workspace}
+						workspaces={childWorkspaces}
+						onSelectWorkspace={(ws) => {
+							setActiveTab("board");
+							handleSelectChildWorkspace(ws);
+						}}
 					/>
 				)}
 			</div>
