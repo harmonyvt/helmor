@@ -56,6 +56,11 @@ export function GoalTerminalView({
 	});
 	const repoScripts = repoScriptsQuery.data ?? null;
 
+	useEffect(() => {
+		setRunStatus("idle");
+		setRunUrls([]);
+	}, [workspaceId, repoId]);
+
 	// Subscribe to the workspace's terminal instance list.
 	useEffect(() => {
 		return subscribeToWorkspaceList(workspaceId, setTerminalInstances);
