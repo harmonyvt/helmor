@@ -4,13 +4,14 @@ import type { DiffOpenOptions } from "@/lib/editor-session";
 /** The three physical states of the Pi AI surface within a goal context. */
 export type GoalPiPhysicalState = "panel" | "dock" | "sheet";
 
-/** The five view tabs available on the goal board. */
+/** The six view tabs available on the goal board. */
 export type GoalTabView =
 	| "board"
 	| "changes"
 	| "team"
 	| "timeline"
-	| "terminal";
+	| "terminal"
+	| "branch-tree";
 
 export type GoalAiSurfaceContext = {
 	workspaceId: string;
