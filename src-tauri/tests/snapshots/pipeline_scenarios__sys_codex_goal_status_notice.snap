@@ -1,0 +1,14 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: system
+  id: msg-1
+  content_length: 1
+  content:
+    - type: system-notice
+      severity: info
+      label: Codex goal set
+      body: Ship the goals status UI
+  status: ~
+  streaming: ~

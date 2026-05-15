@@ -1,0 +1,2 @@
+{"type":"thread/started","thread":{"id":"thread-goal-1"},"session_id":"thread-goal-1"}
+{"type":"thread/goal/status","action":"set","status":"set","objective":"Ship the goals status UI","threadId":"thread-goal-1","session_id":"thread-goal-1"}

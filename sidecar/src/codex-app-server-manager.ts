@@ -75,6 +75,21 @@ function dispatchGoalCommand(
 	};
 }
 
+function buildGoalStatusEvent(
+	threadId: string | null,
+	command: GoalCommand,
+	response: unknown,
+): Record<string, unknown> {
+	return {
+		type: "thread/goal/status",
+		action: command.kind,
+		status: command.kind === "resume" ? "active" : "set",
+		...(threadId ? { threadId } : {}),
+		...(command.kind === "set" ? { objective: command.objective } : {}),
+		response,
+	};
+}
+
 /** How long after a "Reconnecting…" stderr line we keep emitting
  *  synthetic heartbeats while Codex owns its retry loop. */
 const RETRY_SUPPRESSION_MS = 30_000;
@@ -837,6 +852,15 @@ export class CodexAppServerManager implements SessionManager {
 				const { method, promise } = dispatchPrompt();
 				promise
 					.then((response) => {
+						if (goalCommand) {
+							emit(
+								buildGoalStatusEvent(
+									ctx.providerThreadId,
+									goalCommand,
+									response,
+								),
+							);
+						}
 						const turnId = deepGet(response, "turn", "id");
 						if (typeof turnId === "string") {
 							ctx.activeTurnId = turnId;

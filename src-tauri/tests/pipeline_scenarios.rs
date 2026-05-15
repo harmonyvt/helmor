@@ -811,6 +811,20 @@ fn sys_codex_missing_response_item_recovery_notice() {
 }
 
 #[test]
+fn sys_codex_goal_status_notice() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "codex_goal_status",
+            "action": "set",
+            "status": "set",
+            "objective": "Ship the goals status UI",
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn sys_goal_assignee_report_renders_message_body() {
     let parsed = json!({
         "type": "goal_assignee_report",

@@ -242,6 +242,7 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
                     .to_string(),
             ),
         }),
+        "codex_goal_status" => Some(build_codex_goal_status_notice(parsed, msg_id)),
         "codex_reconnecting" => Some(build_codex_reconnecting_notice(parsed, msg_id)),
         "agent_starting" => Some(build_agent_runtime_notice(
             parsed,
@@ -263,6 +264,33 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
         )),
         "api_retry" => Some(build_api_retry_notice(parsed, msg_id)),
         _ => None,
+    }
+}
+
+fn build_codex_goal_status_notice(parsed: &Value, msg_id: &str) -> MessagePart {
+    let action = parsed.get("action").and_then(Value::as_str);
+    let status = parsed.get("status").and_then(Value::as_str);
+    let objective = parsed
+        .get("objective")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let label = match (action, status) {
+        (Some("resume"), _) => "Codex goal resumed",
+        (Some("set"), _) => "Codex goal set",
+        (_, Some("active")) => "Codex goal active",
+        (_, Some("completed")) => "Codex goal completed",
+        (_, Some("cancelled" | "canceled")) => "Codex goal cancelled",
+        (_, Some("set")) => "Codex goal set",
+        _ => "Codex goal updated",
+    };
+
+    MessagePart::SystemNotice {
+        id: notice_part_id(msg_id),
+        severity: NoticeSeverity::Info,
+        label: label.to_string(),
+        body: objective.map(str::to_string),
     }
 }
 
