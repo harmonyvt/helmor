@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { AssistantToolCall } from "./tool-call";
+import type { CollapsedGroupPart } from "@/lib/api";
+import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
 
 describe("AssistantToolCall apply_patch", () => {
 	it("defaults multi-file edits to collapsed and suppresses generic patch text when expanded", () => {
@@ -114,5 +115,118 @@ describe("AssistantToolCall default-collapsed", () => {
 		expect(view.getByText("Read 20 lines")).toBeInTheDocument();
 		expect(view.getByText("App.tsx")).toBeInTheDocument();
 		expect(view.queryByText("via pi")).not.toBeInTheDocument();
+	});
+});
+
+// Helper to build a minimal CollapsedGroupPart for tests.
+function makeGroup(
+	overrides: Partial<CollapsedGroupPart> = {},
+): CollapsedGroupPart {
+	return {
+		type: "collapsed-group",
+		id: "group:tc1",
+		category: "read",
+		summary: "Read 3 files",
+		active: false,
+		tools: [
+			{
+				type: "tool-call",
+				toolCallId: "tc1",
+				toolName: "Read",
+				args: { file_path: "/src/App.tsx" },
+				result: "content",
+				isError: false,
+			},
+			{
+				type: "tool-call",
+				toolCallId: "tc2",
+				toolName: "Read",
+				args: { file_path: "/src/main.tsx" },
+				result: "content",
+				isError: false,
+			},
+			{
+				type: "tool-call",
+				toolCallId: "tc3",
+				toolName: "Read",
+				args: { file_path: "/src/lib/api.ts" },
+				result: "content",
+				isError: false,
+			},
+		],
+		...overrides,
+	};
+}
+
+describe("CollapsedToolGroup", () => {
+	// Count <details> elements nested inside the outer CollapsedToolGroup details.
+	// When closed the inner tool rows are removed from the DOM entirely
+	// (React conditional rendering, not CSS visibility), so this count is 0.
+	// When open, each AssistantToolCall tool row contributes at least one <details>.
+	function innerDetailsCount(container: HTMLElement): number {
+		const outer = container.querySelector(
+			"details",
+		) as HTMLDetailsElement | null;
+		return outer ? outer.querySelectorAll("details").length : 0;
+	}
+
+	it("renders summary and tool count when closed by default (completed group)", () => {
+		render(<CollapsedToolGroup group={makeGroup()} />);
+
+		// Summary text and count are always visible in the <summary> element.
+		expect(screen.getByText("Read 3 files")).toBeInTheDocument();
+		expect(screen.getByText("3 tools")).toBeInTheDocument();
+	});
+
+	it("does not render inner tool rows by default for a completed group", () => {
+		const { container } = render(<CollapsedToolGroup group={makeGroup()} />);
+
+		// Outer details element starts closed.
+		const details = container.querySelector("details") as HTMLDetailsElement;
+		expect(details).not.toBeNull();
+		expect(details.open).toBe(false);
+
+		// No inner tool-row <details> should be present in the DOM.
+		expect(innerDetailsCount(container)).toBe(0);
+	});
+
+	it("reveals inner tool rows after opening the group", () => {
+		const { container } = render(<CollapsedToolGroup group={makeGroup()} />);
+
+		const details = container.querySelector("details") as HTMLDetailsElement;
+		expect(details).not.toBeNull();
+
+		// Simulate the browser toggling the details element open.
+		details.open = true;
+		fireEvent(details, new Event("toggle"));
+
+		// Each tool renders its own <details> row (AssistantToolCall root element).
+		expect(innerDetailsCount(container)).toBeGreaterThan(0);
+	});
+
+	it("starts open when group is active (streaming)", () => {
+		const { container } = render(
+			<CollapsedToolGroup group={makeGroup({ active: true, tools: [] })} />,
+		);
+
+		const details = container.querySelector("details") as HTMLDetailsElement;
+		expect(details).not.toBeNull();
+		expect(details.open).toBe(true);
+	});
+
+	it("collapses back after being opened then closed", () => {
+		const { container } = render(<CollapsedToolGroup group={makeGroup()} />);
+
+		const details = container.querySelector("details") as HTMLDetailsElement;
+
+		// Open — inner tool rows appear.
+		details.open = true;
+		fireEvent(details, new Event("toggle"));
+		expect(innerDetailsCount(container)).toBeGreaterThan(0);
+
+		// Close — inner tool rows are removed from the DOM.
+		details.open = false;
+		fireEvent(details, new Event("toggle"));
+		expect(innerDetailsCount(container)).toBe(0);
 	});
 });

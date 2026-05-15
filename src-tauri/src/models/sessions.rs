@@ -465,7 +465,7 @@ fn list_session_historical_records_with_connection(
               sm.created_at
             FROM session_messages sm
             WHERE sm.session_id = ?1
-            ORDER BY sm.sent_at ASC, sm.rowid ASC
+            ORDER BY COALESCE(julianday(sm.sent_at), julianday(sm.created_at)) ASC, sm.rowid ASC
             "#,
     )?;
 
@@ -1884,6 +1884,38 @@ mod tests {
             .filter_map(Result::ok)
             .collect();
         assert_eq!(roles, vec!["user", "assistant"]);
+    }
+
+    #[test]
+    fn historical_records_order_mixed_timestamp_formats_chronologically() {
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        conn.execute(
+            r#"
+            INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at)
+            VALUES ('user-message', 's1', 'user', '{"type":"user_prompt","text":"delegate please"}', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+            "#,
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at)
+            VALUES ('delegate-anchor', 's1', 'assistant', '{"type":"delegation_anchor","delegationId":"d1","parentSessionId":"s1","childSessionId":"child","title":"Delegate","provider":"codex","status":"succeeded","outputSchema":{}}', '2026-01-01 00:00:01', '2026-01-01 00:00:01')
+            "#,
+            [],
+        )
+        .unwrap();
+
+        let records = list_session_historical_records_with_connection(&conn, "s1").unwrap();
+
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user-message", "delegate-anchor"]
+        );
     }
 
     #[test]

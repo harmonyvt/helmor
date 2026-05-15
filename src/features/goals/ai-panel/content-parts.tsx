@@ -11,7 +11,12 @@ import {
 	Info,
 	Wrench,
 } from "lucide-react";
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import {
+	AssigneeReportNotificationBlock,
+	parseAssigneeReportNotification,
+} from "@/components/ai/assignee-report-notification";
+import { LazyStreamdown } from "@/components/streamdown-loader";
 import type {
 	CollapsedGroupPart,
 	ExtendedMessagePart,
@@ -66,10 +71,26 @@ function PartSwitch({ part }: { part: ExtendedMessagePart }) {
 
 function TextBlock({ part }: { part: TextPart }) {
 	if (!part.text.trim()) return null;
+	if (parseAssigneeReportNotification(part.text)) {
+		return <AssigneeReportNotificationBlock text={part.text} />;
+	}
+
 	return (
-		<p className="text-[12.5px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
-			{part.text}
-		</p>
+		<div className="conversation-markdown assistant-markdown-scale max-w-none break-words text-[12.5px] leading-relaxed text-foreground">
+			<Suspense fallback={<TextFallback text={part.text} />}>
+				<LazyStreamdown className="conversation-streamdown" mode="static">
+					{part.text}
+				</LazyStreamdown>
+			</Suspense>
+		</div>
+	);
+}
+
+function TextFallback({ text }: { text: string }) {
+	return (
+		<div className="conversation-streamdown whitespace-pre-wrap break-words">
+			{text}
+		</div>
 	);
 }
 

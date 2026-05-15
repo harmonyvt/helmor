@@ -107,6 +107,9 @@ function handleUiMutation(
 				}
 			}
 			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.sessionDelegations(event.sessionId),
+			});
+			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
 			});
 			return;

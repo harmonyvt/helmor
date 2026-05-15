@@ -103,9 +103,7 @@ pub(crate) fn delegate_agent_blocking(
         .unwrap_or_else(|| Duration::from_secs(30 * 60));
     let schema_text = serde_json::to_string_pretty(&request.output_schema)?;
     let delegated_debug_prefix = debug_prompt_prefix_for_delegation(parent_prompt_prefix);
-    let prompt = format!(
-        "{task}\n\nReturn only JSON that validates against this JSON Schema. Do not wrap it in Markdown.\n\nJSON Schema:\n{schema_text}"
-    );
+    let prompt = build_delegation_wire_prompt(task, &schema_text);
 
     let first = run_child_turn(
         &app,
@@ -113,6 +111,7 @@ pub(crate) fn delegate_agent_blocking(
         &created,
         &model,
         &prompt,
+        task,
         &working_directory,
         request.effort_level.as_deref(),
         request.permission_mode.as_deref(),
@@ -145,12 +144,15 @@ pub(crate) fn delegate_agent_blocking(
             "Your previous response was not valid JSON for the required schema. Return only repaired JSON, no Markdown.\n\nSchema:\n{schema_text}\n\nPrevious response:\n{}",
             final_output.assistant_text
         );
+        let repair_visible_prompt =
+            "Repair the previous response so it matches the required structured output.";
         final_output = run_child_turn(
             &app,
             sidecar,
             &created,
             &model,
             &repair_prompt,
+            repair_visible_prompt,
             &working_directory,
             request.effort_level.as_deref(),
             request.permission_mode.as_deref(),
@@ -216,7 +218,8 @@ fn run_child_turn(
     sidecar: &crate::sidecar::ManagedSidecar,
     created: &delegations::CreatedDelegation,
     model: &super::ResolvedModel,
-    prompt: &str,
+    wire_prompt: &str,
+    visible_prompt: &str,
     working_directory: &Path,
     effort_level: Option<&str>,
     permission_mode: Option<&str>,
@@ -229,8 +232,8 @@ fn run_child_turn(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        Some(prefix) => format!("{prefix}\n\nDelegated task:\n{prompt}"),
-        None => prompt.to_string(),
+        Some(prefix) => format!("{prefix}\n\nDelegated task:\n{wire_prompt}"),
+        None => wire_prompt.to_string(),
     };
     let params = build_send_message_params(BuildSendMessageParamsInput {
         sidecar_session_id: &created.child_session_id,
@@ -267,7 +270,7 @@ fn run_child_turn(
     };
     {
         let conn = crate::models::db::write_conn()?;
-        persist_user_message(&conn, &ctx, prompt, &[], &[])?;
+        persist_user_message(&conn, &ctx, visible_prompt, &[], &[])?;
     }
 
     let mut pipeline = crate::pipeline::MessagePipeline::new(
@@ -406,6 +409,12 @@ fn debug_prompt_prefix_for_delegation(parent_prompt_prefix: Option<&str>) -> Opt
     } else {
         Some(debug_prefix.to_string())
     }
+}
+
+fn build_delegation_wire_prompt(task: &str, schema_text: &str) -> String {
+    format!(
+        "{task}\n\nReturn only JSON that validates against this JSON Schema. Do not wrap it in Markdown.\n\nJSON Schema:\n{schema_text}"
+    )
 }
 
 fn persist_pending_turns(
@@ -563,6 +572,21 @@ mod tests {
             None
         );
         assert_eq!(debug_prompt_prefix_for_delegation(None), None);
+    }
+
+    #[test]
+    fn delegation_wire_prompt_keeps_schema_out_of_visible_prompt() {
+        let task = "Write one original joke.";
+        let schema = r#"{"type":"object","properties":{"joke":{"type":"string"}}}"#;
+        let visible_prompt = task;
+
+        let wire_prompt = build_delegation_wire_prompt(task, schema);
+
+        assert!(wire_prompt.starts_with(task));
+        assert!(wire_prompt.contains("JSON Schema:"));
+        assert!(wire_prompt.contains(schema));
+        assert!(!visible_prompt.contains("JSON Schema:"));
+        assert!(!visible_prompt.contains(schema));
     }
 
     #[test]

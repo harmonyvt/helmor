@@ -297,6 +297,9 @@ pub(super) fn merge_adjacent_assistants(msgs: Vec<ThreadMessageLike>) -> Vec<Thr
             (Some(MessageRole::Assistant), MessageRole::Assistant)
         ) && !assistant_contains_plan_review(out.last())
             && !message_contains_plan_review(&msg);
+        let should_merge = should_merge
+            && !assistant_contains_delegation_anchor(out.last())
+            && !message_contains_delegation_anchor(&msg);
 
         if should_merge {
             let prev = out.last_mut().unwrap();
@@ -382,6 +385,19 @@ fn message_contains_plan_review(message: &ThreadMessageLike) -> bool {
         matches!(
             part,
             ExtendedMessagePart::Basic(MessagePart::PlanReview { .. })
+        )
+    })
+}
+
+fn assistant_contains_delegation_anchor(message: Option<&ThreadMessageLike>) -> bool {
+    message.is_some_and(message_contains_delegation_anchor)
+}
+
+fn message_contains_delegation_anchor(message: &ThreadMessageLike) -> bool {
+    message.content.iter().any(|part| {
+        matches!(
+            part,
+            ExtendedMessagePart::Basic(MessagePart::DelegationAnchor { .. })
         )
     })
 }

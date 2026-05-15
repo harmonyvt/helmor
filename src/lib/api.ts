@@ -806,6 +806,7 @@ export type AssigneeReportMarker = {
 	messageId?: string | null;
 	createdAt?: string | null;
 	excerpt: string;
+	fullText?: string | null;
 };
 
 export type SendAssigneeMessageRequest = {
@@ -2910,6 +2911,14 @@ export async function delegateAgent(
 	request: DelegateAgentRequest,
 ): Promise<DelegateAgentResponse> {
 	return invoke<DelegateAgentResponse>("delegate_agent", { request });
+}
+
+export async function listSessionDelegations(
+	parentSessionId: string,
+): Promise<DelegationRecord[]> {
+	return invoke<DelegationRecord[]>("list_session_delegations", {
+		parentSessionId,
+	});
 }
 
 // ---------------------------------------------------------------------------

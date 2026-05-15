@@ -84,6 +84,7 @@ pub fn create_delegation_anchor_in_transaction(
     transaction: &Transaction<'_>,
     input: CreateDelegationInput,
 ) -> Result<CreatedDelegation> {
+    let now = db::current_timestamp()?;
     let (workspace_id, parent_provider): (String, Option<String>) = transaction
         .query_row(
             "SELECT workspace_id, agent_type FROM sessions WHERE id = ?1",
@@ -133,8 +134,8 @@ pub fn create_delegation_anchor_in_transaction(
             r#"
             INSERT INTO session_delegations (
                 id, parent_session_id, child_session_id, parent_message_id,
-                provider, model_id, title, status, output_schema, started_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, datetime('now'))
+                provider, model_id, title, status, output_schema, created_at, started_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9, ?9)
             "#,
             params![
                 &delegation_id,
@@ -145,6 +146,7 @@ pub fn create_delegation_anchor_in_transaction(
                 input.model_id.as_deref(),
                 &title,
                 input.output_schema.to_string(),
+                &now,
             ],
         )
         .context("Failed to create delegation metadata")?;
@@ -153,13 +155,14 @@ pub fn create_delegation_anchor_in_transaction(
     transaction
         .execute(
             r#"
-            INSERT INTO session_messages (id, session_id, role, content, sent_at)
-            VALUES (?1, ?2, 'assistant', ?3, datetime('now'))
+            INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at)
+            VALUES (?1, ?2, 'assistant', ?3, ?4, ?4)
             "#,
             params![
                 &parent_message_id,
                 &input.parent_session_id,
                 serde_json::to_string(&content)?,
+                &now,
             ],
         )
         .context("Failed to insert delegation anchor message")?;
@@ -185,28 +188,27 @@ pub fn update_delegation_status(
         .transaction()
         .context("Failed to start delegation update transaction")?;
 
-    let completed_expr = if matches!(status, "succeeded" | "failed" | "timeout" | "cancelled") {
-        "datetime('now')"
+    let completed_at = if matches!(status, "succeeded" | "failed" | "timeout" | "cancelled") {
+        Some(db::current_timestamp()?)
     } else {
-        "completed_at"
+        None
     };
     transaction
         .execute(
-            &format!(
-                r#"
+            r#"
                 UPDATE session_delegations
                 SET status = ?2,
                     structured_result = ?3,
                     error = ?4,
-                    completed_at = {completed_expr}
+                    completed_at = COALESCE(?5, completed_at)
                 WHERE id = ?1
-                "#
-            ),
+                "#,
             params![
                 delegation_id,
                 status,
                 structured_result.map(Value::to_string),
                 error,
+                completed_at.as_deref(),
             ],
         )
         .with_context(|| format!("Failed to update delegation {delegation_id}"))?;
@@ -349,4 +351,86 @@ fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DelegationRecord
         started_at: row.get(12)?,
         completed_at: row.get(13)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seed_parent_session(conn: &Connection) {
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('repo-1', 'repo', '/tmp/repo')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status)
+             VALUES ('workspace-1', 'repo-1', 'repo', 'active', 'in-progress')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title, agent_type)
+             VALUES ('parent-session', 'workspace-1', 'running', 'Parent', 'pi')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn delegation_anchor_uses_chat_timestamp_format_for_ordering() {
+        let _env = crate::testkit::TestEnv::new("delegation-anchor-order");
+        {
+            let conn = db::write_conn().unwrap();
+            seed_parent_session(&conn);
+            let now = db::current_timestamp().unwrap();
+            conn.execute(
+                r#"
+                INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at)
+                VALUES ('user-message', 'parent-session', 'user', '{"type":"user_prompt","text":"delegate please"}', ?1, ?1)
+                "#,
+                [&now],
+            )
+            .unwrap();
+        }
+
+        let created = create_delegation_anchor(CreateDelegationInput {
+            parent_session_id: "parent-session".to_string(),
+            provider: "codex".to_string(),
+            model_id: Some("gpt-5.4".to_string()),
+            title: Some("Capybara joke delegate".to_string()),
+            output_schema: json!({ "type": "object" }),
+        })
+        .unwrap();
+
+        {
+            let conn = db::read_conn().unwrap();
+            let rows = conn
+                .prepare(
+                    "SELECT id, sent_at FROM session_messages WHERE session_id = 'parent-session' ORDER BY sent_at ASC, rowid ASC",
+                )
+                .unwrap()
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(rows[0].0, "user-message");
+            assert_eq!(rows[1].0, created.parent_message_id);
+            assert!(
+                rows[1].1.contains('T') && rows[1].1.ends_with('Z'),
+                "delegation anchor sent_at should use the same RFC3339 format as chat messages: {}",
+                rows[1].1
+            );
+        }
+
+        let completed =
+            update_delegation_status(&created.id, "succeeded", Some(&json!({ "ok": true })), None)
+                .unwrap();
+        let completed_at = completed.completed_at.as_deref().unwrap_or_default();
+        assert!(
+            completed_at.contains('T') && completed_at.ends_with('Z'),
+            "delegation completion should use RFC3339 timestamps: {completed_at}"
+        );
+    }
 }

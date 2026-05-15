@@ -12,7 +12,7 @@ import type { PrSyncState, WorkspaceDetail } from "@/lib/api";
 import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
-import { GOAL_LANES } from "./board-model";
+import { GOAL_LANES, goalLaneForWorkspace } from "./board-model";
 
 const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	M: "text-yellow-500",
@@ -510,8 +510,9 @@ function compareCardStates(
 	const rightHasChanges = right.changes.length > 0 ? 0 : 1;
 	if (leftHasChanges !== rightHasChanges)
 		return leftHasChanges - rightHasChanges;
-	const leftLane = laneOrder[left.source.workspace.status] ?? 99;
-	const rightLane = laneOrder[right.source.workspace.status] ?? 99;
+	const leftLane = laneOrder[goalLaneForWorkspace(left.source.workspace)] ?? 99;
+	const rightLane =
+		laneOrder[goalLaneForWorkspace(right.source.workspace)] ?? 99;
 	if (leftLane !== rightLane) return leftLane - rightLane;
 	return left.source.workspace.title.localeCompare(
 		right.source.workspace.title,

@@ -1,24 +1,26 @@
 import type React from "react";
-import type {
-	AssigneeReportMarker,
-	WorkspaceDetail,
-	WorkspaceStatus,
-} from "@/lib/api";
+import type { AssigneeReportMarker, WorkspaceDetail } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { GoalLaneDefinition } from "./board-model";
+import {
+	type GoalLaneDefinition,
+	isMergedGoalWorkspace,
+	isMovableGoalLaneId,
+} from "./board-model";
 import { WorkspaceCardWithHover } from "./card";
 
 type GoalLaneProps = {
 	lane: GoalLaneDefinition;
 	workspaces: WorkspaceDetail[];
 	isDragOver: boolean;
+	/** True when a non-mergeable card is being dragged over the Merged lane. */
+	isDragRejected?: boolean;
 	draggedId: string | null;
 	selectedId: string | null;
 	onCardClick: (workspace: WorkspaceDetail) => void;
 	onAssigneeClick?: (workspace: WorkspaceDetail) => void;
 	reportByWorkspaceId?: Map<string, AssigneeReportMarker>;
 	orchestratorStatusByWorkspaceId?: Map<string, string>;
-	onDragStart: (id: string, lane: WorkspaceStatus) => void;
+	onDragStart: (id: string, lane: GoalLaneDefinition["id"]) => void;
 	onDragEnd: () => void;
 	onDragOver: (event: React.DragEvent) => void;
 	onDrop: () => void;
@@ -29,6 +31,7 @@ export function GoalLane({
 	lane,
 	workspaces,
 	isDragOver,
+	isDragRejected = false,
 	draggedId,
 	selectedId,
 	onCardClick,
@@ -41,13 +44,23 @@ export function GoalLane({
 	onDrop,
 	onDragLeave,
 }: GoalLaneProps) {
+	const acceptsDrop = isMovableGoalLaneId(lane.id);
+	// The merged lane accepts drops via its own dialog flow.
+	const showDropHint = isDragOver && (acceptsDrop || lane.id === "merged");
+
 	return (
 		<div
 			className={cn(
-				"flex min-h-0 w-52 shrink-0 flex-col rounded-xl border transition-colors duration-150",
-				isDragOver
-					? "border-ring/60 bg-accent/30"
-					: "border-border/70 bg-muted/20",
+				"flex min-h-0 w-60 shrink-0 flex-col rounded-xl border transition-colors duration-150",
+				isDragRejected
+					? "border-destructive/40 bg-destructive/8"
+					: isDragOver && lane.id === "merged"
+						? "border-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_50%,var(--ring))] bg-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_12%,transparent)]"
+						: isDragOver
+							? "border-ring/60 bg-accent/30"
+							: lane.id === "merged"
+								? "border-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_26%,var(--border))] bg-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_5%,transparent)]"
+								: "border-border/70 bg-muted/20",
 			)}
 			onDragOver={onDragOver}
 			onDrop={onDrop}
@@ -68,34 +81,52 @@ export function GoalLane({
 			</div>
 
 			<div className="flex flex-col gap-2 overflow-y-auto p-2">
-				{workspaces.map((workspace) => (
-					<WorkspaceCardWithHover
-						key={workspace.id}
-						workspace={workspace}
-						isSelected={selectedId === workspace.id}
-						isDragging={draggedId === workspace.id}
-						onClick={() => onCardClick(workspace)}
-						onAssigneeClick={
-							onAssigneeClick ? () => onAssigneeClick(workspace) : undefined
-						}
-						latestReport={reportByWorkspaceId?.get(workspace.id) ?? null}
-						orchestratorStatus={
-							orchestratorStatusByWorkspaceId?.get(workspace.id) ?? null
-						}
-						onDragStart={() => onDragStart(workspace.id, workspace.status)}
-						onDragEnd={onDragEnd}
-					/>
-				))}
+				{workspaces.map((workspace) => {
+					const canDrag = acceptsDrop && !isMergedGoalWorkspace(workspace);
+					return (
+						<WorkspaceCardWithHover
+							key={workspace.id}
+							workspace={workspace}
+							isSelected={selectedId === workspace.id}
+							isDragging={draggedId === workspace.id}
+							canDrag={canDrag}
+							onClick={() => onCardClick(workspace)}
+							onAssigneeClick={
+								onAssigneeClick ? () => onAssigneeClick(workspace) : undefined
+							}
+							latestReport={reportByWorkspaceId?.get(workspace.id) ?? null}
+							orchestratorStatus={
+								orchestratorStatusByWorkspaceId?.get(workspace.id) ?? null
+							}
+							onDragStart={() => onDragStart(workspace.id, lane.id)}
+							onDragEnd={onDragEnd}
+						/>
+					);
+				})}
 				{workspaces.length === 0 ? (
 					<div
 						className={cn(
 							"rounded-lg border border-dashed px-3 py-8 text-center text-xs text-muted-foreground transition-colors duration-150",
-							isDragOver ? "border-ring/50 bg-accent/20" : "border-border/70",
+							isDragRejected
+								? "border-destructive/40 bg-destructive/8 text-destructive"
+								: isDragOver
+									? "border-ring/50 bg-accent/20"
+									: "border-border/70",
 						)}
 					>
-						{isDragOver ? "Drop here" : "No cards"}
+						{isDragRejected
+							? "No open PR"
+							: showDropHint
+								? lane.id === "merged"
+									? "Drop to merge"
+									: "Drop here"
+								: lane.emptyLabel}
 					</div>
-				) : isDragOver ? (
+				) : isDragRejected ? (
+					<div className="rounded-lg border-2 border-dashed border-destructive/40 px-3 py-4 text-center text-xs text-destructive">
+						No open PR
+					</div>
+				) : showDropHint ? (
 					<div className="rounded-lg border-2 border-dashed border-ring/50 px-3 py-4" />
 				) : null}
 			</div>

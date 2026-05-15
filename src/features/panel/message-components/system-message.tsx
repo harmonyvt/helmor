@@ -5,6 +5,12 @@ import {
 	Info,
 	MessageSquareText,
 } from "lucide-react";
+import { Suspense } from "react";
+import {
+	AssigneeReportNotificationBlock,
+	parseAssigneeReportNotification,
+} from "@/components/ai/assignee-report-notification";
+import { LazyStreamdown } from "@/components/streamdown-loader";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
@@ -104,6 +110,36 @@ function SystemText({ text }: { text: string }) {
 	return <span>{text}</span>;
 }
 
+function isGoalAssigneeNotificationText(text: string) {
+	const trimmed = text.trimStart();
+	return (
+		trimmed.startsWith("## Assignee Report Received") ||
+		trimmed.startsWith("## Assignee Runtime Issue")
+	);
+}
+
+function SystemMarkdownBlock({ text }: { text: string }) {
+	if (parseAssigneeReportNotification(text)) {
+		return <AssigneeReportNotificationBlock text={text} />;
+	}
+
+	return (
+		<div className="conversation-markdown assistant-markdown-scale max-w-none break-words text-[12.5px] leading-relaxed text-foreground">
+			<Suspense
+				fallback={
+					<div className="conversation-streamdown whitespace-pre-wrap break-words">
+						{text}
+					</div>
+				}
+			>
+				<LazyStreamdown className="conversation-streamdown" mode="static">
+					{text}
+				</LazyStreamdown>
+			</Suspense>
+		</div>
+	);
+}
+
 // --- ChatSystemMessage ---
 
 function MessageTimestamp({ createdAt }: { createdAt?: string }) {
@@ -136,6 +172,29 @@ function isOnlyTurnResult(parts: MessagePart[]) {
 	return parts.length > 0 && parts.every(isTurnResultPart);
 }
 
+function hasBlockSystemContent(parts: MessagePart[]) {
+	return parts.some(
+		(part) => isTextPart(part) && isGoalAssigneeNotificationText(part.text),
+	);
+}
+
+function SystemPart({ part }: { part: MessagePart }) {
+	if (isSystemNoticePart(part)) {
+		return <SystemNotice part={part} />;
+	}
+	if (isPromptSuggestionPart(part)) {
+		return <PromptSuggestion part={part} />;
+	}
+	if (isTextPart(part)) {
+		return isGoalAssigneeNotificationText(part.text) ? (
+			<SystemMarkdownBlock text={part.text} />
+		) : (
+			<SystemText text={part.text} />
+		);
+	}
+	return null;
+}
+
 export function ChatSystemMessage({
 	message,
 	previousAssistantMessage,
@@ -154,6 +213,26 @@ export function ChatSystemMessage({
 		return null;
 	}
 
+	if (hasBlockSystemContent(parts)) {
+		return (
+			<div
+				data-message-id={message.id}
+				data-message-role="system"
+				className="group/sys flex min-w-0 items-start gap-1.5"
+			>
+				<div className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-md border border-border/50 bg-muted/25 px-3 py-2">
+					{parts.map((part, index) => (
+						<SystemPart key={index} part={part} />
+					))}
+				</div>
+				<CopyMessageButton
+					message={copyTarget}
+					className="mt-1 size-5 shrink-0 text-muted-foreground/30 opacity-0 hover:text-muted-foreground group-hover/sys:opacity-100"
+				/>
+			</div>
+		);
+	}
+
 	return (
 		<div
 			data-message-id={message.id}
@@ -162,16 +241,7 @@ export function ChatSystemMessage({
 		>
 			<div className="flex min-w-0 items-center gap-1.5 py-1 text-[11px] leading-none text-muted-foreground">
 				{parts.map((part, index) => {
-					if (isSystemNoticePart(part)) {
-						return <SystemNotice key={index} part={part} />;
-					}
-					if (isPromptSuggestionPart(part)) {
-						return <PromptSuggestion key={index} part={part} />;
-					}
-					if (isTextPart(part)) {
-						return <SystemText key={index} text={part.text} />;
-					}
-					return null;
+					return <SystemPart key={index} part={part} />;
 				})}
 				{shouldShowTimestamp(parts) ? (
 					<MessageTimestamp createdAt={message.createdAt} />

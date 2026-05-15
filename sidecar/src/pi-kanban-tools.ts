@@ -106,7 +106,7 @@ export function createKanbanTools(
 		name: "list_kanban_cards",
 		label: "List Goal Board Workspaces",
 		description:
-			"Return all child workspaces on the current goal board. Each returned card is a real workspace: `id` is the child workspace id, `lane` is the workspace status (backlog/in-progress/review/done/canceled), and optional fields may include branch, PR URL, session count, and description.",
+			"Return all child workspaces on the current goal board. Each returned card is a real workspace: `id` is the child workspace id, `lane` is the board lane (backlog/in-progress/review/done/canceled, or merged when Helmor detects the branch PR has merged), and optional fields may include branch, PR URL, PR state, session count, and description.",
 		promptSnippet:
 			"list_kanban_cards() → returns child workspace board state as JSON",
 		parameters: Type.Object({}),
@@ -126,7 +126,7 @@ export function createKanbanTools(
 		name: "create_kanban_card",
 		label: "Create Goal Board Workspace",
 		description:
-			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. Child workspace prompts always use the same Pi provider/model as the current Goals supervisor. Include `prompt` when the child workspace should immediately start an agent thread in the background.",
+			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. Do not use merged, Helmor derives that lane from PR state after the branch is merged. Child workspace prompts always use the same Pi provider/model as the current Goals supervisor. Include `prompt` when the child workspace should immediately start an agent thread in the background.",
 		promptSnippet:
 			"create_kanban_card({ title, lane, description?, assigned_effort_level?, prompt? }) → new child workspace card and optional background-started thread using the current Goals Pi model",
 		promptGuidelines: [
@@ -198,7 +198,7 @@ export function createKanbanTools(
 		name: "move_kanban_card",
 		label: "Move Goal Board Workspace",
 		description:
-			"Move an existing goal board child workspace to a different lane/status. `card_id` is the child workspace id from list_kanban_cards. `lane` must be one of: backlog, in-progress, review, done, canceled.",
+			"Move an existing goal board child workspace to a different lane/status. `card_id` is the child workspace id from list_kanban_cards. `lane` must be one of: backlog, in-progress, review, done, canceled. Do not move cards into merged, Helmor sets that lane from PR state.",
 		promptSnippet: "move_kanban_card({ card_id, lane }) → updated card",
 		parameters: Type.Object({
 			card_id: Type.String({ description: "The child workspace id" }),

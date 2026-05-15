@@ -134,12 +134,56 @@ export function replaceStreamingTail(
 		const prior = prev ?? [];
 		const boundary = prior.findIndex((m) => m.id === userMessageId);
 		const stable = boundary >= 0 ? prior.slice(0, boundary) : prior;
+		const externalTail =
+			boundary >= 0
+				? collectExternalTailMessages(prior.slice(boundary), turn)
+				: [];
 		// `turn` already begins with the user message — the stream
 		// pipeline rebuilds it from the optimistic seed plus assistant
 		// snapshot every tick.
-		const next = [...stable, ...turn];
+		const next = [
+			...stable,
+			...mergeTurnWithExternalMessages(turn, externalTail),
+		];
 		return shareMessages(prior, next);
 	});
+}
+
+function collectExternalTailMessages(
+	priorTail: ThreadMessageLike[],
+	turn: ThreadMessageLike[],
+): ThreadMessageLike[] {
+	const turnIds = new Set(turn.map((message) => message.id).filter(Boolean));
+	return priorTail.filter(
+		(message) =>
+			message.role === "system" &&
+			message.streaming !== true &&
+			message.id != null &&
+			!turnIds.has(message.id),
+	);
+}
+
+function mergeTurnWithExternalMessages(
+	turn: ThreadMessageLike[],
+	externalTail: ThreadMessageLike[],
+): ThreadMessageLike[] {
+	if (externalTail.length === 0) return turn;
+
+	return [...turn, ...externalTail]
+		.map((message, index) => ({ message, index }))
+		.sort((a, b) => {
+			const aTime = messageTime(a.message);
+			const bTime = messageTime(b.message);
+			if (aTime !== bTime) return aTime - bTime;
+			return a.index - b.index;
+		})
+		.map((entry) => entry.message);
+}
+
+function messageTime(message: ThreadMessageLike): number {
+	if (!message.createdAt) return Number.POSITIVE_INFINITY;
+	const time = Date.parse(message.createdAt);
+	return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time;
 }
 
 /**
