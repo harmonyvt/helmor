@@ -30,6 +30,12 @@ describe("goal board model", () => {
 		const grouped = groupGoalChildWorkspacesByLane([
 			workspace({ id: "ws-backlog", title: "Backlog card" }),
 			workspace({ id: "ws-review", title: "Review card", status: "review" }),
+			workspace({
+				id: "ws-merged",
+				title: "Merged card",
+				status: "done",
+				prSyncState: "merged",
+			}),
 		]);
 
 		expect(grouped.get("backlog")?.map((item) => item.id)).toEqual([
@@ -39,6 +45,9 @@ describe("goal board model", () => {
 			"ws-review",
 		]);
 		expect(grouped.get("done")).toEqual([]);
+		expect(grouped.get("merged")?.map((item) => item.id)).toEqual([
+			"ws-merged",
+		]);
 	});
 
 	it("serializes kanban snapshots from child workspaces only", () => {
@@ -51,6 +60,14 @@ describe("goal board model", () => {
 				prUrl: "https://example.com/pr/1",
 				sessionCount: 2,
 			}),
+			workspace({
+				id: "ws-merged",
+				title: "Merged work",
+				status: "done",
+				branch: "goal/merged",
+				prUrl: "https://example.com/pr/2",
+				prSyncState: "merged",
+			}),
 		]);
 
 		expect(JSON.parse(snapshot)).toEqual([
@@ -61,6 +78,15 @@ describe("goal board model", () => {
 				branch: "goal/auth",
 				prUrl: "https://example.com/pr/1",
 				sessionCount: 2,
+			},
+			{
+				id: "ws-merged",
+				title: "Merged work",
+				lane: "merged",
+				branch: "goal/merged",
+				prUrl: "https://example.com/pr/2",
+				prSyncState: "merged",
+				sessionCount: 0,
 			},
 		]);
 	});

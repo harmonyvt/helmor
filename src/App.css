@@ -237,7 +237,7 @@ body {
 }
 
 .assistant-markdown-scale {
-	--assistant-paragraph-line-height: 1.82;
+	--assistant-paragraph-line-height: 1.65;
 	line-height: 1.5;
 }
 
@@ -277,7 +277,7 @@ body {
 .assistant-markdown-scale [data-streamdown="heading-4"],
 .assistant-markdown-scale [data-streamdown="heading-5"],
 .assistant-markdown-scale [data-streamdown="heading-6"] {
-	margin: 1.4em 0 0.4em;
+	margin: 0.85em 0 0.3em;
 	color: inherit;
 }
 

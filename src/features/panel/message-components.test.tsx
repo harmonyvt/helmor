@@ -232,6 +232,61 @@ describe("MemoConversationMessage plan review", () => {
 		expect(screen.queryByText("1 minute ago")).not.toBeInTheDocument();
 	});
 
+	it("renders assignee report system notifications with a collapsible full excerpt", async () => {
+		const systemMessage: ThreadMessageLike = {
+			id: "assignee-report",
+			role: "system",
+			createdAt: "2026-05-15T03:19:41.371Z",
+			content: [
+				{
+					type: "text",
+					id: "assignee-report:text",
+					text: [
+						"## Assignee Report Received",
+						"",
+						"Card: Capybara joke test 4",
+						"Report type: completed",
+						"",
+						"Excerpt:",
+						"## Completed",
+						"",
+						"Because it wanted to be ready for the hot spring.",
+						"",
+						"It gathered towels, checked the lane, wrote enough detail to exceed the collapsed preview, and included one more sentence before the punchline.",
+						"",
+						"Because it wanted to be the most *spa-cial* rodent there.",
+						"",
+						"Recommended supervisor action:",
+						"Review this report.",
+					].join("\n"),
+				},
+			],
+		};
+
+		render(
+			<MemoConversationMessage
+				message={systemMessage}
+				sessionId="session-1"
+				itemIndex={0}
+			/>,
+		);
+
+		expect(
+			await screen.findByRole("heading", {
+				name: "Assignee Report Received",
+				level: 3,
+			}),
+		).toBeInTheDocument();
+		expect(screen.queryByText("spa-cial")).not.toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("button", { name: "Show full excerpt" }));
+
+		expect(
+			await screen.findByRole("heading", { name: "Completed", level: 2 }),
+		).toBeInTheDocument();
+		expect(screen.getByText("spa-cial").tagName.toLowerCase()).toBe("em");
+	});
+
 	it("copies a user message from the bubble action slot", () => {
 		const userMessage: ThreadMessageLike = {
 			id: "user-copy-source",
@@ -465,7 +520,7 @@ describe("ChatUserMessage with spaces in attachment paths", () => {
 	});
 });
 describe("delegation anchors", () => {
-	it("renders nested delegated messages and opens the child session", async () => {
+	it("opens delegated feed in a dialog and can focus the child session", async () => {
 		const message: ThreadMessageLike = {
 			id: "parent-message-1",
 			role: "assistant",
@@ -511,8 +566,10 @@ describe("delegation anchors", () => {
 		);
 
 		expect(screen.getByText("Inspect parser")).toBeInTheDocument();
-		expect(screen.getByText("Child summary")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: /open/i }));
+		expect(screen.queryByText("Child summary")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: /view delegation/i }));
+		expect(await screen.findByText("Child summary")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: /open thread/i }));
 		expect(onFocusChild).toHaveBeenCalledWith(
 			"child-session",
 			"parent-session",
@@ -548,11 +605,12 @@ describe("delegation anchors", () => {
 			/>,
 		);
 
+		fireEvent.click(screen.getByRole("button", { name: /view delegation/i }));
 		expect(
 			await screen.findByText("Failed to load delegated thread."),
 		).toBeInTheDocument();
 		expect(
-			screen.queryByText("Waiting for delegated thread…"),
+			screen.queryByText("Waiting for delegated thread..."),
 		).not.toBeInTheDocument();
 	});
 });

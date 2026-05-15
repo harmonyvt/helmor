@@ -25,13 +25,14 @@ import {
 
 function makeMessage(
 	id: string,
-	role: "user" | "assistant",
+	role: "user" | "assistant" | "system",
 	text: string,
+	createdAt = "2026-04-08T00:00:00Z",
 ): ThreadMessageLike {
 	return {
 		role,
 		id,
-		createdAt: "2026-04-08T00:00:00Z",
+		createdAt,
 		content: [{ type: "text", id: `${id}:txt:0`, text }],
 	};
 }
@@ -119,6 +120,105 @@ describe("session-thread-cache", () => {
 		if (latestA1?.type === "text") {
 			expect(latestA1.text).toBe("complete reply");
 		}
+	});
+
+	it("replaceStreamingTail preserves external system notifications inserted during a stream", () => {
+		const client = makeClient();
+		const prior = [makeMessage("history-1", "assistant", "old reply")];
+		client.setQueryData(sessionThreadCacheKey("session-1"), prior);
+		const userMsg = makeMessage(
+			"u1",
+			"user",
+			"new turn",
+			"2026-05-15T03:52:37.991Z",
+		);
+		appendUserMessage(client, "session-1", userMsg);
+
+		const notification = makeMessage(
+			"report-1",
+			"system",
+			"## Assignee Report Received\n\nExcerpt:\n## Completed\nDone.",
+			"2026-05-15T03:52:53.747Z",
+		);
+		client.setQueryData(sessionThreadCacheKey("session-1"), [
+			...prior,
+			userMsg,
+			notification,
+		]);
+
+		const assistant = makeMessage(
+			"a1",
+			"assistant",
+			"final supervisor reply",
+			"2026-05-15T03:53:02.211Z",
+		);
+		replaceStreamingTail(client, "session-1", "u1", [userMsg, assistant]);
+
+		const cached = readSessionThread(client, "session-1");
+		expect(cached?.map((message) => message.id)).toEqual([
+			"history-1",
+			"u1",
+			"report-1",
+			"a1",
+		]);
+		expect(cached?.[2]).toBe(notification);
+	});
+
+	it("replaceStreamingTail preserves external system notifications across streaming ticks", () => {
+		const client = makeClient();
+		const userMsg = makeMessage(
+			"u1",
+			"user",
+			"new turn",
+			"2026-05-15T03:52:37.991Z",
+		);
+		appendUserMessage(client, "session-1", userMsg);
+
+		replaceStreamingTail(client, "session-1", "u1", [
+			userMsg,
+			{
+				...makeMessage(
+					"a1",
+					"assistant",
+					"working",
+					"2026-05-15T03:52:48.000Z",
+				),
+				streaming: true,
+			},
+		]);
+
+		const notification = makeMessage(
+			"report-1",
+			"system",
+			"## Assignee Report Received\n\nExcerpt:\n## Completed\nDone.",
+			"2026-05-15T03:52:53.747Z",
+		);
+		client.setQueryData(sessionThreadCacheKey("session-1"), [
+			...(readSessionThread(client, "session-1") ?? []),
+			notification,
+		]);
+
+		replaceStreamingTail(client, "session-1", "u1", [
+			userMsg,
+			{
+				...makeMessage(
+					"a1",
+					"assistant",
+					"still working",
+					"2026-05-15T03:52:55.000Z",
+				),
+				streaming: true,
+			},
+		]);
+
+		const cached = readSessionThread(client, "session-1");
+		expect(cached?.map((message) => message.id)).toEqual([
+			"u1",
+			"report-1",
+			"a1",
+		]);
+		expect(cached?.[1]).toEqual(notification);
+		expect(cached?.[2]?.streaming).toBe(true);
 	});
 
 	it("mergeStreamingPartial replaces matching background stream messages", () => {

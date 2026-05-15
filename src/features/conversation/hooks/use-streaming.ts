@@ -691,6 +691,9 @@ export function useConversationStreaming({
 					queryClient.invalidateQueries({
 						queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread"],
 					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.sessionDelegations(sessionId),
+					}),
 				);
 			}
 

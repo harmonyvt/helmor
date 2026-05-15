@@ -188,6 +188,14 @@ fn persisted_assignee_report_notifies_supervisor_once_with_priority_classificati
         .as_str()
         .unwrap()
         .contains("Card: Build API"));
+    assert_eq!(
+        supervisor_payload["fullText"].as_str().unwrap(),
+        "## Progress\nImplemented the storage path.\n\n## Completed\nReady for review."
+    );
+    assert!(supervisor_payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("## Progress\nImplemented the storage path.\n\n## Completed\nReady for review."));
 
     let last_report_id: String = connection
         .query_row(

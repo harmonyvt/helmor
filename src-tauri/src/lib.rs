@@ -339,6 +339,7 @@ pub fn run() {
             commands::session_commands::get_session_context_usage,
             commands::session_commands::get_live_context_usage,
             commands::agent_commands::delegate_agent,
+            commands::agent_commands::list_session_delegations,
             commands::session_commands::mark_session_read,
             commands::session_commands::mark_session_unread,
             commands::session_commands::update_session_control,

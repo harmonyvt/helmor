@@ -6,9 +6,9 @@ import { WorkspaceConversationContainer } from "@/features/conversation";
 import type {
 	AgentModelOption,
 	AgentStreamEvent,
+	AssigneeSummary,
 	WorkspaceDetail,
 	WorkspaceSessionSummary,
-	WorkspaceStatus,
 } from "@/lib/api";
 import {
 	createGoalChildWorkspaceAndStart,
@@ -31,7 +31,9 @@ import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
 } from "@/lib/query-client";
+import { goalLaneForWorkspace, isMovableGoalLaneId } from "../board-model";
 import { canonicalPiModelId } from "../pi-handoff-models";
+import { AssigneesBar } from "./assignees-bar";
 import { HistoryView } from "./history-view";
 import { ThreadManagerView } from "./thread-manager-view";
 
@@ -50,6 +52,10 @@ type GoalsAiPanelProps = {
 	/** Reports the set of workspace IDs currently streaming (the goal workspace
 	 *  ID itself) so the sidebar folder ring stays in sync. */
 	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
+	/** Assignees to display in the collapsible bar above the composer. */
+	assignees?: AssigneeSummary[];
+	/** Called when the user clicks an assignee to navigate to its workspace. */
+	onSelectAssignee?: (ws: WorkspaceDetail) => void;
 };
 
 const piOnlyModelFilter = (model: AgentModelOption) => model.provider === "pi";
@@ -85,6 +91,8 @@ export function GoalsAiPanel({
 	onClose,
 	onCardCreated,
 	onSendingWorkspacesChange,
+	assignees,
+	onSelectAssignee,
 }: GoalsAiPanelProps) {
 	const queryClient = useQueryClient();
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
@@ -163,11 +171,21 @@ export function GoalsAiPanel({
 					});
 
 				if (event.tool === "list_kanban_cards") {
-					result = await listGoalChildWorkspaces(workspaceId);
+					const children = await listGoalChildWorkspaces(workspaceId);
+					result = children.map((child) => ({
+						...child,
+						lane: goalLaneForWorkspace(child),
+					}));
 				} else if (event.tool === "create_kanban_card") {
 					if (!canCreateCards) {
 						throw new Error(
 							"Goal setup must finish before Pi can create cards.",
+						);
+					}
+					const requestedLane = String(args.lane ?? "backlog");
+					if (!isMovableGoalLaneId(requestedLane)) {
+						throw new Error(
+							"Merged is derived from PR state and cannot be set manually.",
 						);
 					}
 					const requestedModelId =
@@ -198,7 +216,7 @@ export function GoalsAiPanel({
 									typeof args.description === "string"
 										? args.description
 										: null,
-								lane: String(args.lane ?? "backlog") as WorkspaceStatus,
+								lane: requestedLane,
 								targetBranch:
 									typeof args.targetBranch === "string"
 										? args.targetBranch
@@ -234,14 +252,20 @@ export function GoalsAiPanel({
 					const childWorkspaceId = String(
 						args.cardId ?? args.workspaceId ?? "",
 					);
+					const requestedLane = String(args.lane ?? "");
+					if (!isMovableGoalLaneId(requestedLane)) {
+						throw new Error(
+							"Merged is derived from PR state and cannot be set manually.",
+						);
+					}
 					result = await enqueueKanbanMutation(async () => {
 						await setGoalChildWorkspaceStatus(
 							workspaceId,
 							childWorkspaceId,
-							String(args.lane) as WorkspaceStatus,
+							requestedLane,
 						);
 						await invalidateBoard();
-						return { workspaceId: childWorkspaceId, lane: args.lane };
+						return { workspaceId: childWorkspaceId, lane: requestedLane };
 					});
 				} else if (event.tool === "update_kanban_card") {
 					result = await enqueueKanbanMutation(async () => {
@@ -428,6 +452,15 @@ export function GoalsAiPanel({
 					};
 				}}
 				onKanbanToolCall={handleKanbanToolCall}
+				composerAccessory={
+					assignees && assignees.length > 0 ? (
+						<AssigneesBar
+							assignees={assignees}
+							cards={cards}
+							onSelectAssignee={onSelectAssignee}
+						/>
+					) : undefined
+				}
 				compact
 				headerLeading={
 					<span className="text-[11px] font-medium tracking-[0.04em] text-muted-foreground/70">

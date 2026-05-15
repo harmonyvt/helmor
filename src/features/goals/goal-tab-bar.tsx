@@ -8,8 +8,7 @@ import {
 } from "lucide-react";
 import type React from "react";
 import { cn } from "@/lib/utils";
-import { GoalPiChip } from "./pi-chip";
-import type { GoalPiPhysicalState, GoalTabView } from "./types";
+import type { GoalTabView } from "./types";
 
 type TabDef = {
 	id: GoalTabView;
@@ -28,9 +27,6 @@ const GOAL_TABS: TabDef[] = [
 type GoalTabBarProps = {
 	activeTab: GoalTabView;
 	onTabChange: (tab: GoalTabView) => void;
-	piState: GoalPiPhysicalState;
-	unreadCount?: number;
-	onPiChipClick: () => void;
 	canCreateCards?: boolean;
 	onAddCard: () => void;
 };
@@ -38,9 +34,6 @@ type GoalTabBarProps = {
 export function GoalTabBar({
 	activeTab,
 	onTabChange,
-	piState,
-	unreadCount = 0,
-	onPiChipClick,
 	canCreateCards = false,
 	onAddCard,
 }: GoalTabBarProps) {
@@ -48,9 +41,8 @@ export function GoalTabBar({
 		<div
 			role="tablist"
 			aria-label="Goal views"
-			className="flex shrink-0 items-center justify-between border-b border-border/70 px-3"
+			className="flex shrink-0 items-center justify-between border-b border-border/60 px-3"
 		>
-			{/* Tab buttons */}
 			<div className="flex items-center">
 				{GOAL_TABS.map((tab) => {
 					const Icon = tab.icon;
@@ -82,13 +74,7 @@ export function GoalTabBar({
 				})}
 			</div>
 
-			{/* Right actions: Pi chip + Add card */}
 			<div className="flex items-center gap-1.5 py-1">
-				<GoalPiChip
-					piState={piState}
-					unreadCount={unreadCount}
-					onClick={onPiChipClick}
-				/>
 				<button
 					type="button"
 					onClick={onAddCard}
