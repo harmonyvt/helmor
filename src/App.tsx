@@ -3161,8 +3161,13 @@ function AppShell({
  * Rendered inside GoalPiStateProvider. Handles state transitions that must
  * happen when the user moves between the goal board and a child workspace:
  *
- *  - Entering a child workspace while Pi is in "panel" mode → auto-dock.
- *  - Returning to the goal board while Pi is in "sheet" mode  → auto-dock.
+ *  - Entering a child workspace → auto-open the Pi sheet overlay so the Goals
+ *    AI surface is always present without requiring a manual click.
+ *    The effect fires only on the *transition* into the child workspace (tracked
+ *    via a ref), so the user can still manually close the sheet and have it stay
+ *    closed until they navigate away and back.
+ *  - Returning to the goal board while Pi is in "sheet" mode  → auto-dock so
+ *    the inline board panel takes over.
  *  - When the user clicked "Open Goal AI surface" in the sidebar, opens Pi
  *    in "panel" mode once the goal board is active.
  */
@@ -3177,15 +3182,27 @@ function GoalPiViewTransition({
 	goalWorkspaceId: string | null;
 	pendingGoalAiOpenRef: React.MutableRefObject<string | null>;
 }) {
-	const { piState, setPiState } = useGoalPiState();
+	const { setPiState, piState } = useGoalPiState();
+
+	// Auto-open the sheet when landing on a child workspace.
+	// Only fires on the transition *into* a child workspace so the user can
+	// manually close it without it immediately re-opening.
+	const prevIsChildWorkspace = useRef(false);
 	useEffect(() => {
-		if (isChildWorkspace && piState === "panel") {
-			setPiState("dock");
+		const justEntered = isChildWorkspace && !prevIsChildWorkspace.current;
+		prevIsChildWorkspace.current = isChildWorkspace;
+		if (justEntered) {
+			setPiState("sheet");
 		}
+	}, [isChildWorkspace, setPiState]);
+
+	// When returning to the goal board close any open sheet so the inline panel
+	// can take over.
+	useEffect(() => {
 		if (isGoalBoard && piState === "sheet") {
 			setPiState("dock");
 		}
-	}, [isChildWorkspace, isGoalBoard, piState, setPiState]);
+	}, [isGoalBoard, piState, setPiState]);
 
 	// Consume a pending "open Pi" intent set by handleOpenGoalAiSurface.
 	useEffect(() => {
