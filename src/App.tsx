@@ -2756,6 +2756,7 @@ function AppShell({
 															}
 															activeEditorPath={editorSession?.path ?? null}
 															onOpenEditorFile={handleOpenEditorFile}
+															onOpenSettings={handleOpenSettings}
 														/>
 													) : null}
 													<div
