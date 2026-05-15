@@ -2550,124 +2550,124 @@ function AppShell({
 									aria-label="Application shell"
 									className="relative hidden h-screen overflow-hidden bg-background font-sans text-foreground antialiased lg:block"
 								>
-									<div className="relative flex h-full min-h-0 bg-background">
-										{workspaceViewMode === "conversation" && (
-											<>
-												{!sidebarCollapsed && (
-													<aside
-														aria-label="Workspace sidebar"
-														data-helmor-sidebar-root
-														className="relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar"
-														style={{ width: `${sidebarWidth}px` }}
-													>
-														<div className="min-h-0 flex-1">
-															<WorkspacesSidebarContainer
-																selectedWorkspaceId={selectedWorkspaceId}
-																sendingWorkspaceIds={sendingWorkspaceIds}
-																interactionRequiredWorkspaceIds={
-																	interactionRequiredWorkspaceIds
-																}
-																newWorkspaceShortcut={newWorkspaceShortcut}
-																addRepositoryShortcut={addRepositoryShortcut}
-																onSelectWorkspace={handleSelectWorkspace}
-																onOpenGoalAiSurface={handleOpenGoalAiSurface}
-																pushWorkspaceToast={pushWorkspaceToast}
-															/>
-														</div>
-														<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
-															<Tooltip>
-																<TooltipTrigger asChild>
-																	<Button
-																		aria-label="Collapse left sidebar"
-																		onClick={() => setSidebarCollapsed(true)}
-																		variant="ghost"
-																		size="icon-xs"
-																		className="text-muted-foreground hover:text-foreground"
-																	>
-																		<PanelLeftClose
-																			className="size-4"
-																			strokeWidth={1.8}
-																		/>
-																	</Button>
-																</TooltipTrigger>
-																<TooltipContent
-																	side="bottom"
-																	className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-																>
-																	<span>Collapse left sidebar</span>
-																	{leftSidebarToggleShortcut ? (
-																		<InlineShortcutDisplay
-																			hotkey={leftSidebarToggleShortcut}
-																			className="text-background/60"
-																		/>
-																	) : null}
-																</TooltipContent>
-															</Tooltip>
-														</div>
-														<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
-															<SettingsButton
-																onClick={handleOpenSettings}
-																shortcut={getShortcut(
-																	appSettings.shortcuts,
-																	"settings.open",
-																)}
-															/>
-															{githubIdentityState.status === "connected" ? (
-																<GithubStatusMenu
-																	identityState={githubIdentityState}
+									<GoalPiStateProvider goalContextId={goalContextId}>
+										<GoalPiViewTransition
+											isChildWorkspace={Boolean(
+												selectedWorkspaceDetailQuery.data?.goalWorkspaceId,
+											)}
+											isGoalBoard={
+												selectedWorkspaceDetailQuery.data?.workspaceKind ===
+												"goal"
+											}
+											goalWorkspaceId={goalContextId}
+											pendingGoalAiOpenRef={pendingGoalAiOpenRef}
+										/>
+										{/* Pi sheet portal — only active when piState === "sheet" */}
+										{goalContextId &&
+										selectedWorkspaceDetailQuery.data?.goalWorkspaceId ? (
+											<GoalPiSheet goalWorkspaceId={goalContextId} />
+										) : null}
+										<div className="relative flex h-full min-h-0 bg-background">
+											{workspaceViewMode === "conversation" && (
+												<>
+													{!sidebarCollapsed && (
+														<aside
+															aria-label="Workspace sidebar"
+															data-helmor-sidebar-root
+															className="relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar"
+															style={{ width: `${sidebarWidth}px` }}
+														>
+															<div className="min-h-0 flex-1">
+																<WorkspacesSidebarContainer
+																	selectedWorkspaceId={selectedWorkspaceId}
+																	sendingWorkspaceIds={sendingWorkspaceIds}
+																	interactionRequiredWorkspaceIds={
+																		interactionRequiredWorkspaceIds
+																	}
+																	newWorkspaceShortcut={newWorkspaceShortcut}
+																	addRepositoryShortcut={addRepositoryShortcut}
+																	onSelectWorkspace={handleSelectWorkspace}
+																	onOpenGoalAiSurface={handleOpenGoalAiSurface}
+																	pushWorkspaceToast={pushWorkspaceToast}
 																/>
-															) : null}
+															</div>
+															<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
+																<Tooltip>
+																	<TooltipTrigger asChild>
+																		<Button
+																			aria-label="Collapse left sidebar"
+																			onClick={() => setSidebarCollapsed(true)}
+																			variant="ghost"
+																			size="icon-xs"
+																			className="text-muted-foreground hover:text-foreground"
+																		>
+																			<PanelLeftClose
+																				className="size-4"
+																				strokeWidth={1.8}
+																			/>
+																		</Button>
+																	</TooltipTrigger>
+																	<TooltipContent
+																		side="bottom"
+																		className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+																	>
+																		<span>Collapse left sidebar</span>
+																		{leftSidebarToggleShortcut ? (
+																			<InlineShortcutDisplay
+																				hotkey={leftSidebarToggleShortcut}
+																				className="text-background/60"
+																			/>
+																		) : null}
+																	</TooltipContent>
+																</Tooltip>
+															</div>
+															<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
+																<SettingsButton
+																	onClick={handleOpenSettings}
+																	shortcut={getShortcut(
+																		appSettings.shortcuts,
+																		"settings.open",
+																	)}
+																/>
+																{githubIdentityState.status === "connected" ? (
+																	<GithubStatusMenu
+																		identityState={githubIdentityState}
+																	/>
+																) : null}
+															</div>
+														</aside>
+													)}
+
+													{!sidebarCollapsed && (
+														<div
+															role="separator"
+															tabIndex={0}
+															aria-label="Resize sidebar"
+															aria-orientation="vertical"
+															aria-valuemin={MIN_SIDEBAR_WIDTH}
+															aria-valuemax={MAX_SIDEBAR_WIDTH}
+															aria-valuenow={sidebarWidth}
+															onMouseDown={handleResizeStart("sidebar")}
+															onKeyDown={handleResizeKeyDown("sidebar")}
+															className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+															style={{
+																left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+																width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+															}}
+														>
+															<span
+																aria-hidden="true"
+																className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+																	isSidebarResizing
+																		? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
+																		: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
+																}`}
+															/>
 														</div>
-													</aside>
-												)}
+													)}
+												</>
+											)}
 
-												{!sidebarCollapsed && (
-													<div
-														role="separator"
-														tabIndex={0}
-														aria-label="Resize sidebar"
-														aria-orientation="vertical"
-														aria-valuemin={MIN_SIDEBAR_WIDTH}
-														aria-valuemax={MAX_SIDEBAR_WIDTH}
-														aria-valuenow={sidebarWidth}
-														onMouseDown={handleResizeStart("sidebar")}
-														onKeyDown={handleResizeKeyDown("sidebar")}
-														className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-														style={{
-															left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-															width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-														}}
-													>
-														<span
-															aria-hidden="true"
-															className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-																isSidebarResizing
-																	? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
-																	: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
-															}`}
-														/>
-													</div>
-												)}
-											</>
-										)}
-
-										<GoalPiStateProvider goalContextId={goalContextId}>
-											<GoalPiViewTransition
-												isChildWorkspace={Boolean(
-													selectedWorkspaceDetailQuery.data?.goalWorkspaceId,
-												)}
-												isGoalBoard={
-													selectedWorkspaceDetailQuery.data?.workspaceKind ===
-													"goal"
-												}
-												goalWorkspaceId={goalContextId}
-												pendingGoalAiOpenRef={pendingGoalAiOpenRef}
-											/>
-											{/* Pi sheet portal — only active when piState === "sheet" */}
-											{goalContextId &&
-											selectedWorkspaceDetailQuery.data?.goalWorkspaceId ? (
-												<GoalPiSheet goalWorkspaceId={goalContextId} />
-											) : null}
 											<section
 												aria-label="Workspace panel"
 												className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
@@ -3127,8 +3127,8 @@ function AppShell({
 														</aside>
 													</>
 												)}
-										</GoalPiStateProvider>
-									</div>
+										</div>
+									</GoalPiStateProvider>
 								</main>
 							</>
 						)}
