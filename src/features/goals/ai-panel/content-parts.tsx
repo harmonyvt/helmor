@@ -158,6 +158,13 @@ const KANBAN_TOOL_LABELS: Record<string, string> = {
 	read_assignee_thread: "Read assignee",
 	summarize_assignee_status: "Summarize assignee",
 	list_assignees: "List assignees",
+	inspect_workspace_merge_state: "Inspect merge",
+	refresh_change_request: "Refresh PR",
+	sync_workspace_target_branch: "Sync branch",
+	push_workspace_branch: "Push branch",
+	merge_change_request: "Merge PR",
+	check_workspace_landed: "Check landed",
+	mark_workspace_landed: "Mark landed",
 };
 
 /**

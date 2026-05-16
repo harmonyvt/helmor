@@ -2237,6 +2237,9 @@ export type ChangeRequestInfo = {
 	state: "OPEN" | "CLOSED" | "MERGED" | string;
 	title: string;
 	isMerged: boolean;
+	headBranch?: string | null;
+	baseBranch?: string | null;
+	headCommitSha?: string | null;
 };
 
 export type ActionStatusKind = "success" | "pending" | "running" | "failure";

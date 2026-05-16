@@ -17,8 +17,15 @@ import {
 	listAssignees,
 	listGoalChildWorkspaces,
 	loadSessionThreadMessages,
+	loadWorkspaceForgeActionStatus,
+	loadWorkspaceGitActionStatus,
 	loadWorkspaceSessions,
+	markWorkspaceLanded,
+	mergeWorkspaceChangeRequest,
+	pushWorkspaceToRemote,
 	readAssigneeThread,
+	reconcileWorkspaceLandingState,
+	refreshWorkspaceChangeRequest,
 	renameSession,
 	sendAssigneeMessage,
 	sendKanbanToolResult,
@@ -26,6 +33,7 @@ import {
 	setCardAssigneeThread,
 	setGoalChildWorkspaceStatus,
 	summarizeAssigneeStatus,
+	syncWorkspaceWithTargetBranch,
 } from "@/lib/api";
 import {
 	agentModelSectionsQueryOptions,
@@ -401,6 +409,53 @@ export function GoalsAiPanel({
 						workspaceId,
 						typeof args.status === "string" ? args.status : null,
 					);
+				} else if (event.tool === "inspect_workspace_merge_state") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					const [gitStatus, forgeStatus, changeRequest, landing] =
+						await Promise.all([
+							loadWorkspaceGitActionStatus(cardId),
+							loadWorkspaceForgeActionStatus(cardId),
+							refreshWorkspaceChangeRequest(cardId),
+							reconcileWorkspaceLandingState(cardId),
+						]);
+					await invalidateBoard();
+					result = {
+						workspaceId: cardId,
+						gitStatus,
+						forgeStatus,
+						changeRequest,
+						landing,
+					};
+				} else if (event.tool === "refresh_change_request") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					result = await refreshWorkspaceChangeRequest(cardId);
+					await invalidateBoard();
+				} else if (event.tool === "sync_workspace_target_branch") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					result = await syncWorkspaceWithTargetBranch(cardId);
+					await invalidateBoard();
+				} else if (event.tool === "push_workspace_branch") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					result = await pushWorkspaceToRemote(cardId);
+					await invalidateBoard();
+				} else if (event.tool === "merge_change_request") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					result = await enqueueKanbanMutation(async () => {
+						const changeRequest = await mergeWorkspaceChangeRequest(cardId);
+						await invalidateBoard();
+						return changeRequest;
+					});
+				} else if (event.tool === "check_workspace_landed") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					result = await reconcileWorkspaceLandingState(cardId);
+					await invalidateBoard();
+				} else if (event.tool === "mark_workspace_landed") {
+					const cardId = String(args.cardId ?? args.card_id ?? "");
+					result = await enqueueKanbanMutation(async () => {
+						const landing = await markWorkspaceLanded(cardId);
+						await invalidateBoard();
+						return landing;
+					});
 				} else {
 					throw new Error(`Unknown Pi tool: ${event.tool}`);
 				}

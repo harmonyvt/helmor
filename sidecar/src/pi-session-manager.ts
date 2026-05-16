@@ -24,6 +24,7 @@ import {
 } from "./pi-kanban-tools.js";
 import { createPiRuntimeResources } from "./pi-runtime.js";
 import { createThreadTools } from "./pi-thread-tools.js";
+import { createWorkspaceOperationTools } from "./pi-workspace-tools.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
@@ -134,6 +135,14 @@ export class PiSessionManager implements SessionManager {
 				? createAssigneeTools(params.kanbanWorkspaceId, emitter, requestId)
 				: [];
 
+			const workspaceOperationTools = params.kanbanWorkspaceId
+				? createWorkspaceOperationTools(
+						params.kanbanWorkspaceId,
+						emitter,
+						requestId,
+					)
+				: [];
+
 			const delegationCustomTools = params.helmorSessionId
 				? createDelegationTools(params.helmorSessionId, emitter, requestId)
 				: [];
@@ -156,6 +165,7 @@ export class PiSessionManager implements SessionManager {
 					...kanbanCustomTools,
 					...threadCustomTools,
 					...assigneeCustomTools,
+					...workspaceOperationTools,
 					...delegationCustomTools,
 				],
 			});

@@ -150,6 +150,8 @@ describe("writeKanbanContext", () => {
 		expect(extension).toContain("## Goal Orchestration Role");
 		expect(extension).toContain("## Goal Board Tools");
 		expect(extension).toContain("create_kanban_card with a clear prompt");
+		expect(extension).toContain("inspect_workspace_merge_state(card_id)");
+		expect(extension).toContain("mark_workspace_landed(card_id)");
 
 		const systemPrompt = await loadGeneratedSystemPrompt(cwd);
 		expect(systemPrompt).toContain(

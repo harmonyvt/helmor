@@ -84,6 +84,13 @@ function getPiToolInfo(
 		create_kanban_card: "Create card",
 		move_kanban_card: "Move card",
 		update_kanban_card: "Update card",
+		inspect_workspace_merge_state: "Inspect merge",
+		refresh_change_request: "Refresh PR",
+		sync_workspace_target_branch: "Sync branch",
+		push_workspace_branch: "Push branch",
+		merge_change_request: "Merge PR",
+		check_workspace_landed: "Check landed",
+		mark_workspace_landed: "Mark landed",
 	};
 	if (kanbanLabels[tool]) {
 		return {
