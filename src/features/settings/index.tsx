@@ -63,6 +63,7 @@ import { DataSourceSettingsRow } from "./panels/data-source";
 import { DebugIngestNgrokPanel } from "./panels/debug-ingest-ngrok";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { LocalAppUpdatePanel } from "./panels/local-app-update";
+import { LogExportPanel } from "./panels/log-export";
 import {
 	ClaudeCustomProvidersPanel,
 	PiModelsCheckPanel,
@@ -283,6 +284,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "general" && (
 								<SettingsGroup>
 									<DataSourceSettingsRow />
+									<LogExportPanel />
 									<SettingsRow
 										title="Open actions in Helmor"
 										description="Open Vercel deployments and GitHub Actions links in the workspace browser instead of your system browser."

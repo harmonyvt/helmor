@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{LazyLock, Mutex};
 
 use anyhow::Context;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::{
     LogicalSize, LogicalUnit, Manager, PixelUnit, Size, State, Window, WindowSizeConstraints,
@@ -43,6 +45,24 @@ pub struct DataInfo {
     pub data_dir_preference: crate::data_dir::DataDirPreference,
     pub data_dir_preference_path: String,
     pub data_dir_locked_by_env: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendLogEntry {
+    pub ts: String,
+    pub level: String,
+    pub message: String,
+    #[serde(default)]
+    pub args: Vec<serde_json::Value>,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogExportResult {
+    pub export_dir: String,
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -922,6 +942,131 @@ pub fn get_data_info() -> CmdResult<DataInfo> {
         data_dir_preference_path: data_dir_preference_path.display().to_string(),
         data_dir_locked_by_env: crate::data_dir::data_dir_locked_by_env(),
     })
+}
+
+#[tauri::command]
+pub async fn export_verbose_logs(
+    frontend_logs: Vec<FrontendLogEntry>,
+) -> CmdResult<LogExportResult> {
+    run_blocking(move || export_verbose_logs_impl(frontend_logs)).await
+}
+
+fn export_verbose_logs_impl(
+    frontend_logs: Vec<FrontendLogEntry>,
+) -> anyhow::Result<LogExportResult> {
+    let data_dir = crate::data_dir::data_dir()?;
+    let logs_dir = crate::data_dir::logs_dir()?;
+    let export_root = data_dir.join("log-exports");
+    fs::create_dir_all(&export_root).with_context(|| {
+        format!(
+            "Failed to create log export directory {}",
+            export_root.display()
+        )
+    })?;
+
+    let base_name = format!(
+        "helmor-logs-{}",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    );
+    let mut export_dir = export_root.join(&base_name);
+    for suffix in 2..100 {
+        if !export_dir.exists() {
+            break;
+        }
+        export_dir = export_root.join(format!("{base_name}-{suffix}"));
+    }
+    fs::create_dir_all(&export_dir)
+        .with_context(|| format!("Failed to create log export {}", export_dir.display()))?;
+
+    let mut files = Vec::new();
+    if logs_dir.is_dir() {
+        copy_log_tree(
+            &logs_dir,
+            &logs_dir,
+            &export_dir.join("backend"),
+            &mut files,
+        )?;
+    }
+
+    let frontend_path = export_dir.join("frontend.jsonl");
+    write_frontend_logs(&frontend_path, &frontend_logs)?;
+    files.push(frontend_path.display().to_string());
+
+    let manifest_path = export_dir.join("manifest.json");
+    let manifest = serde_json::json!({
+        "exportedAt": chrono::Local::now().to_rfc3339(),
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "dataMode": crate::data_dir::data_mode_label(),
+        "dataDir": data_dir.display().to_string(),
+        "logsDir": logs_dir.display().to_string(),
+        "frontendLogCount": frontend_logs.len(),
+        "files": files.clone(),
+    });
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?).with_context(|| {
+        format!(
+            "Failed to write log export manifest {}",
+            manifest_path.display()
+        )
+    })?;
+    files.push(manifest_path.display().to_string());
+
+    tracing::info!(
+        export_dir = %export_dir.display(),
+        file_count = files.len(),
+        "Exported Helmor logs"
+    );
+
+    Ok(LogExportResult {
+        export_dir: export_dir.display().to_string(),
+        files,
+    })
+}
+
+fn copy_log_tree(
+    current: &Path,
+    root: &Path,
+    output_root: &Path,
+    files: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    for entry in fs::read_dir(current)
+        .with_context(|| format!("Failed to read log directory {}", current.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            copy_log_tree(&path, root, output_root, files)?;
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        let target = output_root.join(relative);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create log export directory {}", parent.display())
+            })?;
+        }
+        fs::copy(&path, &target).with_context(|| {
+            format!(
+                "Failed to copy log file {} to {}",
+                path.display(),
+                target.display()
+            )
+        })?;
+        files.push(target.display().to_string());
+    }
+    Ok(())
+}
+
+fn write_frontend_logs(path: &Path, logs: &[FrontendLogEntry]) -> anyhow::Result<()> {
+    let mut file = fs::File::create(path)
+        .with_context(|| format!("Failed to create frontend log export {}", path.display()))?;
+    for entry in logs {
+        serde_json::to_writer(&mut file, entry)?;
+        file.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
