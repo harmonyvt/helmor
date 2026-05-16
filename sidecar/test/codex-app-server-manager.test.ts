@@ -18,6 +18,7 @@ const serverState = {
 	/** Optional hook tests use to inject extra notifications between
 	 *  `turn/started` and `turn/completed` (e.g. `thread/tokenUsage/updated`). */
 	beforeTurnCompleted: null as null | (() => void),
+	goalSetError: null as null | Error,
 	instances: [] as MockCodexAppServer[],
 };
 const gitAccessState = {
@@ -55,6 +56,7 @@ class MockCodexAppServer {
 			};
 		}
 		if (method === "thread/goal/set") {
+			if (serverState.goalSetError) throw serverState.goalSetError;
 			queueMicrotask(() => {
 				serverState.onNotification?.({
 					method: "turn/started",
@@ -121,6 +123,9 @@ mock.module("../src/codex-config.js", () => ({
 const { CodexAppServerManager } = await import(
 	"../src/codex-app-server-manager.js"
 );
+const { MAX_CODEX_GOAL_OBJECTIVE_CHARS } = await import(
+	"../src/codex-app-server-manager.js"
+);
 
 describe("CodexAppServerManager", () => {
 	let emitter: SidecarEmitter;
@@ -129,6 +134,7 @@ describe("CodexAppServerManager", () => {
 		serverState.requests = [];
 		serverState.onNotification = null;
 		serverState.beforeTurnCompleted = null;
+		serverState.goalSetError = null;
 		serverState.instances = [];
 		gitAccessState.directories = [];
 		codexConfigState.result = {
@@ -228,6 +234,67 @@ describe("CodexAppServerManager", () => {
 		expect(
 			serverState.requests.find((request) => request.method === "turn/start"),
 		).toBeUndefined();
+	});
+
+	test("rejects oversized /goal objectives before opening Codex", async () => {
+		const manager = new CodexAppServerManager();
+		const objective = "x".repeat(MAX_CODEX_GOAL_OBJECTIVE_CHARS + 1);
+
+		await expect(
+			manager.sendMessage(
+				"REQ-goal-too-long",
+				{
+					sessionId: "session-goal-too-long",
+					prompt: `/goal ${objective}`,
+					model: "gpt-5.4",
+					cwd: "/tmp/workspace",
+					resume: undefined,
+					permissionMode: "bypassPermissions",
+					effortLevel: "high",
+					fastMode: false,
+					images: [],
+				},
+				emitter,
+			),
+		).rejects.toThrow(
+			`Codex goal objective is ${MAX_CODEX_GOAL_OBJECTIVE_CHARS + 1} characters; maximum is ${MAX_CODEX_GOAL_OBJECTIVE_CHARS}.`,
+		);
+
+		expect(codexConfigState.calls).toBe(0);
+		expect(serverState.instances).toHaveLength(0);
+		expect(serverState.requests).toEqual([]);
+	});
+
+	test("emits goal API failures before ending the stream", async () => {
+		const manager = new CodexAppServerManager();
+		const events: object[] = [];
+		emitter = createSidecarEmitter((event) => events.push(event));
+		serverState.goalSetError = new Error("thread/goal/set failed");
+
+		await manager.sendMessage(
+			"REQ-goal-fails",
+			{
+				sessionId: "session-goal-fails",
+				prompt: "/goal Finish the migration",
+				model: "gpt-5.4",
+				cwd: "/tmp/workspace",
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(events).toEqual([
+			{
+				id: "REQ-goal-fails",
+				type: "error",
+				message: "thread/goal/set failed",
+			},
+			{ id: "REQ-goal-fails", type: "end" },
+		]);
 	});
 
 	test("dispatches /goal resume as an active goal transition", async () => {
