@@ -733,7 +733,7 @@ export function InspectorTabsSection({
 										)}
 									>
 										<Terminal className="size-3" strokeWidth={1.8} />
-										Terminal
+										Actions
 									</button>
 								) : (
 									terminalInstances.map((instance, index) => {
