@@ -284,6 +284,10 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         return model;
     }
 
+    if let Some(model) = codex_profile_model(model_id) {
+        return model;
+    }
+
     if let Some(model) = super::custom_providers::resolve(model_id) {
         return ResolvedModel {
             id: model.id,
@@ -351,6 +355,23 @@ fn legacy_pi_azure_model(model_id: &str) -> Option<ResolvedModel> {
         claude_base_url: None,
         claude_auth_token: None,
         codex_profile: None,
+    })
+}
+
+fn codex_profile_model(model_id: &str) -> Option<ResolvedModel> {
+    let rest = model_id.strip_prefix("codex:")?;
+    let (profile, model) = rest.split_once(':')?;
+    if profile.trim().is_empty() || model.trim().is_empty() {
+        return None;
+    }
+    Some(ResolvedModel {
+        id: model_id.to_string(),
+        provider: "codex".to_string(),
+        cli_model: model.to_string(),
+        supports_effort: true,
+        claude_base_url: None,
+        claude_auth_token: None,
+        codex_profile: Some(profile.to_string()),
     })
 }
 
@@ -531,6 +552,15 @@ mod tests {
     fn resolve_gpt_5_4_routes_to_codex() {
         let m = resolve_model("gpt-5.4");
         assert_eq!(m.provider, "codex");
+    }
+
+    #[test]
+    fn resolve_codex_profile_model_routes_to_codex_profile() {
+        let m = resolve_model("codex:azure:gpt-5.5");
+        assert_eq!(m.provider, "codex");
+        assert_eq!(m.cli_model, "gpt-5.5");
+        assert_eq!(m.id, "codex:azure:gpt-5.5");
+        assert_eq!(m.codex_profile.as_deref(), Some("azure"));
     }
 
     #[test]

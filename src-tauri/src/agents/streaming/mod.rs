@@ -122,6 +122,7 @@ pub(super) fn stream_via_sidecar(
         provider = %model.provider,
         model_id = %model.id,
         resolved_cli_model = %model.cli_model,
+        codex_profile = ?model.codex_profile,
         cwd = %working_directory.display(),
         prompt_len = prompt.len(),
         has_prompt_prefix = request.prompt_prefix.as_deref().is_some_and(|prefix| !prefix.trim().is_empty()),
@@ -200,6 +201,7 @@ pub(super) fn stream_via_sidecar(
         stream_id = %stream_id,
         provider = %model.provider,
         model = %model.cli_model,
+        codex_profile = ?model.codex_profile,
         combined_prompt_len = combined_prompt.len(),
         prompt_prefix_len = prefix_trimmed.map_or(0, str::len),
         image_count = images_for_wire.len(),
@@ -291,6 +293,7 @@ pub(super) fn stream_via_sidecar(
             sidecar_session_id = %sidecar_session_id_copy,
             provider = %provider,
             model = %model_copy.cli_model,
+            codex_profile = ?model_copy.codex_profile,
             resume_only,
             "stream: event loop starting"
         );
