@@ -49,6 +49,29 @@ import { GoalTerminalView } from "./terminal-view";
 import { GoalTimelineView } from "./timeline-view";
 import type { GoalTabView, GoalWorkspaceContainerProps } from "./types";
 
+const GOAL_SIDEBAR_WIDTH_KEY = "helmor.goalSidebarWidth";
+const GOAL_SIDEBAR_DEFAULT_WIDTH = 300;
+const GOAL_SIDEBAR_MIN_WIDTH = 220;
+const GOAL_SIDEBAR_MAX_WIDTH = 520;
+const GOAL_SIDEBAR_HIT_AREA = 20;
+
+function getInitialSidebarWidth() {
+	if (typeof window === "undefined") return GOAL_SIDEBAR_DEFAULT_WIDTH;
+	try {
+		const stored = window.localStorage.getItem(GOAL_SIDEBAR_WIDTH_KEY);
+		if (!stored) return GOAL_SIDEBAR_DEFAULT_WIDTH;
+		const parsed = Number.parseInt(stored, 10);
+		return Number.isFinite(parsed)
+			? Math.min(
+					GOAL_SIDEBAR_MAX_WIDTH,
+					Math.max(GOAL_SIDEBAR_MIN_WIDTH, parsed),
+				)
+			: GOAL_SIDEBAR_DEFAULT_WIDTH;
+	} catch {
+		return GOAL_SIDEBAR_DEFAULT_WIDTH;
+	}
+}
+
 const GOAL_CARD_DETAIL_WIDTH_KEY = "helmor.goalCardDetailWidth";
 const GOAL_CARD_DETAIL_DEFAULT_WIDTH = 380;
 const GOAL_CARD_DETAIL_MIN_WIDTH = 320;
@@ -103,6 +126,11 @@ export function GoalWorkspaceContainer({
 	/** Workspace that was dropped on Merged but has no open PR. */
 	const [pendingMergeRejected, setPendingMergeRejected] =
 		useState<WorkspaceDetail | null>(null);
+	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
+	const [sidebarResizeState, setSidebarResizeState] = useState<{
+		pointerX: number;
+		startWidth: number;
+	} | null>(null);
 	const [cardDetailWidth, setCardDetailWidth] = useState(
 		getInitialCardDetailWidth,
 	);
@@ -206,6 +234,70 @@ export function GoalWorkspaceContainer({
 		setupScript,
 		scriptsLoaded: repoScriptsQuery.isSuccess,
 	});
+
+	// Persist sidebar width
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(GOAL_SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+		} catch {
+			// ignore
+		}
+	}, [sidebarWidth]);
+
+	// Sidebar resize drag — dragging right expands, left shrinks
+	useEffect(() => {
+		if (!sidebarResizeState) return;
+		let pendingWidth: number | null = null;
+		let rafId: number | null = null;
+		const flush = () => {
+			rafId = null;
+			if (pendingWidth === null) return;
+			const next = pendingWidth;
+			pendingWidth = null;
+			setSidebarWidth(next);
+		};
+		const handleMouseMove = (event: globalThis.MouseEvent) => {
+			const deltaX = event.clientX - sidebarResizeState.pointerX;
+			const raw = sidebarResizeState.startWidth + deltaX;
+			pendingWidth = Math.min(
+				GOAL_SIDEBAR_MAX_WIDTH,
+				Math.max(GOAL_SIDEBAR_MIN_WIDTH, raw),
+			);
+			if (rafId === null) rafId = window.requestAnimationFrame(flush);
+		};
+		const handleMouseUp = () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+				rafId = null;
+			}
+			flush();
+			setSidebarResizeState(null);
+		};
+		const prevCursor = document.body.style.cursor;
+		const prevSelect = document.body.style.userSelect;
+		document.body.style.cursor = "ew-resize";
+		document.body.style.userSelect = "none";
+		window.addEventListener("mousemove", handleMouseMove);
+		window.addEventListener("mouseup", handleMouseUp);
+		return () => {
+			if (rafId !== null) window.cancelAnimationFrame(rafId);
+			document.body.style.cursor = prevCursor;
+			document.body.style.userSelect = prevSelect;
+			window.removeEventListener("mousemove", handleMouseMove);
+			window.removeEventListener("mouseup", handleMouseUp);
+		};
+	}, [sidebarResizeState]);
+
+	const handleSidebarResizeStart = useCallback(
+		(event: { clientX: number; preventDefault(): void }) => {
+			event.preventDefault();
+			setSidebarResizeState({
+				pointerX: event.clientX,
+				startWidth: sidebarWidth,
+			});
+		},
+		[sidebarWidth],
+	);
 
 	// Persist card detail panel width
 	useEffect(() => {
@@ -494,6 +586,11 @@ export function GoalWorkspaceContainer({
 				onSendingWorkspacesChange={onSendingWorkspacesChange}
 				onCardCreated={(created) => setSelectedId(created.id)}
 				onSelectAssignee={handleSelectAssignee}
+				width={sidebarWidth}
+				hitArea={GOAL_SIDEBAR_HIT_AREA}
+				minWidth={GOAL_SIDEBAR_MIN_WIDTH}
+				maxWidth={GOAL_SIDEBAR_MAX_WIDTH}
+				onResizeStart={handleSidebarResizeStart}
 			/>
 
 			{/* Main content column */}
