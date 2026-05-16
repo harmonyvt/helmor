@@ -31,8 +31,9 @@ import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
 } from "@/lib/query-client";
+import { useSettings } from "@/lib/settings";
 import { goalLaneForWorkspace, isMovableGoalLaneId } from "../board-model";
-import { canonicalPiModelId } from "../pi-handoff-models";
+import { resolveGoalAssigneePiHandoffModel } from "../pi-handoff-models";
 import { AssigneesBar } from "./assignees-bar";
 import { HistoryView } from "./history-view";
 import { ThreadManagerView } from "./thread-manager-view";
@@ -95,6 +96,7 @@ export function GoalsAiPanel({
 	onSelectAssignee,
 }: GoalsAiPanelProps) {
 	const queryClient = useQueryClient();
+	const { settings } = useSettings();
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 	const piModels = useMemo(
 		() =>
@@ -192,21 +194,12 @@ export function GoalsAiPanel({
 						typeof args.assignedModelId === "string"
 							? args.assignedModelId
 							: null;
-					const assignedModelId =
-						activeSupervisorModelIdRef.current ??
-						(requestedModelId
-							? canonicalPiModelId(requestedModelId, piModels)
-							: null);
-					const handoffModel = {
-						assignedProvider: "pi",
-						assignedModelId,
+					const handoffModel = resolveGoalAssigneePiHandoffModel({
+						activeSupervisorModelId: activeSupervisorModelIdRef.current,
 						requestedModelId,
-						resolvedModelId: assignedModelId,
-						fallbackUsed: false,
-						policyApplied: false,
-						allowedModelIds: assignedModelId ? [assignedModelId] : [],
-						suggestedModelIds: assignedModelId ? [assignedModelId] : [],
-					};
+						piModels,
+						allowAllModels: settings.allowAllGoalAssigneePiModels,
+					});
 					const { created, newWorkspace } = await enqueueKanbanMutation(
 						async () => {
 							const created = await createGoalChildWorkspaceAndStart({
@@ -427,6 +420,7 @@ export function GoalsAiPanel({
 			onCardCreated,
 			canCreateCards,
 			piModels,
+			settings.allowAllGoalAssigneePiModels,
 			enqueueKanbanMutation,
 		],
 	);

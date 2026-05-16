@@ -576,6 +576,19 @@ export const SettingsDialog = memo(function SettingsDialog({
 										</div>
 									</SettingsRow>
 									<PrCommentReviewModelRow />
+									<SettingsRow
+										title="Goal assignee models"
+										description="Allow Goal child assignees to use every Pi model provider. When off, handoffs are limited to Anthropic and Codex-backed Pi models."
+									>
+										<Switch
+											checked={settings.allowAllGoalAssigneePiModels}
+											onCheckedChange={(checked) =>
+												updateSettings({
+													allowAllGoalAssigneePiModels: checked,
+												})
+											}
+										/>
+									</SettingsRow>
 									<PiModelsCheckPanel />
 									<ClaudeCustomProvidersPanel />
 								</SettingsGroup>

@@ -2,6 +2,7 @@ import { act, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentModelOption, AgentStreamEvent } from "@/lib/api";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
+import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { GoalsAiPanel } from "./index";
 
@@ -58,6 +59,15 @@ const otherModel: AgentModelOption = {
 	provider: "pi",
 	label: "Pi · Claude Sonnet 4.6",
 	cliModel: "anthropic/claude-sonnet-4-6",
+	supportsContextUsage: false,
+};
+
+const disallowedModel: AgentModelOption = {
+	id: "pi:moonshot/kimi-k2",
+	provider: "pi",
+	label: "Pi · Kimi K2",
+	cliModel: "moonshot/kimi-k2",
+	providerKey: "moonshot",
 	supportsContextUsage: false,
 };
 
@@ -213,5 +223,151 @@ describe("GoalsAiPanel", () => {
 		expect(
 			apiMockState.createGoalChildWorkspaceAndStart,
 		).toHaveBeenNthCalledWith(2, expect.objectContaining({ title: "Second" }));
+	});
+
+	it("falls back to an allowed assignee model when the active Pi supervisor model is disallowed", async () => {
+		apiMockState.createGoalChildWorkspaceAndStart.mockResolvedValue({
+			workspaceId: "child-1",
+			sessionId: "session-1",
+		});
+		apiMockState.listGoalChildWorkspaces.mockResolvedValue([
+			{ id: "child-1", title: "Child" },
+		]);
+
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
+			{
+				id: "pi",
+				label: "Pi",
+				options: [otherModel, parentModel, disallowedModel],
+			},
+		]);
+
+		renderWithProviders(
+			<GoalsAiPanel
+				workspaceId="goal-1"
+				cards={[]}
+				kanbanSnapshot="[]"
+				onClose={() => {}}
+			/>,
+			{ queryClient },
+		);
+
+		conversationMockState.props?.buildSendRequestExtras?.({
+			model: disallowedModel,
+			workspaceId: "goal-1",
+			sessionId: "parent-session",
+			prompt: "Plan this goal",
+		});
+
+		await act(async () => {
+			conversationMockState.props?.onKanbanToolCall?.({
+				kind: "kanbanToolCall",
+				toolCallId: "tool-1",
+				tool: "create_kanban_card",
+				workspaceId: "goal-1",
+				args: {
+					title: "Child",
+					lane: "backlog",
+					prompt: "Do the work",
+				},
+			});
+		});
+
+		expect(apiMockState.createGoalChildWorkspaceAndStart).toHaveBeenCalledWith(
+			expect.objectContaining({
+				assignedProvider: "pi",
+				assignedModelId: otherModel.id,
+			}),
+		);
+		expect(apiMockState.sendKanbanToolResult).toHaveBeenCalledWith(
+			"tool-1",
+			expect.objectContaining({
+				handoffModel: expect.objectContaining({
+					resolvedModelId: otherModel.id,
+					fallbackUsed: true,
+					policyApplied: true,
+					allowedModelIds: [otherModel.id, parentModel.id],
+				}),
+			}),
+		);
+	});
+
+	it("allows every assignee Pi provider when the settings override is enabled", async () => {
+		apiMockState.createGoalChildWorkspaceAndStart.mockResolvedValue({
+			workspaceId: "child-1",
+			sessionId: "session-1",
+		});
+		apiMockState.listGoalChildWorkspaces.mockResolvedValue([
+			{ id: "child-1", title: "Child" },
+		]);
+
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
+			{
+				id: "pi",
+				label: "Pi",
+				options: [parentModel, disallowedModel],
+			},
+		]);
+
+		renderWithProviders(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						allowAllGoalAssigneePiModels: true,
+					},
+					isLoaded: true,
+					updateSettings: vi.fn(),
+				}}
+			>
+				<GoalsAiPanel
+					workspaceId="goal-1"
+					cards={[]}
+					kanbanSnapshot="[]"
+					onClose={() => {}}
+				/>
+			</SettingsContext.Provider>,
+			{ queryClient },
+		);
+
+		conversationMockState.props?.buildSendRequestExtras?.({
+			model: disallowedModel,
+			workspaceId: "goal-1",
+			sessionId: "parent-session",
+			prompt: "Plan this goal",
+		});
+
+		await act(async () => {
+			conversationMockState.props?.onKanbanToolCall?.({
+				kind: "kanbanToolCall",
+				toolCallId: "tool-1",
+				tool: "create_kanban_card",
+				workspaceId: "goal-1",
+				args: {
+					title: "Child",
+					lane: "backlog",
+					prompt: "Do the work",
+				},
+			});
+		});
+
+		expect(apiMockState.createGoalChildWorkspaceAndStart).toHaveBeenCalledWith(
+			expect.objectContaining({
+				assignedProvider: "pi",
+				assignedModelId: disallowedModel.id,
+			}),
+		);
+		expect(apiMockState.sendKanbanToolResult).toHaveBeenCalledWith(
+			"tool-1",
+			expect.objectContaining({
+				handoffModel: expect.objectContaining({
+					resolvedModelId: disallowedModel.id,
+					fallbackUsed: false,
+					policyApplied: false,
+				}),
+			}),
+		);
 	});
 });
