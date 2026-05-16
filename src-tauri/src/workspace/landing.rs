@@ -5,7 +5,9 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db, git_ops,
+    db,
+    forge::ChangeRequestInfo,
+    git_ops,
     models::workspaces::{self as workspace_models, WorkspaceRecord},
     workspace_kind::WorkspaceKind,
     workspace_pr_sync::PrSyncState,
@@ -181,20 +183,58 @@ pub fn reconcile_goal_child_landing_states(records: &[WorkspaceRecord]) -> Resul
     Ok(changed)
 }
 
-pub fn mark_workspace_landed_from_pull_request(workspace_id: &str) -> Result<bool> {
+pub fn mark_workspace_landed_from_pull_request(
+    workspace_id: &str,
+    change_request: Option<&ChangeRequestInfo>,
+) -> Result<bool> {
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
     let workspace_dir = workspace_dir_for_record(&record).ok();
+    let target_branch = change_request
+        .and_then(|pr| non_empty(pr.base_branch.as_deref()).map(String::from))
+        .or_else(|| record.landed_target_branch.clone())
+        .or_else(|| record.intended_target_branch.clone());
+    let source_ref = change_request
+        .and_then(|pr| non_empty(pr.head_branch.as_deref()).map(String::from))
+        .or_else(|| record.landed_source_ref.clone())
+        .or_else(|| record.branch.clone());
+    let live_head_sha = change_request.and_then(|pr| {
+        non_empty(pr.head_commit_sha.as_deref())
+            .map(String::from)
+            .and_then(|sha| {
+                workspace_dir
+                    .as_deref()
+                    .and_then(|dir| resolve_commit_sha(dir, &sha))
+                    .or(Some(sha))
+            })
+    });
+    let source_ref_sha = workspace_dir.as_deref().and_then(|dir| {
+        source_ref.as_deref().and_then(|source_ref| {
+            resolve_commit_sha(dir, source_ref).or_else(|| {
+                record.remote.as_deref().and_then(|remote| {
+                    resolve_commit_sha(dir, &format!("refs/remotes/{remote}/{source_ref}"))
+                })
+            })
+        })
+    });
     let last_known_head_sha = workspace_dir
         .as_deref()
         .and_then(|dir| preferred_head_sha(dir, &record));
+    let commit_sha = live_head_sha
+        .clone()
+        .or(source_ref_sha)
+        .or_else(|| record.landed_commit_sha.clone())
+        .or_else(|| last_known_head_sha.clone());
+    let last_known_head_sha = live_head_sha
+        .or_else(|| record.last_known_head_sha.clone())
+        .or(last_known_head_sha);
     persist_landing(
         &record,
         LandingState::Landed,
         Some(LandingSource::PullRequest),
-        record.intended_target_branch.clone(),
-        record.branch.clone(),
-        last_known_head_sha.clone(),
+        target_branch,
+        source_ref,
+        commit_sha,
         last_known_head_sha,
     )
 }
@@ -225,7 +265,7 @@ fn reconcile_workspace_landing_record(record: &WorkspaceRecord) -> Result<bool> 
         return Ok(false);
     }
     if record.pr_sync_state == PrSyncState::Merged {
-        return mark_workspace_landed_from_pull_request(&record.id);
+        return mark_workspace_landed_from_pull_request(&record.id, None);
     }
 
     let detection = detect_landing_by_branch_ancestry(record);

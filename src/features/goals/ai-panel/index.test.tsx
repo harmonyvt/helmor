@@ -8,8 +8,16 @@ import { GoalsAiPanel } from "./index";
 
 const apiMockState = vi.hoisted(() => ({
 	createGoalChildWorkspaceAndStart: vi.fn(),
+	loadWorkspaceForgeActionStatus: vi.fn(),
+	loadWorkspaceGitActionStatus: vi.fn(),
 	listGoalChildWorkspaces: vi.fn(),
+	markWorkspaceLanded: vi.fn(),
+	mergeWorkspaceChangeRequest: vi.fn(),
+	pushWorkspaceToRemote: vi.fn(),
+	reconcileWorkspaceLandingState: vi.fn(),
+	refreshWorkspaceChangeRequest: vi.fn(),
 	sendKanbanToolResult: vi.fn(),
+	syncWorkspaceWithTargetBranch: vi.fn(),
 }));
 
 const conversationMockState = vi.hoisted(() => ({
@@ -41,8 +49,16 @@ vi.mock("@/lib/api", async () => {
 		...actual,
 		createGoalChildWorkspaceAndStart:
 			apiMockState.createGoalChildWorkspaceAndStart,
+		loadWorkspaceForgeActionStatus: apiMockState.loadWorkspaceForgeActionStatus,
+		loadWorkspaceGitActionStatus: apiMockState.loadWorkspaceGitActionStatus,
 		listGoalChildWorkspaces: apiMockState.listGoalChildWorkspaces,
+		markWorkspaceLanded: apiMockState.markWorkspaceLanded,
+		mergeWorkspaceChangeRequest: apiMockState.mergeWorkspaceChangeRequest,
+		pushWorkspaceToRemote: apiMockState.pushWorkspaceToRemote,
+		reconcileWorkspaceLandingState: apiMockState.reconcileWorkspaceLandingState,
+		refreshWorkspaceChangeRequest: apiMockState.refreshWorkspaceChangeRequest,
 		sendKanbanToolResult: apiMockState.sendKanbanToolResult,
+		syncWorkspaceWithTargetBranch: apiMockState.syncWorkspaceWithTargetBranch,
 	};
 });
 
@@ -74,8 +90,16 @@ const disallowedModel: AgentModelOption = {
 describe("GoalsAiPanel", () => {
 	beforeEach(() => {
 		apiMockState.createGoalChildWorkspaceAndStart.mockReset();
+		apiMockState.loadWorkspaceForgeActionStatus.mockReset();
+		apiMockState.loadWorkspaceGitActionStatus.mockReset();
 		apiMockState.listGoalChildWorkspaces.mockReset();
+		apiMockState.markWorkspaceLanded.mockReset();
+		apiMockState.mergeWorkspaceChangeRequest.mockReset();
+		apiMockState.pushWorkspaceToRemote.mockReset();
+		apiMockState.reconcileWorkspaceLandingState.mockReset();
+		apiMockState.refreshWorkspaceChangeRequest.mockReset();
 		apiMockState.sendKanbanToolResult.mockReset();
+		apiMockState.syncWorkspaceWithTargetBranch.mockReset();
 		conversationMockState.props = null;
 	});
 
@@ -223,6 +247,64 @@ describe("GoalsAiPanel", () => {
 		expect(
 			apiMockState.createGoalChildWorkspaceAndStart,
 		).toHaveBeenNthCalledWith(2, expect.objectContaining({ title: "Second" }));
+	});
+
+	it("executes merge and landing tools against the selected child workspace", async () => {
+		apiMockState.listGoalChildWorkspaces.mockResolvedValue([]);
+		apiMockState.mergeWorkspaceChangeRequest.mockResolvedValue({
+			url: "https://example.test/pr/1",
+			number: 1,
+			state: "MERGED",
+			title: "PR",
+			isMerged: true,
+		});
+		apiMockState.markWorkspaceLanded.mockResolvedValue({
+			workspaceId: "child-1",
+			landingState: "landed",
+			landingSource: "manual-repair",
+			changed: true,
+		});
+
+		renderWithProviders(
+			<GoalsAiPanel
+				workspaceId="goal-1"
+				cards={[]}
+				kanbanSnapshot="[]"
+				onClose={() => {}}
+			/>,
+		);
+
+		await act(async () => {
+			conversationMockState.props?.onKanbanToolCall?.({
+				kind: "kanbanToolCall",
+				toolCallId: "merge-tool",
+				tool: "merge_change_request",
+				workspaceId: "goal-1",
+				args: { cardId: "child-1" },
+			});
+		});
+		await act(async () => {
+			conversationMockState.props?.onKanbanToolCall?.({
+				kind: "kanbanToolCall",
+				toolCallId: "land-tool",
+				tool: "mark_workspace_landed",
+				workspaceId: "goal-1",
+				args: { card_id: "child-1" },
+			});
+		});
+
+		expect(apiMockState.mergeWorkspaceChangeRequest).toHaveBeenCalledWith(
+			"child-1",
+		);
+		expect(apiMockState.markWorkspaceLanded).toHaveBeenCalledWith("child-1");
+		expect(apiMockState.sendKanbanToolResult).toHaveBeenCalledWith(
+			"merge-tool",
+			expect.objectContaining({ state: "MERGED" }),
+		);
+		expect(apiMockState.sendKanbanToolResult).toHaveBeenCalledWith(
+			"land-tool",
+			expect.objectContaining({ landingState: "landed" }),
+		);
 	});
 
 	it("falls back to an allowed assignee model when the active Pi supervisor model is disallowed", async () => {

@@ -439,7 +439,8 @@ pub fn sync_workspace_pr_state(
         changed = true;
     }
     if next_state == PrSyncState::Merged {
-        changed |= super::landing::mark_workspace_landed_from_pull_request(workspace_id)?;
+        changed |=
+            super::landing::mark_workspace_landed_from_pull_request(workspace_id, change_request)?;
     }
     Ok(changed)
 }
@@ -1287,6 +1288,9 @@ mod tests {
             state: "OPEN".to_string(),
             title: "PR".to_string(),
             is_merged: false,
+            head_branch: Some("feature/alpha".to_string()),
+            base_branch: Some("main".to_string()),
+            head_commit_sha: None,
         };
         assert!(sync_workspace_pr_state("w-pr", Some(&open)).unwrap());
         assert_eq!(
@@ -1322,6 +1326,67 @@ mod tests {
     }
 
     #[test]
+    fn pr_sync_preserves_replacement_pr_landing_source() {
+        let env = TestEnv::new("pr-sync-replacement-source");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-pr",
+                repo_id: "r1",
+                directory_name: "alpha",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/original"),
+                intended_target_branch: Some("helmor/goal/prototype"),
+            },
+        );
+
+        let merged = ChangeRequestInfo {
+            url: "https://example.test/pr/1".to_string(),
+            number: 1,
+            state: "MERGED".to_string(),
+            title: "PR".to_string(),
+            is_merged: true,
+            head_branch: Some("harmonyvt/pr-replacement".to_string()),
+            base_branch: Some("helmor/goal/prototype".to_string()),
+            head_commit_sha: Some("abc123".to_string()),
+        };
+
+        assert!(sync_workspace_pr_state("w-pr", Some(&merged)).unwrap());
+        assert_eq!(
+            workspace_landing_details(&env, "w-pr"),
+            WorkspaceLandingDetails {
+                state: LandingState::Landed,
+                source: Some(LandingSource::PullRequest),
+                target_branch: Some("helmor/goal/prototype".to_string()),
+                source_ref: Some("harmonyvt/pr-replacement".to_string()),
+                commit_sha: Some("abc123".to_string()),
+                last_known_head_sha: Some("abc123".to_string()),
+            }
+        );
+
+        let cached_merged = ChangeRequestInfo {
+            head_branch: None,
+            base_branch: None,
+            head_commit_sha: None,
+            ..merged
+        };
+        assert!(!sync_workspace_pr_state("w-pr", Some(&cached_merged)).unwrap());
+        assert_eq!(
+            workspace_landing_details(&env, "w-pr"),
+            WorkspaceLandingDetails {
+                state: LandingState::Landed,
+                source: Some(LandingSource::PullRequest),
+                target_branch: Some("helmor/goal/prototype".to_string()),
+                source_ref: Some("harmonyvt/pr-replacement".to_string()),
+                commit_sha: Some("abc123".to_string()),
+                last_known_head_sha: Some("abc123".to_string()),
+            }
+        );
+    }
+
+    #[test]
     fn pr_sync_does_not_regress_terminal_state_to_open() {
         let env = TestEnv::new("pr-sync-terminal-no-regress");
         let conn = env.db_connection();
@@ -1351,6 +1416,9 @@ mod tests {
             state: "OPEN".to_string(),
             title: "PR".to_string(),
             is_merged: false,
+            head_branch: None,
+            base_branch: None,
+            head_commit_sha: None,
         };
 
         assert!(!sync_workspace_pr_state("w-pr", Some(&stale_open)).unwrap());
@@ -1658,6 +1726,9 @@ mod tests {
             state: "OPEN".to_string(),
             title: "Add cool feature".to_string(),
             is_merged: false,
+            head_branch: Some("feature/alpha".to_string()),
+            base_branch: Some("main".to_string()),
+            head_commit_sha: None,
         };
         assert!(sync_workspace_pr_state("w-pr", Some(&open)).unwrap());
         assert_eq!(
@@ -1777,6 +1848,35 @@ mod tests {
                 "SELECT landing_state, landing_source FROM workspaces WHERE id = ?1",
                 [id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct WorkspaceLandingDetails {
+        state: LandingState,
+        source: Option<LandingSource>,
+        target_branch: Option<String>,
+        source_ref: Option<String>,
+        commit_sha: Option<String>,
+        last_known_head_sha: Option<String>,
+    }
+
+    fn workspace_landing_details(env: &TestEnv, id: &str) -> WorkspaceLandingDetails {
+        env.db_connection()
+            .query_row(
+                "SELECT landing_state, landing_source, landed_target_branch, landed_source_ref, landed_commit_sha, last_known_head_sha FROM workspaces WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(WorkspaceLandingDetails {
+                        state: row.get(0)?,
+                        source: row.get(1)?,
+                        target_branch: row.get(2)?,
+                        source_ref: row.get(3)?,
+                        commit_sha: row.get(4)?,
+                        last_known_head_sha: row.get(5)?,
+                    })
+                },
             )
             .unwrap()
     }

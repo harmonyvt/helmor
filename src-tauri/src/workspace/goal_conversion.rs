@@ -89,6 +89,9 @@ fn ensure_change_request(
         state: "OPEN".to_string(),
         title: title.to_string(),
         is_merged: false,
+        head_branch: record.branch.clone(),
+        base_branch: record.intended_target_branch.clone(),
+        head_commit_sha: None,
     }))
 }
 

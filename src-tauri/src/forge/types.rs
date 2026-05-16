@@ -106,6 +106,9 @@ pub struct ChangeRequestInfo {
     pub state: String,
     pub title: String,
     pub is_merged: bool,
+    pub head_branch: Option<String>,
+    pub base_branch: Option<String>,
+    pub head_commit_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

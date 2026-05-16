@@ -45,6 +45,7 @@ pub struct GithubPullRequestSummary {
     pub is_merged: bool,
     pub head_branch: String,
     pub base_branch: String,
+    pub head_commit_sha: Option<String>,
     pub additions: u64,
     pub deletions: u64,
 }
@@ -66,6 +67,9 @@ query($owner: String!, $name: String!) {
         merged
         headRefName
         baseRefName
+        commits(last: 1) {
+          nodes { commit { oid } }
+        }
         additions
         deletions
         headRepository { nameWithOwner }
@@ -127,6 +131,9 @@ query($owner: String!, $name: String!, $number: Int!) {
         merged
         headRefName
       baseRefName
+      commits(last: 1) {
+        nodes { commit { oid } }
+      }
       additions
       deletions
       headRepository { nameWithOwner }
@@ -179,6 +186,9 @@ query($owner: String!, $name: String!, $head: String!) {
         merged
         headRefName
         baseRefName
+        commits(last: 1) {
+          nodes { commit { oid } }
+        }
         additions
         deletions
         headRepository { nameWithOwner }
@@ -310,10 +320,25 @@ fn pull_request_summary_from_node(
         is_merged: node.merged,
         head_branch: node.head_ref_name,
         base_branch: node.base_ref_name,
+        head_commit_sha: latest_pull_request_commit_oid(node.commits.as_ref()),
         additions: node.additions,
         deletions: node.deletions,
     })
 }
+
+fn latest_pull_request_commit_oid(commits: Option<&PullRequestCommitConnection>) -> Option<String> {
+    commits?
+        .nodes
+        .first()
+        .map(|node| node.commit.oid.clone())
+        .filter(|oid| !oid.trim().is_empty())
+}
+
+fn latest_action_commit_oid(node: Option<&ActionPullRequestCommitNode>) -> Option<String> {
+    node.map(|node| node.commit.oid.clone())
+        .filter(|oid| !oid.trim().is_empty())
+}
+
 /// Look up the (most recent) pull request matching this workspace's current
 /// branch on GitHub.
 ///
@@ -377,6 +402,11 @@ query($owner: String!, $name: String!, $head: String!) {
         state
         title
         merged
+        headRefName
+        baseRefName
+        commits(last: 1) {
+          nodes { commit { oid } }
+        }
       }
     }
   }
@@ -463,6 +493,9 @@ query($owner: String!, $name: String!, $head: String!) {
         state: node.state,
         title: node.title,
         is_merged: node.merged,
+        head_branch: node.head_ref_name,
+        base_branch: node.base_ref_name,
+        head_commit_sha: latest_pull_request_commit_oid(node.commits.as_ref()),
     }))
 }
 
@@ -567,6 +600,9 @@ fn change_request_from_summary(summary: GithubPullRequestSummary) -> ChangeReque
         state: summary.state,
         title: summary.title,
         is_merged: summary.is_merged,
+        head_branch: Some(summary.head_branch),
+        base_branch: Some(summary.base_branch),
+        head_commit_sha: summary.head_commit_sha,
     }
 }
 
@@ -599,6 +635,9 @@ fn cached_change_request_from_snapshot(
         state: sync_state.as_str().to_ascii_uppercase(),
         title: title.unwrap_or_default().to_string(),
         is_merged: sync_state == PrSyncState::Merged,
+        head_branch: None,
+        base_branch: None,
+        head_commit_sha: None,
     })
 }
 
@@ -733,11 +772,14 @@ query($owner: String!, $name: String!, $head: String!) {
         state
         title
         merged
+        headRefName
+        baseRefName
         reviewDecision
         mergeable
         commits(last: 1) {
           nodes {
             commit {
+              oid
               statusCheckRollup {
                 contexts(first: 50) {
                   nodes {
@@ -1078,6 +1120,7 @@ struct PullRequestConnection {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PullRequestNode {
     /// GraphQL node ID (e.g. "PR_kwDO..."). Only populated when the query
     /// explicitly selects `id`; the lookup query omits it so this is
@@ -1088,6 +1131,9 @@ struct PullRequestNode {
     state: String,
     title: String,
     merged: bool,
+    head_ref_name: Option<String>,
+    base_ref_name: Option<String>,
+    commits: Option<PullRequestCommitConnection>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1128,10 +1174,26 @@ struct RepositoryPullRequestNode {
     merged: bool,
     head_ref_name: String,
     base_ref_name: String,
+    commits: Option<PullRequestCommitConnection>,
     head_repository: Option<RepositoryPullRequestRepository>,
     base_repository: Option<RepositoryPullRequestRepository>,
     additions: u64,
     deletions: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PullRequestCommitConnection {
+    nodes: Vec<PullRequestCommitNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PullRequestCommitNode {
+    commit: PullRequestCommit,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PullRequestCommit {
+    oid: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1187,6 +1249,8 @@ struct ActionPullRequestNode {
     state: String,
     title: String,
     merged: bool,
+    head_ref_name: Option<String>,
+    base_ref_name: Option<String>,
     review_decision: Option<String>,
     mergeable: Option<String>,
     commits: ActionCommitConnection,
@@ -1205,6 +1269,7 @@ struct ActionPullRequestCommitNode {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ActionCommitNode {
+    oid: String,
     status_check_rollup: Option<ActionStatusCheckRollup>,
     deployments: ActionDeploymentConnection,
 }
@@ -1288,6 +1353,9 @@ fn build_action_status(node: ActionPullRequestNode) -> ForgeActionStatus {
         state: node.state,
         title: node.title,
         is_merged: node.merged,
+        head_branch: node.head_ref_name,
+        base_branch: node.base_ref_name,
+        head_commit_sha: latest_action_commit_oid(node.commits.nodes.first()),
     };
     let review_decision = node.review_decision;
     let mergeable = node.mergeable;
@@ -2158,6 +2226,13 @@ mod tests {
             merged,
             head_ref_name: "feature/review".to_string(),
             base_ref_name: "main".to_string(),
+            commits: Some(PullRequestCommitConnection {
+                nodes: vec![PullRequestCommitNode {
+                    commit: PullRequestCommit {
+                        oid: "abc123".to_string(),
+                    },
+                }],
+            }),
             head_repository: head_repo.map(|name_with_owner| RepositoryPullRequestRepository {
                 name_with_owner: name_with_owner.to_string(),
             }),
@@ -2185,6 +2260,7 @@ mod tests {
         assert_eq!(summary.number, 42);
         assert_eq!(summary.head_branch, "feature/review");
         assert_eq!(summary.base_branch, "main");
+        assert_eq!(summary.head_commit_sha.as_deref(), Some("abc123"));
     }
 
     #[test]
@@ -2448,11 +2524,14 @@ mod tests {
             state: "OPEN".to_string(),
             title: "Update".to_string(),
             merged: false,
+            head_ref_name: Some("feature/update".to_string()),
+            base_ref_name: Some("main".to_string()),
             review_decision: Some("CHANGES_REQUESTED".to_string()),
             mergeable: Some("CONFLICTING".to_string()),
             commits: ActionCommitConnection {
                 nodes: vec![ActionPullRequestCommitNode {
                     commit: ActionCommitNode {
+                        oid: "abc123".to_string(),
                         status_check_rollup: Some(ActionStatusCheckRollup {
                             contexts: ActionCheckContextConnection {
                                 nodes: vec![ActionCheckContextNode::CheckRun(ActionCheckRunNode {
@@ -2509,11 +2588,14 @@ mod tests {
             state: "OPEN".to_string(),
             title: "Update".to_string(),
             merged: false,
+            head_ref_name: Some("feature/update".to_string()),
+            base_ref_name: Some("main".to_string()),
             review_decision: None,
             mergeable: Some("MERGEABLE".to_string()),
             commits: ActionCommitConnection {
                 nodes: vec![ActionPullRequestCommitNode {
                     commit: ActionCommitNode {
+                        oid: "abc123".to_string(),
                         status_check_rollup: Some(ActionStatusCheckRollup {
                             contexts: ActionCheckContextConnection {
                                 nodes: vec![

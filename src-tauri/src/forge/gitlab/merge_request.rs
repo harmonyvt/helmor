@@ -79,6 +79,9 @@ pub(super) fn mr_info(mr: &GitlabMergeRequest) -> ChangeRequestInfo {
         state: gitlab_mr_state(&mr.state).to_string(),
         title: mr.title.clone(),
         is_merged: mr.state == "merged" || mr.merged_at.is_some(),
+        head_branch: mr.source_branch.clone(),
+        base_branch: mr.target_branch.clone(),
+        head_commit_sha: mr.sha.clone(),
     }
 }
 
@@ -133,6 +136,9 @@ mod tests {
             title: "MR".to_string(),
             state: "opened".to_string(),
             web_url: "https://gitlab.example.com/acme/repo/-/merge_requests/1".to_string(),
+            source_branch: Some("feature/review".to_string()),
+            target_branch: Some("main".to_string()),
+            sha: Some("abc123".to_string()),
             merged_at: None,
             merge_status: merge_status.map(str::to_string),
             detailed_merge_status: detailed_merge_status.map(str::to_string),
