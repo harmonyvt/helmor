@@ -298,6 +298,7 @@ pub async fn send_agent_message_stream(
         requested_model_id = %request.model_id,
         resolved_provider = %model.provider,
         resolved_cli_model = %model.cli_model,
+        codex_profile = ?model.codex_profile,
         supports_effort = model.supports_effort,
         session_id = ?request.session_id,
         helmor_session_id = ?request.helmor_session_id,
@@ -315,6 +316,7 @@ pub async fn send_agent_message_stream(
             requested_model_id = %request.model_id,
             resolved_provider = %model.provider,
             resolved_cli_model = %model.cli_model,
+            codex_profile = ?model.codex_profile,
             "send_agent_message_stream provider/model mismatch"
         );
         return Err(anyhow::anyhow!(
@@ -333,6 +335,7 @@ pub async fn send_agent_message_stream(
         provider = %model.provider,
         model_id = %request.model_id,
         resolved_cli_model = %model.cli_model,
+        codex_profile = ?model.codex_profile,
         working_directory = %working_directory.display(),
         session_id = ?request.session_id,
         helmor_session_id = ?request.helmor_session_id,

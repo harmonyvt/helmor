@@ -1461,13 +1461,19 @@ export class CodexAppServerManager implements SessionManager {
 
 		if (resume) {
 			try {
-				logger.info(`Attempting thread/resume`, { threadId: resume });
+				logger.info(`Attempting thread/resume`, {
+					threadId: resume,
+					codexProfile: codexProfile ?? "(default)",
+				});
 				const response = await server.sendRequest<Record<string, unknown>>(
 					"thread/resume",
 					{ threadId: resume },
 				);
 				threadId = (deepGet(response, "thread", "id") as string) ?? resume;
-				logger.info(`Resumed Codex thread`, { threadId });
+				logger.info(`Resumed Codex thread`, {
+					threadId,
+					codexProfile: codexProfile ?? "(default)",
+				});
 			} catch (err) {
 				if (isRecoverableResumeError(err)) {
 					logger.debug(
@@ -1484,13 +1490,17 @@ export class CodexAppServerManager implements SessionManager {
 			logger.info("Starting new Codex thread", {
 				cwd,
 				model: model ?? "(default)",
+				codexProfile: codexProfile ?? "(default)",
 			});
 			const response = await server.sendRequest<Record<string, unknown>>(
 				"thread/start",
 				buildThreadStartParams(cwd, permissionMode, model, fastMode === true),
 			);
 			threadId = (deepGet(response, "thread", "id") as string) ?? null;
-			logger.info("Codex thread started", { threadId: threadId ?? "(none)" });
+			logger.info("Codex thread started", {
+				threadId: threadId ?? "(none)",
+				codexProfile: codexProfile ?? "(default)",
+			});
 		}
 
 		const ctx: AppServerContext = {

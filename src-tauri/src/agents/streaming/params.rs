@@ -181,6 +181,33 @@ mod tests {
     }
 
     #[test]
+    fn build_params_includes_codex_profile_when_present() {
+        let params = build_send_message_params(BuildSendMessageParamsInput {
+            sidecar_session_id: "s-1",
+            prompt: "hello",
+            cli_model: "gpt-5.5",
+            cwd: "/tmp/work",
+            resume_session_id: None,
+            provider: "codex",
+            effort_level: Some("high"),
+            permission_mode: Some("bypassPermissions"),
+            fast_mode: false,
+            helmor_session_id: None,
+            claude_base_url: None,
+            claude_auth_token: None,
+            codex_profile: Some("azure"),
+            images: &[],
+            kanban_workspace_id: None,
+            kanban_snapshot: None,
+            goal_title: None,
+            goal_description: None,
+        });
+
+        assert_eq!(params["model"], "gpt-5.5");
+        assert_eq!(params["codexProfile"], "azure");
+    }
+
+    #[test]
     fn returns_empty_when_session_id_is_missing() {
         with_test_db("noop", |_conn| {
             assert!(lookup_workspace_linked_directories(None).is_empty());
