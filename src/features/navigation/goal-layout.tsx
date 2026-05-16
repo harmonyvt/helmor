@@ -1,11 +1,9 @@
 import {
 	Archive,
 	ArrowRight,
-	Bot,
 	ChevronRight,
 	Circle,
 	Folder,
-	FolderOpen,
 	Layers,
 	LoaderCircle,
 	Trash2,
@@ -23,7 +21,6 @@ import {
 	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { ShineBorder } from "@/components/ui/shine-border";
 import { GOAL_LANES, isMovableGoalLaneId } from "@/features/goals/board-model";
 import type { WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -391,8 +388,6 @@ function GoalFolderHeader({
 	const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
 	const hasChildren = goalGroup.childRows.length > 0;
-	const FolderIcon =
-		isOpen && (hasChildren || isDragTarget) ? FolderOpen : Folder;
 	const workspaceIds = [
 		...goalGroup.childRows.map((row) => row.id),
 		goalGroup.goalWorkspaceId,
@@ -471,51 +466,12 @@ function GoalFolderHeader({
 									: "text-foreground/85 hover:text-foreground",
 							)}
 						>
-							<span className="relative inline-flex shrink-0 items-center justify-center">
-								<FolderIcon
-									className={cn(
-										"size-3.5 transition-colors",
-										selected
-											? "text-foreground/80"
-											: "text-muted-foreground/60",
-									)}
-									strokeWidth={1.7}
-								/>
-								{isGoalAiRunning && (
-									<ShineBorder
-										borderWidth={1.5}
-										duration={4}
-										shineColor={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
-										style={{
-											inset: "-3px",
-											width: "calc(100% + 6px)",
-											height: "calc(100% + 6px)",
-											borderRadius: "4px",
-										}}
-									/>
-								)}
-							</span>
+							<WorkspaceAvatar
+								title={goalGroup.goalTitle}
+								isRunning={isGoalAiRunning}
+							/>
 							<span className="truncate">{goalGroup.goalTitle}</span>
 						</button>
-
-						{actions.onOpenGoalAiSurface ? (
-							<button
-								type="button"
-								onClick={() =>
-									actions.onOpenGoalAiSurface?.(goalGroup.goalWorkspaceId)
-								}
-								className={cn(
-									"flex size-5 shrink-0 cursor-pointer items-center justify-center rounded transition-all hover:bg-accent hover:text-foreground",
-									isGoalAiRunning
-										? "text-chart-2 opacity-100"
-										: "text-muted-foreground/30 opacity-0 group-hover/folder:opacity-100",
-								)}
-								aria-label="Open Goal AI surface"
-								title="Open Goal AI surface"
-							>
-								<Bot className="size-3" strokeWidth={2.2} />
-							</button>
-						) : null}
 
 						<button
 							type="button"
