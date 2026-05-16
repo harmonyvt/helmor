@@ -106,11 +106,13 @@ export function GoalsAiPanel({
 	const queryClient = useQueryClient();
 	const { settings } = useSettings();
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
-	const piModels = useMemo(
-		() =>
-			modelSectionsQuery.data?.find((section) => section.id === "pi")
-				?.options ?? [],
+	const modelSections = useMemo(
+		() => modelSectionsQuery.data ?? [],
 		[modelSectionsQuery.data],
+	);
+	const piModels = useMemo(
+		() => modelSections.find((section) => section.id === "pi")?.options ?? [],
+		[modelSections],
 	);
 	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
 		null,
@@ -205,6 +207,7 @@ export function GoalsAiPanel({
 					const handoffModel = resolveGoalAssigneePiHandoffModel({
 						activeSupervisorModelId: activeSupervisorModelIdRef.current,
 						requestedModelId,
+						modelSections,
 						piModels,
 						allowAllModels: settings.allowAllGoalAssigneePiModels,
 					});
@@ -474,6 +477,7 @@ export function GoalsAiPanel({
 			queryClient,
 			onCardCreated,
 			canCreateCards,
+			modelSections,
 			piModels,
 			settings.allowAllGoalAssigneePiModels,
 			enqueueKanbanMutation,

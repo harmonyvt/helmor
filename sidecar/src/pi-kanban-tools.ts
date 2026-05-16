@@ -126,9 +126,9 @@ export function createKanbanTools(
 		name: "create_kanban_card",
 		label: "Create Goal Board Workspace",
 		description:
-			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. Do not use merged, Helmor derives that lane from whether the child workspace has landed in the goal branch. Child workspace prompts always use the same Pi provider/model as the current Goals supervisor. Include `prompt` when the child workspace should immediately start an agent thread in the background.",
+			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. Do not use merged, Helmor derives that lane from whether the child workspace has landed in the goal branch. Helmor selects the assignee model from available Claude/Codex-backed Pi models unless the user enabled all Goal assignee Pi providers. Include `prompt` when the child workspace should immediately start an agent thread in the background.",
 		promptSnippet:
-			"create_kanban_card({ title, lane, description?, assigned_effort_level?, prompt? }) → new child workspace card and optional background-started thread using the current Goals Pi model",
+			"create_kanban_card({ title, lane, description?, assigned_effort_level?, prompt? }) → new child workspace card and optional background-started thread using Helmor's selected assignee model",
 		promptGuidelines: [
 			"Use create_kanban_card when the user asks to add, create, or track a new goal task workspace.",
 			"Default lane is 'backlog' when unspecified.",

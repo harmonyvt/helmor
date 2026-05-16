@@ -87,6 +87,38 @@ const disallowedModel: AgentModelOption = {
 	supportsContextUsage: false,
 };
 
+function modelSectionsWithPi(options: AgentModelOption[]) {
+	return [
+		{
+			id: "claude",
+			label: "Claude Code",
+			options: [
+				{
+					id: "sonnet",
+					provider: "claude" as const,
+					label: "Sonnet",
+					cliModel: "sonnet",
+					supportsContextUsage: true,
+				},
+			],
+		},
+		{
+			id: "codex",
+			label: "Codex",
+			options: [
+				{
+					id: "gpt-5.5",
+					provider: "codex" as const,
+					label: "GPT-5.5",
+					cliModel: "gpt-5.5",
+					supportsContextUsage: true,
+				},
+			],
+		},
+		{ id: "pi", label: "Pi", options },
+	];
+}
+
 describe("GoalsAiPanel", () => {
 	beforeEach(() => {
 		apiMockState.createGoalChildWorkspaceAndStart.mockReset();
@@ -113,9 +145,10 @@ describe("GoalsAiPanel", () => {
 		]);
 
 		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
-			{ id: "pi", label: "Pi", options: [parentModel, otherModel] },
-		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([parentModel, otherModel]),
+		);
 
 		renderWithProviders(
 			<GoalsAiPanel
@@ -188,9 +221,10 @@ describe("GoalsAiPanel", () => {
 		]);
 
 		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
-			{ id: "pi", label: "Pi", options: [parentModel] },
-		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([parentModel]),
+		);
 
 		renderWithProviders(
 			<GoalsAiPanel
@@ -317,13 +351,10 @@ describe("GoalsAiPanel", () => {
 		]);
 
 		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
-			{
-				id: "pi",
-				label: "Pi",
-				options: [otherModel, parentModel, disallowedModel],
-			},
-		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([otherModel, parentModel, disallowedModel]),
+		);
 
 		renderWithProviders(
 			<GoalsAiPanel
@@ -359,17 +390,17 @@ describe("GoalsAiPanel", () => {
 		expect(apiMockState.createGoalChildWorkspaceAndStart).toHaveBeenCalledWith(
 			expect.objectContaining({
 				assignedProvider: "pi",
-				assignedModelId: otherModel.id,
+				assignedModelId: parentModel.id,
 			}),
 		);
 		expect(apiMockState.sendKanbanToolResult).toHaveBeenCalledWith(
 			"tool-1",
 			expect.objectContaining({
 				handoffModel: expect.objectContaining({
-					resolvedModelId: otherModel.id,
+					resolvedModelId: parentModel.id,
 					fallbackUsed: true,
 					policyApplied: true,
-					allowedModelIds: [otherModel.id, parentModel.id],
+					allowedModelIds: [parentModel.id, otherModel.id],
 				}),
 			}),
 		);
@@ -385,13 +416,10 @@ describe("GoalsAiPanel", () => {
 		]);
 
 		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
-			{
-				id: "pi",
-				label: "Pi",
-				options: [parentModel, disallowedModel],
-			},
-		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([parentModel, disallowedModel]),
+		);
 
 		renderWithProviders(
 			<SettingsContext.Provider
