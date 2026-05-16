@@ -5,7 +5,7 @@ use crate::{
     db,
     error::{coded, ErrorCode},
     forge::ChangeRequestInfo,
-    helpers,
+    git_ops, helpers,
     models::workspaces::{self as workspace_models, WorkspaceRecord},
     sessions,
     workspace_kind::WorkspaceKind,
@@ -264,7 +264,10 @@ pub fn get_workspace(workspace_id: &str) -> Result<WorkspaceDetail> {
 /// creation order (oldest first — matches the natural card sort on the
 /// Kanban board).
 pub fn list_goal_child_workspaces(goal_workspace_id: &str) -> Result<Vec<WorkspaceDetail>> {
-    let records = workspace_models::load_goal_child_workspace_records(goal_workspace_id)?;
+    let mut records = workspace_models::load_goal_child_workspace_records(goal_workspace_id)?;
+    if reconcile_goal_child_target_merges(&records)? {
+        records = workspace_models::load_goal_child_workspace_records(goal_workspace_id)?;
+    }
     Ok(records.into_iter().map(record_to_detail).collect())
 }
 
@@ -356,16 +359,20 @@ pub fn sync_workspace_pr_state(
         return Ok(false);
     }
 
-    let next_state = stabilize_pr_sync_state(
-        record.pr_sync_state,
-        pr_sync_state_from_change_request(change_request),
-    );
+    let inferred_target_merge = change_request.is_none() && goal_child_branch_is_merged(&record);
+    let live_state = if inferred_target_merge {
+        PrSyncState::Merged
+    } else {
+        pr_sync_state_from_change_request(change_request)
+    };
+    let next_state = stabilize_pr_sync_state(record.pr_sync_state, live_state);
 
     // Always reflect the live request's title/url when present; clear them
     // when the PR has disappeared. Lets the inspector render the PR badge
     // optimistically on next visit without waiting for the live fetch.
     let (next_title, next_url) = match change_request {
         Some(cr) => (Some(cr.title.clone()), Some(cr.url.clone())),
+        None if inferred_target_merge => (record.pr_title.clone(), record.pr_url.clone()),
         None => (None, None),
     };
 
@@ -441,6 +448,76 @@ fn stabilize_pr_sync_state(current: PrSyncState, next: PrSyncState) -> PrSyncSta
         (PrSyncState::Merged | PrSyncState::Closed, PrSyncState::Open) => current,
         _ => next,
     }
+}
+
+fn goal_child_branch_is_merged(record: &WorkspaceRecord) -> bool {
+    if record.workspace_kind != WorkspaceKind::Code
+        || record.goal_workspace_id.is_none()
+        || record.status != WorkspaceStatus::Done
+        || record.pr_sync_state == PrSyncState::Closed
+    {
+        return false;
+    }
+
+    let Some(branch) = record
+        .branch
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return false;
+    };
+    let Some(target_branch) = record
+        .intended_target_branch
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return false;
+    };
+    if branch == target_branch {
+        return false;
+    }
+
+    let Ok(workspace_dir) =
+        crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
+    else {
+        return false;
+    };
+    if !workspace_dir.is_dir() {
+        return false;
+    }
+
+    if let Some(remote) = record
+        .remote
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let _ = git_ops::fetch_remote_branch(&workspace_dir, remote, target_branch);
+    }
+
+    let remote_target = record
+        .remote
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|remote| format!("{remote}/{target_branch}"))
+        .filter(|target_ref| git_ops::ref_exists(&workspace_dir, target_ref));
+    let target_ref = remote_target.as_deref().unwrap_or(target_branch);
+    if !git_ops::ref_exists(&workspace_dir, branch)
+        || !git_ops::ref_exists(&workspace_dir, target_ref)
+    {
+        return false;
+    }
+
+    git_ops::is_ancestor_of(&workspace_dir, branch, target_ref).unwrap_or(false)
+}
+
+fn reconcile_goal_child_target_merges(records: &[WorkspaceRecord]) -> Result<bool> {
+    let mut changed = false;
+    for record in records {
+        if record.pr_sync_state != PrSyncState::Merged && goal_child_branch_is_merged(record) {
+            changed |= sync_workspace_pr_state(&record.id, None)?;
+        }
+    }
+    Ok(changed)
 }
 
 // ---- Linked directories (the /add-dir feature) ----
@@ -1061,7 +1138,7 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{insert_repo, insert_workspace, TestEnv, WorkspaceFixture};
+    use crate::testkit::{insert_repo, insert_workspace, GitTestRepo, TestEnv, WorkspaceFixture};
     use std::fs;
 
     fn count_workspaces(env: &TestEnv) -> usize {
@@ -1342,6 +1419,167 @@ mod tests {
         assert_eq!(
             workspace_statuses(&env, "w-pr"),
             ("done".to_string(), "none".to_string())
+        );
+    }
+
+    #[test]
+    fn pr_sync_marks_done_goal_child_merged_when_branch_landed_in_target() {
+        let env = TestEnv::new("pr-sync-goal-child-merged-by-ancestry");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        conn.execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, state, status, workspace_kind,
+              branch, pr_sync_state
+            )
+            VALUES ('goal-1', 'r1', 'goal', 'ready', 'review', 'goal',
+                    'helmor/goal/prototype', 'open')
+            "#,
+            [],
+        )
+        .unwrap();
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-pr",
+                repo_id: "r1",
+                directory_name: "alpha",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("harmonyvt/goal-dynamic-course-catalogue-pages"),
+                intended_target_branch: Some("helmor/goal/prototype"),
+            },
+        );
+        conn.execute(
+            "UPDATE workspaces SET goal_workspace_id = 'goal-1', status = 'done', pr_title = 'Dynamic course catalogue/pages' WHERE id = 'w-pr'",
+            [],
+        )
+        .unwrap();
+
+        let workspace_dir = crate::data_dir::workspace_dir("demo", "alpha").unwrap();
+        fs::create_dir_all(workspace_dir.parent().unwrap()).unwrap();
+        let repo = GitTestRepo::init();
+        git_ops::run_git(
+            [
+                "clone",
+                repo.path().to_str().unwrap(),
+                workspace_dir.to_str().unwrap(),
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "config",
+                "user.email",
+                "test@helmor.test",
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "config",
+                "user.name",
+                "Test",
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "config",
+                "commit.gpgsign",
+                "false",
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "checkout",
+                "-b",
+                "helmor/goal/prototype",
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "checkout",
+                "-b",
+                "harmonyvt/goal-dynamic-course-catalogue-pages",
+            ],
+            None,
+        )
+        .unwrap();
+        fs::write(workspace_dir.join("catalogue.txt"), "catalogue\n").unwrap();
+        git_ops::run_git(["-C", workspace_dir.to_str().unwrap(), "add", "."], None).unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "commit",
+                "-m",
+                "feat: dynamic course catalogue pages",
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "branch",
+                "harmonyvt/pr-dynamic-course-catalogue-pages",
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "checkout",
+                "helmor/goal/prototype",
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "merge",
+                "--no-ff",
+                "harmonyvt/pr-dynamic-course-catalogue-pages",
+                "-m",
+                "Merge pull request #3",
+            ],
+            None,
+        )
+        .unwrap();
+
+        let children = list_goal_child_workspaces("goal-1").unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].pr_sync_state, PrSyncState::Merged);
+        assert_eq!(
+            workspace_statuses(&env, "w-pr"),
+            ("done".to_string(), "merged".to_string())
+        );
+        assert_eq!(
+            workspace_pr_metadata(&env, "w-pr"),
+            (Some("Dynamic course catalogue/pages".to_string()), None)
         );
     }
 
