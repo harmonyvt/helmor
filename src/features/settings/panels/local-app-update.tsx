@@ -8,7 +8,6 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
-import { type HelmorAppInstallResult, restartApp } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { SettingsNotice, SettingsRow } from "../components/settings-row";
@@ -67,39 +66,12 @@ export function LocalAppUpdatePanel() {
 		[installState.steps],
 	);
 
-	const showRestartToast = useCallback(
-		(result: HelmorAppInstallResult) => {
-			if (!result.restartRequired) return;
-			pushToast(
-				"The new app has been installed. Restart Helmor to start using it.",
-				"Restart required",
-				"default",
-				{
-					persistent: true,
-					action: {
-						label: "Restart now",
-						onClick: () => {
-							void restartApp(true).catch((error) => {
-								pushToast(
-									error instanceof Error ? error.message : String(error),
-									"Unable to restart Helmor",
-									"destructive",
-								);
-							});
-						},
-					},
-				},
-			);
-		},
-		[pushToast],
-	);
-
 	const handleInstallApp = useCallback(async () => {
 		setLogsExpanded(false);
 		try {
-			await startLocalAppInstall(showRestartToast);
+			await startLocalAppInstall();
 		} catch {}
-	}, [showRestartToast]);
+	}, []);
 
 	const handleCancel = useCallback(async () => {
 		setCancelling(true);
@@ -149,6 +121,11 @@ export function LocalAppUpdatePanel() {
 							logsExpanded={logsExpanded}
 							onToggleLogs={() => setLogsExpanded((expanded) => !expanded)}
 						/>
+					) : null}
+					{installState.result?.restartRequired ? (
+						<SettingsNotice tone="warn">
+							Restart Helmor to start using the installed update.
+						</SettingsNotice>
 					) : null}
 				</>
 			}

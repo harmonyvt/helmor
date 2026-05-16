@@ -7,13 +7,14 @@ mod tests;
 mod types;
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use super::common::{run_blocking, CmdResult};
 use anyhow::{bail, Context};
 use tauri::{ipc::Channel, State};
 
 pub use manager::AppInstallManager;
-pub use types::{AppInstallEvent, HelmorAppInstallResult};
+pub use types::{AppInstallEvent, HelmorAppInstallResult, HelmorAppUpdateStatus};
 
 use bundle::{inspect_bundle, unix_seconds_now, validate_build_result};
 use runner::{command_spec, finish_step, run_checked_command, run_command, start_step};
@@ -22,6 +23,11 @@ use types::{
     AppInstallStepStatus, InstallStepId, APP_INSTALL_REPO_ENV, BUILT_APP_EXECUTABLE_RELATIVE_PATH,
     BUILT_APP_RELATIVE_PATH, DEFAULT_REPO_DIR, ENTITLEMENTS_RELATIVE_PATH, INSTALLED_APP_PATH,
 };
+
+#[tauri::command]
+pub async fn get_helmor_app_update_status() -> CmdResult<HelmorAppUpdateStatus> {
+    run_blocking(check_helmor_app_update_status).await
+}
 
 #[tauri::command]
 pub async fn run_helmor_app_install(
@@ -177,6 +183,144 @@ fn run_helmor_app_install_impl(
         result: result.clone(),
     });
     Ok(result)
+}
+
+fn check_helmor_app_update_status() -> anyhow::Result<HelmorAppUpdateStatus> {
+    let checked_at = unix_seconds_now();
+    match resolve_repo_root() {
+        Ok(repo_root) => Ok(check_repo_update_status(&repo_root, checked_at)),
+        Err(error) => Ok(HelmorAppUpdateStatus {
+            repo_root: None,
+            installed_app_path: INSTALLED_APP_PATH.to_string(),
+            update_available: false,
+            behind_count: 0,
+            upstream: None,
+            head: None,
+            checked_at,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+fn check_repo_update_status(repo_root: &Path, checked_at: u64) -> HelmorAppUpdateStatus {
+    let head = git_stdout(repo_root, ["rev-parse", "--short", "HEAD"])
+        .ok()
+        .and_then(non_empty_trimmed);
+    let upstream = match git_stdout(
+        repo_root,
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    ) {
+        Ok(stdout) => non_empty_trimmed(stdout),
+        Err(error) => {
+            return app_update_status_error(repo_root, checked_at, head, error.to_string());
+        }
+    };
+
+    if let Err(error) = fetch_current_upstream(repo_root) {
+        return app_update_status_error(repo_root, checked_at, head, error.to_string());
+    }
+
+    match git_stdout(repo_root, ["rev-list", "--count", "HEAD..@{u}"]) {
+        Ok(stdout) => {
+            let behind_count = parse_git_count(&stdout).unwrap_or(0);
+            HelmorAppUpdateStatus {
+                repo_root: Some(repo_root.display().to_string()),
+                installed_app_path: INSTALLED_APP_PATH.to_string(),
+                update_available: behind_count > 0,
+                behind_count,
+                upstream,
+                head,
+                checked_at,
+                error: None,
+            }
+        }
+        Err(error) => app_update_status_error(repo_root, checked_at, head, error.to_string()),
+    }
+}
+
+fn fetch_current_upstream(repo_root: &Path) -> anyhow::Result<()> {
+    let branch = git_stdout(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(non_empty_trimmed)
+        .ok()
+        .flatten()
+        .context("Unable to determine current branch for Helmor update check")?;
+    let remote_key = format!("branch.{branch}.remote");
+    let remote = git_stdout(repo_root, ["config", "--get", remote_key.as_str()])
+        .map(non_empty_trimmed)
+        .ok()
+        .flatten()
+        .context("Current Helmor branch has no configured upstream remote")?;
+    git_success(repo_root, ["fetch", "--quiet", "--prune", remote.as_str()])
+        .with_context(|| format!("Failed to fetch Helmor updates from {remote}"))
+}
+
+fn app_update_status_error(
+    repo_root: &Path,
+    checked_at: u64,
+    head: Option<String>,
+    error: String,
+) -> HelmorAppUpdateStatus {
+    HelmorAppUpdateStatus {
+        repo_root: Some(repo_root.display().to_string()),
+        installed_app_path: INSTALLED_APP_PATH.to_string(),
+        update_available: false,
+        behind_count: 0,
+        upstream: None,
+        head,
+        checked_at,
+        error: Some(error),
+    }
+}
+
+fn git_stdout<const N: usize>(repo_root: &Path, args: [&str; N]) -> anyhow::Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .context("Failed to run git for Helmor update check")?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "{}",
+            if stderr.trim().is_empty() {
+                "Git update check failed".to_string()
+            } else {
+                stderr.trim().to_string()
+            }
+        );
+    }
+}
+
+fn git_success<const N: usize>(repo_root: &Path, args: [&str; N]) -> anyhow::Result<()> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .context("Failed to run git for Helmor update check")?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "{}",
+            if stderr.trim().is_empty() {
+                "Git update check failed".to_string()
+            } else {
+                stderr.trim().to_string()
+            }
+        );
+    }
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn parse_git_count(stdout: &str) -> Option<u32> {
+    stdout.trim().parse().ok()
 }
 
 fn resolve_repo_root_with_events(channel: &Channel<AppInstallEvent>) -> anyhow::Result<PathBuf> {

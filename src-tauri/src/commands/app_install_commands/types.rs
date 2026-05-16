@@ -71,6 +71,19 @@ pub struct HelmorAppInstallResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HelmorAppUpdateStatus {
+    pub repo_root: Option<String>,
+    pub installed_app_path: String,
+    pub update_available: bool,
+    pub behind_count: u32,
+    pub upstream: Option<String>,
+    pub head: Option<String>,
+    pub checked_at: u64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AppInstallEvent {
     Started {

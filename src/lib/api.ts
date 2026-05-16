@@ -1256,6 +1256,17 @@ export type HelmorAppInstallResult = {
 	signingWarning: string | null;
 };
 
+export type HelmorAppUpdateStatus = {
+	repoRoot: string | null;
+	installedAppPath: string;
+	updateAvailable: boolean;
+	behindCount: number;
+	upstream: string | null;
+	head: string | null;
+	checkedAt: number;
+	error: string | null;
+};
+
 export type AppInstallStepStatus = "ok" | "warning" | "skipped";
 export type AppInstallOutputStream = "stdout" | "stderr";
 
@@ -1288,6 +1299,16 @@ export async function runHelmorAppInstall(
 		});
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to install Helmor."));
+	}
+}
+
+export async function getHelmorAppUpdateStatus(): Promise<HelmorAppUpdateStatus> {
+	try {
+		return await invoke<HelmorAppUpdateStatus>("get_helmor_app_update_status");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to check for Helmor updates."),
+		);
 	}
 }
 

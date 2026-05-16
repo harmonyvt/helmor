@@ -31,6 +31,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { LocalAppUpdateStatusButton } from "@/features/app-update/status-button";
 import { BrowserSurface } from "@/features/browser";
 import type { BrowserSessionState } from "@/features/browser/browser-session";
 import { CommandPalette } from "@/features/command-palette";
@@ -2497,6 +2498,7 @@ function AppShell({
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
 				<SendingSessionsProvider value={sendingSessionIds}>
 					<ComposerInsertProvider value={handleInsertIntoComposer}>
+						<LocalAppUpdateStatusButton />
 						{!isIdentityConnected ? (
 							<GithubIdentityGate
 								identityState={githubIdentityState}
