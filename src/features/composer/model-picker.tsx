@@ -7,6 +7,8 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+	getCodexProfileKey,
+	getCodexProfileLabel,
 	getPiModelProviderKey,
 	getPiModelProviderLabel,
 } from "@/lib/agent-models";
@@ -21,12 +23,34 @@ function logModelPickerDebug(
 }
 
 // ---------------------------------------------------------------------------
-// Grouping helper (Pi models split by provider key)
+// Grouping helper (Pi models split by provider key; Codex models split by
+// config profile when profile-backed options are present)
 // ---------------------------------------------------------------------------
 
 function groupModelSectionForPicker(
 	section: AgentModelSection,
 ): AgentModelSection[] {
+	if (
+		section.id === "codex" &&
+		section.options.some((option) => option.codexProfile)
+	) {
+		const groupedOptions = new Map<string, AgentModelOption[]>();
+		for (const option of section.options) {
+			const profileKey = getCodexProfileKey(option);
+			const existing = groupedOptions.get(profileKey);
+			if (existing) {
+				existing.push(option);
+			} else {
+				groupedOptions.set(profileKey, [option]);
+			}
+		}
+		return Array.from(groupedOptions, ([profileKey, options]) => ({
+			...section,
+			id: `${section.id}:${profileKey}`,
+			label: `${section.label} · ${getCodexProfileLabel(profileKey)}`,
+			options,
+		}));
+	}
 	if (section.id !== "pi") return [section];
 	const groupedOptions = new Map<string, AgentModelOption[]>();
 	for (const option of section.options) {

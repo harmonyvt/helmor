@@ -11,6 +11,7 @@ use crate::{
     models::workspaces::{self as workspace_models, WorkspaceRecord},
     workspace_kind::WorkspaceKind,
     workspace_pr_sync::PrSyncState,
+    workspace_status::WorkspaceStatus,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,7 +270,10 @@ fn reconcile_workspace_landing_record(record: &WorkspaceRecord) -> Result<bool> 
     }
 
     let detection = detect_landing_by_branch_ancestry(record);
-    if record.landing_state == LandingState::Landed && detection.state != LandingState::Landed {
+    if record.landing_state == LandingState::Landed
+        && detection.state != LandingState::Landed
+        && record.landing_source != Some(LandingSource::BranchAncestry)
+    {
         return Ok(false);
     }
 
@@ -375,6 +379,39 @@ fn detect_landing_by_branch_ancestry(record: &WorkspaceRecord) -> LandingDetecti
         };
     };
 
+    if record.status == WorkspaceStatus::InProgress {
+        return unlanded_detection(
+            record,
+            target_branch,
+            source.name,
+            source.commit_sha,
+            head_sha,
+        );
+    }
+    match git_ops::working_tree_clean(&workspace_dir) {
+        Ok(true) => {}
+        Ok(false) => {
+            return unlanded_detection(
+                record,
+                target_branch,
+                source.name,
+                source.commit_sha,
+                head_sha,
+            );
+        }
+        Err(_) => return unknown(),
+    }
+
+    if !source_has_committed_work_beyond_base(&workspace_dir, record, &source.commit_sha) {
+        return unlanded_detection(
+            record,
+            target_branch,
+            source.name,
+            source.commit_sha,
+            head_sha,
+        );
+    }
+
     let landed =
         git_ops::is_ancestor_of(&workspace_dir, &source.commit_sha, &target_ref).unwrap_or(false);
     LandingDetection {
@@ -389,6 +426,38 @@ fn detect_landing_by_branch_ancestry(record: &WorkspaceRecord) -> LandingDetecti
         commit_sha: Some(source.commit_sha),
         last_known_head_sha: head_sha,
     }
+}
+
+fn unlanded_detection(
+    record: &WorkspaceRecord,
+    target_branch: &str,
+    source_name: String,
+    source_commit_sha: String,
+    last_known_head_sha: Option<String>,
+) -> LandingDetection {
+    LandingDetection {
+        state: LandingState::Unlanded,
+        source: None,
+        target_branch: Some(target_branch.to_string()),
+        source_ref: Some(source_name),
+        commit_sha: Some(source_commit_sha),
+        last_known_head_sha: last_known_head_sha.or_else(|| record.last_known_head_sha.clone()),
+    }
+}
+
+fn source_has_committed_work_beyond_base(
+    workspace_dir: &Path,
+    record: &WorkspaceRecord,
+    source_commit_sha: &str,
+) -> bool {
+    let base_sha = record
+        .initial_head_sha
+        .as_deref()
+        .or(record.last_known_head_sha.as_deref());
+    let Some(base_sha) = base_sha.and_then(|sha| resolve_commit_sha(workspace_dir, sha)) else {
+        return false;
+    };
+    base_sha != source_commit_sha
 }
 
 struct ResolvedSource {
@@ -495,7 +564,10 @@ fn persist_landing(
     commit_sha: Option<String>,
     last_known_head_sha: Option<String>,
 ) -> Result<bool> {
-    if record.landing_state == LandingState::Landed && state != LandingState::Landed {
+    if record.landing_state == LandingState::Landed
+        && state != LandingState::Landed
+        && record.landing_source != Some(LandingSource::BranchAncestry)
+    {
         return Ok(false);
     }
 

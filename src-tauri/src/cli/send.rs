@@ -129,7 +129,12 @@ fn list_models(cli: &Cli) -> Result<()> {
         for section in all {
             lines.push(format!("{} ({:?})", section.label, section.status,));
             for option in &section.options {
-                lines.push(format!("  {}\t{}", option.id, option.label));
+                let profile = option
+                    .codex_profile
+                    .as_deref()
+                    .map(|profile| format!("\tprofile={profile}"))
+                    .unwrap_or_default();
+                lines.push(format!("  {}\t{}{}", option.id, option.label, profile));
             }
         }
         if lines.is_empty() {

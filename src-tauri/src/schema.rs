@@ -453,6 +453,7 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         ("landed_target_branch", "TEXT"),
         ("landed_source_ref", "TEXT"),
         ("landed_commit_sha", "TEXT"),
+        ("initial_head_sha", "TEXT"),
         ("last_known_head_sha", "TEXT"),
     ] {
         if has_table(connection, "workspaces") && !has_column(connection, "workspaces", column) {
@@ -696,6 +697,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     landed_target_branch TEXT,
     landed_source_ref TEXT,
     landed_commit_sha TEXT,
+    initial_head_sha TEXT,
     last_known_head_sha TEXT,
     workspace_kind TEXT DEFAULT 'code',
     goal_workspace_id TEXT,

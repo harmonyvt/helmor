@@ -192,6 +192,7 @@ fn parse_model_option(raw: &Value) -> Option<AgentModelOption> {
         effort_levels,
         supports_fast_mode,
         supports_context_usage: false,
+        codex_profile: None,
     })
 }
 
