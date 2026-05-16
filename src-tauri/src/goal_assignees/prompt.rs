@@ -21,7 +21,7 @@ pub(super) fn format_supervisor_update(message: &str, priority: Option<&str>) ->
         .filter(|value| !value.is_empty())
         .unwrap_or("normal");
     Ok(format!(
-        "Supervisor update from Goals Pi (priority: {priority}):\n\n{trimmed}\n\nReport blockers and completion in this thread. Use clear headings: Progress, Blocked, Completed, Handoff. Do not assume Pi saw your work until you write a milestone report."
+        "Supervisor update from Goals Pi (priority: {priority}):\n\n{trimmed}\n\nReport blockers and completion in this thread. End milestone reports with one explicit line: Status: progress, Status: blocked, Status: completed, or Status: handoff. Use Verification Notes for tests or checks that could not run but do not block the implementation. Reserve Blocked for work that cannot be completed without supervisor or user intervention. Do not assume Pi saw your work until you write a milestone report."
     ))
 }
 
@@ -48,7 +48,8 @@ pub fn assignee_bootstrap_prompt(input: AssigneeBootstrapPromptInput<'_>) -> Str
     sections.push(input.initial_task.trim().to_string());
     sections.push("".to_string());
     sections.push("## Reporting expectations".to_string());
-    sections.push("Report meaningful milestones in this thread. Use clear headings: Progress, Blocked, Completed, Handoff.".to_string());
+    sections.push("Report meaningful milestones in this thread. End milestone reports with one explicit line: Status: progress, Status: blocked, Status: completed, or Status: handoff.".to_string());
+    sections.push("Use Verification Notes for tests or checks that could not run but do not block the implementation. Reserve Blocked for work that cannot be completed without supervisor or user intervention.".to_string());
     sections.push(
         "Do not assume Goals Pi saw your work until you write a milestone report.".to_string(),
     );
@@ -73,6 +74,7 @@ mod tests {
         let message = format_supervisor_update("Use the new endpoint", Some("high")).unwrap();
         assert!(message.starts_with("Supervisor update from Goals Pi"));
         assert!(message.contains("priority: high"));
-        assert!(message.contains("Use clear headings: Progress, Blocked, Completed, Handoff"));
+        assert!(message.contains("Status: progress"));
+        assert!(message.contains("Verification Notes"));
     }
 }
