@@ -13,7 +13,7 @@ use crate::forge::{
     PrComment, PrCommentData, RemoteState,
 };
 use crate::{
-    git_ops, github_cli,
+    db, git_ops, github_cli,
     models::{repos, workspaces as workspace_models},
     workspace_pr_sync::PrSyncState,
 };
@@ -107,6 +107,14 @@ pub(crate) fn resolve_repository_pull_request_by_number(
     number: i64,
 ) -> Result<GithubPullRequestSummary> {
     let (owner, name) = resolve_github_repository(repository)?;
+    query_repository_pull_request_by_number(owner, name, number)
+}
+
+fn query_repository_pull_request_by_number(
+    owner: String,
+    name: String,
+    number: i64,
+) -> Result<GithubPullRequestSummary> {
     let query = r#"
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -339,18 +347,6 @@ pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInf
         return Ok(None);
     };
 
-    // No remote-tracking ref → this branch was never published, so any PR
-    // GitHub returns for `headRefName == branch` belongs to a previous owner
-    // of the name (e.g. a merged PR whose head branch was deleted). Skip.
-    if !workspace_branch_has_remote_tracking(&record) {
-        return Ok(None);
-    }
-
-    // Guard: `github_cli::graphql()` bails when the CLI is not authenticated,
-    // which would violate this function's documented `Ok(None)` contract for
-    // the unauthenticated / unavailable case. Check status first and return
-    // `Ok(None)` gracefully so callers (commit button, CLI, forge router) see
-    // a clean "no PR" state rather than an error toast.
     let cached_pr = cached_change_request_from_workspace_record(&record);
     let cli_status = github_cli::get_github_cli_status()?;
     if !matches!(cli_status, github_cli::GithubCliStatus::Ready { .. }) {
@@ -362,6 +358,13 @@ pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInf
             );
         }
         return Ok(cached_pr);
+    }
+
+    // No remote-tracking ref → this branch was never published, so any PR
+    // GitHub returns for `headRefName == branch` belongs to a previous owner
+    // of the name (e.g. a merged PR whose head branch was deleted). Skip.
+    if !workspace_branch_has_remote_tracking(&record) {
+        return lookup_create_pr_action_pull_request(&record, &owner, &name);
     }
 
     let query = r#"
@@ -383,8 +386,8 @@ query($owner: String!, $name: String!, $head: String!) {
     let parsed: GraphqlEnvelope = match github_cli::graphql(
         query,
         &[
-            ("owner", owner),
-            ("name", name),
+            ("owner", owner.clone()),
+            ("name", name.clone()),
             ("head", branch.to_string()),
         ],
     ) {
@@ -442,6 +445,9 @@ query($owner: String!, $name: String!, $head: String!) {
     };
 
     let Some(node) = repository.pull_requests.nodes.into_iter().next() else {
+        if let Some(action_pr) = lookup_create_pr_action_pull_request(&record, &owner, &name)? {
+            return Ok(Some(action_pr));
+        }
         if cached_pr.is_some() {
             tracing::warn!(
                 workspace_id,
@@ -458,6 +464,110 @@ query($owner: String!, $name: String!, $head: String!) {
         title: node.title,
         is_merged: node.merged,
     }))
+}
+
+fn lookup_create_pr_action_pull_request(
+    record: &workspace_models::WorkspaceRecord,
+    owner: &str,
+    name: &str,
+) -> Result<Option<ChangeRequestInfo>> {
+    for url in recent_create_pr_action_pull_request_urls(&record.id, owner, name)? {
+        let Ok(number) = parse_pull_request_input(&url, owner, name) else {
+            continue;
+        };
+        let summary =
+            query_repository_pull_request_by_number(owner.to_string(), name.to_string(), number)?;
+        if let Some(target_branch) = record
+            .intended_target_branch
+            .as_deref()
+            .filter(|branch| !branch.trim().is_empty())
+        {
+            if summary.base_branch != target_branch {
+                tracing::warn!(
+                    workspace_id = %record.id,
+                    pr_url = %summary.url,
+                    pr_base = %summary.base_branch,
+                    target_branch,
+                    "Ignoring PR URL from create-pr action because it targets a different branch"
+                );
+                continue;
+            }
+        }
+        return Ok(Some(change_request_from_summary(summary)));
+    }
+
+    Ok(None)
+}
+
+fn recent_create_pr_action_pull_request_urls(
+    workspace_id: &str,
+    owner: &str,
+    name: &str,
+) -> Result<Vec<String>> {
+    let connection = db::read_conn()?;
+    let mut statement = connection.prepare(
+        r#"
+        SELECT sm.content
+        FROM sessions s
+        JOIN session_messages sm ON sm.session_id = s.id
+        WHERE s.workspace_id = ?1
+          AND s.action_kind = 'create-pr'
+        ORDER BY datetime(sm.created_at) DESC, sm.rowid DESC
+        LIMIT 80
+        "#,
+    )?;
+    let rows = statement.query_map([workspace_id], |row| row.get::<_, String>(0))?;
+
+    let mut urls = Vec::new();
+    for content in rows {
+        collect_github_pull_request_urls(&content?, owner, name, &mut urls);
+    }
+    Ok(urls)
+}
+
+fn collect_github_pull_request_urls(text: &str, owner: &str, name: &str, urls: &mut Vec<String>) {
+    let prefix = format!("https://github.com/{owner}/{name}/pull/");
+    let mut rest = text;
+    while let Some(index) = rest.find(&prefix) {
+        let candidate_start = &rest[index..];
+        let candidate = candidate_start
+            .split(|ch: char| {
+                ch.is_whitespace()
+                    || matches!(
+                        ch,
+                        '"' | '\'' | ')' | '(' | '<' | '>' | ']' | '[' | '}' | '{'
+                    )
+            })
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(['.', ',', ';', ':']);
+
+        if let Some(canonical) = canonical_pull_request_url(candidate, &prefix) {
+            if !urls.iter().any(|url| url == &canonical) {
+                urls.push(canonical);
+            }
+        }
+        rest = &candidate_start[prefix.len()..];
+    }
+}
+
+fn canonical_pull_request_url(candidate: &str, prefix: &str) -> Option<String> {
+    let number = candidate
+        .strip_prefix(prefix)?
+        .split(|ch: char| !ch.is_ascii_digit())
+        .next()
+        .filter(|value| !value.is_empty())?;
+    Some(format!("{prefix}{number}"))
+}
+
+fn change_request_from_summary(summary: GithubPullRequestSummary) -> ChangeRequestInfo {
+    ChangeRequestInfo {
+        url: summary.url,
+        number: summary.number,
+        state: summary.state,
+        title: summary.title,
+        is_merged: summary.is_merged,
+    }
 }
 
 fn cached_change_request_from_workspace_record(
@@ -1809,6 +1919,7 @@ struct CommentsAuthor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::TestEnv;
 
     #[test]
     fn parses_https_remote() {
@@ -1932,6 +2043,69 @@ mod tests {
             Some("Review this"),
         )
         .is_none());
+    }
+
+    #[test]
+    fn extracts_github_pull_request_urls_for_repo() {
+        let mut urls = Vec::new();
+        collect_github_pull_request_urls(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Created https://github.com/octocat/hello-world/pull/42. Also ignore https://github.com/octocat/other/pull/7 and duplicate https://github.com/octocat/hello-world/pull/42/files"}]}}"#,
+            "octocat",
+            "hello-world",
+            &mut urls,
+        );
+
+        assert_eq!(
+            urls,
+            vec!["https://github.com/octocat/hello-world/pull/42".to_string()]
+        );
+    }
+
+    #[test]
+    fn reads_recent_create_pr_action_pull_request_urls() {
+        let env = TestEnv::new("create-pr-action-pr-url");
+        let conn = env.db_connection();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, action_kind, created_at) VALUES ('s-old', 'w1', 'create-pr', '2026-01-01T00:00:00')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, action_kind, created_at) VALUES ('s-new', 'w1', 'create-pr', '2026-01-02T00:00:00')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, action_kind, created_at) VALUES ('s-chat', 'w1', NULL, '2026-01-03T00:00:00')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES ('m-old', 's-old', 'assistant', 'Old PR https://github.com/octocat/hello-world/pull/1', '2026-01-01T00:01:00')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES ('m-new', 's-new', 'assistant', 'New PR https://github.com/octocat/hello-world/pull/2', '2026-01-02T00:01:00')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES ('m-chat', 's-chat', 'assistant', 'Chat PR https://github.com/octocat/hello-world/pull/3', '2026-01-03T00:01:00')",
+            [],
+        )
+        .unwrap();
+
+        let urls =
+            recent_create_pr_action_pull_request_urls("w1", "octocat", "hello-world").unwrap();
+
+        assert_eq!(
+            urls,
+            vec![
+                "https://github.com/octocat/hello-world/pull/2".to_string(),
+                "https://github.com/octocat/hello-world/pull/1".to_string(),
+            ]
+        );
     }
 
     #[test]
