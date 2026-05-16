@@ -178,6 +178,38 @@ pub async fn set_workspace_status(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn reconcile_workspace_landing_state(
+    app: AppHandle,
+    workspace_id: String,
+) -> CmdResult<workspaces::LandingReconcileResponse> {
+    let id = workspace_id.clone();
+    let response = run_blocking(move || workspaces::reconcile_workspace_landing_state(&id)).await?;
+    if response.changed {
+        ui_sync::publish(
+            &app,
+            UiMutationEvent::WorkspaceLandingChanged { workspace_id },
+        );
+    }
+    Ok(response)
+}
+
+#[tauri::command]
+pub async fn mark_workspace_landed(
+    app: AppHandle,
+    workspace_id: String,
+) -> CmdResult<workspaces::LandingReconcileResponse> {
+    let id = workspace_id.clone();
+    let response = run_blocking(move || workspaces::mark_workspace_landed_manually(&id)).await?;
+    if response.changed {
+        ui_sync::publish(
+            &app,
+            UiMutationEvent::WorkspaceLandingChanged { workspace_id },
+        );
+    }
+    Ok(response)
+}
+
 /// `/add-dir` feature: list the extra directories the user has linked to
 /// this workspace. These are sent as `additionalDirectories` to the agent
 /// SDKs on every turn.

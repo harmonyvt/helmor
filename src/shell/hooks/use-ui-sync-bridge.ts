@@ -214,6 +214,7 @@ function handleUiMutation(
 			});
 			return;
 		case "workspaceChangeRequestChanged":
+		case "workspaceLandingChanged":
 			invalidateWorkspaceLists(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),

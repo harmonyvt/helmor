@@ -115,7 +115,7 @@ export function GoalLane({
 						)}
 					>
 						{isDragRejected
-							? "No open PR"
+							? "Drop to check"
 							: showDropHint
 								? lane.id === "merged"
 									? "Drop to merge"
@@ -124,7 +124,7 @@ export function GoalLane({
 					</div>
 				) : isDragRejected ? (
 					<div className="rounded-lg border-2 border-dashed border-destructive/40 px-3 py-4 text-center text-xs text-destructive">
-						No open PR
+						Drop to check landed state
 					</div>
 				) : showDropHint ? (
 					<div className="rounded-lg border-2 border-dashed border-ring/50 px-3 py-4" />

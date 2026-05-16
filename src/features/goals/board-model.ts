@@ -1,4 +1,10 @@
-import type { PrSyncState, WorkspaceDetail, WorkspaceStatus } from "@/lib/api";
+import type {
+	LandingSource,
+	LandingState,
+	PrSyncState,
+	WorkspaceDetail,
+	WorkspaceStatus,
+} from "@/lib/api";
 
 export type GoalLaneId = WorkspaceStatus | "merged";
 
@@ -68,20 +74,26 @@ export function isMovableGoalLaneId(laneId: string): laneId is WorkspaceStatus {
 }
 
 export function isMergedGoalWorkspace(
-	workspace: Pick<WorkspaceDetail, "prSyncState">,
+	workspace: Pick<WorkspaceDetail, "landingState">,
 ): boolean {
-	return workspace.prSyncState === "merged";
+	return workspace.landingState === "landed";
 }
 
-/** A workspace can be merged when it has an open pull request. */
-export function isWorkspaceMergeable(
+/** True when a workspace has a live change request that can be merged. */
+export function hasOpenChangeRequest(
 	workspace: Pick<WorkspaceDetail, "prSyncState"> | null | undefined,
 ): boolean {
 	return workspace?.prSyncState === "open";
 }
 
+export function isLanded(
+	workspace: Pick<WorkspaceDetail, "landingState"> | null | undefined,
+): boolean {
+	return workspace?.landingState === "landed";
+}
+
 export function goalLaneForWorkspace(
-	workspace: Pick<WorkspaceDetail, "prSyncState" | "status">,
+	workspace: Pick<WorkspaceDetail, "landingState" | "status">,
 ): GoalLaneId {
 	if (isMergedGoalWorkspace(workspace)) return "merged";
 	return isMovableGoalLaneId(workspace.status) ? workspace.status : "backlog";
@@ -94,6 +106,8 @@ export type GoalKanbanSnapshotItem = {
 	branch?: string | null;
 	prUrl?: string | null;
 	prSyncState?: PrSyncState | null;
+	landingState: LandingState;
+	landingSource?: LandingSource | null;
 	sessionCount: number;
 	activeSessionId?: string | null;
 	activeSessionStatus?: string | null;
@@ -122,6 +136,8 @@ export function createGoalKanbanSnapshot(
 		lane: goalLaneForWorkspace(workspace),
 		branch: workspace.branch,
 		prUrl: workspace.prUrl,
+		landingState: workspace.landingState ?? "unlanded",
+		landingSource: workspace.landingSource,
 		...(workspace.prSyncState && workspace.prSyncState !== "none"
 			? { prSyncState: workspace.prSyncState }
 			: {}),

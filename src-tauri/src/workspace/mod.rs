@@ -5,6 +5,7 @@ pub(crate) mod goal_conversion;
 pub mod goals;
 pub mod helpers;
 pub mod kind;
+pub mod landing;
 pub(crate) mod lifecycle;
 pub mod pr_sync;
 pub mod scripts;

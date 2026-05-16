@@ -223,7 +223,7 @@ function MobileLaneActionSheet({
 			</button>
 			{isMerged ? (
 				<p className="text-xs text-muted-foreground">
-					Merged branches are moved by PR state and cannot be changed here.
+					Merged work has landed in the goal branch and cannot be changed here.
 				</p>
 			) : otherLanes.length > 0 ? (
 				<div className="flex flex-wrap gap-2">

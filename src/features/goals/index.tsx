@@ -20,7 +20,9 @@ import {
 	createGoalChildWorkspaceAndStart,
 	listAssignees,
 	loadRepoScripts,
+	markWorkspaceLanded,
 	mergeWorkspaceChangeRequest,
+	reconcileWorkspaceLandingState,
 	setGoalChildWorkspaceStatus,
 	updateGoalWorkspaceMeta,
 	type WorkspaceDetail,
@@ -119,13 +121,15 @@ export function GoalWorkspaceContainer({
 	const [newWorkspaceTitle, setNewWorkspaceTitle] = useState("");
 	const [dragState, setDragState] = useState<DragState>(null);
 	const [dragOverLane, setDragOverLane] = useState<GoalLaneId | null>(null);
-	/** Workspace waiting for merge confirmation (has open PR). */
+	/** Workspace waiting for merge confirmation (has open change request). */
 	const [pendingMerge, setPendingMerge] = useState<WorkspaceDetail | null>(
 		null,
 	);
-	/** Workspace that was dropped on Merged but has no open PR. */
-	const [pendingMergeRejected, setPendingMergeRejected] =
+	const [pendingLandingCheck, setPendingLandingCheck] =
 		useState<WorkspaceDetail | null>(null);
+	const [landingCheckResult, setLandingCheckResult] = useState<
+		"unlanded" | "unknown" | null
+	>(null);
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
 	const [sidebarResizeState, setSidebarResizeState] = useState<{
 		pointerX: number;
@@ -431,9 +435,40 @@ export function GoalWorkspaceContainer({
 		setPendingMerge(workspace);
 	}, []);
 
-	const handleMergeRejected = useCallback((workspace: WorkspaceDetail) => {
-		setPendingMergeRejected(workspace);
-	}, []);
+	const landingCheckMutation = useMutation({
+		mutationFn: (childWorkspaceId: string) =>
+			reconcileWorkspaceLandingState(childWorkspaceId),
+		onSuccess: async (result) => {
+			if (result.landingState === "landed") {
+				setPendingLandingCheck(null);
+				setLandingCheckResult(null);
+				await invalidateBoard();
+				return;
+			}
+			setLandingCheckResult(
+				result.landingState === "unknown" ? "unknown" : "unlanded",
+			);
+		},
+	});
+
+	const manualLandingMutation = useMutation({
+		mutationFn: (childWorkspaceId: string) =>
+			markWorkspaceLanded(childWorkspaceId),
+		onSuccess: async () => {
+			setPendingLandingCheck(null);
+			setLandingCheckResult(null);
+			await invalidateBoard();
+		},
+	});
+
+	const handleCheckLanding = useCallback(
+		(workspace: WorkspaceDetail) => {
+			setPendingLandingCheck(workspace);
+			setLandingCheckResult(null);
+			landingCheckMutation.mutate(workspace.id);
+		},
+		[landingCheckMutation],
+	);
 
 	const createMutation = useMutation({
 		mutationFn: async (title: string) =>
@@ -517,7 +552,7 @@ export function GoalWorkspaceContainer({
 				onSave={saveGoalMeta}
 			/>
 
-			{/* Merge confirmation — shown when a card with an open PR is dropped on Merged */}
+			{/* Merge confirmation — shown when a card with an open change request is dropped on Merged */}
 			<ConfirmDialog
 				open={pendingMerge !== null}
 				onOpenChange={(open) => {
@@ -541,11 +576,14 @@ export function GoalWorkspaceContainer({
 				loading={mergeMutation.isPending}
 			/>
 
-			{/* Rejection notice — shown when a card without an open PR is dropped on Merged */}
+			{/* Landing check — shown when a card without an open change request is dropped on Merged */}
 			<Dialog
-				open={pendingMergeRejected !== null}
+				open={pendingLandingCheck !== null}
 				onOpenChange={(open) => {
-					if (!open) setPendingMergeRejected(null);
+					if (!open) {
+						setPendingLandingCheck(null);
+						setLandingCheckResult(null);
+					}
 				}}
 			>
 				<DialogContent
@@ -553,20 +591,57 @@ export function GoalWorkspaceContainer({
 					showCloseButton={false}
 				>
 					<DialogTitle className="text-[13px] font-semibold">
-						Cannot merge
+						Check landed state
 					</DialogTitle>
 					<DialogDescription className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
-						<span className="font-medium text-foreground">
-							{pendingMergeRejected?.title}
-						</span>{" "}
-						doesn&apos;t have an open pull request and cannot be moved to
-						Merged.
+						{landingCheckMutation.isPending ? (
+							<>
+								Checking whether{" "}
+								<span className="font-medium text-foreground">
+									{pendingLandingCheck?.title}
+								</span>{" "}
+								has landed in the goal branch.
+							</>
+						) : landingCheckResult === "unknown" ? (
+							<>
+								Helmor could not verify whether{" "}
+								<span className="font-medium text-foreground">
+									{pendingLandingCheck?.title}
+								</span>{" "}
+								has landed in the goal branch. You can mark it landed manually
+								after confirming the target branch contains the work.
+							</>
+						) : (
+							<>
+								<span className="font-medium text-foreground">
+									{pendingLandingCheck?.title}
+								</span>{" "}
+								has not landed in the goal branch yet.
+							</>
+						)}
 					</DialogDescription>
-					<div className="mt-3 flex justify-end">
+					<div className="mt-3 flex justify-end gap-2">
+						{landingCheckResult === "unknown" ? (
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => {
+									if (pendingLandingCheck) {
+										manualLandingMutation.mutate(pendingLandingCheck.id);
+									}
+								}}
+								disabled={manualLandingMutation.isPending}
+							>
+								Mark landed
+							</Button>
+						) : null}
 						<Button
 							variant="outline"
 							size="sm"
-							onClick={() => setPendingMergeRejected(null)}
+							onClick={() => {
+								setPendingLandingCheck(null);
+								setLandingCheckResult(null);
+							}}
 						>
 							Got it
 						</Button>
@@ -644,7 +719,7 @@ export function GoalWorkspaceContainer({
 							orchestratorStatusByWorkspaceId={orchestratorStatusByWorkspaceId}
 							onMoveWorkspace={handleMoveWorkspace}
 							onMergeWorkspace={handleMergeWorkspace}
-							onMergeRejected={handleMergeRejected}
+							onCheckLanding={handleCheckLanding}
 							onDragStart={(childWorkspaceId, sourceLane) =>
 								setDragState({ workspaceId: childWorkspaceId, sourceLane })
 							}

@@ -87,7 +87,7 @@ export function WorkspaceDetailPanel({
 					<div className="flex flex-wrap gap-1.5 pt-0.5">
 						{isMergedGoalWorkspace(ws) ? (
 							<span className="text-[11px] text-muted-foreground">
-								Moved by PR state
+								Landed in goal branch
 							</span>
 						) : (
 							moveLanes.map((lane) => (

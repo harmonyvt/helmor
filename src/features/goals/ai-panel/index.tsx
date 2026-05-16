@@ -187,7 +187,7 @@ export function GoalsAiPanel({
 					const requestedLane = String(args.lane ?? "backlog");
 					if (!isMovableGoalLaneId(requestedLane)) {
 						throw new Error(
-							"Merged is derived from PR state and cannot be set manually.",
+							"Merged is derived from whether the child workspace has landed in the goal branch and cannot be set manually.",
 						);
 					}
 					const requestedModelId =
@@ -248,7 +248,7 @@ export function GoalsAiPanel({
 					const requestedLane = String(args.lane ?? "");
 					if (!isMovableGoalLaneId(requestedLane)) {
 						throw new Error(
-							"Merged is derived from PR state and cannot be set manually.",
+							"Merged is derived from whether the child workspace has landed in the goal branch and cannot be set manually.",
 						);
 					}
 					result = await enqueueKanbanMutation(async () => {

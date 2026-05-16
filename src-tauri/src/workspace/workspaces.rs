@@ -5,10 +5,11 @@ use crate::{
     db,
     error::{coded, ErrorCode},
     forge::ChangeRequestInfo,
-    git_ops, helpers,
+    helpers,
     models::workspaces::{self as workspace_models, WorkspaceRecord},
     sessions,
     workspace_kind::WorkspaceKind,
+    workspace_landing::{LandingSource, LandingState},
     workspace_pr_sync::PrSyncState,
     workspace_state::WorkspaceState,
     workspace_status::WorkspaceStatus,
@@ -34,6 +35,9 @@ pub use super::goals::{
     FinalizeGoalWorkspaceResponse, GoalCard, GoalChildWorkspaceRequest,
     GoalChildWorkspaceStatusRequest, PrepareGoalWorkspaceRequest, PrepareGoalWorkspaceResponse,
     UpsertGoalCardInput,
+};
+pub use super::landing::{
+    mark_workspace_landed_manually, reconcile_workspace_landing_state, LandingReconcileResponse,
 };
 pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,
@@ -74,6 +78,13 @@ pub struct WorkspaceSidebarRow {
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
+    pub landing_state: LandingState,
+    pub landing_source: Option<LandingSource>,
+    pub landed_at: Option<String>,
+    pub landed_target_branch: Option<String>,
+    pub landed_source_ref: Option<String>,
+    pub landed_commit_sha: Option<String>,
+    pub last_known_head_sha: Option<String>,
     pub intended_target_branch: Option<String>,
     pub pinned_at: Option<String>,
     pub session_count: i64,
@@ -159,6 +170,13 @@ pub struct WorkspaceDetail {
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
+    pub landing_state: LandingState,
+    pub landing_source: Option<LandingSource>,
+    pub landed_at: Option<String>,
+    pub landed_target_branch: Option<String>,
+    pub landed_source_ref: Option<String>,
+    pub landed_commit_sha: Option<String>,
+    pub last_known_head_sha: Option<String>,
     pub archive_commit: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
@@ -265,7 +283,7 @@ pub fn get_workspace(workspace_id: &str) -> Result<WorkspaceDetail> {
 /// Kanban board).
 pub fn list_goal_child_workspaces(goal_workspace_id: &str) -> Result<Vec<WorkspaceDetail>> {
     let mut records = workspace_models::load_goal_child_workspace_records(goal_workspace_id)?;
-    if reconcile_goal_child_target_merges(&records)? {
+    if super::landing::reconcile_goal_child_landing_states(&records)? {
         records = workspace_models::load_goal_child_workspace_records(goal_workspace_id)?;
     }
     Ok(records.into_iter().map(record_to_detail).collect())
@@ -359,12 +377,7 @@ pub fn sync_workspace_pr_state(
         return Ok(false);
     }
 
-    let inferred_target_merge = change_request.is_none() && goal_child_branch_is_merged(&record);
-    let live_state = if inferred_target_merge {
-        PrSyncState::Merged
-    } else {
-        pr_sync_state_from_change_request(change_request)
-    };
+    let live_state = pr_sync_state_from_change_request(change_request);
     let next_state = stabilize_pr_sync_state(record.pr_sync_state, live_state);
 
     // Always reflect the live request's title/url when present; clear them
@@ -372,16 +385,13 @@ pub fn sync_workspace_pr_state(
     // optimistically on next visit without waiting for the live fetch.
     let (next_title, next_url) = match change_request {
         Some(cr) => (Some(cr.title.clone()), Some(cr.url.clone())),
-        None if inferred_target_merge => (record.pr_title.clone(), record.pr_url.clone()),
         None => (None, None),
     };
 
     let state_changed = record.pr_sync_state != next_state;
     let title_changed = record.pr_title != next_title;
     let url_changed = record.pr_url != next_url;
-    if !state_changed && !title_changed && !url_changed {
-        return Ok(false);
-    }
+    let mut changed = false;
 
     let target_status = if state_changed {
         match next_state {
@@ -394,38 +404,44 @@ pub fn sync_workspace_pr_state(
         None
     };
 
-    let connection = db::write_conn()?;
-    if let Some(status) = target_status {
-        connection
-            .execute(
-                r#"
-                UPDATE workspaces
-                SET pr_sync_state = ?2,
-                    pr_title = ?3,
-                    pr_url = ?4,
-                    status = ?5,
-                    updated_at = datetime('now')
-                WHERE id = ?1
-                "#,
-                rusqlite::params![workspace_id, next_state, next_title, next_url, status],
-            )
-            .context("Failed to sync workspace PR state")?;
-    } else {
-        connection
-            .execute(
-                r#"
-                UPDATE workspaces
-                SET pr_sync_state = ?2,
-                    pr_title = ?3,
-                    pr_url = ?4,
-                    updated_at = datetime('now')
-                WHERE id = ?1
-                "#,
-                rusqlite::params![workspace_id, next_state, next_title, next_url],
-            )
-            .context("Failed to record workspace PR sync state")?;
+    if state_changed || title_changed || url_changed {
+        let connection = db::write_conn()?;
+        if let Some(status) = target_status {
+            connection
+                .execute(
+                    r#"
+                    UPDATE workspaces
+                    SET pr_sync_state = ?2,
+                        pr_title = ?3,
+                        pr_url = ?4,
+                        status = ?5,
+                        updated_at = datetime('now')
+                    WHERE id = ?1
+                    "#,
+                    rusqlite::params![workspace_id, next_state, next_title, next_url, status],
+                )
+                .context("Failed to sync workspace PR state")?;
+        } else {
+            connection
+                .execute(
+                    r#"
+                    UPDATE workspaces
+                    SET pr_sync_state = ?2,
+                        pr_title = ?3,
+                        pr_url = ?4,
+                        updated_at = datetime('now')
+                    WHERE id = ?1
+                    "#,
+                    rusqlite::params![workspace_id, next_state, next_title, next_url],
+                )
+                .context("Failed to record workspace PR sync state")?;
+        }
+        changed = true;
     }
-    Ok(true)
+    if next_state == PrSyncState::Merged {
+        changed |= super::landing::mark_workspace_landed_from_pull_request(workspace_id)?;
+    }
+    Ok(changed)
 }
 
 fn pr_sync_state_from_change_request(change_request: Option<&ChangeRequestInfo>) -> PrSyncState {
@@ -448,76 +464,6 @@ fn stabilize_pr_sync_state(current: PrSyncState, next: PrSyncState) -> PrSyncSta
         (PrSyncState::Merged | PrSyncState::Closed, PrSyncState::Open) => current,
         _ => next,
     }
-}
-
-fn goal_child_branch_is_merged(record: &WorkspaceRecord) -> bool {
-    if record.workspace_kind != WorkspaceKind::Code
-        || record.goal_workspace_id.is_none()
-        || record.status != WorkspaceStatus::Done
-        || record.pr_sync_state == PrSyncState::Closed
-    {
-        return false;
-    }
-
-    let Some(branch) = record
-        .branch
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return false;
-    };
-    let Some(target_branch) = record
-        .intended_target_branch
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return false;
-    };
-    if branch == target_branch {
-        return false;
-    }
-
-    let Ok(workspace_dir) =
-        crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-    else {
-        return false;
-    };
-    if !workspace_dir.is_dir() {
-        return false;
-    }
-
-    if let Some(remote) = record
-        .remote
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        let _ = git_ops::fetch_remote_branch(&workspace_dir, remote, target_branch);
-    }
-
-    let remote_target = record
-        .remote
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(|remote| format!("{remote}/{target_branch}"))
-        .filter(|target_ref| git_ops::ref_exists(&workspace_dir, target_ref));
-    let target_ref = remote_target.as_deref().unwrap_or(target_branch);
-    if !git_ops::ref_exists(&workspace_dir, branch)
-        || !git_ops::ref_exists(&workspace_dir, target_ref)
-    {
-        return false;
-    }
-
-    git_ops::is_ancestor_of(&workspace_dir, branch, target_ref).unwrap_or(false)
-}
-
-fn reconcile_goal_child_target_merges(records: &[WorkspaceRecord]) -> Result<bool> {
-    let mut changed = false;
-    for record in records {
-        if record.pr_sync_state != PrSyncState::Merged && goal_child_branch_is_merged(record) {
-            changed |= sync_workspace_pr_state(&record.id, None)?;
-        }
-    }
-    Ok(changed)
 }
 
 // ---- Linked directories (the /add-dir feature) ----
@@ -842,6 +788,13 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         pr_title: record.pr_title,
         pr_sync_state: record.pr_sync_state,
         pr_url: record.pr_url,
+        landing_state: record.landing_state,
+        landing_source: record.landing_source,
+        landed_at: record.landed_at,
+        landed_target_branch: record.landed_target_branch,
+        landed_source_ref: record.landed_source_ref,
+        landed_commit_sha: record.landed_commit_sha,
+        last_known_head_sha: record.last_known_head_sha,
         intended_target_branch: record.intended_target_branch,
         pinned_at: record.pinned_at,
         session_count: record.session_count,
@@ -936,6 +889,13 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         pr_title: record.pr_title,
         pr_sync_state: record.pr_sync_state,
         pr_url: record.pr_url,
+        landing_state: record.landing_state,
+        landing_source: record.landing_source,
+        landed_at: record.landed_at,
+        landed_target_branch: record.landed_target_branch,
+        landed_source_ref: record.landed_source_ref,
+        landed_commit_sha: record.landed_commit_sha,
+        last_known_head_sha: record.last_known_head_sha,
         archive_commit: record.archive_commit,
         session_count: record.session_count,
         message_count: record.message_count,
@@ -1138,7 +1098,10 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{insert_repo, insert_workspace, GitTestRepo, TestEnv, WorkspaceFixture};
+    use crate::{
+        git_ops,
+        testkit::{insert_repo, insert_workspace, GitTestRepo, TestEnv, WorkspaceFixture},
+    };
     use std::fs;
 
     fn count_workspaces(env: &TestEnv) -> usize {
@@ -1352,6 +1315,10 @@ mod tests {
             workspace_statuses(&env, "w-pr"),
             ("done".to_string(), "merged".to_string())
         );
+        assert_eq!(
+            workspace_landing(&env, "w-pr"),
+            (LandingState::Landed, Some(LandingSource::PullRequest))
+        );
     }
 
     #[test]
@@ -1373,7 +1340,7 @@ mod tests {
         // Pre-seed title/url so the stale_open call won't dirty them either —
         // that lets the assertion below specifically test the *state freeze*.
         conn.execute(
-            "UPDATE workspaces SET status = 'done', pr_sync_state = 'merged', pr_title = 'PR', pr_url = 'https://example.test/pr/1' WHERE id = 'w-pr'",
+            "UPDATE workspaces SET status = 'done', pr_sync_state = 'merged', pr_title = 'PR', pr_url = 'https://example.test/pr/1', landing_state = 'landed', landing_source = 'pull-request', landed_at = datetime('now'), landed_source_ref = 'feature/alpha' WHERE id = 'w-pr'",
             [],
         )
         .unwrap();
@@ -1423,8 +1390,8 @@ mod tests {
     }
 
     #[test]
-    fn pr_sync_marks_done_goal_child_merged_when_branch_landed_in_target() {
-        let env = TestEnv::new("pr-sync-goal-child-merged-by-ancestry");
+    fn landing_marks_done_goal_child_landed_without_pr_when_branch_landed_in_target() {
+        let env = TestEnv::new("landing-goal-child-by-ancestry");
         let conn = env.db_connection();
         insert_repo(&conn, "r1", "demo", None);
         conn.execute(
@@ -1572,14 +1539,99 @@ mod tests {
 
         let children = list_goal_child_workspaces("goal-1").unwrap();
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].pr_sync_state, PrSyncState::Merged);
+        assert_eq!(children[0].pr_sync_state, PrSyncState::None);
+        assert_eq!(children[0].landing_state, LandingState::Landed);
+        assert_eq!(
+            children[0].landing_source,
+            Some(LandingSource::BranchAncestry)
+        );
         assert_eq!(
             workspace_statuses(&env, "w-pr"),
-            ("done".to_string(), "merged".to_string())
+            ("done".to_string(), "none".to_string())
         );
         assert_eq!(
             workspace_pr_metadata(&env, "w-pr"),
             (Some("Dynamic course catalogue/pages".to_string()), None)
+        );
+    }
+
+    #[test]
+    fn landing_keeps_done_goal_child_unlanded_when_branch_not_in_target() {
+        let env = TestEnv::new("landing-goal-child-unlanded");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        conn.execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, state, status, workspace_kind,
+              branch, pr_sync_state
+            )
+            VALUES ('goal-1', 'r1', 'goal', 'ready', 'review', 'goal',
+                    'main', 'open')
+            "#,
+            [],
+        )
+        .unwrap();
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-child",
+                repo_id: "r1",
+                directory_name: "alpha",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/alpha"),
+                intended_target_branch: Some("main"),
+            },
+        );
+        conn.execute(
+            "UPDATE workspaces SET goal_workspace_id = 'goal-1', status = 'done' WHERE id = 'w-child'",
+            [],
+        )
+        .unwrap();
+
+        let workspace_dir = crate::data_dir::workspace_dir("demo", "alpha").unwrap();
+        fs::create_dir_all(workspace_dir.parent().unwrap()).unwrap();
+        let repo = GitTestRepo::init();
+        git_ops::run_git(
+            [
+                "clone",
+                repo.path().to_str().unwrap(),
+                workspace_dir.to_str().unwrap(),
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "checkout",
+                "-b",
+                "feature/alpha",
+            ],
+            None,
+        )
+        .unwrap();
+        fs::write(workspace_dir.join("alpha.txt"), "alpha\n").unwrap();
+        git_ops::run_git(["-C", workspace_dir.to_str().unwrap(), "add", "."], None).unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "commit",
+                "-m",
+                "alpha",
+            ],
+            None,
+        )
+        .unwrap();
+
+        let children = list_goal_child_workspaces("goal-1").unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].landing_state, LandingState::Unlanded);
+        assert_eq!(
+            workspace_statuses(&env, "w-child"),
+            ("done".to_string(), "none".to_string())
         );
     }
 
@@ -1713,6 +1765,16 @@ mod tests {
         env.db_connection()
             .query_row(
                 "SELECT pr_title, pr_url FROM workspaces WHERE id = ?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    }
+
+    fn workspace_landing(env: &TestEnv, id: &str) -> (LandingState, Option<LandingSource>) {
+        env.db_connection()
+            .query_row(
+                "SELECT landing_state, landing_source FROM workspaces WHERE id = ?1",
                 [id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
