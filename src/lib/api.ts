@@ -1787,6 +1787,31 @@ export async function setWorkspaceLinkedDirectories(
 	}
 }
 
+export type ExportWorkspaceDirectoriesResponse = {
+	added: number;
+	total: number;
+	directories: string[];
+};
+
+/**
+ * Link every other ready Helmor workspace directory to this workspace.
+ * Codex receives this list as additional workspace context on future turns.
+ */
+export async function exportWorkspaceDirectoriesToCodex(
+	workspaceId: string,
+): Promise<ExportWorkspaceDirectoriesResponse> {
+	try {
+		return await invoke<ExportWorkspaceDirectoriesResponse>(
+			"export_workspace_directories_to_codex",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to export workspace directories."),
+		);
+	}
+}
+
 /** Candidate entry shown in the `/add-dir` popup's quick-pick list. */
 export type CandidateDirectory = {
 	workspaceId: string;

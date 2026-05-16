@@ -12,6 +12,7 @@ import {
 	Code,
 	Copy,
 	Cpu,
+	FolderPlus,
 	GitBranch,
 	History,
 	MessageSquare,
@@ -54,6 +55,7 @@ import {
 	type ChangeRequestInfo,
 	createSession,
 	deleteSession,
+	exportWorkspaceDirectoriesToCodex,
 	listRemoteBranches,
 	listTerminalProfiles,
 	loadHiddenSessions,
@@ -155,6 +157,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const [editingBranch, setEditingBranch] = useState<string | null>(null);
 	const [newSessionOpen, setNewSessionOpen] = useState(false);
 	const [branchCopied, setBranchCopied] = useState(false);
+	const [exportingDirectories, setExportingDirectories] = useState(false);
+	const [directoriesExported, setDirectoriesExported] = useState(false);
 	const tabsScrollRef = useRef<HTMLDivElement>(null);
 	const [hasRightOverflow, setHasRightOverflow] = useState(false);
 	const selectedSession =
@@ -220,6 +224,45 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const handleCancelBranchRename = useCallback(() => {
 		setEditingBranch(null);
 	}, []);
+
+	const handleExportWorkspacesToCodex = useCallback(async () => {
+		if (!workspace || exportingDirectories) {
+			return;
+		}
+		setExportingDirectories(true);
+		try {
+			const result = await exportWorkspaceDirectoriesToCodex(workspace.id);
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceLinkedDirectories(workspace.id),
+				result.directories,
+			);
+			void queryClient.invalidateQueries({
+				predicate: (query) =>
+					query.queryKey[0] === "slashCommands" &&
+					query.queryKey[3] === workspace.id,
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceCandidateDirectories(workspace.id),
+			});
+			setDirectoriesExported(true);
+			setTimeout(() => setDirectoriesExported(false), 1500);
+			pushToast(
+				result.added === 0
+					? "Codex already has all workspace folders"
+					: `Added ${result.added} workspace folder${result.added === 1 ? "" : "s"}`,
+				"Workspace folders exported",
+				"default",
+			);
+		} catch (error: unknown) {
+			pushToast(
+				error instanceof Error ? error.message : String(error),
+				"Codex export failed",
+				"destructive",
+			);
+		} finally {
+			setExportingDirectories(false);
+		}
+	}, [exportingDirectories, pushToast, queryClient, workspace]);
 
 	const handleCreateSession = useCallback(
 		async (mode: "thread" | "terminal", runtimeOverride?: string | null) => {
@@ -715,6 +758,43 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								/>
 							)}
 						</>
+					) : null}
+					{workspace && workspace.state !== "archived" ? (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									type="button"
+									aria-label="Export workspace folders to Codex"
+									variant="ghost"
+									size="icon-sm"
+									disabled={exportingDirectories}
+									onClick={handleExportWorkspacesToCodex}
+									className="shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+								>
+									{directoriesExported ? (
+										<Check
+											className="size-3.5 text-green-400"
+											strokeWidth={2}
+										/>
+									) : (
+										<FolderPlus
+											className={cn(
+												"size-3.5",
+												exportingDirectories && "animate-pulse",
+											)}
+											strokeWidth={1.8}
+										/>
+									)}
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent
+								side="bottom"
+								sideOffset={4}
+								className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
+							>
+								<span>Export workspaces to Codex</span>
+							</TooltipContent>
+						</Tooltip>
 					) : null}
 				</div>
 				{headerActions ? (

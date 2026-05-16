@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use std::collections::HashSet;
 
 use crate::{
     db,
@@ -501,6 +502,14 @@ pub struct CandidateDirectory {
     pub absolute_path: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportWorkspaceDirectoriesResponse {
+    pub added: usize,
+    pub total: usize,
+    pub directories: Vec<String>,
+}
+
 /// List every ready (non-archived, non-initializing) workspace across all
 /// repos as candidate directories for `/add-dir`. `exclude_workspace_id`
 /// is typically the currently-active workspace — the one the user is
@@ -570,6 +579,29 @@ pub fn set_workspace_linked_directories(
     Ok(normalized)
 }
 
+pub fn export_workspace_directories_to_codex(
+    workspace_id: &str,
+) -> Result<ExportWorkspaceDirectoriesResponse> {
+    let existing = get_workspace_linked_directories(workspace_id)?;
+    let mut seen: HashSet<String> = existing.iter().cloned().collect();
+    let mut directories = existing.clone();
+    let mut added = 0;
+
+    for candidate in list_candidate_directories(Some(workspace_id))? {
+        if seen.insert(candidate.absolute_path.clone()) {
+            directories.push(candidate.absolute_path);
+            added += 1;
+        }
+    }
+
+    let directories = set_workspace_linked_directories(workspace_id, directories)?;
+    Ok(ExportWorkspaceDirectoriesResponse {
+        added,
+        total: directories.len(),
+        directories,
+    })
+}
+
 /// Parse the JSON-encoded `linked_directory_paths` column. Tolerant: any
 /// corrupt / legacy value yields an empty list rather than an error, so a
 /// user can always reset by saving a fresh list.
@@ -636,7 +668,7 @@ mod linked_directories_tests {
 
 #[cfg(test)]
 mod candidate_directories_tests {
-    use super::list_candidate_directories;
+    use super::{export_workspace_directories_to_codex, list_candidate_directories};
 
     fn with_env<F: FnOnce(&rusqlite::Connection)>(f: F) {
         let dir = tempfile::tempdir().unwrap();
@@ -727,6 +759,49 @@ mod candidate_directories_tests {
             // repo_initials are derived from the repo name at display time.
             assert!(!row.repo_initials.is_empty());
             assert!(row.absolute_path.ends_with("/alpha/feat-x"));
+        });
+    }
+
+    #[test]
+    fn export_to_codex_merges_other_ready_workspace_paths() {
+        with_env(|conn| {
+            seed_repo(conn, "r1", "alpha");
+            seed_workspace(conn, "w1", "r1", "current", Some("main"), "ready");
+            seed_workspace(conn, "w2", "r1", "linked", Some("feat/a"), "ready");
+            seed_workspace(conn, "w3", "r1", "new", Some("feat/b"), "ready");
+            seed_workspace(conn, "w4", "r1", "archived", Some("old"), "archived");
+
+            let linked_path = crate::data_dir::workspace_dir("alpha", "linked")
+                .unwrap()
+                .display()
+                .to_string();
+            conn.execute(
+                "UPDATE workspaces SET linked_directory_paths = ?2 WHERE id = ?1",
+                rusqlite::params![
+                    "w1",
+                    serde_json::to_string(&vec!["/manual".to_string(), linked_path.clone()])
+                        .unwrap()
+                ],
+            )
+            .unwrap();
+
+            let result = export_workspace_directories_to_codex("w1").unwrap();
+            let current_path = crate::data_dir::workspace_dir("alpha", "current")
+                .unwrap()
+                .display()
+                .to_string();
+            let new_path = crate::data_dir::workspace_dir("alpha", "new")
+                .unwrap()
+                .display()
+                .to_string();
+
+            assert_eq!(result.added, 1);
+            assert_eq!(result.total, 3);
+            assert_eq!(
+                result.directories,
+                vec!["/manual".to_string(), linked_path, new_path]
+            );
+            assert!(!result.directories.contains(&current_path));
         });
     }
 }

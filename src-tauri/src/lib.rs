@@ -374,6 +374,7 @@ pub fn run() {
             commands::workspace_commands::set_workspace_status,
             commands::workspace_commands::list_workspace_linked_directories,
             commands::workspace_commands::set_workspace_linked_directories,
+            commands::workspace_commands::export_workspace_directories_to_codex,
             commands::workspace_commands::list_workspace_candidate_directories,
             commands::workspace_commands::trigger_workspace_fetch,
             commands::editors::detect_installed_editors,

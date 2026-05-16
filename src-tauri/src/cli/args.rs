@@ -411,6 +411,11 @@ pub enum LinkedDirsAction {
         #[arg(long)]
         exclude: Option<String>,
     },
+    /// Link every other ready Helmor workspace to this workspace.
+    ImportWorkspaces {
+        #[arg(name = "ref")]
+        workspace_ref: String,
+    },
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]

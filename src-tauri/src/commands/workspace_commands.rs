@@ -235,6 +235,22 @@ pub async fn set_workspace_linked_directories(
     Ok(result)
 }
 
+/// Link every other ready Helmor workspace directory to this workspace so
+/// Codex receives them as additional workspace context on future turns.
+#[tauri::command]
+pub async fn export_workspace_directories_to_codex(
+    app: AppHandle,
+    workspace_id: String,
+) -> CmdResult<workspaces::ExportWorkspaceDirectoriesResponse> {
+    let workspace_id_clone = workspace_id.clone();
+    let result = run_blocking(move || {
+        workspaces::export_workspace_directories_to_codex(&workspace_id_clone)
+    })
+    .await?;
+    git_watcher::notify_workspace_changed(&app);
+    Ok(result)
+}
+
 /// Candidate directories the `/add-dir` picker offers as quick-pick
 /// suggestions: every ready workspace across every repo, minus the
 /// currently-active one.
