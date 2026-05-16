@@ -186,6 +186,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return [];
 			case "list_workspace_linked_directories":
 				return [];
+			case "export_workspace_directories_to_codex":
+				return { added: 0, total: 0, directories: [] };
 			case "list_workspace_candidate_directories":
 				return [];
 			case "refresh_workspace_change_request":

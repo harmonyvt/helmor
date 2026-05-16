@@ -506,5 +506,22 @@ fn linked_dirs(action: &LinkedDirsAction, cli: &Cli) -> Result<()> {
                     .join("\n")
             })
         }
+        LinkedDirsAction::ImportWorkspaces { workspace_ref } => {
+            let id = service::resolve_workspace_ref(workspace_ref)?;
+            let response = workspaces::export_workspace_directories_to_codex(&id)?;
+            notify_ui_event(UiMutationEvent::WorkspaceChanged { workspace_id: id });
+            output::print(cli, &response, |r| {
+                if r.directories.is_empty() {
+                    "No workspace directories were linked.".to_string()
+                } else {
+                    format!(
+                        "Imported {} workspace director{}.\nLinked directories:\n{}",
+                        r.added,
+                        if r.added == 1 { "y" } else { "ies" },
+                        r.directories.join("\n")
+                    )
+                }
+            })
+        }
     }
 }

@@ -1,6 +1,6 @@
 ---
 name: helmor-cli
-description: Use the Helmor CLI to remote-control Helmor from the terminal. Use when the user asks to inspect Helmor data/settings, manage repositories/workspaces/sessions/files, send prompts to agents, list models, use GitHub integration, inspect scripts, migrate from Conductor, run Helmor as an MCP server, generate shell completions, quit a running app, check/install/update the Helmor CLI beta, install/update Helmor skills through the beta app flow, or needs the Helmor command reference.
+description: Use the Helmor CLI to remote-control Helmor from the terminal. Use when the user asks to inspect Helmor data/settings, manage repositories/workspaces/sessions/files, create Helmor-managed workspaces instead of manual git worktrees, import Helmor workspaces into agent linked-directory context, send prompts to agents, list models, use GitHub integration, inspect scripts, migrate from Conductor, run Helmor as an MCP server, generate shell completions, quit a running app, check/install/update the Helmor CLI beta, install/update Helmor skills through the beta app flow, or needs the Helmor command reference.
 ---
 
 # Helmor CLI
@@ -52,10 +52,64 @@ helmor repo --help
 helmor workspace --help
 ```
 
-When creating workspaces, prefer explicit repo names and concise purpose labels:
+Do not create Helmor workspaces by hand with `git worktree add`, `mkdir`, or direct DB edits. Let Helmor allocate the directory, branch, session, database row, and UI notifications.
+
+When the user asks to create a workspace, first list the available Helmor projects and ask which one to use:
+
+```bash
+helmor repo list
+```
+
+If scripting, use JSON:
+
+```bash
+helmor --json repo list
+```
+
+After the user chooses a project, create the workspace through Helmor:
 
 ```bash
 helmor workspace new --repo helmor
+```
+
+Then import/link that new workspace into the current workspace's agent context so future Codex/Claude turns can see it. If you know the current workspace ref, use:
+
+```bash
+helmor workspace linked-dirs import-workspaces <current-workspace-ref>
+```
+
+This imports all other ready Helmor workspace folders, including the one just created, through Helmor's `/add-dir` linked-directory path.
+
+If you only want the new workspace, parse `helmor --json workspace new --repo <repo>` for `createdWorkspaceId`, then read its exact path:
+
+```bash
+helmor --json workspace show <created-workspace-id>
+```
+
+Use the returned `rootPath` with:
+
+```bash
+helmor workspace linked-dirs add <current-workspace-ref> /absolute/path/to/workspace
+```
+
+If the current workspace ref is unclear, run:
+
+```bash
+helmor workspace list
+```
+
+Use the row matching the current working directory's repo/directory name, then ask the user if still ambiguous.
+
+List what is already linked:
+
+```bash
+helmor workspace linked-dirs list <current-workspace-ref>
+```
+
+For Goal boards, create child workspaces through the Goal CLI so Helmor attaches the child to the board and can optionally start the assigned agent:
+
+```bash
+helmor goal child create --goal <goal-workspace-ref> --title "Implement focused change" --provider codex --prompt "Do the focused task"
 ```
 
 ### Inspect Sessions And Files
