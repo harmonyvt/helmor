@@ -995,6 +995,44 @@ pub fn commits_behind(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
         .with_context(|| format!("Unexpected rev-list count output: {}", output))
 }
 
+pub fn is_ancestor_of(
+    workspace_dir: &Path,
+    ancestor_ref: &str,
+    descendant_ref: &str,
+) -> Result<bool> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_dir)
+        .arg("merge-base")
+        .arg("--is-ancestor")
+        .arg(ancestor_ref)
+        .arg(descendant_ref)
+        .output()
+        .context("Failed to run git merge-base")?;
+
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => handle_git_output(output).map(|_| false),
+    }
+}
+
+pub fn ref_exists(workspace_dir: &Path, ref_name: &str) -> bool {
+    let workspace_dir = workspace_dir.display().to_string();
+    run_git(
+        [
+            "-C",
+            workspace_dir.as_str(),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            ref_name,
+        ],
+        None,
+    )
+    .is_ok()
+}
+
 fn parse_porcelain_status_paths(output: &str) -> std::collections::BTreeSet<String> {
     output
         .lines()
