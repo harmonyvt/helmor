@@ -439,6 +439,13 @@ pub fn finalize_workspace_from_repo_with_options_impl(
             Ok(_) => created_worktree = true,
             Err(error) => return Err(error),
         }
+        let initial_head_sha = git_ops::run_git(["rev-parse", "HEAD"], Some(&workspace_dir))
+            .ok()
+            .filter(|sha| !sha.trim().is_empty());
+        workspace_models::update_workspace_initial_head_sha(
+            workspace_id,
+            initial_head_sha.as_deref(),
+        )?;
 
         // Defer setup to the frontend inspector: if a script is configured AND
         // the user opted into auto-run, the workspace starts in "setup_pending"

@@ -52,6 +52,7 @@ pub struct WorkspaceRecord {
     pub landed_target_branch: Option<String>,
     pub landed_source_ref: Option<String>,
     pub landed_commit_sha: Option<String>,
+    pub initial_head_sha: Option<String>,
     pub last_known_head_sha: Option<String>,
     pub archive_commit: Option<String>,
     pub session_count: i64,
@@ -170,6 +171,7 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.landed_target_branch,
       w.landed_source_ref,
       w.landed_commit_sha,
+      w.initial_head_sha,
       w.last_known_head_sha,
       w.archive_commit,
       COALESCE(wss.session_count, 0) AS session_count,
@@ -381,6 +383,20 @@ pub(crate) fn insert_initializing_workspace_and_session_with_metadata(
     transaction
         .commit()
         .context("Failed to commit create-workspace transaction")
+}
+
+pub(crate) fn update_workspace_initial_head_sha(
+    workspace_id: &str,
+    initial_head_sha: Option<&str>,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            "UPDATE workspaces SET initial_head_sha = ?2 WHERE id = ?1",
+            rusqlite::params![workspace_id, initial_head_sha],
+        )
+        .context("Failed to update workspace initial_head_sha")?;
+    Ok(())
 }
 
 pub(crate) fn update_workspace_state(
@@ -599,17 +615,18 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         landed_target_branch: row.get(31)?,
         landed_source_ref: row.get(32)?,
         landed_commit_sha: row.get(33)?,
-        last_known_head_sha: row.get(34)?,
-        archive_commit: row.get(35)?,
-        session_count: row.get(36)?,
-        message_count: row.get(37)?,
-        remote: row.get(38)?,
-        forge_provider: row.get(39)?,
-        created_at: row.get(40)?,
-        updated_at: row.get(41)?,
-        last_user_message_at: row.get(42)?,
-        goal_title: row.get(43)?,
-        goal_description: row.get(44)?,
+        initial_head_sha: row.get(34)?,
+        last_known_head_sha: row.get(35)?,
+        archive_commit: row.get(36)?,
+        session_count: row.get(37)?,
+        message_count: row.get(38)?,
+        remote: row.get(39)?,
+        forge_provider: row.get(40)?,
+        created_at: row.get(41)?,
+        updated_at: row.get(42)?,
+        last_user_message_at: row.get(43)?,
+        goal_title: row.get(44)?,
+        goal_description: row.get(45)?,
     })
 }
 
