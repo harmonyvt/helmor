@@ -62,16 +62,50 @@ pub(super) fn message_text(message: &pipeline::types::ThreadMessageLike) -> Stri
 }
 
 fn detect_report_type(text: &str) -> Option<&'static str> {
-    let mut best: Option<&'static str> = None;
-    for report_type in text.lines().filter_map(detect_report_type_in_line) {
-        best = Some(match (best, report_type) {
-            (Some("blocked"), _) | (_, "blocked") => "blocked",
-            (Some("completed"), _) | (_, "completed") => "completed",
-            (Some("handoff"), _) | (_, "handoff") => "handoff",
-            _ => "progress",
-        });
+    let mut explicit_status: Option<&'static str> = None;
+    let mut seen_completed = false;
+    let mut seen_blocked = false;
+    let mut seen_handoff = false;
+    let mut seen_progress = false;
+
+    for line in text.lines() {
+        if let Some(report_type) = detect_explicit_status_line(line) {
+            explicit_status = Some(report_type);
+            continue;
+        }
+        match detect_report_type_in_line(line) {
+            Some("completed") => seen_completed = true,
+            Some("blocked") => seen_blocked = true,
+            Some("handoff") => seen_handoff = true,
+            Some("progress") => seen_progress = true,
+            _ => {}
+        }
     }
-    best
+
+    explicit_status.or({
+        if seen_completed {
+            Some("completed")
+        } else if seen_blocked {
+            Some("blocked")
+        } else if seen_handoff {
+            Some("handoff")
+        } else if seen_progress {
+            Some("progress")
+        } else {
+            None
+        }
+    })
+}
+
+fn detect_explicit_status_line(line: &str) -> Option<&'static str> {
+    let normalized = normalize_report_marker_line(line);
+    let status = normalized
+        .strip_prefix("status:")
+        .or_else(|| normalized.strip_prefix("final status:"))?
+        .trim();
+    ["blocked", "completed", "handoff", "progress"]
+        .into_iter()
+        .find(|marker| status == *marker)
 }
 
 fn detect_report_type_in_line(line: &str) -> Option<&'static str> {
@@ -123,7 +157,23 @@ mod tests {
         );
         assert_eq!(
             detect_report_type("## Completed\n\nAll set.\n\n## Blocked\nNone."),
+            Some("completed")
+        );
+        assert_eq!(
+            detect_report_type(
+                "## Completed\n\nImplemented.\n\n## Blocked\nTypecheck could not run."
+            ),
+            Some("completed")
+        );
+        assert_eq!(
+            detect_report_type("Status: blocked\n\n## Completed\nPartial work only."),
             Some("blocked")
+        );
+        assert_eq!(
+            detect_report_type(
+                "Final status: completed\n\n## Blocked\nVerification could not run."
+            ),
+            Some("completed")
         );
         assert_eq!(
             detect_report_type("## Progress\nWorking\n\n## Completed\nDone."),

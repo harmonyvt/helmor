@@ -224,6 +224,7 @@ export type AgentModelOption = {
 	label: string;
 	cliModel: string;
 	providerKey?: string | null;
+	codexProfile?: string | null;
 	effortLevels?: string[];
 	supportsFastMode?: boolean;
 	supportsContextUsage?: boolean;

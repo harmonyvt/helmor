@@ -10,6 +10,7 @@ use crate::error::CommandError;
 pub mod action_kind;
 mod builtin_claude_providers;
 mod catalog;
+mod codex_profiles;
 mod custom_providers;
 pub mod delegation;
 mod persistence;

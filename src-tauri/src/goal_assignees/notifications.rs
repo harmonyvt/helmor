@@ -17,6 +17,8 @@ struct AssigneeNotificationTarget {
     card_workspace_id: String,
     card_title: String,
     supervisor_session_id: Option<String>,
+    supervisor_model: Option<String>,
+    supervisor_permission_mode: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,10 +152,13 @@ fn resolve_notification_target(
           w.goal_workspace_id,
           w.id,
           COALESCE(NULLIF(gc.title, ''), NULLIF(s.title, ''), w.directory_name, w.id),
-          goal.active_session_id
+          goal.active_session_id,
+          supervisor.model,
+          supervisor.permission_mode
         FROM sessions s
         JOIN workspaces w ON w.id = s.workspace_id
         JOIN workspaces goal ON goal.id = w.goal_workspace_id
+        LEFT JOIN sessions supervisor ON supervisor.id = goal.active_session_id
         LEFT JOIN goal_cards gc
           ON gc.goal_workspace_id = w.goal_workspace_id
          AND (gc.child_workspace_id = w.id OR gc.id = w.id)
@@ -174,6 +179,8 @@ fn resolve_notification_target(
                 card_workspace_id: row.get(1)?,
                 card_title: row.get(2)?,
                 supervisor_session_id: row.get(3)?,
+                supervisor_model: row.get(4)?,
+                supervisor_permission_mode: row.get(5)?,
             })
         },
     )
@@ -211,10 +218,10 @@ fn ensure_delivered_report_notification(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(notification.created_at.as_str());
     let recommended_action =
-        "Review this report, update the card lane if appropriate, and summarize any blockers or completion back to the user.";
+        "Auto-resume is enabled by default: Helmor queued a supervisor follow-up turn to review this report, update the card lane if appropriate, and summarize any blockers or completion back to the user.";
     let report_text = marker.full_text.trim();
     let message = format!(
-        "## Assignee Report Received\n\nCard: {}\nCard workspace: {}\nAssignee thread: {}\nReport type: {}\nReported at: {}\n\nExcerpt:\n{}\n\nRecommended supervisor action:\n{}",
+        "## Assignee Report Received\n\nCard: {}\nCard workspace: {}\nAssignee thread: {}\nReport type: {}\nReported at: {}\nAuto-resume: enabled\n\nExcerpt:\n{}\n\nRecommended supervisor action:\n{}",
         target.card_title,
         target.card_workspace_id,
         assignee_session_id,
@@ -242,6 +249,14 @@ fn ensure_delivered_report_notification(
         &target.goal_workspace_id,
         supervisor_session_id,
         payload,
+    )?;
+    queue_supervisor_auto_resume(
+        conn,
+        target,
+        supervisor_session_id,
+        assignee_session_id,
+        message_id,
+        &marker.report_type,
     )
 }
 
@@ -270,9 +285,9 @@ fn notify_runtime_issue_on(
     };
 
     let recommended_action =
-        "Inspect runtime status and provider session logs, then retry or create a replacement thread if needed.";
+        "Auto-resume is enabled by default: Helmor queued a supervisor follow-up turn to inspect runtime status and provider session logs, then retry or create a replacement thread if needed.";
     let message = format!(
-        "## Assignee Runtime Issue\n\nCard: {}\nAssignee thread: {}\nIssue: {}\n\nRecommended supervisor action:\n{}",
+        "## Assignee Runtime Issue\n\nCard: {}\nAssignee thread: {}\nAuto-resume: enabled\nIssue: {}\n\nRecommended supervisor action:\n{}",
         target.card_title, assignee_session_id, issue, recommended_action
     );
     let payload = serde_json::json!({
@@ -294,7 +309,55 @@ fn notify_runtime_issue_on(
         supervisor_session_id,
         payload,
     )?;
+    queue_supervisor_auto_resume(
+        conn,
+        target,
+        supervisor_session_id,
+        assignee_session_id,
+        &message_id,
+        "runtime_issue",
+    )?;
     Ok(Some(notification.id))
+}
+
+fn queue_supervisor_auto_resume(
+    conn: &rusqlite::Connection,
+    target: &AssigneeNotificationTarget,
+    supervisor_session_id: &str,
+    assignee_session_id: &str,
+    message_id: &str,
+    report_type: &str,
+) -> Result<()> {
+    let notification_kind = if report_type == "runtime_issue" {
+        "a runtime issue"
+    } else {
+        "an assignee report"
+    };
+    let prompt = format!(
+        "Auto-resume from Helmor Goals: {notification_kind} was delivered for card \"{}\".\n\nReview the latest Assignee Report Received or Assignee Runtime Issue system message in this supervisor thread. Report type: {report_type}. Assignee thread: {assignee_session_id}. Source message: {message_id}.\n\nUpdate the card lane if appropriate, inspect blockers or verification notes, and summarize the outcome back to the user.",
+        target.card_title
+    );
+    let pending_send_id = crate::service::insert_pending_cli_send_on(
+        conn,
+        &target.goal_workspace_id,
+        supervisor_session_id,
+        &prompt,
+        target.supervisor_model.as_deref(),
+        target.supervisor_permission_mode.as_deref(),
+    )
+    .with_context(|| {
+        format!("Failed to queue supervisor auto-resume for assignee session {assignee_session_id}")
+    })?;
+
+    let _ = crate::ui_sync::notify_running_app(UiMutationEvent::PendingCliSendQueued {
+        pending_send_id,
+        workspace_id: target.goal_workspace_id.clone(),
+        session_id: supervisor_session_id.to_string(),
+        prompt,
+        model_id: target.supervisor_model.clone(),
+        permission_mode: target.supervisor_permission_mode.clone(),
+    });
+    Ok(())
 }
 
 fn ensure_notification(

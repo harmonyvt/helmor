@@ -623,7 +623,7 @@ pub struct SendArgs {
     /// Session UUID. Defaults to the workspace's active session.
     #[arg(long)]
     pub session: Option<String>,
-    /// Model ID (default: configured default, else `default`).
+    /// Model ID (use `helmor models list`; Codex profile IDs look like `codex:azure:gpt-5-codex`).
     #[arg(long)]
     pub model: Option<String>,
     /// Permission mode (plan, auto, yolo, default).

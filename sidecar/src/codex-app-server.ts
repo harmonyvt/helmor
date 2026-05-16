@@ -61,6 +61,7 @@ export interface CodexAppServerOptions {
 	 *  timestamp so a transient {method:"error"} notification arriving
 	 *  inside the retry window can be suppressed. */
 	onRetry?: (message: string) => void;
+	profile?: string;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
@@ -75,8 +76,12 @@ const CODEX_APP_SERVER_ARGS = [
 	"notify=[]",
 ] as const;
 
-export function buildCodexAppServerArgs(): string[] {
-	return [...CODEX_APP_SERVER_ARGS];
+export function buildCodexAppServerArgs(profile?: string): string[] {
+	const trimmedProfile = profile?.trim();
+	return [
+		...(trimmedProfile ? ["--profile", trimmedProfile] : []),
+		...CODEX_APP_SERVER_ARGS,
+	];
 }
 
 export class CodexAppServer {
@@ -95,7 +100,7 @@ export class CodexAppServer {
 		this.onNotification = opts.onNotification;
 		this.onRequest = opts.onRequest;
 
-		this.child = spawn(opts.binaryPath, buildCodexAppServerArgs(), {
+		this.child = spawn(opts.binaryPath, buildCodexAppServerArgs(opts.profile), {
 			cwd: opts.cwd,
 			stdio: ["pipe", "pipe", "pipe"],
 		});

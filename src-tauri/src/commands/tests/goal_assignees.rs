@@ -187,6 +187,14 @@ fn persisted_assignee_report_notifies_supervisor_once_with_priority_classificati
     assert!(supervisor_payload["message"]
         .as_str()
         .unwrap()
+        .contains("Auto-resume: enabled"));
+    assert!(supervisor_payload["recommendedAction"]
+        .as_str()
+        .unwrap()
+        .contains("Auto-resume is enabled by default"));
+    assert!(supervisor_payload["message"]
+        .as_str()
+        .unwrap()
         .contains("Card: Build API"));
     assert_eq!(
         supervisor_payload["fullText"].as_str().unwrap(),
@@ -205,6 +213,107 @@ fn persisted_assignee_report_notifies_supervisor_once_with_priority_classificati
         )
         .unwrap();
     assert_eq!(last_report_id, "assistant-report");
+
+    let (
+        pending_count,
+        pending_workspace,
+        pending_session,
+        pending_prompt,
+        pending_model,
+        pending_permission_mode,
+    ): (
+        i64,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    ) = connection
+        .query_row(
+            "SELECT COUNT(*), MAX(workspace_id), MAX(session_id), MAX(prompt), MAX(model_id), MAX(permission_mode) FROM pending_cli_sends",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(pending_count, 1);
+    assert_eq!(pending_workspace, "00000000-0000-0000-0000-000000000001");
+    assert_eq!(pending_session, "session-supervisor");
+    assert_eq!(pending_model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(pending_permission_mode.as_deref(), Some("default"));
+    assert!(pending_prompt.contains("Auto-resume from Helmor Goals"));
+    assert!(pending_prompt.contains("Report type: completed"));
+}
+
+#[test]
+fn completed_assignee_report_with_blocked_verification_notifies_as_completed() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+    insert_active_supervisor_session(&connection);
+    insert_goal_card(&connection);
+
+    let content = json!({
+        "type": "assistant",
+        "message": {
+            "id": "turn-report",
+            "role": "assistant",
+            "content": [{
+                "type": "text",
+                "text": "## Completed\nImplemented the root setup workflow.\n\n## Blocked\n`bun run typecheck` could not run because dependencies are not installed in this workspace."
+            }]
+        }
+    });
+    let turn = CollectedTurn {
+        id: "assistant-report".to_string(),
+        role: MessageRole::Assistant,
+        content_json: content.to_string(),
+    };
+
+    crate::agents::persist_collected_turn_message(&connection, "session-assignee", &turn).unwrap();
+
+    let report_type: String = connection
+        .query_row(
+            "SELECT report_type FROM goal_supervisor_notifications",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(report_type, "completed");
+
+    let supervisor_payload: String = connection
+        .query_row(
+            "SELECT content FROM session_messages WHERE session_id = 'session-supervisor'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let supervisor_payload: serde_json::Value = serde_json::from_str(&supervisor_payload).unwrap();
+    assert_eq!(supervisor_payload["reportType"], "completed");
+    assert!(supervisor_payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("Auto-resume: enabled"));
+
+    let pending_prompt: String = connection
+        .query_row(
+            "SELECT prompt FROM pending_cli_sends WHERE session_id = 'session-supervisor'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(pending_prompt.contains("Report type: completed"));
 }
 
 #[test]
@@ -256,6 +365,23 @@ fn runtime_issue_notifies_supervisor_when_no_report_was_persisted() {
         .as_str()
         .unwrap()
         .contains("## Assignee Runtime Issue"));
+    assert!(supervisor_payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("Auto-resume: enabled"));
+    assert!(supervisor_payload["recommendedAction"]
+        .as_str()
+        .unwrap()
+        .contains("Auto-resume is enabled by default"));
+
+    let pending_prompt: String = connection
+        .query_row(
+            "SELECT prompt FROM pending_cli_sends WHERE session_id = 'session-supervisor'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(pending_prompt.contains("Report type: runtime_issue"));
 }
 
 #[test]

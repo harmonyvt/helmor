@@ -1,0 +1,16 @@
+---
+source: tests/streaming_send_params.rs
+assertion_line: 189
+expression: "&params"
+---
+codexProfile: azure
+cwd: /abs/workspace
+effortLevel: high
+fastMode: false
+helmorSessionId: s-codex
+model: gpt-5-codex
+permissionMode: bypassPermissions
+prompt: hello
+provider: codex
+resume: ~
+sessionId: sidecar-sess-1

@@ -248,6 +248,7 @@ fn run_child_turn(
         helmor_session_id: Some(&created.child_session_id),
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
+        codex_profile: model.codex_profile.as_deref(),
         images: &[],
         kanban_workspace_id: None,
         kanban_snapshot: None,
