@@ -213,6 +213,7 @@ pub fn run() {
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
             commands::settings_commands::set_data_dir_preference,
+            commands::system_commands::export_verbose_logs,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             web_daemon::get_web_daemon_status,

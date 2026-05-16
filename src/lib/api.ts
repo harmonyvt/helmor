@@ -123,6 +123,19 @@ export type DataInfo = {
 	dataDirLockedByEnv: boolean;
 };
 
+export type FrontendLogEntry = {
+	ts: string;
+	level: string;
+	message: string;
+	args: unknown[];
+	url?: string;
+};
+
+export type LogExportResult = {
+	exportDir: string;
+	files: string[];
+};
+
 export type WebDaemonStatus = {
 	state: "running" | "stopped";
 	pid: number | null;
@@ -1158,6 +1171,14 @@ export async function loadDataInfo(): Promise<DataInfo | null> {
 	} catch {
 		return null;
 	}
+}
+
+export async function exportVerboseLogs(
+	frontendLogs: FrontendLogEntry[],
+): Promise<LogExportResult> {
+	return await invoke<LogExportResult>("export_verbose_logs", {
+		frontendLogs,
+	});
 }
 
 export async function setDataDirPreference(
