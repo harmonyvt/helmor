@@ -69,6 +69,7 @@ const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
 const EMPTY_QUEUE_ITEMS: readonly QueuedSubmit[] = [];
+const DEFAULT_CODEX_THREAD_SCOPE = "__default_codex__";
 
 /**
  * Host-app slash commands. Prepended to the agent-supplied list so they
@@ -79,6 +80,23 @@ const ADD_DIR_COMMAND: SlashCommandEntry = {
 	description: "Link extra directories to this workspace",
 	source: "client-action",
 };
+
+function providerThreadScope(
+	model: AgentModelOption | null | undefined,
+): string {
+	if (!model) return "";
+	if (model.provider !== "codex") return model.provider;
+	return model.codexProfile || model.providerKey || DEFAULT_CODEX_THREAD_SCOPE;
+}
+
+function canReuseProviderThread(
+	currentModel: AgentModelOption | null | undefined,
+	nextModel: AgentModelOption | null | undefined,
+): boolean {
+	if (!currentModel || !nextModel) return false;
+	if (currentModel.provider !== nextModel.provider) return false;
+	return providerThreadScope(currentModel) === providerThreadScope(nextModel);
+}
 
 const CODEX_COMPACT_COMMAND: SlashCommandEntry = {
 	name: "compact",
@@ -626,11 +644,13 @@ export const WorkspaceComposerContainer = memo(
 				const newModel = findModelOption(modelSections, modelId);
 				const currentProvider = provider;
 				const newProvider = newModel?.provider;
+				const canReuseThread = canReuseProviderThread(effectiveModel, newModel);
 				logComposerDebug("model select requested", {
 					modelId,
 					modelFound: Boolean(newModel),
 					currentProvider,
 					newProvider: newProvider ?? null,
+					canReuseThread,
 					currentSessionId: currentSession?.id ?? null,
 					currentSessionAgentType: currentSession?.agentType ?? null,
 					currentSessionModel: currentSession?.model ?? null,
@@ -643,12 +663,13 @@ export const WorkspaceComposerContainer = memo(
 					providerCounts: modelProviderCounts(modelSections),
 				});
 
-				// Only create a new session when provider changes AND the session
-				// already has messages. New/empty sessions just switch in-place.
+				// Only create a new session when the selected model cannot reuse
+				// the current provider-owned thread AND the session already has
+				// messages. New/empty sessions just switch in-place.
 				if (
 					newProvider &&
 					currentProvider &&
-					newProvider !== currentProvider &&
+					!canReuseThread &&
 					!isNewSession(currentSession) &&
 					displayedSessionId &&
 					displayedWorkspaceId
@@ -844,6 +865,7 @@ export const WorkspaceComposerContainer = memo(
 			[
 				modelSections,
 				provider,
+				effectiveModel,
 				currentSession,
 				displayedSessionId,
 				displayedWorkspaceId,

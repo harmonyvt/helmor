@@ -170,6 +170,16 @@ const MODEL_SECTIONS = [
 				effortLevels: ["low", "medium", "high"],
 				supportsFastMode: true,
 			},
+			{
+				id: "codex:azure:gpt-5-codex",
+				provider: "codex",
+				label: "Azure · gpt-5-codex",
+				cliModel: "gpt-5-codex",
+				providerKey: "azure",
+				codexProfile: "azure",
+				effortLevels: ["low", "medium", "high"],
+				supportsFastMode: true,
+			},
 		],
 	},
 	{
@@ -737,6 +747,80 @@ describe("WorkspaceComposerContainer", () => {
 		expect(apiMockState.createSession).toHaveBeenCalledWith("workspace-1");
 		expect(apiMockState.loadSessionThreadMessages).not.toHaveBeenCalled();
 		expect(getProviderSwitchParent("session-new")).toBeNull();
+	});
+
+	it("uses provider-switch flow when changing Codex thread scopes", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+		apiMockState.loadSessionThreadMessages.mockResolvedValue([
+			{
+				id: "m-codex",
+				role: "user",
+				content: [{ type: "text", id: "m-codex:t", text: "from openai" }],
+				createdAt: "2026-04-05T00:00:00Z",
+			},
+		]);
+
+		const onSelectModel = vi.fn();
+		const onSwitchSession = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-2"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={onSelectModel}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSwitchSession={onSwitchSession}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(composerMockState.lastOnSelectModel).not.toBeNull();
+		composerMockState.lastOnSelectModel?.("codex:azure:gpt-5-codex");
+		fireEvent.click(await screen.findByText("Bring history"));
+
+		await waitFor(() => {
+			expect(onSelectModel).toHaveBeenCalledWith(
+				"session:session-new",
+				"codex:azure:gpt-5-codex",
+			);
+		});
+		expect(onSwitchSession).toHaveBeenCalledWith("session-new");
+		expect(apiMockState.createSession).toHaveBeenCalledWith("workspace-1");
+		expect(apiMockState.loadSessionThreadMessages).toHaveBeenCalledWith(
+			"session-2",
+		);
+		expect(getProviderSwitchParent("session-new")).toEqual({
+			parentSessionId: "session-2",
+			fromProvider: "codex",
+			toProvider: "codex",
+		});
 	});
 
 	it("passes through pending prompt permission mode without a model override", async () => {
