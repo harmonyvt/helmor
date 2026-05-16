@@ -8,8 +8,8 @@ import {
 	GOAL_LANES,
 	type GoalLaneId,
 	groupGoalChildWorkspacesByLane,
+	hasOpenChangeRequest,
 	isMovableGoalLaneId,
-	isWorkspaceMergeable,
 } from "./board-model";
 import { GoalLane } from "./lane";
 
@@ -31,10 +31,10 @@ type GoalBoardProps = {
 		workspace: WorkspaceDetail,
 		status: WorkspaceStatus,
 	) => void;
-	/** Called when a mergeable card is dropped on the Merged lane. */
+	/** Called when a card with an open change request is dropped on Merged. */
 	onMergeWorkspace: (workspace: WorkspaceDetail) => void;
-	/** Called when a non-mergeable card is dropped on the Merged lane. */
-	onMergeRejected: (workspace: WorkspaceDetail) => void;
+	/** Called when a card without an open change request is dropped on Merged. */
+	onCheckLanding: (workspace: WorkspaceDetail) => void;
 	onDragStart: (workspaceId: string, sourceLane: GoalLaneId) => void;
 	onDragEnd: () => void;
 	onDragOverLane: (lane: GoalLaneId | null) => void;
@@ -51,18 +51,18 @@ export function GoalBoard({
 	orchestratorStatusByWorkspaceId,
 	onMoveWorkspace,
 	onMergeWorkspace,
-	onMergeRejected,
+	onCheckLanding,
 	onDragStart,
 	onDragEnd,
 	onDragOverLane,
 }: GoalBoardProps) {
 	const byLane = groupGoalChildWorkspacesByLane(workspaces);
 
-	// Resolve the workspace being dragged so we can check mergeability.
+	// Resolve the workspace being dragged so we can choose the Merged-lane flow.
 	const draggedWorkspace = dragState
 		? (workspaces.find((w) => w.id === dragState.workspaceId) ?? null)
 		: null;
-	const isDraggedMergeable = isWorkspaceMergeable(draggedWorkspace);
+	const draggedHasOpenChangeRequest = hasOpenChangeRequest(draggedWorkspace);
 
 	const handleDragOver = (laneId: GoalLaneId, event: React.DragEvent) => {
 		if (laneId === "merged") {
@@ -84,10 +84,10 @@ export function GoalBoard({
 					(w) => w.id === dragState.workspaceId,
 				);
 				if (workspace) {
-					if (isDraggedMergeable) {
+					if (draggedHasOpenChangeRequest) {
 						onMergeWorkspace(workspace);
 					} else {
-						onMergeRejected(workspace);
+						onCheckLanding(workspace);
 					}
 				}
 			}
@@ -125,10 +125,8 @@ export function GoalBoard({
 			<div className="flex h-full gap-3 p-4">
 				{GOAL_LANES.map((lane) => {
 					const isOver = dragOverLane === lane.id;
-					// Show a rejection highlight when hovering over the merged lane
-					// with a card that cannot be merged.
 					const isDragRejected =
-						isOver && lane.id === "merged" && !isDraggedMergeable;
+						isOver && lane.id === "merged" && !draggedHasOpenChangeRequest;
 					return (
 						<GoalLane
 							key={lane.id}

@@ -187,7 +187,7 @@ export function GoalCardDetailPanel({
 					)}
 					{isMergedGoalWorkspace(ws) ? (
 						<span className="text-[11px] text-muted-foreground">
-							Moved by PR state
+							Landed in goal branch
 						</span>
 					) : (
 						moveLanes.map((lane) => (

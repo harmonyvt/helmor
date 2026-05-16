@@ -628,6 +628,13 @@ pub fn continue_workspace_from_target_branch(
                     pr_sync_state = ?5,
                     pr_title = NULL,
                     pr_url = NULL,
+                    landing_state = 'unlanded',
+                    landing_source = NULL,
+                    landed_at = NULL,
+                    landed_target_branch = NULL,
+                    landed_source_ref = NULL,
+                    landed_commit_sha = NULL,
+                    last_known_head_sha = NULL,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,

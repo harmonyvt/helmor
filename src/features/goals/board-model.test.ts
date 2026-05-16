@@ -22,6 +22,7 @@ function workspace(
 		status: overrides.status ?? "backlog",
 		sessionCount: overrides.sessionCount ?? 0,
 		messageCount: 0,
+		landingState: overrides.landingState ?? "unlanded",
 	};
 }
 
@@ -34,7 +35,8 @@ describe("goal board model", () => {
 				id: "ws-merged",
 				title: "Merged card",
 				status: "done",
-				prSyncState: "merged",
+				prSyncState: "none",
+				landingState: "landed",
 			}),
 		]);
 
@@ -67,6 +69,7 @@ describe("goal board model", () => {
 				branch: "goal/merged",
 				prUrl: "https://example.com/pr/2",
 				prSyncState: "merged",
+				landingState: "landed",
 			}),
 		]);
 
@@ -77,6 +80,7 @@ describe("goal board model", () => {
 				lane: "in-progress",
 				branch: "goal/auth",
 				prUrl: "https://example.com/pr/1",
+				landingState: "unlanded",
 				sessionCount: 2,
 			},
 			{
@@ -86,8 +90,35 @@ describe("goal board model", () => {
 				branch: "goal/merged",
 				prUrl: "https://example.com/pr/2",
 				prSyncState: "merged",
+				landingState: "landed",
 				sessionCount: 0,
 			},
+		]);
+	});
+
+	it("uses landing state, not PR state, for the merged lane", () => {
+		const grouped = groupGoalChildWorkspacesByLane([
+			workspace({
+				id: "branch-landed",
+				title: "Branch landed",
+				status: "done",
+				prSyncState: "none",
+				landingState: "landed",
+			}),
+			workspace({
+				id: "pr-merged-but-not-landed",
+				title: "Stale PR state",
+				status: "done",
+				prSyncState: "merged",
+				landingState: "unlanded",
+			}),
+		]);
+
+		expect(grouped.get("merged")?.map((item) => item.id)).toEqual([
+			"branch-landed",
+		]);
+		expect(grouped.get("done")?.map((item) => item.id)).toEqual([
+			"pr-merged-but-not-landed",
 		]);
 	});
 });

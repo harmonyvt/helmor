@@ -42,6 +42,9 @@ pub enum UiMutationEvent {
     WorkspaceChangeRequestChanged {
         workspace_id: String,
     },
+    WorkspaceLandingChanged {
+        workspace_id: String,
+    },
     WorkspaceBrowserTabsChanged {
         workspace_id: String,
     },
@@ -129,6 +132,9 @@ mod tests {
                 workspace_id: "w".into(),
             },
             UiMutationEvent::WorkspaceChangeRequestChanged {
+                workspace_id: "w".into(),
+            },
+            UiMutationEvent::WorkspaceLandingChanged {
                 workspace_id: "w".into(),
             },
             UiMutationEvent::WorkspaceBrowserTabsChanged {

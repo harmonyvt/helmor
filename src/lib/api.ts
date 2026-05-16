@@ -44,6 +44,13 @@ export type WorkspaceStatus =
  */
 export type PrSyncState = "none" | "open" | "closed" | "merged";
 
+export type LandingState = "unlanded" | "landed" | "unknown";
+
+export type LandingSource =
+	| "pull-request"
+	| "branch-ancestry"
+	| "manual-repair";
+
 /**
  * Mirror of the Rust `ActionKind` enum
  * (`src-tauri/src/agents/action_kind.rs`). Non-null when the session was
@@ -90,6 +97,13 @@ export type WorkspaceRow = {
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
+	landingState?: LandingState;
+	landingSource?: LandingSource | null;
+	landedAt?: string | null;
+	landedTargetBranch?: string | null;
+	landedSourceRef?: string | null;
+	landedCommitSha?: string | null;
+	lastKnownHeadSha?: string | null;
 	intendedTargetBranch?: string | null;
 	pinnedAt?: string | null;
 	sessionCount?: number;
@@ -482,6 +496,13 @@ export type WorkspaceDetail = {
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
+	landingState?: LandingState;
+	landingSource?: LandingSource | null;
+	landedAt?: string | null;
+	landedTargetBranch?: string | null;
+	landedSourceRef?: string | null;
+	landedCommitSha?: string | null;
+	lastKnownHeadSha?: string | null;
 	archiveCommit?: string | null;
 	sessionCount: number;
 	messageCount: number;
@@ -1828,6 +1849,7 @@ export type UiMutationEvent =
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
 	| { type: "workspaceChangeRequestChanged"; workspaceId: string }
+	| { type: "workspaceLandingChanged"; workspaceId: string }
 	| { type: "workspaceBrowserTabsChanged"; workspaceId: string }
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
@@ -2884,6 +2906,34 @@ export async function setGoalChildWorkspaceStatus(
 ): Promise<void> {
 	return invoke<void>("set_goal_child_workspace_status", {
 		request: { goalWorkspaceId, childWorkspaceId, status },
+	});
+}
+
+export type LandingReconcileResponse = {
+	workspaceId: string;
+	landingState: LandingState;
+	landingSource?: LandingSource | null;
+	landedAt?: string | null;
+	landedTargetBranch?: string | null;
+	landedSourceRef?: string | null;
+	landedCommitSha?: string | null;
+	lastKnownHeadSha?: string | null;
+	changed: boolean;
+};
+
+export async function reconcileWorkspaceLandingState(
+	workspaceId: string,
+): Promise<LandingReconcileResponse> {
+	return invoke<LandingReconcileResponse>("reconcile_workspace_landing_state", {
+		workspaceId,
+	});
+}
+
+export async function markWorkspaceLanded(
+	workspaceId: string,
+): Promise<LandingReconcileResponse> {
+	return invoke<LandingReconcileResponse>("mark_workspace_landed", {
+		workspaceId,
 	});
 }
 

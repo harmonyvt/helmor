@@ -446,6 +446,38 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add pr_url column")?;
     }
 
+    for (column, definition) in [
+        ("landing_state", "TEXT DEFAULT 'unlanded'"),
+        ("landing_source", "TEXT"),
+        ("landed_at", "TEXT"),
+        ("landed_target_branch", "TEXT"),
+        ("landed_source_ref", "TEXT"),
+        ("landed_commit_sha", "TEXT"),
+        ("last_known_head_sha", "TEXT"),
+    ] {
+        if has_table(connection, "workspaces") && !has_column(connection, "workspaces", column) {
+            connection
+                .execute_batch(&format!(
+                    "ALTER TABLE workspaces ADD COLUMN {column} {definition}"
+                ))
+                .with_context(|| format!("Failed to add workspaces.{column}"))?;
+        }
+    }
+    if has_table(connection, "workspaces") {
+        connection
+            .execute_batch(
+                r#"
+                UPDATE workspaces
+                SET landing_state = 'landed',
+                    landing_source = COALESCE(landing_source, 'pull-request'),
+                    landed_at = COALESCE(landed_at, updated_at, datetime('now'))
+                WHERE pr_sync_state = 'merged'
+                  AND COALESCE(landing_state, 'unlanded') != 'landed';
+                "#,
+            )
+            .context("Failed to backfill workspace landing state")?;
+    }
+
     if has_table(connection, "workspaces")
         && !has_column(connection, "workspaces", "workspace_kind")
     {
@@ -658,6 +690,13 @@ CREATE TABLE IF NOT EXISTS workspaces (
     pr_title TEXT,
     pr_sync_state TEXT DEFAULT 'none',
     pr_url TEXT,
+    landing_state TEXT DEFAULT 'unlanded',
+    landing_source TEXT,
+    landed_at TEXT,
+    landed_target_branch TEXT,
+    landed_source_ref TEXT,
+    landed_commit_sha TEXT,
+    last_known_head_sha TEXT,
     workspace_kind TEXT DEFAULT 'code',
     goal_workspace_id TEXT,
     goal_title TEXT,

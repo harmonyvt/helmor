@@ -45,6 +45,7 @@ pub use models::settings;
 pub use workspace::files as editor_files;
 pub use workspace::helpers;
 pub use workspace::kind as workspace_kind;
+pub use workspace::landing as workspace_landing;
 pub use workspace::pr_sync as workspace_pr_sync;
 pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
@@ -271,6 +272,8 @@ pub fn run() {
             commands::workspace_commands::get_workspace,
             commands::workspace_commands::list_goal_child_workspaces,
             commands::workspace_commands::update_goal_workspace_meta,
+            commands::workspace_commands::reconcile_workspace_landing_state,
+            commands::workspace_commands::mark_workspace_landed,
             commands::repository_commands::add_repository_from_local_path,
             commands::repository_commands::clone_repository_from_url,
             commands::github_commands::list_github_accessible_repositories,
