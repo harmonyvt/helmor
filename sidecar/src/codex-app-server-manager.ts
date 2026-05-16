@@ -21,6 +21,7 @@ import { parseImageRefs } from "./images.js";
 import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
 import { errorDetails, logger } from "./logger.js";
 import { listProviderModels, modelSupportsFastMode } from "./model-catalog.js";
+import { errorMessage } from "./request-parser.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
@@ -36,6 +37,7 @@ import {
 } from "./title.js";
 
 const CODEX_BIN_PATH = process.env.HELMOR_CODEX_BIN_PATH || "codex";
+export const MAX_CODEX_GOAL_OBJECTIVE_CHARS = 4000;
 
 export type GoalCommand =
 	| { kind: "set"; objective: string }
@@ -48,6 +50,15 @@ export function parseGoalCommand(prompt: string): GoalCommand | null {
 	if (arg === "") return null;
 	if (arg === "resume") return { kind: "resume" };
 	return { kind: "set", objective: arg };
+}
+
+export function validateGoalCommand(command: GoalCommand): void {
+	if (command.kind !== "set") return;
+	const objectiveChars = Array.from(command.objective).length;
+	if (objectiveChars <= MAX_CODEX_GOAL_OBJECTIVE_CHARS) return;
+	throw new Error(
+		`Codex goal objective is ${objectiveChars} characters; maximum is ${MAX_CODEX_GOAL_OBJECTIVE_CHARS}. Shorten the /goal objective, then send supporting details as follow-up messages.`,
+	);
 }
 
 function dispatchGoalCommand(
@@ -373,6 +384,9 @@ export class CodexAppServerManager implements SessionManager {
 		});
 
 		const goalCommand = parseGoalCommand(prompt);
+		if (goalCommand) {
+			validateGoalCommand(goalCommand);
+		}
 		let effectiveResume = resume;
 		if (goalCommand) {
 			effectiveResume = await this.ensureCodexGoalsReady(
@@ -868,7 +882,7 @@ export class CodexAppServerManager implements SessionManager {
 					})
 					.catch((err) => {
 						logger.error(`${method} failed`, errorDetails(err));
-						reject(err);
+						finishWithError(errorMessage(err));
 					});
 			}
 		}).finally(() => {
