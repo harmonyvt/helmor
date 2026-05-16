@@ -1547,6 +1547,16 @@ mod tests {
             None,
         )
         .unwrap();
+        let initial_head_sha = git_ops::run_git(
+            ["-C", workspace_dir.to_str().unwrap(), "rev-parse", "HEAD"],
+            None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE workspaces SET initial_head_sha = ?2 WHERE id = ?1",
+            rusqlite::params!["w-pr", initial_head_sha],
+        )
+        .unwrap();
         git_ops::run_git(
             [
                 "-C",
@@ -1620,6 +1630,113 @@ mod tests {
         assert_eq!(
             workspace_pr_metadata(&env, "w-pr"),
             (Some("Dynamic course catalogue/pages".to_string()), None)
+        );
+    }
+
+    #[test]
+    fn landing_clears_branch_ancestry_false_positive_for_fresh_dirty_child_branch() {
+        let env = TestEnv::new("landing-fresh-child-branch-unlanded");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        conn.execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, state, status, workspace_kind,
+              branch, pr_sync_state
+            )
+            VALUES ('goal-1', 'r1', 'goal', 'ready', 'review', 'goal',
+                    'helmor/goal/prototype', 'open')
+            "#,
+            [],
+        )
+        .unwrap();
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-child",
+                repo_id: "r1",
+                directory_name: "alpha",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("harmonyvt/goal-add-setup-envs-workflow-for-convex-next-env-file"),
+                intended_target_branch: Some("helmor/goal/prototype"),
+            },
+        );
+        conn.execute(
+            "UPDATE workspaces SET goal_workspace_id = 'goal-1', status = 'in-progress' WHERE id = 'w-child'",
+            [],
+        )
+        .unwrap();
+
+        let workspace_dir = crate::data_dir::workspace_dir("demo", "alpha").unwrap();
+        fs::create_dir_all(workspace_dir.parent().unwrap()).unwrap();
+        let repo = GitTestRepo::init();
+        git_ops::run_git(
+            [
+                "clone",
+                repo.path().to_str().unwrap(),
+                workspace_dir.to_str().unwrap(),
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "checkout",
+                "-b",
+                "helmor/goal/prototype",
+            ],
+            None,
+        )
+        .unwrap();
+        let initial_head_sha = git_ops::run_git(
+            ["-C", workspace_dir.to_str().unwrap(), "rev-parse", "HEAD"],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                workspace_dir.to_str().unwrap(),
+                "checkout",
+                "-b",
+                "harmonyvt/goal-add-setup-envs-workflow-for-convex-next-env-file",
+            ],
+            None,
+        )
+        .unwrap();
+        fs::write(workspace_dir.join("env.local.example"), "CONVEX_URL=\n").unwrap();
+        conn.execute(
+            r#"
+            UPDATE workspaces
+            SET landing_state = 'landed',
+                landing_source = 'branch-ancestry',
+                landed_target_branch = 'helmor/goal/prototype',
+                landed_source_ref = 'harmonyvt/goal-add-setup-envs-workflow-for-convex-next-env-file',
+                landed_commit_sha = ?2,
+                initial_head_sha = ?2,
+                last_known_head_sha = ?2
+            WHERE id = ?1
+            "#,
+            rusqlite::params!["w-child", initial_head_sha],
+        )
+        .unwrap();
+
+        let children = list_goal_child_workspaces("goal-1").unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].landing_state, LandingState::Unlanded);
+        assert_eq!(children[0].landing_source, None);
+        assert_eq!(
+            workspace_landing_details(&env, "w-child"),
+            WorkspaceLandingDetails {
+                state: LandingState::Unlanded,
+                source: None,
+                target_branch: None,
+                source_ref: None,
+                commit_sha: None,
+                last_known_head_sha: Some(initial_head_sha),
+            }
         );
     }
 
