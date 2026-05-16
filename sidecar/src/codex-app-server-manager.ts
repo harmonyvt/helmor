@@ -43,6 +43,13 @@ export type GoalCommand =
 	| { kind: "set"; objective: string }
 	| { kind: "resume" };
 
+type GoalStatusSnapshot = {
+	threadId: string | null;
+	action: string | null;
+	status: string | null;
+	objective: string | null;
+};
+
 export function parseGoalCommand(prompt: string): GoalCommand | null {
 	const match = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
 	if (!match) return null;
@@ -99,6 +106,91 @@ function buildGoalStatusEvent(
 		...(command.kind === "set" ? { objective: command.objective } : {}),
 		response,
 	};
+}
+
+function isGoalStatusMethod(method: string): boolean {
+	return method === "thread/goal/status" || method.startsWith("thread/goal/");
+}
+
+function goalString(value: unknown): string | null {
+	return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
+function extractGoalStatusSnapshot(
+	value: Record<string, unknown>,
+	fallbackThreadId?: string | null,
+): GoalStatusSnapshot {
+	const response =
+		value.response && typeof value.response === "object"
+			? (value.response as Record<string, unknown>)
+			: {};
+	const goal =
+		value.goal && typeof value.goal === "object"
+			? (value.goal as Record<string, unknown>)
+			: {};
+	const responseGoal =
+		response.goal && typeof response.goal === "object"
+			? (response.goal as Record<string, unknown>)
+			: {};
+	const thread =
+		value.thread && typeof value.thread === "object"
+			? (value.thread as Record<string, unknown>)
+			: {};
+	const responseThread =
+		response.thread && typeof response.thread === "object"
+			? (response.thread as Record<string, unknown>)
+			: {};
+
+	return {
+		threadId:
+			goalString(value.threadId) ??
+			goalString(value.thread_id) ??
+			goalString(thread.id) ??
+			goalString(response.threadId) ??
+			goalString(response.thread_id) ??
+			goalString(responseThread.id) ??
+			goalString(fallbackThreadId),
+		action: goalString(value.action) ?? goalString(response.action),
+		status:
+			goalString(value.status) ??
+			goalString(goal.status) ??
+			goalString(response.status) ??
+			goalString(responseGoal.status),
+		objective:
+			goalString(value.objective) ??
+			goalString(goal.objective) ??
+			goalString(response.objective) ??
+			goalString(responseGoal.objective),
+	};
+}
+
+function goalStatusKey(snapshot: GoalStatusSnapshot): string {
+	return JSON.stringify({
+		action: snapshot.action,
+		status: snapshot.status,
+		objective: snapshot.objective,
+	});
+}
+
+function isTerminalGoalStatus(status: string | null): boolean {
+	return (
+		status === "completed" ||
+		status === "complete" ||
+		status === "cancelled" ||
+		status === "canceled" ||
+		status === "ended" ||
+		status === "failed"
+	);
+}
+
+function isActiveGoalSnapshot(snapshot: GoalStatusSnapshot): boolean {
+	if (isTerminalGoalStatus(snapshot.status)) return false;
+	return (
+		snapshot.action === "set" ||
+		snapshot.action === "resume" ||
+		snapshot.status === "set" ||
+		snapshot.status === "active"
+	);
 }
 
 /** How long after a "Reconnecting…" stderr line we keep emitting
@@ -320,6 +412,10 @@ export class CodexAppServerManager implements SessionManager {
 	private sessions = new Map<string, AppServerContext>();
 	private pendingApprovals = new Map<string, PendingApproval>();
 	private pendingUserInputs = new Map<string, PendingApproval>();
+	private threadGoalStates = new Map<
+		string,
+		GoalStatusSnapshot & { key: string }
+	>();
 
 	/** Called by index.ts when frontend responds to a permission prompt. */
 	resolvePermission(permissionId: string, behavior: "allow" | "deny"): void {
@@ -386,6 +482,9 @@ export class CodexAppServerManager implements SessionManager {
 		const goalCommand = parseGoalCommand(prompt);
 		if (goalCommand) {
 			validateGoalCommand(goalCommand);
+			const knownThreadId =
+				this.sessions.get(sessionId)?.providerThreadId ?? resume ?? null;
+			this.assertCanDispatchGoalCommand(knownThreadId, goalCommand);
 		}
 		let effectiveResume = resume;
 		if (goalCommand) {
@@ -407,6 +506,9 @@ export class CodexAppServerManager implements SessionManager {
 			permissionMode,
 			effectiveFastMode,
 		);
+		if (goalCommand) {
+			this.assertCanDispatchGoalCommand(ctx.providerThreadId, goalCommand);
+		}
 		// Codex usage notifications do not include a model id.
 		if (model) ctx.lastSentModel = model;
 
@@ -465,7 +567,15 @@ export class CodexAppServerManager implements SessionManager {
 				reject(err);
 			};
 
-			const emit = (event: object) => {
+			const emit = (event: Record<string, unknown>) => {
+				const eventType = typeof event.type === "string" ? event.type : null;
+				if (eventType && isGoalStatusMethod(eventType)) {
+					const snapshot = extractGoalStatusSnapshot(
+						event,
+						ctx.providerThreadId,
+					);
+					if (!this.shouldEmitGoalStatus(snapshot)) return;
+				}
 				emitter.passthrough(requestId, event);
 			};
 
@@ -1222,6 +1332,27 @@ export class CodexAppServerManager implements SessionManager {
 		for (const [id, pending] of this.pendingUserInputs) {
 			if (pending.sessionId === sessionId) this.pendingUserInputs.delete(id);
 		}
+	}
+
+	private assertCanDispatchGoalCommand(
+		threadId: string | null,
+		command: GoalCommand,
+	): void {
+		if (command.kind !== "set" || !threadId) return;
+		const current = this.threadGoalStates.get(threadId);
+		if (!current || !isActiveGoalSnapshot(current)) return;
+		throw new Error(
+			"A Codex goal is already active for this thread. Complete or cancel the current goal before setting another.",
+		);
+	}
+
+	private shouldEmitGoalStatus(snapshot: GoalStatusSnapshot): boolean {
+		if (!snapshot.threadId) return true;
+		const key = goalStatusKey(snapshot);
+		const previous = this.threadGoalStates.get(snapshot.threadId);
+		if (previous?.key === key) return false;
+		this.threadGoalStates.set(snapshot.threadId, { ...snapshot, key });
+		return true;
 	}
 
 	private recycleIdleContextForGoal(

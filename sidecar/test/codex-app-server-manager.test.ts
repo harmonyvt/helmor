@@ -18,6 +18,7 @@ const serverState = {
 	/** Optional hook tests use to inject extra notifications between
 	 *  `turn/started` and `turn/completed` (e.g. `thread/tokenUsage/updated`). */
 	beforeTurnCompleted: null as null | (() => void),
+	goalStatusNotifications: [] as Array<Record<string, unknown>>,
 	goalSetError: null as null | Error,
 	instances: [] as MockCodexAppServer[],
 };
@@ -62,6 +63,12 @@ class MockCodexAppServer {
 					method: "turn/started",
 					params: { turn: { id: "turn-goal-1" } },
 				});
+				for (const params of serverState.goalStatusNotifications) {
+					serverState.onNotification?.({
+						method: "thread/goal/status",
+						params,
+					});
+				}
 				serverState.onNotification?.({
 					method: "turn/completed",
 					params: { turn: { id: "turn-goal-1" } },
@@ -134,6 +141,7 @@ describe("CodexAppServerManager", () => {
 		serverState.requests = [];
 		serverState.onNotification = null;
 		serverState.beforeTurnCompleted = null;
+		serverState.goalStatusNotifications = [];
 		serverState.goalSetError = null;
 		serverState.instances = [];
 		gitAccessState.directories = [];
@@ -323,6 +331,183 @@ describe("CodexAppServerManager", () => {
 			threadId: "thread-existing",
 			status: "active",
 		});
+	});
+
+	test("dedupes repeated Codex goal status notifications", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+		serverState.goalStatusNotifications = [
+			{
+				status: "active",
+				goal: { objective: "Finish the migration" },
+				threadId: "thread-1",
+			},
+			{
+				status: "active",
+				goal: { objective: "Finish the migration" },
+				threadId: "thread-1",
+			},
+		];
+
+		await manager.sendMessage(
+			"REQ-goal-dedupe",
+			{
+				sessionId: "session-goal-dedupe",
+				prompt: "/goal Finish the migration",
+				model: "gpt-5.4",
+				cwd: "/tmp/workspace",
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		const goalEvents = events.filter(
+			(event) => event.type === "thread/goal/status",
+		);
+		expect(goalEvents).toHaveLength(2);
+		expect(
+			goalEvents.filter((event) => event.status === "active"),
+		).toHaveLength(1);
+		expect(goalEvents.filter((event) => event.status === "set")).toHaveLength(
+			1,
+		);
+	});
+
+	test("rejects setting a new Codex goal while one is active", async () => {
+		const manager = new CodexAppServerManager();
+		serverState.goalStatusNotifications = [
+			{
+				status: "active",
+				goal: { objective: "Finish the migration" },
+				threadId: "thread-1",
+			},
+		];
+
+		await manager.sendMessage(
+			"REQ-goal-active",
+			{
+				sessionId: "session-goal-active",
+				prompt: "/goal Finish the migration",
+				model: "gpt-5.4",
+				cwd: "/tmp/workspace",
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		serverState.requests = [];
+		await expect(
+			manager.sendMessage(
+				"REQ-goal-rejected",
+				{
+					sessionId: "session-goal-active",
+					prompt: "/goal Start a different goal",
+					model: "gpt-5.4",
+					cwd: "/tmp/workspace",
+					resume: undefined,
+					permissionMode: "bypassPermissions",
+					effortLevel: "high",
+					fastMode: false,
+					images: [],
+				},
+				emitter,
+			),
+		).rejects.toThrow("A Codex goal is already active for this thread");
+		expect(
+			serverState.requests.find(
+				(request) => request.method === "thread/goal/set",
+			),
+		).toBeUndefined();
+	});
+
+	test("allows setting a new Codex goal after the previous goal ends", async () => {
+		const manager = new CodexAppServerManager();
+		serverState.goalStatusNotifications = [
+			{
+				status: "active",
+				goal: { objective: "Finish the migration" },
+				threadId: "thread-1",
+			},
+		];
+
+		await manager.sendMessage(
+			"REQ-goal-completed",
+			{
+				sessionId: "session-goal-completed",
+				prompt: "/goal Finish the migration",
+				model: "gpt-5.4",
+				cwd: "/tmp/workspace",
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		serverState.goalStatusNotifications = [];
+		serverState.beforeTurnCompleted = () => {
+			serverState.onNotification?.({
+				method: "thread/goal/status",
+				params: {
+					status: "completed",
+					goal: { objective: "Finish the migration" },
+					threadId: "thread-1",
+				},
+			});
+		};
+		await manager.sendMessage(
+			"REQ-goal-finished-turn",
+			{
+				sessionId: "session-goal-completed",
+				prompt: "ack",
+				model: "gpt-5.4",
+				cwd: "/tmp/workspace",
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		serverState.requests = [];
+		serverState.beforeTurnCompleted = null;
+		serverState.goalStatusNotifications = [];
+		await manager.sendMessage(
+			"REQ-goal-next",
+			{
+				sessionId: "session-goal-completed",
+				prompt: "/goal Start the next goal",
+				model: "gpt-5.4",
+				cwd: "/tmp/workspace",
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(
+			serverState.requests.find(
+				(request) => request.method === "thread/goal/set",
+			),
+		).toBeDefined();
 	});
 
 	test("recycles idle Codex context before /goal", async () => {
