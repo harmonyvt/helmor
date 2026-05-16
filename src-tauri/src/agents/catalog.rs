@@ -14,6 +14,8 @@ pub struct AgentModelOption {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supports_fast_mode: bool,
     pub supports_context_usage: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -34,18 +36,22 @@ pub struct AgentModelSection {
 }
 
 pub fn static_model_sections() -> Vec<AgentModelSection> {
-    model_sections_for_custom(super::custom_providers::configured_models())
+    model_sections_for_custom(
+        super::custom_providers::configured_models(),
+        super::codex_profiles::configured_models(),
+    )
 }
 
 fn model_sections_for_custom(
     custom: Vec<super::custom_providers::ClaudeProviderModel>,
+    codex_profiles: Vec<super::codex_profiles::CodexProfileModel>,
 ) -> Vec<AgentModelSection> {
     let mut claude_section = official_claude_section();
     claude_section
         .options
         .extend(custom_provider_options(custom));
     let mut sections = vec![claude_section];
-    sections.push(codex_section());
+    sections.push(codex_section(codex_profiles));
     sections.push(pi_section());
 
     sections
@@ -75,19 +81,21 @@ fn official_claude_section() -> AgentModelSection {
     }
 }
 
-fn codex_section() -> AgentModelSection {
+fn codex_section(profiles: Vec<super::codex_profiles::CodexProfileModel>) -> AgentModelSection {
+    let mut options = vec![
+        codex_model("gpt-5.5", "GPT-5.5"),
+        codex_model("gpt-5.4", "GPT-5.4"),
+        codex_model("gpt-5.4-mini", "GPT-5.4-Mini"),
+        codex_model("gpt-5.3-codex", "GPT-5.3-Codex"),
+        codex_model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"),
+        codex_model("gpt-5.2", "GPT-5.2"),
+    ];
+    options.extend(codex_profile_options(profiles));
     AgentModelSection {
         id: "codex".to_string(),
         label: "Codex".to_string(),
         status: AgentModelSectionStatus::Ready,
-        options: vec![
-            codex_model("gpt-5.5", "GPT-5.5"),
-            codex_model("gpt-5.4", "GPT-5.4"),
-            codex_model("gpt-5.4-mini", "GPT-5.4-Mini"),
-            codex_model("gpt-5.3-codex", "GPT-5.3-Codex"),
-            codex_model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"),
-            codex_model("gpt-5.2", "GPT-5.2"),
-        ],
+        options,
     }
 }
 
@@ -151,6 +159,32 @@ fn custom_provider_options(
             effort_levels: claude_effort_levels(),
             supports_fast_mode: false,
             supports_context_usage: false,
+            codex_profile: None,
+        })
+        .collect()
+}
+
+fn codex_profile_options(
+    profiles: Vec<super::codex_profiles::CodexProfileModel>,
+) -> Vec<AgentModelOption> {
+    profiles
+        .into_iter()
+        .map(|profile| {
+            let label_prefix = super::codex_profiles::provider_label(&profile.model_provider);
+            AgentModelOption {
+                id: super::codex_profiles::model_id(&profile.profile, &profile.model),
+                provider: "codex".to_string(),
+                label: format!("{label_prefix} · {}", profile.model),
+                cli_model: profile.model,
+                provider_key: Some(profile.profile.clone()),
+                effort_levels: ["low", "medium", "high", "xhigh"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                supports_fast_mode: true,
+                supports_context_usage: true,
+                codex_profile: Some(profile.profile),
+            }
         })
         .collect()
 }
@@ -173,6 +207,7 @@ fn claude_model(
             .collect(),
         supports_fast_mode,
         supports_context_usage: true,
+        codex_profile: None,
     }
 }
 
@@ -189,6 +224,7 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
             .collect(),
         supports_fast_mode: true,
         supports_context_usage: true,
+        codex_profile: None,
     }
 }
 
@@ -205,6 +241,7 @@ fn pi_model(id: &str, label: &str, cli_model: &str, effort_levels: &[&str]) -> A
             .collect(),
         supports_fast_mode: false,
         supports_context_usage: false,
+        codex_profile: None,
     }
 }
 
@@ -232,6 +269,7 @@ pub struct ResolvedModel {
     pub supports_effort: bool,
     pub claude_base_url: Option<String>,
     pub claude_auth_token: Option<String>,
+    pub codex_profile: Option<String>,
 }
 
 /// Resolve a model ID to provider + cli_model. Built-in and custom catalog
@@ -254,6 +292,7 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
             supports_effort: true,
             claude_base_url: Some(model.base_url),
             claude_auth_token: Some(model.api_key),
+            codex_profile: None,
         };
     }
 
@@ -269,6 +308,7 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
             supports_effort: !option.effort_levels.is_empty(),
             claude_base_url: None,
             claude_auth_token: None,
+            codex_profile: option.codex_profile,
         };
     }
 
@@ -284,6 +324,7 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         supports_effort: true,
         claude_base_url: None,
         claude_auth_token: None,
+        codex_profile: None,
     }
 }
 
@@ -296,6 +337,7 @@ fn dynamic_pi_model(model_id: &str) -> Option<ResolvedModel> {
         supports_effort: true,
         claude_base_url: None,
         claude_auth_token: None,
+        codex_profile: None,
     })
 }
 
@@ -308,6 +350,7 @@ fn legacy_pi_azure_model(model_id: &str) -> Option<ResolvedModel> {
         supports_effort: true,
         claude_base_url: None,
         claude_auth_token: None,
+        codex_profile: None,
     })
 }
 
@@ -317,7 +360,7 @@ mod tests {
 
     #[test]
     fn static_model_sections_returns_hardcoded_catalog() {
-        let sections = model_sections_for_custom(Vec::new());
+        let sections = model_sections_for_custom(Vec::new(), Vec::new());
 
         assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].id, "claude");
@@ -390,15 +433,17 @@ mod tests {
 
     #[test]
     fn custom_provider_models_append_to_official_claude_section() {
-        let sections =
-            model_sections_for_custom(vec![super::super::custom_providers::ClaudeProviderModel {
+        let sections = model_sections_for_custom(
+            vec![super::super::custom_providers::ClaudeProviderModel {
                 id: "claude-custom|minimax|MiniMax-M2.7".to_string(),
                 provider_key: "minimax".to_string(),
                 label: "MiniMax M2.7".to_string(),
                 cli_model: "MiniMax-M2.7".to_string(),
                 base_url: "https://api.minimax.io/anthropic".to_string(),
                 api_key: "sk-test".to_string(),
-            }]);
+            }],
+            Vec::new(),
+        );
 
         assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].id, "claude");
@@ -428,6 +473,29 @@ mod tests {
         assert!(!sections[0].options[4].supports_context_usage);
         assert_eq!(sections[1].id, "codex");
         assert_eq!(sections[2].id, "pi");
+    }
+
+    #[test]
+    fn codex_profile_models_append_to_codex_section() {
+        let sections = model_sections_for_custom(
+            Vec::new(),
+            vec![super::super::codex_profiles::CodexProfileModel {
+                profile: "azure".to_string(),
+                model_provider: "azure".to_string(),
+                model: "gpt-5-codex".to_string(),
+            }],
+        );
+
+        let model = sections[1]
+            .options
+            .iter()
+            .find(|model| model.id == "codex:azure:gpt-5-codex")
+            .expect("azure codex profile model should be present");
+        assert_eq!(model.provider, "codex");
+        assert_eq!(model.label, "Azure · gpt-5-codex");
+        assert_eq!(model.cli_model, "gpt-5-codex");
+        assert_eq!(model.provider_key.as_deref(), Some("azure"));
+        assert_eq!(model.codex_profile.as_deref(), Some("azure"));
     }
 
     #[test]

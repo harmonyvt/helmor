@@ -21,6 +21,9 @@ export interface SendMessageParams {
 	readonly effortLevel: string | undefined;
 	readonly fastMode: boolean | undefined;
 	readonly claudeEnvironment?: Readonly<Record<string, string>>;
+	/** Codex config profile name. When present, Helmor launches
+	 * `codex --profile <name> app-server` for this session. */
+	readonly codexProfile?: string;
 	/**
 	 * Extra directories the user linked via `/add-dir`. Passed to Claude as
 	 * `additionalDirectories`; merged into Codex's per-turn `sandboxPolicy`
@@ -107,6 +110,7 @@ export interface ProviderModelInfo {
 	readonly label: string;
 	readonly cliModel: string;
 	readonly providerKey?: string;
+	readonly codexProfile?: string;
 	readonly effortLevels?: readonly string[];
 	readonly supportsFastMode?: boolean;
 }

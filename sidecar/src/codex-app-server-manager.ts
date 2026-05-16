@@ -339,6 +339,8 @@ interface AppServerContext {
 	notificationGate: Promise<void> | null;
 	/** Last send's model id; Codex usage notifications omit it. */
 	lastSentModel: string;
+	/** Codex config profile used to launch this app-server process. */
+	codexProfile: string | null;
 	/** Wall-clock ms of the most recent "Reconnecting…" line on the
 	 *  Codex child process's stderr. Used to suppress the transient
 	 *  {method:"error"} notifications that Codex emits during its own
@@ -460,12 +462,15 @@ export class CodexAppServerManager implements SessionManager {
 			effortLevel,
 			permissionMode,
 			fastMode,
+			codexProfile,
 			additionalDirectories,
 			images,
 		} = params;
+		const effectiveCodexProfile = normalizeCodexProfile(codexProfile);
 		const workDir = cwd ?? process.cwd();
 		const effectiveFastMode =
-			fastMode === true && modelSupportsFastMode("codex", model);
+			fastMode === true &&
+			(Boolean(effectiveCodexProfile) || modelSupportsFastMode("codex", model));
 		const resolvedAdditionalDirectories = await mergeAdditionalDirectories(
 			workDir,
 			additionalDirectories,
@@ -474,6 +479,7 @@ export class CodexAppServerManager implements SessionManager {
 		logger.debug(`[${requestId}] codex sendMessage`, {
 			sessionId,
 			model: model ?? "(default)",
+			codexProfile: effectiveCodexProfile ?? "(default)",
 			cwd: workDir,
 			resume: resume ?? "(none)",
 			promptLen: prompt.length,
@@ -505,6 +511,7 @@ export class CodexAppServerManager implements SessionManager {
 			model,
 			permissionMode,
 			effectiveFastMode,
+			effectiveCodexProfile,
 		);
 		if (goalCommand) {
 			this.assertCanDispatchGoalCommand(ctx.providerThreadId, goalCommand);
@@ -1394,9 +1401,23 @@ export class CodexAppServerManager implements SessionManager {
 		model?: string,
 		permissionMode?: string,
 		fastMode?: boolean,
+		codexProfile?: string | null,
 	): Promise<AppServerContext> {
 		const existing = this.sessions.get(sessionId);
-		if (existing && !existing.server.killed) return existing;
+		if (existing && !existing.server.killed) {
+			if (existing.codexProfile === (codexProfile ?? null)) return existing;
+			logger.info("Restarting Codex app-server for profile switch", {
+				sessionId,
+				from: existing.codexProfile ?? "(default)",
+				to: codexProfile ?? "(default)",
+			});
+			if (!resume && existing.providerThreadId) {
+				resume = existing.providerThreadId;
+			}
+			existing.server.kill();
+			this.sessions.delete(sessionId);
+			this.clearPendingSessionState(sessionId);
+		}
 
 		// Forward-reference holder so the `onRetry` closure can reach the
 		// context that's constructed below — the callback only fires once
@@ -1407,6 +1428,7 @@ export class CodexAppServerManager implements SessionManager {
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
+			profile: codexProfile ?? undefined,
 			onNotification: () => {},
 			onRequest: () => {},
 			onExit: () => {
@@ -1481,6 +1503,7 @@ export class CodexAppServerManager implements SessionManager {
 			activeEmitter: null,
 			notificationGate: null,
 			lastSentModel: model ?? "",
+			codexProfile: codexProfile ?? null,
 			lastRetryAt: null,
 			lastRetryNotice: null,
 		};
@@ -1558,6 +1581,11 @@ function buildThreadStartParams(
 	if (model) params.model = model;
 	if (fastMode) params.serviceTier = "fast";
 	return params;
+}
+
+function normalizeCodexProfile(profile: string | undefined): string | null {
+	const trimmed = profile?.trim();
+	return trimmed ? trimmed : null;
 }
 
 function buildThreadRecoveryParams(

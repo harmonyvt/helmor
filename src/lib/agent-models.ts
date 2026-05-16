@@ -7,6 +7,11 @@ const PI_PROVIDER_LABELS: Record<string, string> = {
 	openai: "OpenAI",
 };
 
+const CODEX_PROFILE_LABELS: Record<string, string> = {
+	azure: "Azure",
+	openai: "OpenAI",
+};
+
 export function getPiModelProviderKey(model: AgentModelOption): string {
 	return (
 		model.providerKey ??
@@ -17,6 +22,15 @@ export function getPiModelProviderKey(model: AgentModelOption): string {
 
 export function getPiModelProviderLabel(providerKey: string): string {
 	return PI_PROVIDER_LABELS[providerKey] ?? providerKey;
+}
+
+export function getCodexProfileKey(model: AgentModelOption): string {
+	return (model.codexProfile ?? model.providerKey ?? "default").trim();
+}
+
+export function getCodexProfileLabel(profileKey: string): string {
+	if (profileKey === "default") return "Default";
+	return CODEX_PROFILE_LABELS[profileKey] ?? profileKey;
 }
 
 export function replacePiModels(
