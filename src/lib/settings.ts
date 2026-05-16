@@ -33,6 +33,8 @@ export type AppSettings = {
 	prCommentReviewModelId: string | null;
 	/** Pi model ids allowed for Goals handoffs. Empty means unrestricted. */
 	piHandoffModelIds: string[];
+	/** Allow Goals assignee handoffs to use every Pi provider instead of the default Anthropic/Codex subset. */
+	allowAllGoalAssigneePiModels: boolean;
 	/** Webview zoom factor. 1.0 = 100%. Range 0.5–2.0. */
 	zoomLevel: number;
 	followUpBehavior: FollowUpBehavior;
@@ -78,6 +80,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	defaultFastMode: false,
 	prCommentReviewModelId: null,
 	piHandoffModelIds: [],
+	allowAllGoalAssigneePiModels: false,
 	zoomLevel: 1.0,
 	followUpBehavior: "steer",
 	alwaysShowContextUsage: true,
@@ -112,6 +115,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	defaultFastMode: "app.default_fast_mode",
 	prCommentReviewModelId: "app.pr_comment_review_model_id",
 	piHandoffModelIds: "app.pi_handoff_model_ids",
+	allowAllGoalAssigneePiModels: "app.allow_all_goal_assignee_pi_models",
 	zoomLevel: "app.zoom_level",
 	followUpBehavior: "app.follow_up_behavior",
 	alwaysShowContextUsage: "app.always_show_context_usage",
@@ -229,6 +233,10 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.piHandoffModelIds],
 				DEFAULT_SETTINGS.piHandoffModelIds,
 			),
+			allowAllGoalAssigneePiModels:
+				raw[SETTINGS_KEY_MAP.allowAllGoalAssigneePiModels] !== undefined
+					? raw[SETTINGS_KEY_MAP.allowAllGoalAssigneePiModels] === "true"
+					: DEFAULT_SETTINGS.allowAllGoalAssigneePiModels,
 			zoomLevel: raw[SETTINGS_KEY_MAP.zoomLevel]
 				? Number(raw[SETTINGS_KEY_MAP.zoomLevel])
 				: DEFAULT_SETTINGS.zoomLevel,
