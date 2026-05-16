@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppInstallEvent, HelmorAppInstallResult } from "@/lib/api";
@@ -6,7 +6,7 @@ import { WorkspaceToastProvider } from "@/lib/workspace-toast-context";
 
 const apiMocks = vi.hoisted(() => ({
 	cancelHelmorAppInstall: vi.fn(),
-	restartApp: vi.fn(),
+	getHelmorAppUpdateStatus: vi.fn(),
 	runHelmorAppInstall: vi.fn(),
 }));
 
@@ -15,7 +15,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		cancelHelmorAppInstall: apiMocks.cancelHelmorAppInstall,
-		restartApp: apiMocks.restartApp,
+		getHelmorAppUpdateStatus: apiMocks.getHelmorAppUpdateStatus,
 		runHelmorAppInstall: apiMocks.runHelmorAppInstall,
 	};
 });
@@ -40,7 +40,7 @@ const installResult = (): HelmorAppInstallResult => ({
 describe("LocalAppUpdatePanel", () => {
 	beforeEach(() => {
 		apiMocks.cancelHelmorAppInstall.mockReset();
-		apiMocks.restartApp.mockReset();
+		apiMocks.getHelmorAppUpdateStatus.mockReset();
 		apiMocks.runHelmorAppInstall.mockReset();
 	});
 
@@ -50,7 +50,7 @@ describe("LocalAppUpdatePanel", () => {
 		vi.clearAllMocks();
 	});
 
-	it("shows streamed progress and a persistent restart toast after installing an update", async () => {
+	it("shows streamed progress and an inline restart notice after installing an update", async () => {
 		const user = userEvent.setup();
 		const pushToast = vi.fn();
 		apiMocks.runHelmorAppInstall.mockImplementation(
@@ -80,8 +80,6 @@ describe("LocalAppUpdatePanel", () => {
 				return installResult();
 			},
 		);
-		apiMocks.restartApp.mockResolvedValue(undefined);
-
 		render(
 			<WorkspaceToastProvider value={pushToast}>
 				<LocalAppUpdatePanel />
@@ -96,22 +94,10 @@ describe("LocalAppUpdatePanel", () => {
 
 		await user.click(screen.getByRole("button", { name: "Diagnostics log" }));
 		expect(screen.getByText(/Already up to date/)).toBeInTheDocument();
-
-		await waitFor(() => {
-			expect(pushToast).toHaveBeenCalledWith(
-				"The new app has been installed. Restart Helmor to start using it.",
-				"Restart required",
-				"default",
-				expect.objectContaining({
-					persistent: true,
-					action: expect.objectContaining({ label: "Restart now" }),
-				}),
-			);
-		});
-
-		const toastOptions = pushToast.mock.calls[0]?.[3];
-		toastOptions.action.onClick();
-		expect(apiMocks.restartApp).toHaveBeenCalledWith(true);
+		expect(
+			screen.getByText("Restart Helmor to start using the installed update."),
+		).toBeInTheDocument();
+		expect(pushToast).not.toHaveBeenCalled();
 	});
 
 	it("keeps failed update details visible", async () => {

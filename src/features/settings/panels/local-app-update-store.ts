@@ -2,7 +2,9 @@ import {
 	type AppInstallEvent,
 	type AppInstallStepStatus,
 	cancelHelmorAppInstall,
+	getHelmorAppUpdateStatus,
 	type HelmorAppInstallResult,
+	type HelmorAppUpdateStatus,
 	runHelmorAppInstall,
 } from "@/lib/api";
 
@@ -48,6 +50,9 @@ export type InstallUiState = {
 	latestOutput: string | null;
 	error: string | null;
 	result: HelmorAppInstallResult | null;
+	updateStatus: HelmorAppUpdateStatus | null;
+	checkingForUpdate: boolean;
+	updateCheckError: string | null;
 };
 
 const MAX_LOG_CHARS = 60_000;
@@ -61,6 +66,9 @@ type StateUpdater =
 const listeners = new Set<Listener>();
 let installState = initialState();
 let currentInstall: Promise<HelmorAppInstallResult> | null = null;
+let currentUpdateCheck: Promise<HelmorAppUpdateStatus | null> | null = null;
+let monitorRefCount = 0;
+let monitorInterval: ReturnType<typeof setInterval> | null = null;
 
 export function getLocalAppInstallSnapshot() {
 	return installState;
@@ -73,9 +81,7 @@ export function subscribeLocalAppInstall(listener: Listener) {
 	};
 }
 
-export function startLocalAppInstall(
-	onRestartRequired?: (result: HelmorAppInstallResult) => void,
-) {
+export function startLocalAppInstall() {
 	if (currentInstall) return currentInstall;
 	setInstallState({
 		...initialState(),
@@ -91,8 +97,14 @@ export function startLocalAppInstall(
 				latestOutput: null,
 				result,
 				error: null,
+				updateStatus: previous.updateStatus
+					? {
+							...previous.updateStatus,
+							updateAvailable: false,
+							behindCount: 0,
+						}
+					: previous.updateStatus,
 			}));
-			onRestartRequired?.(result);
 			return result;
 		})
 		.catch((error) => {
@@ -112,6 +124,61 @@ export function startLocalAppInstall(
 	return currentInstall;
 }
 
+export function startLocalAppUpdateMonitor() {
+	monitorRefCount += 1;
+	void checkLocalAppUpdateStatus();
+	if (!monitorInterval) {
+		monitorInterval = setInterval(() => {
+			void checkLocalAppUpdateStatus();
+		}, 60_000);
+	}
+
+	return () => {
+		monitorRefCount = Math.max(0, monitorRefCount - 1);
+		if (monitorRefCount === 0 && monitorInterval) {
+			clearInterval(monitorInterval);
+			monitorInterval = null;
+		}
+	};
+}
+
+export function checkLocalAppUpdateStatus() {
+	if (currentUpdateCheck) return currentUpdateCheck;
+	if (currentInstall) return Promise.resolve(installState.updateStatus);
+
+	setInstallState((previous) => ({
+		...previous,
+		checkingForUpdate: true,
+		updateCheckError: null,
+	}));
+
+	currentUpdateCheck = getHelmorAppUpdateStatus()
+		.then((status) => {
+			setInstallState((previous) => ({
+				...previous,
+				updateStatus: status,
+				checkingForUpdate: false,
+				updateCheckError: status.error,
+				result: status.updateAvailable ? null : previous.result,
+			}));
+			return status;
+		})
+		.catch((error) => {
+			const message = error instanceof Error ? error.message : String(error);
+			setInstallState((previous) => ({
+				...previous,
+				checkingForUpdate: false,
+				updateCheckError: message,
+			}));
+			return null;
+		})
+		.finally(() => {
+			currentUpdateCheck = null;
+		});
+
+	return currentUpdateCheck;
+}
+
 export async function cancelLocalAppInstall() {
 	return await cancelHelmorAppInstall();
 }
@@ -119,6 +186,12 @@ export async function cancelLocalAppInstall() {
 export function resetLocalAppInstallStoreForTests() {
 	installState = initialState();
 	currentInstall = null;
+	currentUpdateCheck = null;
+	monitorRefCount = 0;
+	if (monitorInterval) {
+		clearInterval(monitorInterval);
+		monitorInterval = null;
+	}
 	notifyListeners();
 }
 
@@ -145,6 +218,9 @@ function initialState(): InstallUiState {
 		latestOutput: null,
 		error: null,
 		result: null,
+		updateStatus: null,
+		checkingForUpdate: false,
+		updateCheckError: null,
 	};
 }
 
@@ -200,6 +276,13 @@ function handleInstallEvent(event: AppInstallEvent) {
 					latestOutput: null,
 					result: event.result,
 					error: null,
+					updateStatus: previous.updateStatus
+						? {
+								...previous.updateStatus,
+								updateAvailable: false,
+								behindCount: 0,
+							}
+						: previous.updateStatus,
 				};
 			case "error":
 				return {

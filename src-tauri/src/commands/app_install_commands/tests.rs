@@ -74,3 +74,17 @@ fn cancel_marks_active_run() {
     assert!(manager.cancel());
     assert!(state.check_cancelled().is_err());
 }
+
+#[test]
+fn parse_git_count_accepts_trimmed_count() {
+    assert_eq!(parse_git_count("12\n"), Some(12));
+}
+
+#[test]
+fn non_empty_trimmed_rejects_blank_output() {
+    assert_eq!(non_empty_trimmed(" \n\t".to_string()), None);
+    assert_eq!(
+        non_empty_trimmed("origin/main\n".to_string()).as_deref(),
+        Some("origin/main")
+    );
+}

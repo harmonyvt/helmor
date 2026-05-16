@@ -387,6 +387,7 @@ pub fn run() {
             commands::system_commands::copy_image_to_clipboard,
             commands::system_commands::request_quit,
             commands::system_commands::restart_app,
+            commands::app_install_commands::get_helmor_app_update_status,
             commands::app_install_commands::run_helmor_app_install,
             commands::app_install_commands::cancel_helmor_app_install,
             commands::system_commands::dev_reset_all_data,
