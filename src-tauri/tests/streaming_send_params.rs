@@ -112,6 +112,7 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         helmor_session_id: session_id,
         claude_base_url: None,
         claude_auth_token: None,
+        codex_profile: None,
         images: &[],
         kanban_workspace_id: None,
         kanban_snapshot: None,
@@ -172,6 +173,20 @@ fn includes_claude_environment_for_custom_provider() {
 
     let params = build(&env, input);
     assert_yaml_snapshot!("params_with_claude_environment", &params);
+}
+
+#[test]
+fn includes_codex_profile_for_profile_backed_model() {
+    let env = TestEnv::new();
+    seed_workspace_session(&env.connection(), "w-codex", "s-codex", None);
+
+    let mut input = base_input(Some("s-codex"));
+    input.provider = "codex";
+    input.cli_model = "gpt-5-codex";
+    input.codex_profile = Some("azure");
+
+    let params = build(&env, input);
+    assert_yaml_snapshot!("params_with_codex_profile", &params);
 }
 
 #[test]

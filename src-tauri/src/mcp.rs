@@ -141,7 +141,7 @@ fn handle_tools_list(request: &Value) -> Value {
         tool_def("helmor_send", "Send a prompt to an AI agent in a workspace", json!({
             "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" },
             "prompt": { "type": "string", "description": "The prompt to send to the AI agent" },
-            "model": { "type": "string", "description": "Model ID (default: opus-1m)" },
+            "model": { "type": "string", "description": "Helmor model ID. Codex profile-backed IDs look like codex:azure:gpt-5-codex." },
             "session_id": { "type": "string", "description": "Session UUID (default: active session)" }
         }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["workspace", "prompt"] })).unwrap()),
     ]);

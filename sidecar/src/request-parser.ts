@@ -128,6 +128,7 @@ export function parseSendMessageParams(
 		effortLevel: optionalString(params, "effortLevel"),
 		fastMode: optionalBoolean(params, "fastMode"),
 		claudeEnvironment: parseOptionalStringRecord(params, "claudeEnvironment"),
+		codexProfile: optionalString(params, "codexProfile"),
 		additionalDirectories: parseOptionalStringArray(
 			params,
 			"additionalDirectories",

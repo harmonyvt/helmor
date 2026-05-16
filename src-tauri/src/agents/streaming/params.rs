@@ -21,6 +21,7 @@ pub struct BuildSendMessageParamsInput<'a> {
     pub helmor_session_id: Option<&'a str>,
     pub claude_base_url: Option<&'a str>,
     pub claude_auth_token: Option<&'a str>,
+    pub codex_profile: Option<&'a str>,
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
@@ -75,6 +76,7 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
             );
         }
     }
+    insert_optional_string(&mut params, "codexProfile", input.codex_profile);
     insert_optional_string(&mut params, "kanbanWorkspaceId", input.kanban_workspace_id);
     insert_optional_string(&mut params, "kanbanSnapshot", input.kanban_snapshot);
     insert_optional_string(&mut params, "goalTitle", input.goal_title);
