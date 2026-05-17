@@ -157,19 +157,6 @@ export const WorkspaceRowItem = memo(
 		const hasActionHandler = isRestoreAction
 			? Boolean(onRestoreWorkspace)
 			: Boolean(onArchiveWorkspace);
-		// Width of the hover action cluster drives the text fade mask. Single icon
-		// uses the CSS default (transparent 1.2rem, solid 2rem). Two icons span
-		// ~3.25rem from the row's right edge (pr-2.5 + size-5 + gap-0.5 + size-5),
-		// so push the fade to end just past that so text hugs the leftmost icon
-		// instead of leaving a visible gap.
-		const hasTwoActions =
-			hasActionHandler && isRestoreAction && Boolean(onDeleteWorkspace);
-		const rowFadeStyle = hasTwoActions
-			? ({
-					"--row-fade-transparent": "2.6rem",
-					"--row-fade-solid": "3.4rem",
-				} as React.CSSProperties)
-			: undefined;
 		const actionIcon = isBusy ? (
 			<LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
 		) : isRestoreAction ? (
@@ -211,7 +198,6 @@ export const WorkspaceRowItem = memo(
 				data-workspace-row-id={row.id}
 				data-has-unread={row.hasUnread ? "true" : "false"}
 				data-busy={isBusy ? "true" : undefined}
-				style={rowFadeStyle}
 				onMouseEnter={() => {
 					onPrefetch?.(row.id);
 				}}
@@ -283,7 +269,7 @@ export const WorkspaceRowItem = memo(
 					</div>
 					<div
 						className={cn(
-							"shrink-0 flex items-center gap-1 group-hover/row:opacity-0 transition-opacity",
+							"shrink-0 flex items-center gap-1 transition-opacity",
 							isBusy && "opacity-0",
 						)}
 					>
@@ -300,7 +286,7 @@ export const WorkspaceRowItem = memo(
 					<span
 						className={cn(
 							"pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 pr-2.5",
-							"opacity-0 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100",
+							"opacity-0 transition-opacity",
 							isBusy && "pointer-events-auto opacity-100",
 						)}
 					>
