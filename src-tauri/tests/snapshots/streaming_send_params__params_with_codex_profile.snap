@@ -1,8 +1,9 @@
 ---
 source: tests/streaming_send_params.rs
-assertion_line: 189
+assertion_line: 191
 expression: "&params"
 ---
+codexModelProvider: azure
 codexProfile: azure
 cwd: /abs/workspace
 effortLevel: high

@@ -24,6 +24,10 @@ export interface SendMessageParams {
 	/** Codex config profile name. When present, Helmor launches
 	 * `codex --profile <name> app-server` for this session. */
 	readonly codexProfile?: string;
+	/** Codex model provider from the selected config profile. When present,
+	 * Helmor also passes `-c model_provider=<provider>` to app-server so a
+	 * per-thread `model` override cannot fall back to the default provider. */
+	readonly codexModelProvider?: string;
 	/**
 	 * Extra directories the user linked via `/add-dir`. Passed to Claude as
 	 * `additionalDirectories`; merged into Codex's per-turn `sandboxPolicy`

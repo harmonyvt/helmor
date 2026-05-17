@@ -269,6 +269,7 @@ fn run_child_turn(
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
         codex_profile: model.codex_profile.as_deref(),
+        codex_model_provider: model.codex_model_provider.as_deref(),
         images: &[],
         kanban_workspace_id: None,
         kanban_snapshot: None,

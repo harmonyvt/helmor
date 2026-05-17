@@ -62,6 +62,7 @@ export interface CodexAppServerOptions {
 	 *  inside the retry window can be suppressed. */
 	onRetry?: (message: string) => void;
 	profile?: string;
+	modelProvider?: string;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
@@ -76,11 +77,18 @@ const CODEX_APP_SERVER_ARGS = [
 	"notify=[]",
 ] as const;
 
-export function buildCodexAppServerArgs(profile?: string): string[] {
+export function buildCodexAppServerArgs(
+	profile?: string,
+	modelProvider?: string,
+): string[] {
 	const trimmedProfile = profile?.trim();
+	const trimmedModelProvider = modelProvider?.trim();
 	return [
 		...(trimmedProfile ? ["--profile", trimmedProfile] : []),
 		...CODEX_APP_SERVER_ARGS,
+		...(trimmedModelProvider
+			? ["-c", `model_provider="${trimmedModelProvider}"`]
+			: []),
 	];
 }
 
@@ -100,10 +108,14 @@ export class CodexAppServer {
 		this.onNotification = opts.onNotification;
 		this.onRequest = opts.onRequest;
 
-		this.child = spawn(opts.binaryPath, buildCodexAppServerArgs(opts.profile), {
-			cwd: opts.cwd,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
+		this.child = spawn(
+			opts.binaryPath,
+			buildCodexAppServerArgs(opts.profile, opts.modelProvider),
+			{
+				cwd: opts.cwd,
+				stdio: ["pipe", "pipe", "pipe"],
+			},
+		);
 
 		this.output = readline.createInterface({ input: this.child.stdout });
 		this.output.on("line", (line) => this.handleLine(line));
