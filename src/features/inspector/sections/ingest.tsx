@@ -75,6 +75,19 @@ export function IngestTab({ workspaceId, state, isActive }: IngestTabProps) {
 			`curl -s -X DELETE ${shellQuote(ingestUrl)}`,
 		];
 	}, [ingestUrl]);
+	const probeSnippet = useMemo(() => {
+		if (!ingestUrl) return null;
+		return `import { postDebugEvidence } from "@/lib/debug-evidence";
+
+const DEBUG_INGEST_URL = ${JSON.stringify(ingestUrl)};
+
+postDebugEvidence(DEBUG_INGEST_URL, {
+	level: "info",
+	source: "runtime-probe",
+	message: "flow checkpoint",
+	details: { flow, step, elapsedMs, route, state },
+});`;
+	}, [ingestUrl]);
 
 	const copyText = useCallback(async (key: string, text: string) => {
 		await navigator.clipboard.writeText(text);
@@ -162,6 +175,14 @@ export function IngestTab({ workspaceId, state, isActive }: IngestTabProps) {
 									onCopy={() => copyText(`curl-${index}`, example)}
 								/>
 							))}
+							{probeSnippet ? (
+								<CopyableLine
+									label="Probe"
+									value={probeSnippet}
+									copied={copied === "probe"}
+									onCopy={() => copyText("probe", probeSnippet)}
+								/>
+							) : null}
 						</div>
 					) : null}
 				</div>

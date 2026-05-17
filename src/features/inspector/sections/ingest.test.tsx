@@ -91,6 +91,16 @@ describe("IngestTab", () => {
 
 		expect(screen.getByText("Running on localhost")).toBeInTheDocument();
 		expect(screen.getByText("Local")).toBeInTheDocument();
+		expect(screen.getByText("Probe")).toBeInTheDocument();
+		expect(
+			screen.getAllByText((_content, element) =>
+				Boolean(
+					element?.textContent?.includes(
+						'import { postDebugEvidence } from "@/lib/debug-evidence"',
+					),
+				),
+			).length,
+		).toBeGreaterThan(0);
 		await screen.findByText("Captured console failure");
 		fireEvent.click(screen.getByRole("button", { name: /clear/i }));
 		await waitFor(() =>
