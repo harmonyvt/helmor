@@ -262,7 +262,63 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
 			expect.objectContaining({
 				promptPrefix: expect.stringContaining(
-					"create temporary instrumentation that points back to this ingest endpoint",
+					"add focused temporary instrumentation around the suspected hot path",
+				),
+			}),
+			expect.any(Function),
+		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"GET http://127.0.0.1:4321/ingest before making claims",
+				),
+			}),
+			expect.any(Function),
+		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					'importing postDebugEvidence from "@/lib/debug-evidence"',
+				),
+			}),
+			expect.any(Function),
+		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"After adding probes, give the user concrete testing instructions and stop",
+				),
+			}),
+			expect.any(Function),
+		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"the user will prompt again after they have run the dev app",
+				),
+			}),
+			expect.any(Function),
+		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"frontend timing, console errors, unhandled rejections",
+				),
+			}),
+			expect.any(Function),
+		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"For terminal renderer work specifically",
+				),
+			}),
+			expect.any(Function),
+		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"Remove temporary instrumentation before finishing",
 				),
 			}),
 			expect.any(Function),
