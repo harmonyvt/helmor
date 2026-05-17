@@ -26,6 +26,7 @@ const apiMocks = vi.hoisted(() => {
 
 	return {
 		addRepositoryFromLocalPath: vi.fn(),
+		createGithubProjectRepository: vi.fn(),
 		createWorkspaceFromRepo: vi.fn(),
 		prepareWorkspaceFromRepo: vi.fn(),
 		prepareWorkspaceFromSource: vi.fn(),
@@ -79,6 +80,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		addRepositoryFromLocalPath: apiMocks.addRepositoryFromLocalPath,
+		createGithubProjectRepository: apiMocks.createGithubProjectRepository,
 		createWorkspaceFromRepo: apiMocks.createWorkspaceFromRepo,
 		prepareWorkspaceFromRepo: apiMocks.prepareWorkspaceFromRepo,
 		prepareWorkspaceFromSource: apiMocks.prepareWorkspaceFromSource,

@@ -8,8 +8,10 @@ import {
 	assignWorkspaceToGoal,
 	cloneRepositoryFromUrl,
 	convertWorkspaceToGoal,
+	createGithubProjectRepository,
 	finalizeGoalWorkspace,
 	finalizeWorkspaceFromRepo,
+	type GithubRepositoryVisibility,
 	listenArchiveExecutionFailed,
 	listenArchiveExecutionSucceeded,
 	loadAddRepositoryDefaults,
@@ -115,6 +117,8 @@ export function useWorkspacesSidebarController({
 	}, []);
 	const [addingRepository, setAddingRepository] = useState(false);
 	const [isCloneDialogOpen, setIsCloneDialogOpen] = useState(false);
+	const [isCreateGithubProjectDialogOpen, setIsCreateGithubProjectDialogOpen] =
+		useState(false);
 	const [cloneDefaultDirectory, setCloneDefaultDirectory] = useState<
 		string | null
 	>(null);
@@ -1283,11 +1287,35 @@ export function useWorkspacesSidebarController({
 			});
 	}, []);
 
+	const handleOpenCreateGithubProjectDialog = useCallback(() => {
+		setIsCreateGithubProjectDialogOpen(true);
+		void loadAddRepositoryDefaults()
+			.then((defaults) => {
+				setCloneDefaultDirectory(defaults.lastCloneDirectory ?? null);
+			})
+			.catch(() => {
+				/* swallow: dialog will just have an empty default */
+			});
+	}, []);
+
 	const handleCloneFromUrl = useCallback(
 		async (args: { gitUrl: string; cloneDirectory: string }) => {
 			const response = await cloneRepositoryFromUrl(args);
 			await applyAddRepositoryResponse(response);
 			setCloneDefaultDirectory(args.cloneDirectory);
+		},
+		[applyAddRepositoryResponse],
+	);
+
+	const handleCreateGithubProject = useCallback(
+		async (args: {
+			projectName: string;
+			parentDirectory: string;
+			visibility: GithubRepositoryVisibility;
+		}) => {
+			const response = await createGithubProjectRepository(args);
+			await applyAddRepositoryResponse(response);
+			setCloneDefaultDirectory(args.parentDirectory);
 		},
 		[applyAddRepositoryResponse],
 	);
@@ -1774,19 +1802,23 @@ export function useWorkspacesSidebarController({
 		handleArchiveWorkspace,
 		handleAssignWorkspaceToGoal,
 		handleCloneFromUrl,
+		handleCreateGithubProject,
 		handleConvertWorkspaceToGoal,
 		handleCreateWorkspaceFromRepo,
 		handleCreateGoalWorkspace,
 		handleDeleteWorkspace,
 		handleMarkWorkspaceUnread,
 		handleOpenCloneDialog,
+		handleOpenCreateGithubProjectDialog,
 		handleRestoreWorkspace,
 		handleSelectWorkspace,
 		handleSetWorkspaceStatus,
 		handleTogglePin,
+		isCreateGithubProjectDialogOpen,
 		isCloneDialogOpen,
 		convertingGoalWorkspaceIds,
 		prefetchWorkspace,
+		setIsCreateGithubProjectDialogOpen,
 		setIsCloneDialogOpen,
 	};
 }

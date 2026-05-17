@@ -6,7 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
-use crate::forge::command::run_command;
+use crate::forge::command::{run_command, run_command_with_timeout};
 use crate::forge::status_cache::{self, CacheableStatus, CachedEntry};
 
 const GITHUB_HOST: &str = "github.com";
@@ -14,6 +14,7 @@ const GITHUB_REPOS_ENDPOINT: &str =
     "/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member";
 const GITHUB_CLI_STATUS_CACHE_TTL: Duration = Duration::from_secs(2);
 const GITHUB_CLI_READY_DOWNGRADE_GRACE: Duration = Duration::from_secs(600);
+const GITHUB_REPO_CREATE_TIMEOUT: Duration = Duration::from_secs(120);
 
 type GithubStatusCache = Mutex<HashMap<&'static str, CachedEntry<GithubCliStatus>>>;
 static SYSTEM_GH_STATUS_CACHE: LazyLock<GithubStatusCache> =
@@ -80,6 +81,22 @@ pub struct GithubRepositorySummary {
     pub pushed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GithubRepositoryVisibility {
+    Private,
+    Public,
+}
+
+impl GithubRepositoryVisibility {
+    fn gh_flag(self) -> &'static str {
+        match self {
+            Self::Private => "--private",
+            Self::Public => "--public",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct GhCommandOutput {
     stdout: String,
@@ -101,6 +118,18 @@ trait GhCommandRunner {
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>;
+
+    fn run_with_timeout<I, S>(
+        &self,
+        args: I,
+        _timeout: Duration,
+    ) -> std::result::Result<GhCommandOutput, GhCommandError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.run(args)
+    }
 }
 
 pub fn get_github_cli_status() -> Result<GithubCliStatus> {
@@ -127,6 +156,21 @@ pub fn get_github_cli_user() -> Result<Option<GithubCliUser>> {
 pub fn list_github_accessible_repositories() -> Result<Vec<GithubRepositorySummary>> {
     let status = get_github_cli_status()?;
     list_github_accessible_repositories_with_status(&SystemGhRunner, &status)
+}
+
+pub fn create_repository_from_source(
+    source_dir: &std::path::Path,
+    repository_name: &str,
+    visibility: GithubRepositoryVisibility,
+) -> Result<()> {
+    let status = get_github_cli_status()?;
+    create_repository_from_source_with(
+        &SystemGhRunner,
+        &status,
+        source_dir,
+        repository_name,
+        visibility,
+    )
 }
 
 pub fn graphql<T: DeserializeOwned>(query: &str, variables: &[(&str, String)]) -> Result<T> {
@@ -433,6 +477,62 @@ fn api_json_with_status<T: DeserializeOwned>(
     )
 }
 
+fn create_repository_from_source_with(
+    runner: &impl GhCommandRunner,
+    status: &GithubCliStatus,
+    source_dir: &std::path::Path,
+    repository_name: &str,
+    visibility: GithubRepositoryVisibility,
+) -> Result<()> {
+    if !github_cli_is_ready(status) {
+        bail!("GitHub CLI is not authenticated. Run `gh auth login`.");
+    }
+
+    let output = runner.run_with_timeout(
+        create_repository_from_source_args(source_dir, repository_name, visibility),
+        GITHUB_REPO_CREATE_TIMEOUT,
+    );
+
+    match output {
+        Ok(_) => Ok(()),
+        Err(GhCommandError::NotFound) => {
+            bail!("GitHub CLI is not installed on this machine.");
+        }
+        Err(GhCommandError::Failed {
+            stdout,
+            stderr,
+            code,
+        }) => {
+            let detail = command_error_detail(&stdout, &stderr, code);
+            if looks_like_unauthenticated(&detail) {
+                bail!("GitHub CLI is not authenticated. Run `gh auth login`.");
+            }
+            Err(anyhow!("GitHub repository creation failed: {detail}"))
+        }
+        Err(GhCommandError::Other(message)) => {
+            Err(anyhow!("GitHub repository creation failed: {message}"))
+        }
+    }
+}
+
+fn create_repository_from_source_args(
+    source_dir: &std::path::Path,
+    repository_name: &str,
+    visibility: GithubRepositoryVisibility,
+) -> Vec<OsString> {
+    vec![
+        OsString::from("repo"),
+        OsString::from("create"),
+        OsString::from(repository_name),
+        OsString::from(visibility.gh_flag()),
+        OsString::from("--source"),
+        source_dir.as_os_str().to_os_string(),
+        OsString::from("--remote"),
+        OsString::from("origin"),
+        OsString::from("--push"),
+    ]
+}
+
 fn graphql_args(query: &str, variables: &[(&str, String)]) -> Vec<OsString> {
     let mut args = Vec::from([
         OsString::from("api"),
@@ -542,26 +642,53 @@ impl GhCommandRunner for SystemGhRunner {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let output = run_command("gh", args).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                GhCommandError::NotFound
-            } else {
-                GhCommandError::Other(error.to_string())
-            }
-        })?;
-
-        if output.success {
-            return Ok(GhCommandOutput {
-                stdout: output.stdout,
-            });
-        }
-
-        Err(GhCommandError::Failed {
-            stdout: output.stdout,
-            stderr: output.stderr,
-            code: output.status,
-        })
+        run_system_gh(args, None)
     }
+
+    fn run_with_timeout<I, S>(
+        &self,
+        args: I,
+        timeout: Duration,
+    ) -> std::result::Result<GhCommandOutput, GhCommandError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        run_system_gh(args, Some(timeout))
+    }
+}
+
+fn run_system_gh<I, S>(
+    args: I,
+    timeout: Option<Duration>,
+) -> std::result::Result<GhCommandOutput, GhCommandError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = match timeout {
+        Some(timeout) => run_command_with_timeout("gh", args, timeout),
+        None => run_command("gh", args),
+    }
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            GhCommandError::NotFound
+        } else {
+            GhCommandError::Other(error.to_string())
+        }
+    })?;
+
+    if output.success {
+        return Ok(GhCommandOutput {
+            stdout: output.stdout,
+        });
+    }
+
+    Err(GhCommandError::Failed {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        code: output.status,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -666,6 +793,48 @@ mod tests {
                 MockRunnerResponse::Other(message) => Err(GhCommandError::Other(message)),
             }
         }
+    }
+
+    #[test]
+    fn create_repository_from_source_args_include_visibility_and_push() {
+        let args = create_repository_from_source_args(
+            std::path::Path::new("/tmp/my-project"),
+            "my-project",
+            GithubRepositoryVisibility::Public,
+        )
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            vec![
+                "repo",
+                "create",
+                "my-project",
+                "--public",
+                "--source",
+                "/tmp/my-project",
+                "--remote",
+                "origin",
+                "--push",
+            ]
+        );
+    }
+
+    #[test]
+    fn create_repository_from_source_args_support_private_repositories() {
+        let args = create_repository_from_source_args(
+            std::path::Path::new("/tmp/my-project"),
+            "my-project",
+            GithubRepositoryVisibility::Private,
+        )
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+
+        assert!(args.iter().any(|arg| arg == "--private"));
+        assert!(!args.iter().any(|arg| arg == "--public"));
     }
 
     #[test]

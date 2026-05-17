@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
 	addRepositoryFromLocalPath: vi.fn(),
+	createGithubProjectRepository: vi.fn(),
 	loadAddRepositoryDefaults: vi.fn(),
 	loadWorkspaceGroups: vi.fn(),
 	loadArchivedWorkspaces: vi.fn(),
@@ -12,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionThreadMessages: vi.fn(),
 	listRepositories: vi.fn(),
+	subscribeUiMutations: vi.fn(),
 }));
 
 const dialogMocks = vi.hoisted(() => ({
@@ -33,6 +35,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		addRepositoryFromLocalPath: apiMocks.addRepositoryFromLocalPath,
+		createGithubProjectRepository: apiMocks.createGithubProjectRepository,
 		loadAddRepositoryDefaults: apiMocks.loadAddRepositoryDefaults,
 		loadWorkspaceGroups: apiMocks.loadWorkspaceGroups,
 		loadArchivedWorkspaces: apiMocks.loadArchivedWorkspaces,
@@ -42,6 +45,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadSessionMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		listRepositories: apiMocks.listRepositories,
+		subscribeUiMutations: apiMocks.subscribeUiMutations,
 	};
 });
 
@@ -52,6 +56,7 @@ describe("App add repository flow", () => {
 		addRepoRuntime.added = false;
 
 		apiMocks.addRepositoryFromLocalPath.mockReset();
+		apiMocks.createGithubProjectRepository.mockReset();
 		apiMocks.loadAddRepositoryDefaults.mockReset();
 		apiMocks.loadWorkspaceGroups.mockReset();
 		apiMocks.loadArchivedWorkspaces.mockReset();
@@ -60,6 +65,7 @@ describe("App add repository flow", () => {
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.listRepositories.mockReset();
+		apiMocks.subscribeUiMutations.mockReset();
 		dialogMocks.open.mockReset();
 
 		apiMocks.loadAddRepositoryDefaults.mockResolvedValue({
@@ -227,7 +233,19 @@ describe("App add repository flow", () => {
 			},
 		);
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
+		apiMocks.subscribeUiMutations.mockResolvedValue(undefined);
 		apiMocks.addRepositoryFromLocalPath.mockImplementation(async () => {
+			addRepoRuntime.added = true;
+
+			return {
+				repositoryId: "repo-added",
+				createdRepository: true,
+				selectedWorkspaceId: "workspace-added",
+				createdWorkspaceId: "workspace-added",
+				createdWorkspaceState: "ready",
+			};
+		});
+		apiMocks.createGithubProjectRepository.mockImplementation(async () => {
 			addRepoRuntime.added = true;
 
 			return {
@@ -279,6 +297,70 @@ describe("App add repository flow", () => {
 		});
 
 		expect(screen.getByText("Acamar")).toBeInTheDocument();
+	});
+
+	it("creates a public GitHub project from the add repository menu", async () => {
+		const user = userEvent.setup();
+
+		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
+
+		await user.click(screen.getByRole("button", { name: "Add repository" }));
+		await user.click(
+			await screen.findByRole("menuitem", { name: "New GitHub project" }),
+		);
+
+		await user.type(await screen.findByLabelText("Project name"), "fresh-app");
+		await waitFor(() => {
+			expect(screen.getByLabelText("Location")).toHaveValue("/tmp/test-repos");
+		});
+		await user.click(screen.getByRole("button", { name: "Public" }));
+		await user.click(screen.getByRole("button", { name: "Create project" }));
+
+		await waitFor(() => {
+			expect(apiMocks.createGithubProjectRepository).toHaveBeenCalledWith({
+				projectName: "fresh-app",
+				parentDirectory: "/tmp/test-repos",
+				visibility: "public",
+			});
+		});
+		await waitFor(() => {
+			expect(apiMocks.loadWorkspaceDetail).toHaveBeenCalledWith(
+				"workspace-added",
+			);
+		});
+
+		expect(screen.getByText("Acamar")).toBeInTheDocument();
+	});
+
+	it("creates a private GitHub project by default", async () => {
+		const user = userEvent.setup();
+
+		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
+
+		await user.click(screen.getByRole("button", { name: "Add repository" }));
+		await user.click(
+			await screen.findByRole("menuitem", { name: "New GitHub project" }),
+		);
+
+		await user.type(await screen.findByLabelText("Project name"), "secret-app");
+		await waitFor(() => {
+			expect(screen.getByLabelText("Location")).toHaveValue("/tmp/test-repos");
+		});
+		expect(screen.getByRole("button", { name: "Private" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
+		await user.click(screen.getByRole("button", { name: "Create project" }));
+
+		await waitFor(() => {
+			expect(apiMocks.createGithubProjectRepository).toHaveBeenCalledWith({
+				projectName: "secret-app",
+				parentDirectory: "/tmp/test-repos",
+				visibility: "private",
+			});
+		});
 	});
 
 	it("treats picker cancel as a no-op", async () => {
