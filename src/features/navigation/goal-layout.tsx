@@ -388,6 +388,7 @@ function GoalFolderHeader({
 	const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
 	const hasChildren = goalGroup.childRows.length > 0;
+	const statusTone = workspaceStatusToTone(goalGroup.goalRow.status);
 	const workspaceIds = [
 		...goalGroup.childRows.map((row) => row.id),
 		goalGroup.goalWorkspaceId,
@@ -425,12 +426,9 @@ function GoalFolderHeader({
 			<ContextMenu>
 				<ContextMenuTrigger asChild>
 					<div
-						style={{
-							...(indent ? { paddingLeft: `${indent}px` } : {}),
-							borderLeftColor: `var(--workspace-sidebar-status-${workspaceStatusToTone(goalGroup.goalRow.status)})`,
-						}}
+						style={indent ? { paddingLeft: `${indent}px` } : {}}
 						className={cn(
-							"group/folder flex h-9 items-center gap-1 rounded-md border-l-2 px-1 transition-colors",
+							"group/folder flex h-9 items-center gap-1 rounded-md px-1.5 transition-colors",
 							isOpen && (hasChildren || isDragTarget) && "bg-accent/25",
 							isDragTarget && "ring-1 ring-ring/40",
 						)}
@@ -438,25 +436,20 @@ function GoalFolderHeader({
 						onDragLeave={onDragLeave}
 						onDragOver={(e) => e.preventDefault()}
 					>
+						{/* Status icon — communicates goal status and doubles as expand toggle */}
 						<button
 							type="button"
-							onClick={onToggle}
+							onClick={hasChildren ? onToggle : undefined}
 							tabIndex={hasChildren ? 0 : -1}
 							className={cn(
 								"flex size-5 shrink-0 items-center justify-center rounded transition-colors",
 								hasChildren
-									? "cursor-pointer text-muted-foreground/50 hover:text-foreground"
-									: "pointer-events-none opacity-0",
+									? "cursor-pointer hover:bg-accent"
+									: "pointer-events-none",
 							)}
 							aria-label={isOpen ? "Collapse" : "Expand"}
 						>
-							<ChevronRight
-								className={cn(
-									"size-3 transition-transform",
-									isOpen && "rotate-90",
-								)}
-								strokeWidth={2.2}
-							/>
+							<GroupIcon tone={statusTone} />
 						</button>
 
 						<button
