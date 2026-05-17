@@ -1065,6 +1065,18 @@ function AppShell({
 			);
 		});
 	}, [pullRequestUrl, pushWorkspaceToast]);
+	const handleRefreshPrStatus = useCallback(async () => {
+		if (!selectedWorkspaceId) return;
+		await Promise.all([
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceChangeRequest(selectedWorkspaceId),
+			}),
+			queryClient.invalidateQueries({
+				queryKey:
+					helmorQueryKeys.workspaceForgeActionStatus(selectedWorkspaceId),
+			}),
+		]);
+	}, [queryClient, selectedWorkspaceId]);
 
 	const workspaceForgeActionStatusQuery = useQuery({
 		...workspaceForgeActionStatusQueryOptions(
@@ -2759,6 +2771,23 @@ function AppShell({
 															activeEditorPath={editorSession?.path ?? null}
 															onOpenEditorFile={handleOpenEditorFile}
 															onOpenSettings={handleOpenSettings}
+															commitButtonMode={commitButtonMode}
+															commitButtonState={commitButtonState}
+															changeRequest={workspaceChangeRequest}
+															forgeDetection={workspaceForge}
+															forgeRemoteState={
+																workspaceForgeActionStatus?.remoteState ?? null
+															}
+															forgeIsRefreshing={workspaceForgeIsRefreshing}
+															hasGitChanges={Boolean(
+																(workspaceGitActionStatus?.uncommittedCount ??
+																	0) > 0 ||
+																	(workspaceGitActionStatus?.aheadOfRemoteCount ??
+																		0) > 0,
+															)}
+															onCommitAction={handleInspectorCommitAction}
+															onOpenChangeRequest={handleOpenPullRequest}
+															onRefreshPrStatus={handleRefreshPrStatus}
 														/>
 													) : null}
 													<div

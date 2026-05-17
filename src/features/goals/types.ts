@@ -1,4 +1,13 @@
 import type React from "react";
+import type {
+	CommitButtonState,
+	WorkspaceCommitButtonMode,
+} from "@/features/commit/button";
+import type {
+	ChangeRequestInfo,
+	ForgeActionStatus,
+	ForgeDetection,
+} from "@/lib/api";
 import type { DiffOpenOptions } from "@/lib/editor-session";
 
 /** The three physical states of the Pi AI surface within a goal context. */
@@ -43,4 +52,14 @@ export type GoalWorkspaceContainerProps = {
 	 *  tab's Setup / Run / Archive sections so the user can configure scripts
 	 *  without leaving the goal view. */
 	onOpenSettings?: () => void;
+	commitButtonMode?: WorkspaceCommitButtonMode;
+	commitButtonState?: CommitButtonState;
+	changeRequest?: ChangeRequestInfo | null;
+	forgeDetection?: ForgeDetection | null;
+	forgeRemoteState?: ForgeActionStatus["remoteState"] | null;
+	forgeIsRefreshing?: boolean;
+	hasGitChanges?: boolean;
+	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	onOpenChangeRequest?: () => void;
+	onRefreshPrStatus?: () => Promise<void>;
 };
