@@ -2498,7 +2498,7 @@ function AppShell({
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
 				<SendingSessionsProvider value={sendingSessionIds}>
 					<ComposerInsertProvider value={handleInsertIntoComposer}>
-						<LocalAppUpdateStatusButton />
+						{!sidebarCollapsed && <LocalAppUpdateStatusButton />}
 						{!isIdentityConnected ? (
 							<GithubIdentityGate
 								identityState={githubIdentityState}
@@ -2718,6 +2718,7 @@ function AppShell({
 																		{/* Spacer to avoid macOS traffic lights */}
 																		<div className="w-[52px] shrink-0" />
 																		<div className="flex items-center gap-[2px]">
+																			<LocalAppUpdateStatusButton inline />
 																			<Tooltip>
 																				<TooltipTrigger asChild>
 																					<Button
@@ -2826,6 +2827,7 @@ function AppShell({
 																		{/* Spacer to avoid macOS traffic lights */}
 																		<div className="w-[52px] shrink-0" />
 																		<div className="flex items-center gap-[2px]">
+																			<LocalAppUpdateStatusButton inline />
 																			<Tooltip>
 																				<TooltipTrigger asChild>
 																					<Button
