@@ -161,6 +161,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const [directoriesExported, setDirectoriesExported] = useState(false);
 	const tabsScrollRef = useRef<HTMLDivElement>(null);
 	const [hasRightOverflow, setHasRightOverflow] = useState(false);
+	const [hasLeftOverflow, setHasLeftOverflow] = useState(false);
 	const selectedSession =
 		sessions.find((s) => s.id === selectedSessionId) ?? null;
 	const selectedSessionParentId =
@@ -170,6 +171,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		const el = tabsScrollRef.current;
 		if (!el) return;
 		setHasRightOverflow(el.scrollWidth - el.scrollLeft - el.clientWidth > 1);
+		setHasLeftOverflow(el.scrollLeft > 1);
 	}, []);
 
 	useEffect(() => {
@@ -180,6 +182,19 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		ro.observe(el);
 		return () => ro.disconnect();
 	}, [updateOverflow, sessions.length]);
+
+	useEffect(() => {
+		const el = tabsScrollRef.current;
+		if (!el) return;
+		const onWheel = (e: WheelEvent) => {
+			if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+			if (e.deltaY === 0) return;
+			e.preventDefault();
+			el.scrollLeft += e.deltaY;
+		};
+		el.addEventListener("wheel", onWheel, { passive: false });
+		return () => el.removeEventListener("wheel", onWheel);
+	}, []);
 
 	const handleStartBranchRename = useCallback(() => {
 		if (!workspace?.branch) {
@@ -444,6 +459,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				{/* Single compact row: scrollable tabs + new-session + close */}
 				<div className="flex items-center gap-0.5 border-b border-border/40 px-2 pb-1">
 					<div className="group/tabs-scroll relative min-w-0 flex-1">
+						{hasLeftOverflow && (
+							<div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6 bg-gradient-to-r from-background to-transparent" />
+						)}
 						{hasRightOverflow && (
 							<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-gradient-to-l from-background to-transparent" />
 						)}
@@ -465,7 +483,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								>
 									<TabsList
 										aria-label="Sessions"
-										className="inline-flex w-max min-w-full justify-start self-start"
+										className="inline-flex w-max min-w-full justify-start self-start bg-transparent p-0 rounded-none h-auto gap-px"
 									>
 										{sessions.map((session) => {
 											const selected = session.id === selectedSessionId;
@@ -486,7 +504,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 													value={session.id}
 													onMouseEnter={() => onPrefetchSession?.(session.id)}
 													onFocus={() => onPrefetchSession?.(session.id)}
-													className="group/tab relative h-full w-auto min-w-[4rem] max-w-[9rem] shrink-0 flex-none justify-start gap-1 overflow-hidden pr-4 text-[12px] text-muted-foreground data-[state=active]:text-foreground"
+													className="group/tab relative h-[26px] w-auto min-w-[4rem] max-w-[8rem] shrink-0 flex-none justify-start gap-1 overflow-hidden rounded-md pr-4 text-[11.5px] text-muted-foreground/70 aria-selected:border-transparent aria-selected:shadow-none data-[state=active]:text-foreground dark:aria-selected:border-transparent"
 												>
 													<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1">
 														{session.parentSessionId ? (
@@ -816,6 +834,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			) : null}
 			<div className="flex items-center px-4 pb-1">
 				<div className="group/tabs-scroll relative min-w-0 flex-1">
+					{hasLeftOverflow && (
+						<div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-8 bg-gradient-to-r from-background to-transparent" />
+					)}
 					{hasRightOverflow && (
 						<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background to-transparent" />
 					)}
@@ -839,7 +860,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							>
 								<TabsList
 									aria-label="Sessions"
-									className="inline-flex min-w-full w-max justify-start self-start"
+									className="inline-flex min-w-full w-max justify-start self-start bg-transparent p-0 rounded-none h-auto gap-px"
 								>
 									{sessions.map((session) => {
 										const selected = session.id === selectedSessionId;
@@ -866,7 +887,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														onFocus={() => {
 															onPrefetchSession?.(session.id);
 														}}
-														className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+														className="group/tab relative h-[28px] w-auto min-w-[5rem] max-w-[12rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden rounded-md pr-5 text-[12px] text-muted-foreground/70 aria-selected:border-transparent aria-selected:shadow-none data-[state=active]:text-foreground dark:aria-selected:border-transparent"
 													>
 														{/* Content wrapper: text fades out on the right when hovered so
 														    the action icons can sit on the tab's own background. */}
