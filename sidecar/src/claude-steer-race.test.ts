@@ -39,6 +39,16 @@ function makeSpyEmitter(): {
 /** Minimal `Query` stub — `steer()` never invokes it. */
 const queryStub = {} as unknown as Query;
 
+function makeCloseSpyQuery(): { query: Query; calls: { close: number } } {
+	const calls = { close: 0 };
+	const query = {
+		close: () => {
+			calls.close += 1;
+		},
+	} as unknown as Query;
+	return { query, calls };
+}
+
 /** Inject a fake live session into the manager. The `as any` is
  *  deliberately narrow: the test only touches public `steer()` which
  *  reads `sessions.get(...)` internally, and the returned map entry is
@@ -248,5 +258,31 @@ describe("ClaudeSessionManager.steer @-ref preservation", () => {
 		const [first] = passthroughs;
 		if (!first) throw new Error("expected emit");
 		expect((first.message as { text: string }).text).toBe(raw);
+	});
+});
+
+describe("ClaudeSessionManager.stopSession cleanup", () => {
+	test("aborts, closes the query, closes prompt input, and removes the session", async () => {
+		const manager = new ClaudeSessionManager();
+		const { emitter, passthroughs } = makeSpyEmitter();
+		const promptSource = createPushable<SDKUserMessage>();
+		const abortController = new AbortController();
+		const { query, calls } = makeCloseSpyQuery();
+
+		injectSession(manager, "s1", {
+			query,
+			abortController,
+			promptSource,
+			requestId: "rid-1",
+			emitter,
+		});
+
+		await manager.stopSession("s1");
+
+		expect(abortController.signal.aborted).toBe(true);
+		expect(calls.close).toBe(1);
+		expect(promptSource.closed).toBe(true);
+		expect(await manager.steer("s1", "late steer", [], [])).toBe(false);
+		expect(passthroughs).toHaveLength(0);
 	});
 });

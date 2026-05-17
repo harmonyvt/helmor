@@ -467,6 +467,18 @@ impl ManagedSidecar {
         *guard = None;
     }
 
+    /// Stop a sidecar that accepted stdin but did not actually drain the
+    /// target session. This is intentionally process-wide: if the sidecar's
+    /// event loop is wedged, a per-session `stopSession` write can succeed
+    /// while Claude/Codex never sees it. The next request will spawn fresh.
+    pub fn restart_after_unresponsive_stop(&self, reason: &str) {
+        tracing::warn!(
+            reason = %reason,
+            "Restarting sidecar after unresponsive stopSession"
+        );
+        self.shutdown(Duration::from_millis(750), Duration::from_millis(750));
+    }
+
     /// Spawn a background thread that reads all sidecar stdout and dispatches
     /// events to the correct per-request channel. On exit (EOF / error), the
     /// thread clears `reader_running` and drops all listener senders so that
@@ -784,6 +796,15 @@ mod tests {
         // Now start_reader_thread should be willing to start again
         let flag = sidecar.reader_running.lock().unwrap();
         assert!(!*flag, "Flag should be cleared, allowing restart");
+    }
+
+    #[test]
+    fn restart_after_unresponsive_stop_noops_when_not_running() {
+        let sidecar = ManagedSidecar::new();
+
+        sidecar.restart_after_unresponsive_stop("test");
+
+        assert!(sidecar.process.lock().unwrap().is_none());
     }
 
     #[test]
