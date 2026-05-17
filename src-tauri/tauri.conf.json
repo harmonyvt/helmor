@@ -52,7 +52,10 @@
 		],
 		"resources": {
 			"../sidecar/dist/vendor/": "vendor",
-			"../dist-web/": "web-dist"
+			"../dist-web/": "web-dist",
+			"../.codex/skills/": "skills/codex",
+			"../.claude/skills/": "skills/claude",
+			"../.agents/skills/": "skills/agents"
 		},
 		"icon": [
 			"icons/32x32.png",

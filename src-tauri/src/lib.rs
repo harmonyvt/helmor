@@ -23,6 +23,7 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod skill_export;
 pub mod terminal_profiles;
 pub mod tmux;
 pub mod ui_sync;

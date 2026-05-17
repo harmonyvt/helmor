@@ -42,8 +42,8 @@ describe("SkillsStep", () => {
 			installed: false,
 			claude: false,
 			codex: false,
-			command:
-				"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+			agents: false,
+			command: "helmor-dev skills export --target all",
 		});
 	});
 
@@ -128,9 +128,9 @@ describe("SkillsStep", () => {
 		apiMocks.installHelmorSkills.mockResolvedValue({
 			installed: true,
 			claude: true,
-			codex: false,
-			command:
-				"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code",
+			codex: true,
+			agents: true,
+			command: "helmor-dev skills export --target all",
 		});
 
 		render(
