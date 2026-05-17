@@ -1,5 +1,5 @@
 import { Archive } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { humanizeBranch } from "@/features/navigation/shared";
 import type { WorkspaceRow as WorkspaceRowData } from "@/lib/api";
 import { parsePrUrl } from "@/lib/pr-url";
@@ -36,7 +36,7 @@ function prAccentColor(
 		case "merged":
 			return "var(--workspace-pr-merged-accent)";
 		case "closed":
-			return "var(--workspace-sidebar-status-canceled)";
+			return "var(--workspace-sidebar-status-backlog)";
 		default:
 			return null;
 	}
@@ -52,6 +52,27 @@ export function WorkspaceRow({
 	const [swiping, setSwiping] = useState(false);
 	const startXRef = useRef(0);
 	const swipeXRef = useRef(0);
+	const rowRef = useRef<HTMLDivElement>(null);
+
+	// Snap back when the workspace is selected (navigated to)
+	useEffect(() => {
+		if (selected && swipeX !== 0) {
+			setSwipeX(0);
+		}
+	}, [selected, swipeX]);
+
+	// Snap back when the user taps outside this row
+	useEffect(() => {
+		if (swipeX === 0) return;
+		const handleOutsidePointerDown = (e: PointerEvent) => {
+			if (rowRef.current && !rowRef.current.contains(e.target as Node)) {
+				setSwipeX(0);
+			}
+		};
+		document.addEventListener("pointerdown", handleOutsidePointerDown);
+		return () =>
+			document.removeEventListener("pointerdown", handleOutsidePointerDown);
+	}, [swipeX]);
 
 	const displayTitle = workspace.branch
 		? humanizeBranch(workspace.branch)
@@ -94,7 +115,7 @@ export function WorkspaceRow({
 	}
 
 	return (
-		<div className="relative w-full overflow-hidden">
+		<div ref={rowRef} className="relative w-full overflow-hidden">
 			{/* Archive action behind the row */}
 			<button
 				type="button"
