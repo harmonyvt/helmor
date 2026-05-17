@@ -41,7 +41,7 @@ export default function MobileInspectorView({
 								Changes
 							</TabsTrigger>
 							<TabsTrigger value="actions" className="cursor-pointer">
-								Actions
+								Terminal
 							</TabsTrigger>
 							<TabsTrigger value="run" className="cursor-pointer">
 								Run
