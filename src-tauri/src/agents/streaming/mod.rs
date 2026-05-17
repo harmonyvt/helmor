@@ -147,17 +147,34 @@ pub(super) fn stream_via_sidecar(
     let resume_session_id = request.session_id.clone().or_else(|| {
         request.helmor_session_id.as_deref().and_then(|hsid| {
             let conn = crate::models::db::read_conn().ok()?;
-            let (stored_sid, stored_provider): (Option<String>, Option<String>) = conn
+            let (stored_sid, stored_provider, stored_model_id): (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ) = conn
                 .query_row(
-                    "SELECT provider_session_id, agent_type FROM sessions WHERE id = ?1",
+                    "SELECT provider_session_id, agent_type, model FROM sessions WHERE id = ?1",
                     [hsid],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .ok()?;
             let sid = stored_sid?;
-            if stored_provider.unwrap_or_default() == model.provider {
+            if can_resume_provider_session_for_model(
+                stored_provider.as_deref(),
+                stored_model_id.as_deref(),
+                model,
+            ) {
                 Some(sid)
             } else {
+                tracing::info!(
+                    helmor_session_id = %hsid,
+                    stored_provider = ?stored_provider,
+                    stored_model_id = ?stored_model_id,
+                    requested_provider = %model.provider,
+                    requested_model_id = %model.id,
+                    requested_codex_profile = ?model.codex_profile,
+                    "Skipping stored provider session resume because session metadata no longer matches requested model"
+                );
                 None
             }
         })
@@ -337,11 +354,37 @@ pub(super) fn stream_via_sidecar(
 
             match crate::models::db::write_conn() {
                 Ok(conn) => {
+                    let now = crate::models::db::current_timestamp()
+                        .map(Some)
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(
+                                rid = %rid,
+                                error = %error,
+                                "Failed to build stream-start timestamp"
+                            );
+                            None
+                        });
                     if let Err(e) = conn.execute(
-                        "UPDATE sessions SET fast_mode = ?1 WHERE id = ?2",
-                        rusqlite::params![fast_mode, &ctx.helmor_session_id],
+                        r#"
+                        UPDATE sessions
+                        SET fast_mode = ?1,
+                            status = 'streaming',
+                            model = ?3,
+                            agent_type = ?4,
+                            permission_mode = COALESCE(?5, permission_mode),
+                            updated_at = COALESCE(?6, updated_at)
+                        WHERE id = ?2
+                        "#,
+                        rusqlite::params![
+                            fast_mode,
+                            &ctx.helmor_session_id,
+                            &ctx.model_id,
+                            &ctx.model_provider,
+                            permission_mode_initial.as_deref(),
+                            now.as_deref()
+                        ],
                     ) {
-                        tracing::error!(rid = %rid, "Failed to update fast_mode: {e}");
+                        tracing::error!(rid = %rid, "Failed to update stream-start session metadata: {e}");
                     }
 
                     if resume_only {
@@ -1303,6 +1346,32 @@ pub(super) fn stream_via_sidecar(
     Ok(())
 }
 
+fn can_resume_provider_session_for_model(
+    stored_provider: Option<&str>,
+    stored_model_id: Option<&str>,
+    model: &super::ResolvedModel,
+) -> bool {
+    if stored_provider.unwrap_or_default() != model.provider {
+        return false;
+    }
+
+    if model.provider != "codex" {
+        return true;
+    }
+
+    match stored_model_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(stored_model_id) => {
+            let stored_model = super::resolve_model(stored_model_id);
+            stored_model.provider == "codex"
+                && stored_model.codex_profile.as_deref() == model.codex_profile.as_deref()
+        }
+        None => model.codex_profile.is_none(),
+    }
+}
+
 fn build_exit_plan_review_message(
     id: Option<String>,
     created_at: Option<String>,
@@ -1349,5 +1418,81 @@ fn build_exit_plan_review_message(
         })],
         status: None,
         streaming: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_resume_reuses_default_thread_for_default_model() {
+        let model = super::super::resolve_model("gpt-5.5");
+
+        assert!(can_resume_provider_session_for_model(
+            Some("codex"),
+            Some("gpt-5.4"),
+            &model,
+        ));
+    }
+
+    #[test]
+    fn codex_resume_rejects_default_thread_for_profile_model() {
+        let model = super::super::resolve_model("codex:azure:gpt-5.5");
+
+        assert!(!can_resume_provider_session_for_model(
+            Some("codex"),
+            Some("gpt-5.5"),
+            &model,
+        ));
+    }
+
+    #[test]
+    fn codex_resume_reuses_profile_thread_for_same_profile() {
+        let model = super::super::resolve_model("codex:azure:gpt-5.5");
+
+        assert!(can_resume_provider_session_for_model(
+            Some("codex"),
+            Some("codex:azure:gpt-5.4"),
+            &model,
+        ));
+    }
+
+    #[test]
+    fn codex_resume_rejects_profile_thread_for_different_profile() {
+        let model = super::super::resolve_model("codex:azure:gpt-5.5");
+
+        assert!(!can_resume_provider_session_for_model(
+            Some("codex"),
+            Some("codex:openai:gpt-5.5"),
+            &model,
+        ));
+    }
+
+    #[test]
+    fn codex_resume_rejects_legacy_unknown_model_for_profile_model() {
+        let model = super::super::resolve_model("codex:azure:gpt-5.5");
+
+        assert!(!can_resume_provider_session_for_model(
+            Some("codex"),
+            None,
+            &model,
+        ));
+    }
+
+    #[test]
+    fn non_codex_resume_still_keys_by_provider() {
+        let model = super::super::resolve_model("sonnet");
+
+        assert!(can_resume_provider_session_for_model(
+            Some("claude"),
+            Some("gpt-5.5"),
+            &model,
+        ));
+        assert!(!can_resume_provider_session_for_model(
+            Some("codex"),
+            Some("sonnet"),
+            &model,
+        ));
     }
 }

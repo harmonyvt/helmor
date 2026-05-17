@@ -1411,9 +1411,8 @@ export class CodexAppServerManager implements SessionManager {
 				from: existing.codexProfile ?? "(default)",
 				to: codexProfile ?? "(default)",
 			});
-			if (!resume && existing.providerThreadId) {
-				resume = existing.providerThreadId;
-			}
+			// Provider thread ids are profile-scoped. Keep an explicit caller resume,
+			// but never synthesize one from the context being replaced.
 			existing.server.kill();
 			this.sessions.delete(sessionId);
 			this.clearPendingSessionState(sessionId);
