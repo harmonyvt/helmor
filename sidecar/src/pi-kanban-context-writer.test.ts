@@ -149,7 +149,14 @@ describe("writeKanbanContext", () => {
 		expect(extension).toContain("Each card is a child workspace");
 		expect(extension).toContain("## Goal Orchestration Role");
 		expect(extension).toContain("## Goal Board Tools");
-		expect(extension).toContain("create_kanban_card with a clear prompt");
+		expect(extension).toContain("call list_assignee_models");
+		expect(extension).toContain(
+			"present the returned assigneeModels to the user",
+		);
+		expect(extension).not.toContain(
+			"same Pi provider/model as this goal supervisor",
+		);
+		expect(extension).not.toContain("Helmor will choose an available");
 		expect(extension).toContain("inspect_workspace_merge_state(card_id)");
 		expect(extension).toContain("mark_workspace_landed(card_id)");
 
@@ -168,7 +175,7 @@ describe("writeKanbanContext", () => {
 		expect(systemPrompt).toContain("## Kanban Board");
 		expect(systemPrompt).toContain("The board is currently empty.");
 		expect(systemPrompt).toContain(
-			"use create_kanban_card to create child workspace cards",
+			"call list_assignee_models, show the available choices, ask the user which model to use",
 		);
 	});
 });

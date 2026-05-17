@@ -5,7 +5,24 @@ import {
 } from "./pi-kanban-tools.js";
 
 describe("createKanbanTools", () => {
-	test("locks create-card handoffs to the current supervisor Pi model", async () => {
+	test("exposes assignee model listing before board creation tools", () => {
+		const tools = createKanbanTools(
+			"goal-workspace-1",
+			{ kanbanToolCall() {} } as never,
+			"request-1",
+		);
+
+		expect(tools.map((tool) => tool.name)).toEqual([
+			"list_assignee_models",
+			"list_kanban_cards",
+			"create_kanban_card",
+			"move_kanban_card",
+			"update_kanban_card",
+		]);
+		expect(tools[0]?.description).toContain("show the choices to the user");
+	});
+
+	test("forwards the user-selected assignee model for create-card handoffs", async () => {
 		const calls: Array<{ toolCallId: string; args: Record<string, unknown> }> =
 			[];
 		const tools = createKanbanTools(
@@ -27,13 +44,12 @@ describe("createKanbanTools", () => {
 			"request-1",
 			{
 				assignedProvider: "pi",
-				assignedModelId: "pi:azure-openai-responses/gpt-5.5",
 			},
 		);
 		const createCard = tools.find((tool) => tool.name === "create_kanban_card");
 		expect(createCard).toBeDefined();
 		expect(createCard?.parameters.properties.assigned_provider).toBeUndefined();
-		expect(createCard?.parameters.properties.assigned_model_id).toBeUndefined();
+		expect(createCard?.parameters.properties.assigned_model_id).toBeDefined();
 
 		await createCard?.execute(
 			"sdk-tool-call-1",
@@ -41,7 +57,7 @@ describe("createKanbanTools", () => {
 				title: "Child",
 				lane: "backlog",
 				assigned_provider: "claude",
-				assigned_model_id: "claude-sonnet-4-6",
+				assigned_model_id: "pi:anthropic/claude-sonnet-4-6",
 			} as never,
 			new AbortController().signal,
 			() => {},
@@ -50,7 +66,7 @@ describe("createKanbanTools", () => {
 
 		expect(calls[0]?.args).toMatchObject({
 			assignedProvider: "pi",
-			assignedModelId: "pi:azure-openai-responses/gpt-5.5",
+			assignedModelId: "pi:anthropic/claude-sonnet-4-6",
 		});
 	});
 });

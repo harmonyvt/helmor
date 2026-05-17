@@ -19,6 +19,23 @@ export type PiHandoffModelPolicyResult = {
 	suggestedModelIds: string[];
 };
 
+export function listGoalAssigneePiModels({
+	modelSections,
+	piModels,
+	allowAllModels,
+}: {
+	modelSections: readonly AgentModelSection[];
+	piModels: readonly AgentModelOption[];
+	allowAllModels: boolean;
+}): AgentModelOption[] {
+	const eligibleModels = allowAllModels
+		? [...piModels]
+		: piModels.filter((model) =>
+				isDefaultGoalAssigneePiModelAllowed(model, modelSections),
+			);
+	return eligibleModels.sort(compareGoalAssigneePiModels);
+}
+
 export function canonicalPiModelId(
 	modelId: string,
 	piModels: readonly AgentModelOption[],
@@ -57,31 +74,31 @@ export function isDefaultGoalAssigneePiModelAllowed(
 }
 
 export function resolveGoalAssigneePiHandoffModel({
-	activeSupervisorModelId,
 	requestedModelId,
 	modelSections,
 	piModels,
 	allowAllModels,
 }: {
-	activeSupervisorModelId: string | null;
 	requestedModelId: string | null;
 	modelSections: readonly AgentModelSection[];
 	piModels: readonly AgentModelOption[];
 	allowAllModels: boolean;
 }): PiHandoffModelPolicyResult {
-	const allowedModelIds = piModels
-		.filter((model) =>
-			isDefaultGoalAssigneePiModelAllowed(model, modelSections),
-		)
-		.sort(compareGoalAssigneePiModels)
-		.map((model) => model.id);
-	const candidateModelId = activeSupervisorModelId
-		? canonicalPiModelId(activeSupervisorModelId, piModels)
-		: requestedModelId
-			? canonicalPiModelId(requestedModelId, piModels)
-			: null;
+	const allowedModelIds = listGoalAssigneePiModels({
+		modelSections,
+		piModels,
+		allowAllModels: false,
+	}).map((model) => model.id);
+	const candidateModelId = requestedModelId
+		? canonicalPiModelId(requestedModelId, piModels)
+		: null;
 
 	if (allowAllModels) {
+		const allModelIds = listGoalAssigneePiModels({
+			modelSections,
+			piModels,
+			allowAllModels: true,
+		}).map((model) => model.id);
 		return {
 			assignedProvider: "pi",
 			assignedModelId: candidateModelId,
@@ -89,24 +106,21 @@ export function resolveGoalAssigneePiHandoffModel({
 			resolvedModelId: candidateModelId,
 			fallbackUsed: false,
 			policyApplied: false,
-			allowedModelIds: allowAllModels
-				? piModels.map((model) => model.id)
-				: allowedModelIds,
+			allowedModelIds: allModelIds,
 			suggestedModelIds: candidateModelId ? [candidateModelId] : [],
 		};
 	}
 
 	if (!candidateModelId) {
-		const resolvedModelId = allowedModelIds[0] ?? null;
 		return {
 			assignedProvider: "pi",
-			assignedModelId: resolvedModelId,
+			assignedModelId: null,
 			requestedModelId,
-			resolvedModelId,
+			resolvedModelId: null,
 			fallbackUsed: false,
 			policyApplied: true,
 			allowedModelIds,
-			suggestedModelIds: resolvedModelId ? [resolvedModelId] : [],
+			suggestedModelIds: allowedModelIds,
 		};
 	}
 
@@ -116,19 +130,17 @@ export function resolveGoalAssigneePiHandoffModel({
 	const candidateAllowed = candidateModel
 		? isDefaultGoalAssigneePiModelAllowed(candidateModel, modelSections)
 		: isDefaultAllowedPiModelId(candidateModelId, modelSections);
-	const resolvedModelId = candidateAllowed
-		? candidateModelId
-		: (allowedModelIds[0] ?? null);
+	const resolvedModelId = candidateAllowed ? candidateModelId : null;
 
 	return {
 		assignedProvider: "pi",
 		assignedModelId: resolvedModelId,
 		requestedModelId,
 		resolvedModelId,
-		fallbackUsed: resolvedModelId !== candidateModelId,
+		fallbackUsed: false,
 		policyApplied: true,
 		allowedModelIds,
-		suggestedModelIds: resolvedModelId ? [resolvedModelId] : [],
+		suggestedModelIds: candidateAllowed ? [candidateModelId] : allowedModelIds,
 	};
 }
 

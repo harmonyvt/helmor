@@ -3,6 +3,7 @@ import type { AgentModelOption, AgentModelSection } from "@/lib/api";
 import {
 	canonicalPiModelId,
 	isDefaultGoalAssigneePiModelAllowed,
+	listGoalAssigneePiModels,
 	resolveGoalAssigneePiHandoffModel,
 } from "./pi-handoff-models";
 
@@ -93,11 +94,10 @@ describe("isDefaultGoalAssigneePiModelAllowed", () => {
 });
 
 describe("resolveGoalAssigneePiHandoffModel", () => {
-	it("keeps an allowed active supervisor model under the default policy", () => {
+	it("uses the requested model when it is available under the default policy", () => {
 		expect(
 			resolveGoalAssigneePiHandoffModel({
-				activeSupervisorModelId: "pi:azure-openai-responses/gpt-5.5",
-				requestedModelId: null,
+				requestedModelId: "pi:azure-openai-responses/gpt-5.5",
 				modelSections,
 				piModels,
 				allowAllModels: false,
@@ -112,10 +112,9 @@ describe("resolveGoalAssigneePiHandoffModel", () => {
 		);
 	});
 
-	it("falls back from a disallowed active supervisor model to the best available allowed model", () => {
+	it("does not guess a model when no requested model is provided", () => {
 		expect(
 			resolveGoalAssigneePiHandoffModel({
-				activeSupervisorModelId: "pi:moonshot/kimi-k2",
 				requestedModelId: null,
 				modelSections,
 				piModels,
@@ -123,10 +122,14 @@ describe("resolveGoalAssigneePiHandoffModel", () => {
 			}),
 		).toEqual(
 			expect.objectContaining({
-				assignedModelId: "pi:azure-openai-responses/gpt-5.5",
-				resolvedModelId: "pi:azure-openai-responses/gpt-5.5",
-				fallbackUsed: true,
+				assignedModelId: null,
+				resolvedModelId: null,
+				fallbackUsed: false,
 				policyApplied: true,
+				suggestedModelIds: [
+					"pi:azure-openai-responses/gpt-5.5",
+					"pi:anthropic/claude-sonnet-4-6",
+				],
 				allowedModelIds: [
 					"pi:azure-openai-responses/gpt-5.5",
 					"pi:anthropic/claude-sonnet-4-6",
@@ -135,52 +138,46 @@ describe("resolveGoalAssigneePiHandoffModel", () => {
 		);
 	});
 
-	it("excludes Pi models that are not backed by currently available Claude or Codex models", () => {
+	it("rejects a requested model that is not backed by currently available Claude or Codex models", () => {
 		const sectionsWithoutCodexGpt55 = modelSections.map((section) =>
 			section.id === "codex" ? { ...section, options: [] } : section,
 		);
 
 		expect(
 			resolveGoalAssigneePiHandoffModel({
-				activeSupervisorModelId: "pi:azure-openai-responses/gpt-5.5",
-				requestedModelId: null,
+				requestedModelId: "pi:azure-openai-responses/gpt-5.5",
 				modelSections: sectionsWithoutCodexGpt55,
 				piModels,
 				allowAllModels: false,
 			}),
 		).toEqual(
 			expect.objectContaining({
-				assignedModelId: "pi:anthropic/claude-sonnet-4-6",
-				resolvedModelId: "pi:anthropic/claude-sonnet-4-6",
-				fallbackUsed: true,
+				assignedModelId: null,
+				resolvedModelId: null,
+				fallbackUsed: false,
 				allowedModelIds: ["pi:anthropic/claude-sonnet-4-6"],
+				suggestedModelIds: ["pi:anthropic/claude-sonnet-4-6"],
 			}),
 		);
 	});
 
-	it("uses the best available allowed model when no supervisor model is known", () => {
+	it("lists available assignee models in best-first order", () => {
 		expect(
-			resolveGoalAssigneePiHandoffModel({
-				activeSupervisorModelId: null,
-				requestedModelId: null,
+			listGoalAssigneePiModels({
 				modelSections,
 				piModels,
 				allowAllModels: false,
-			}),
-		).toEqual(
-			expect.objectContaining({
-				assignedModelId: "pi:azure-openai-responses/gpt-5.5",
-				resolvedModelId: "pi:azure-openai-responses/gpt-5.5",
-				policyApplied: true,
-			}),
-		);
+			}).map((model) => model.id),
+		).toEqual([
+			"pi:azure-openai-responses/gpt-5.5",
+			"pi:anthropic/claude-sonnet-4-6",
+		]);
 	});
 
 	it("allows any Pi model when the override is enabled", () => {
 		expect(
 			resolveGoalAssigneePiHandoffModel({
-				activeSupervisorModelId: "pi:moonshot/kimi-k2",
-				requestedModelId: null,
+				requestedModelId: "pi:moonshot/kimi-k2",
 				modelSections,
 				piModels,
 				allowAllModels: true,

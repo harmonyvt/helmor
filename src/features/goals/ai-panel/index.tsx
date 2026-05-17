@@ -41,7 +41,10 @@ import {
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { goalLaneForWorkspace, isMovableGoalLaneId } from "../board-model";
-import { resolveGoalAssigneePiHandoffModel } from "../pi-handoff-models";
+import {
+	listGoalAssigneePiModels,
+	resolveGoalAssigneePiHandoffModel,
+} from "../pi-handoff-models";
 import { AssigneesBar } from "./assignees-bar";
 import { HistoryView } from "./history-view";
 import { ThreadManagerView } from "./thread-manager-view";
@@ -123,7 +126,6 @@ export function GoalsAiPanel({
 	const [overlayMode, setOverlayMode] = useState<"history" | "threads" | null>(
 		null,
 	);
-	const activeSupervisorModelIdRef = useRef<string | null>(null);
 	const kanbanMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
 
 	const handleSelectSession = useCallback((sessionId: string | null) => {
@@ -188,6 +190,29 @@ export function GoalsAiPanel({
 						...child,
 						lane: goalLaneForWorkspace(child),
 					}));
+				} else if (event.tool === "list_assignee_models") {
+					const assigneeModels = listGoalAssigneePiModels({
+						modelSections,
+						piModels,
+						allowAllModels: settings.allowAllGoalAssigneePiModels,
+					});
+					result = {
+						policy: settings.allowAllGoalAssigneePiModels
+							? "all-goal-assignee-pi-providers"
+							: "available-claude-and-codex-backed-pi-models",
+						assigneeModels: assigneeModels.map((model) => ({
+							id: model.id,
+							label: model.label,
+							cliModel: model.cliModel,
+							providerKey: model.providerKey ?? null,
+						})),
+						claudeModels:
+							modelSections.find((section) => section.id === "claude")
+								?.options ?? [],
+						codexModels:
+							modelSections.find((section) => section.id === "codex")
+								?.options ?? [],
+					};
 				} else if (event.tool === "create_kanban_card") {
 					if (!canCreateCards) {
 						throw new Error(
@@ -203,14 +228,26 @@ export function GoalsAiPanel({
 					const requestedModelId =
 						typeof args.assignedModelId === "string"
 							? args.assignedModelId
-							: null;
+							: typeof args.assigned_model_id === "string"
+								? args.assigned_model_id
+								: null;
 					const handoffModel = resolveGoalAssigneePiHandoffModel({
-						activeSupervisorModelId: activeSupervisorModelIdRef.current,
 						requestedModelId,
 						modelSections,
 						piModels,
 						allowAllModels: settings.allowAllGoalAssigneePiModels,
 					});
+					if (
+						typeof args.prompt === "string" &&
+						args.prompt.trim() &&
+						!handoffModel.assignedModelId
+					) {
+						throw new Error(
+							requestedModelId
+								? `The selected assignee model is not available: ${requestedModelId}. Call list_assignee_models and ask the user to choose one of the returned assigneeModels.`
+								: "Choose an assignee model before starting work. Call list_assignee_models, show the returned assigneeModels to the user, ask which model to use, then pass assigned_model_id to create_kanban_card.",
+						);
+					}
 					const { created, newWorkspace } = await enqueueKanbanMutation(
 						async () => {
 							const created = await createGoalChildWorkspaceAndStart({
@@ -354,7 +391,7 @@ export function GoalsAiPanel({
 						threadId: String(args.threadId ?? args.thread_id ?? ""),
 						message: String(args.message ?? ""),
 						priority: typeof args.priority === "string" ? args.priority : null,
-						modelId: activeSupervisorModelIdRef.current,
+						modelId: null,
 						permissionMode:
 							typeof args.permissionMode === "string"
 								? args.permissionMode
@@ -495,8 +532,7 @@ export function GoalsAiPanel({
 				onResolveDisplayedSession={handleResolveDisplayedSession}
 				onSendingWorkspacesChange={onSendingWorkspacesChange}
 				modelFilter={piOnlyModelFilter}
-				buildSendRequestExtras={({ model }) => {
-					activeSupervisorModelIdRef.current = model.id;
+				buildSendRequestExtras={() => {
 					return {
 						kanbanWorkspaceId: workspaceId,
 						kanbanSnapshot,
