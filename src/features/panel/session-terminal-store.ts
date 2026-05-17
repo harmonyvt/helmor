@@ -77,6 +77,7 @@ export function startSessionTerminal(
 	workspaceId: string,
 	sessionId: string,
 	runtime: string | null,
+	initialSize?: { cols: number; rows: number } | null,
 ) {
 	const state = ensureState(sessionId);
 	if (state.started) return startPromises.get(sessionId) ?? Promise.resolve();
@@ -121,6 +122,7 @@ export function startSessionTerminal(
 				}
 			}
 		},
+		initialSize,
 	).catch((err) => {
 		const current = ensureState(sessionId);
 		const msg = `\r\n\x1b[31mFailed to start terminal: ${err}\x1b[0m\r\n`;

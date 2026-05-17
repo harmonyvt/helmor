@@ -50,6 +50,8 @@ export function SessionTerminalSurface({
 }: SessionTerminalSurfaceProps) {
 	const termRef = useRef<TerminalHandle | null>(null);
 	const titleUpdateTimerRef = useRef<number | null>(null);
+	const startTimerRef = useRef<number | null>(null);
+	const startedSessionRef = useRef<string | null>(null);
 	const lastQueuedTitleRef = useRef(session.title);
 	const [status, setStatus] = useState<SessionTerminalStatus>(
 		session.terminalStoppedAt ? "exited" : "new",
@@ -100,8 +102,16 @@ export function SessionTerminalSurface({
 			if (titleUpdateTimerRef.current !== null) {
 				window.clearTimeout(titleUpdateTimerRef.current);
 			}
+			if (startTimerRef.current !== null) {
+				window.clearTimeout(startTimerRef.current);
+			}
 		};
 	}, []);
+
+	useEffect(() => {
+		startedSessionRef.current = null;
+		setStatus(session.terminalStoppedAt ? "exited" : "new");
+	}, [session.id, session.terminalStoppedAt]);
 
 	useEffect(() => {
 		const existing = attachSessionTerminal(session.id, {
@@ -133,10 +143,38 @@ export function SessionTerminalSurface({
 		};
 	}, [session.id]);
 
+	const startTerminalOnce = useCallback(
+		(initialSize?: { cols: number; rows: number } | null) => {
+			if (!repoId || !workspaceId) return;
+			if (startedSessionRef.current === session.id) return;
+			startedSessionRef.current = session.id;
+			void startSessionTerminal(
+				repoId,
+				workspaceId,
+				session.id,
+				runtime,
+				initialSize,
+			);
+		},
+		[repoId, runtime, session.id, workspaceId],
+	);
+
 	useEffect(() => {
 		if (!repoId || !workspaceId) return;
-		void startSessionTerminal(repoId, workspaceId, session.id, runtime);
-	}, [repoId, runtime, session.id, workspaceId]);
+		if (startTimerRef.current !== null) {
+			window.clearTimeout(startTimerRef.current);
+		}
+		startTimerRef.current = window.setTimeout(() => {
+			startTimerRef.current = null;
+			startTerminalOnce(null);
+		}, 250);
+		return () => {
+			if (startTimerRef.current !== null) {
+				window.clearTimeout(startTimerRef.current);
+				startTimerRef.current = null;
+			}
+		};
+	}, [repoId, session.id, startTerminalOnce, workspaceId]);
 
 	const handleData = useCallback(
 		(data: string) => {
@@ -149,9 +187,10 @@ export function SessionTerminalSurface({
 	const handleResize = useCallback(
 		(cols: number, rows: number) => {
 			if (!repoId || !workspaceId) return;
+			startTerminalOnce({ cols, rows });
 			resizeSessionTerminalProcess(repoId, workspaceId, session.id, cols, rows);
 		},
-		[repoId, session.id, workspaceId],
+		[repoId, session.id, startTerminalOnce, workspaceId],
 	);
 
 	const handleStop = useCallback(() => {

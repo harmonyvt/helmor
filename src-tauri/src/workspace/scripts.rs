@@ -14,6 +14,12 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
+#[derive(Debug, Clone, Copy)]
+pub struct PtySize {
+    pub cols: u16,
+    pub rows: u16,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ScriptEvent {
@@ -162,22 +168,7 @@ impl ScriptProcessManager {
             return Ok(false);
         };
         let file = stdin.lock().expect("stdin mutex poisoned");
-        let ws = libc::winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        let ret = unsafe {
-            libc::ioctl(
-                file.as_raw_fd(),
-                libc::TIOCSWINSZ as libc::c_ulong,
-                &ws as *const libc::winsize,
-            )
-        };
-        if ret != 0 {
-            bail!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
-        }
+        set_winsize(file.as_raw_fd(), cols, rows)?;
         Ok(true)
     }
 }
@@ -336,8 +327,33 @@ pub fn run_terminal_session(
     channel: Channel<ScriptEvent>,
     initial_input: Option<&str>,
 ) -> Result<Option<i32>> {
+    run_terminal_session_with_size(
+        manager,
+        repo_id,
+        script_type,
+        workspace_id,
+        working_dir,
+        context,
+        channel,
+        initial_input,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_terminal_session_with_size(
+    manager: &ScriptProcessManager,
+    repo_id: &str,
+    script_type: &str,
+    workspace_id: Option<&str>,
+    working_dir: &str,
+    context: &ScriptContext,
+    channel: Channel<ScriptEvent>,
+    initial_input: Option<&str>,
+    initial_size: Option<PtySize>,
+) -> Result<Option<i32>> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    run_script_with_shell(
+    run_script_with_shell_sized(
         manager,
         repo_id,
         script_type,
@@ -349,6 +365,7 @@ pub fn run_terminal_session(
         initial_input,
         &shell,
         &["-i", "-l"],
+        initial_size,
     )
 }
 
@@ -367,9 +384,10 @@ pub fn run_terminal_command(
     channel: Channel<ScriptEvent>,
     command_path: &str,
     command_args: &[String],
+    initial_size: Option<PtySize>,
 ) -> Result<Option<i32>> {
     let arg_refs = command_args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_script_with_shell(
+    run_script_with_shell_sized(
         manager,
         repo_id,
         script_type,
@@ -381,6 +399,7 @@ pub fn run_terminal_command(
         None,
         command_path,
         &arg_refs,
+        initial_size,
     )
 }
 
@@ -407,6 +426,37 @@ pub(crate) fn run_script_with_shell(
     shell_path: &str,
     shell_args: &[&str],
 ) -> Result<Option<i32>> {
+    run_script_with_shell_sized(
+        manager,
+        repo_id,
+        script_type,
+        workspace_id,
+        script,
+        working_dir,
+        context,
+        channel,
+        initial_input,
+        shell_path,
+        shell_args,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_script_with_shell_sized(
+    manager: &ScriptProcessManager,
+    repo_id: &str,
+    script_type: &str,
+    workspace_id: Option<&str>,
+    script: Option<&str>,
+    working_dir: &str,
+    context: &ScriptContext,
+    channel: Channel<ScriptEvent>,
+    initial_input: Option<&str>,
+    shell_path: &str,
+    shell_args: &[&str],
+    initial_size: Option<PtySize>,
+) -> Result<Option<i32>> {
     if let Some(s) = script {
         if s.trim().is_empty() {
             bail!("Script is empty");
@@ -414,6 +464,9 @@ pub(crate) fn run_script_with_shell(
     }
 
     let (master_fd, slave_fd) = open_pty()?;
+    if let Some(size) = initial_size {
+        set_winsize(master_fd, size.cols, size.rows)?;
+    }
     set_nonblocking(master_fd)?;
 
     // Dup master for stdin writing. Kept alive in `ProcessHandle` for the
@@ -587,6 +640,26 @@ pub(crate) fn run_script_with_shell(
 
     let _ = channel.send(ScriptEvent::Exited { code: exit_code });
     Ok(exit_code)
+}
+
+fn set_winsize(fd: std::os::fd::RawFd, cols: u16, rows: u16) -> Result<()> {
+    let ws = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let ret = unsafe {
+        libc::ioctl(
+            fd,
+            libc::TIOCSWINSZ as libc::c_ulong,
+            &ws as *const libc::winsize,
+        )
+    };
+    if ret != 0 {
+        bail!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -984,6 +1057,61 @@ mod tests {
         assert!(
             combined.contains("33 77"),
             "expected 33 77 from stty size; got: {combined:?}"
+        );
+    }
+
+    #[test]
+    fn initial_size_sets_pty_winsize_before_script_starts() {
+        let mgr = ScriptProcessManager::new();
+        let ctx = ScriptContext {
+            root_path: std::env::temp_dir().display().to_string(),
+            workspace_path: None,
+            workspace_name: None,
+            default_branch: None,
+        };
+
+        let (tx, rx) = mpsc::channel::<String>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            let _ = tx.send(data.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let dir = std::env::temp_dir().display().to_string();
+        let exit = run_script_with_shell_sized(
+            &mgr,
+            "repo",
+            "run",
+            Some("ws"),
+            Some("/bin/stty size"),
+            &dir,
+            &ctx,
+            ch,
+            None,
+            "/bin/sh",
+            &[],
+            Some(PtySize {
+                cols: 101,
+                rows: 37,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(exit, Some(0));
+        let mut combined = String::new();
+        while let Ok(chunk) = rx.try_recv() {
+            combined.push_str(&chunk);
+        }
+        assert!(
+            combined.contains("37 101"),
+            "expected initial size 37 101 from stty size; got: {combined:?}"
         );
     }
 
