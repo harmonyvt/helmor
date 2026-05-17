@@ -107,7 +107,7 @@ export function useWorkspacesSidebarController({
 	const { settings } = useSettings();
 	const [layoutMode, setLayoutModeState] = useState<SidebarLayoutMode>(
 		() =>
-			(localStorage.getItem(LAYOUT_MODE_KEY) as SidebarLayoutMode) ?? "status",
+			(localStorage.getItem(LAYOUT_MODE_KEY) as SidebarLayoutMode) ?? "goal",
 	);
 	const setLayoutMode = useCallback((mode: SidebarLayoutMode) => {
 		localStorage.setItem(LAYOUT_MODE_KEY, mode);

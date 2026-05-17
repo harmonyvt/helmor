@@ -226,7 +226,7 @@ export function buildGoalViewVirtualItems(
 		if (hasProjects) {
 			items.push({ kind: "group-gap", size: GOAL_GROUP_GAP });
 		}
-		const ungroupedOpen = sectionOpenState[GOAL_UNGROUPED_KEY] ?? true;
+		const ungroupedOpen = sectionOpenState[GOAL_UNGROUPED_KEY] ?? false;
 		items.push({
 			kind: "ungrouped-header",
 			count: projection.ungroupedRows.length,
@@ -425,9 +425,12 @@ function GoalFolderHeader({
 			<ContextMenu>
 				<ContextMenuTrigger asChild>
 					<div
-						style={indent ? { paddingLeft: `${indent}px` } : undefined}
+						style={{
+							...(indent ? { paddingLeft: `${indent}px` } : {}),
+							borderLeftColor: `var(--workspace-sidebar-status-${workspaceStatusToTone(goalGroup.goalRow.status)})`,
+						}}
 						className={cn(
-							"group/folder flex h-9 items-center gap-1 rounded-md px-1 transition-colors",
+							"group/folder flex h-9 items-center gap-1 rounded-md border-l-2 px-1 transition-colors",
 							isOpen && (hasChildren || isDragTarget) && "bg-accent/25",
 							isDragTarget && "ring-1 ring-ring/40",
 						)}
@@ -946,7 +949,7 @@ export const GoalVirtualItemRenderer = memo(function GoalVirtualItemRenderer({
 						className="size-[14px] shrink-0 text-muted-foreground"
 						strokeWidth={1.9}
 					/>
-					<span>Workspaces</span>
+					<span>Branches</span>
 				</span>
 				{item.count > 0 ? (
 					<span className="relative flex h-5 min-w-5 items-center justify-center">
