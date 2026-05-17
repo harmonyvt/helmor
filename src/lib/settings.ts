@@ -47,8 +47,7 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	/** Use the libghostty terminal rendering library instead of xterm.js.
-	 *  Enables GPU-accelerated rendering and improved font shaping.
-	 *  Requires a restart to take effect. */
+	 *  Enables the Ghostty VT parser and canvas renderer for terminal panes. */
 	libghosttyEnabled: boolean;
 	/** Model IDs the user has starred for quick access. */
 	favoriteModelIds: string[];

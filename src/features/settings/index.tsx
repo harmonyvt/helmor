@@ -651,7 +651,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 									<SettingsGroup>
 										<SettingsRow
 											title="libghostty renderer"
-											description="Use the libghostty terminal rendering library for GPU-accelerated rendering and improved font shaping. Requires a restart to take effect."
+											description="Use the libghostty terminal rendering library for Ghostty-backed VT parsing and canvas rendering."
 										>
 											<Switch
 												checked={settings.libghosttyEnabled}

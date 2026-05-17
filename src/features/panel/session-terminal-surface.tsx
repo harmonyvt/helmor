@@ -6,7 +6,6 @@ import {
 } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
 import {
-	captureSessionTerminal,
 	getSessionTerminalStatus,
 	renameSession,
 	updateSessionControl,
@@ -53,6 +52,7 @@ export function SessionTerminalSurface({
 	const startTimerRef = useRef<number | null>(null);
 	const startedSessionRef = useRef<string | null>(null);
 	const lastQueuedTitleRef = useRef(session.title);
+	const [terminalReadyToken, setTerminalReadyToken] = useState(0);
 	const [status, setStatus] = useState<SessionTerminalStatus>(
 		session.terminalStoppedAt ? "exited" : "new",
 	);
@@ -118,6 +118,7 @@ export function SessionTerminalSurface({
 			onChunk: (data) => termRef.current?.write(data),
 			onStatusChange: (nextStatus) => setStatus(nextStatus),
 		});
+		setStatus(existing.status);
 
 		let rafId: number | null = null;
 		const replay = () => {
@@ -147,6 +148,10 @@ export function SessionTerminalSurface({
 		(initialSize?: { cols: number; rows: number } | null) => {
 			if (!repoId || !workspaceId) return;
 			if (startedSessionRef.current === session.id) return;
+			if (startTimerRef.current !== null) {
+				window.clearTimeout(startTimerRef.current);
+				startTimerRef.current = null;
+			}
 			startedSessionRef.current = session.id;
 			void startSessionTerminal(
 				repoId,
@@ -161,6 +166,7 @@ export function SessionTerminalSurface({
 
 	useEffect(() => {
 		if (!repoId || !workspaceId) return;
+		if (terminalReadyToken === 0) return;
 		if (startTimerRef.current !== null) {
 			window.clearTimeout(startTimerRef.current);
 		}
@@ -174,7 +180,11 @@ export function SessionTerminalSurface({
 				startTimerRef.current = null;
 			}
 		};
-	}, [repoId, session.id, startTerminalOnce, workspaceId]);
+	}, [repoId, session.id, startTerminalOnce, terminalReadyToken, workspaceId]);
+
+	const handleTerminalReady = useCallback(() => {
+		setTerminalReadyToken((token) => token + 1);
+	}, []);
 
 	const handleData = useCallback(
 		(data: string) => {
@@ -197,17 +207,6 @@ export function SessionTerminalSurface({
 		if (!repoId || !workspaceId) return;
 		stopSessionTerminalProcess(repoId, workspaceId, session.id);
 	}, [repoId, session.id, workspaceId]);
-
-	const handleCapture = useCallback(async () => {
-		if (!workspaceId) return;
-		const tail = await captureSessionTerminal(workspaceId, session.id, 120);
-		const terminal = termRef.current;
-		if (!terminal) return;
-		terminal.clear();
-		terminal.write(
-			tail || "\r\n\x1b[2mNo tmux pane output captured.\x1b[0m\r\n",
-		);
-	}, [session.id, workspaceId]);
 
 	const handleTakeControl = useCallback(() => {
 		void updateSessionControl(session.id, "user", "writable");
@@ -242,85 +241,96 @@ export function SessionTerminalSurface({
 					"border-amber-500/70 ring-1 ring-inset ring-amber-500/50",
 			)}
 		>
+			{/* Terminal title bar */}
 			<div
 				className={cn(
-					"flex min-h-9 items-center justify-between gap-3 border-b border-border/70 bg-background/80 px-3 text-xs",
-					isAgentOwned &&
-						"border-amber-500/30 bg-amber-500/10 text-amber-950 dark:text-amber-100",
+					"flex min-h-7 items-center justify-between gap-3 border-b px-3",
+					"border-white/[0.06] bg-[color-mix(in_oklab,var(--terminal-background)_92%,white_8%)]",
+					isAgentOwned && "border-amber-500/20 bg-amber-500/10",
 				)}
 			>
-				<div className="flex min-w-0 items-center gap-2">
-					<span className="font-medium">{terminalModeLabel(session)}</span>
-					<span className="text-muted-foreground">
-						{terminalRuntimeLabel(runtime)}
-					</span>
-					<span className="truncate text-muted-foreground">
-						{session.terminalCwd ?? workspace?.rootPath ?? "workspace"}
-					</span>
+				{/* Left: mode · runtime · path */}
+				<div className="flex min-w-0 items-center gap-1.5 font-mono text-[11px]">
+					<span className="text-white/40">{terminalModeLabel(session)}</span>
+					<span className="text-white/25">·</span>
+					<span className="text-white/60">{terminalRuntimeLabel(runtime)}</span>
+					{(session.terminalCwd ?? workspace?.rootPath) ? (
+						<>
+							<span className="text-white/25">·</span>
+							<span className="truncate text-white/35">
+								{session.terminalCwd ?? workspace?.rootPath}
+							</span>
+						</>
+					) : null}
+					{tmuxLabel ? (
+						<>
+							<span className="text-white/20">›</span>
+							<span className="text-white/40">{tmuxLabel}</span>
+						</>
+					) : null}
 				</div>
-				<div className="flex shrink-0 items-center gap-2">
-					<span
+
+				{/* Right: status indicator + actions */}
+				<div className="flex shrink-0 items-center gap-2.5">
+					{/* Status dot + label */}
+					<div
 						className={cn(
-							"text-muted-foreground",
-							status === "new" && "animate-pulse",
+							"flex items-center gap-1.5 font-mono text-[10px]",
+							status === "running"
+								? "text-emerald-400/70"
+								: status === "exited"
+									? "text-white/25"
+									: "text-amber-400/60",
 						)}
 					>
+						<span
+							className={cn(
+								"inline-block h-1.5 w-1.5 rounded-full",
+								status === "running"
+									? "bg-emerald-400/70"
+									: status === "exited"
+										? "bg-white/20"
+										: "animate-pulse bg-amber-400/60",
+							)}
+						/>
 						{status === "running"
-							? "Running"
+							? "running"
 							: status === "exited"
-								? "Exited"
-								: "Starting…"}
-					</span>
+								? "exited"
+								: "starting…"}
+					</div>
 					{tmuxStatus?.dead ? (
-						<span className="text-[11px] text-destructive/80">pane dead</span>
-					) : tmuxLabel ? (
-						<span className="text-muted-foreground">{tmuxLabel}</span>
-					) : null}
-					{/* Keep Capture visible but disabled when tmux is available yet the
-					    session hasn't started — this ensures users can discover it. */}
-					{tmuxStatus?.available ? (
-						<Button
-							size="xs"
-							variant="ghost"
-							className="cursor-pointer"
-							disabled={!tmuxStatus.exists}
-							onClick={handleCapture}
-							title={
-								tmuxStatus.exists
-									? "Capture the last 120 lines from the tmux pane"
-									: "Available once the terminal is running"
-							}
-						>
-							Capture
-						</Button>
+						<span className="font-mono text-[10px] text-red-400/60">
+							pane dead
+						</span>
 					) : null}
 					{isAgentOwned ? (
 						<Button
 							size="xs"
-							variant="outline"
-							className="cursor-pointer"
+							variant="ghost"
+							className="h-5 cursor-pointer px-2 font-mono text-[10px] text-amber-300/70 hover:bg-amber-500/10 hover:text-amber-300"
 							onClick={handleTakeControl}
 						>
-							Take Control
+							take control
 						</Button>
 					) : null}
 					{status === "running" ? (
 						<Button
 							size="xs"
 							variant="ghost"
-							className="cursor-pointer"
+							className="h-5 cursor-pointer px-2 font-mono text-[10px] text-white/30 hover:bg-white/5 hover:text-white/60"
 							onClick={handleStop}
 						>
-							Stop
+							stop
 						</Button>
 					) : null}
 				</div>
 			</div>
 			{isAgentOwned ? (
-				<div className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-950 dark:text-amber-100">
-					Controlled by {ownerLabel(session)} — click{" "}
-					<strong className="font-semibold">Take Control</strong> to type in
-					this terminal.
+				<div className="border-b border-amber-500/20 bg-amber-500/[0.07] px-3 py-1.5 font-mono text-[11px] text-amber-300/80">
+					controlled by {ownerLabel(session)} — click{" "}
+					<span className="font-semibold text-amber-300">take control</span> to
+					type in this terminal
 				</div>
 			) : null}
 			<div className="min-h-0 flex-1">
@@ -330,6 +340,7 @@ export function SessionTerminalSurface({
 					onData={handleData}
 					onResize={handleResize}
 					onTitleChange={handleTerminalTitleChange}
+					onReady={handleTerminalReady}
 				/>
 			</div>
 		</div>

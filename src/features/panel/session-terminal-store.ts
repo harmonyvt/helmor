@@ -83,6 +83,8 @@ export function startSessionTerminal(
 	if (state.started) return startPromises.get(sessionId) ?? Promise.resolve();
 	state.started = true;
 	state.status = "running";
+	state.exitCode = null;
+	listeners.get(sessionId)?.onStatusChange("running", null);
 	const promise = spawnSessionTerminal(
 		repoId,
 		workspaceId,
