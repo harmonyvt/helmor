@@ -1099,6 +1099,35 @@ fn delete_session_tree_in_transaction(
         .context("Failed to delete delegation metadata")?;
     transaction
         .execute(
+            "DELETE FROM session_messages
+             WHERE role = 'system'
+               AND json_valid(content)
+               AND json_extract(content, '$.assigneeSessionId') = ?1
+               AND json_extract(content, '$.type') IN ('goal_assignee_report', 'goal_assignee_runtime_issue')",
+            [session_id],
+        )
+        .context("Failed to delete delivered assignee notifications")?;
+    transaction
+        .execute(
+            "DELETE FROM goal_supervisor_notifications
+             WHERE assignee_session_id = ?1 OR delivered_to_session_id = ?1",
+            [session_id],
+        )
+        .context("Failed to delete assignee notification metadata")?;
+    transaction
+        .execute(
+            "DELETE FROM pending_cli_sends WHERE session_id = ?1",
+            [session_id],
+        )
+        .context("Failed to delete pending session sends")?;
+    transaction
+        .execute(
+            "DELETE FROM session_command_audit_log WHERE session_id = ?1",
+            [session_id],
+        )
+        .context("Failed to delete session command audit log")?;
+    transaction
+        .execute(
             "DELETE FROM session_messages WHERE session_id = ?1",
             [session_id],
         )
@@ -2022,5 +2051,88 @@ mod tests {
         assert_eq!(session_count, 0);
         assert_eq!(message_count, 0);
         assert_eq!(delegation_count, 0);
+    }
+
+    #[test]
+    fn deleting_session_tree_removes_assignee_artifacts() {
+        let _env = crate::testkit::TestEnv::new("assignee-delete-cascade");
+        let conn = crate::models::db::write_conn().unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('repo-assignee-delete', 'repo', '/tmp')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO workspaces (id, repository_id, directory_name, state, status, active_session_id, workspace_kind) VALUES ('goal-assignee-delete', 'repo-assignee-delete', 'goal', 'active', 'in-progress', 'supervisor-assignee-delete', 'goal')", []).unwrap();
+        conn.execute("INSERT INTO workspaces (id, repository_id, directory_name, state, status, active_session_id, workspace_kind, goal_workspace_id) VALUES ('workspace-assignee-delete', 'repo-assignee-delete', 'card', 'active', 'in-progress', 'parent-assignee-delete', 'code', 'goal-assignee-delete')", []).unwrap();
+        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('supervisor-assignee-delete', 'goal-assignee-delete', 'idle', 'Supervisor', 'pi')", []).unwrap();
+        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type, thread_role) VALUES ('parent-assignee-delete', 'workspace-assignee-delete', 'idle', 'Assignee', 'pi', 'assignee')", []).unwrap();
+        conn.execute("INSERT INTO sessions (id, workspace_id, status, title, agent_type) VALUES ('child-assignee-delete', 'workspace-assignee-delete', 'idle', 'Delegate', 'codex')", []).unwrap();
+        conn.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('anchor-assignee-delete', 'parent-assignee-delete', 'assistant', '{}')", []).unwrap();
+        conn.execute("INSERT INTO session_delegations (id, parent_session_id, child_session_id, parent_message_id, provider, model_id, title, status, output_schema) VALUES ('delegation-assignee-delete', 'parent-assignee-delete', 'child-assignee-delete', 'anchor-assignee-delete', 'codex', 'gpt-5.4', 'Delegate', 'running', '{}')", []).unwrap();
+        conn.execute("INSERT INTO goal_supervisor_notifications (id, goal_workspace_id, card_workspace_id, assignee_session_id, message_id, report_type, excerpt, delivered_to_session_id) VALUES ('notification-parent-delete', 'goal-assignee-delete', 'workspace-assignee-delete', 'parent-assignee-delete', 'report-parent-delete', 'completed', 'done', 'supervisor-assignee-delete')", []).unwrap();
+        conn.execute("INSERT INTO goal_supervisor_notifications (id, goal_workspace_id, card_workspace_id, assignee_session_id, message_id, report_type, excerpt, delivered_to_session_id) VALUES ('notification-child-delete', 'goal-assignee-delete', 'workspace-assignee-delete', 'child-assignee-delete', 'report-child-delete', 'runtime_issue', 'failed', 'supervisor-assignee-delete')", []).unwrap();
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content) VALUES ('delivered-parent-delete', 'supervisor-assignee-delete', 'system', ?1)",
+            [serde_json::json!({
+                "type": "goal_assignee_report",
+                "assigneeSessionId": "parent-assignee-delete",
+                "message": "done"
+            })
+            .to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content) VALUES ('delivered-child-delete', 'supervisor-assignee-delete', 'system', ?1)",
+            [serde_json::json!({
+                "type": "goal_assignee_runtime_issue",
+                "assigneeSessionId": "child-assignee-delete",
+                "message": "failed"
+            })
+            .to_string()],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO pending_cli_sends (id, workspace_id, session_id, prompt) VALUES ('pending-parent-delete', 'workspace-assignee-delete', 'parent-assignee-delete', 'continue')", []).unwrap();
+        conn.execute("INSERT INTO pending_cli_sends (id, workspace_id, session_id, prompt) VALUES ('pending-child-delete', 'workspace-assignee-delete', 'child-assignee-delete', 'continue')", []).unwrap();
+        conn.execute("INSERT INTO session_command_audit_log (id, session_id, actor, command) VALUES ('audit-parent-delete', 'parent-assignee-delete', 'agent', 'test')", []).unwrap();
+        conn.execute("INSERT INTO session_command_audit_log (id, session_id, actor, command) VALUES ('audit-child-delete', 'child-assignee-delete', 'agent', 'test')", []).unwrap();
+        drop(conn);
+
+        delete_session("parent-assignee-delete").unwrap();
+        let conn = crate::models::db::read_conn().unwrap();
+        for (table, expected) in [
+            (
+                "sessions",
+                "id IN ('parent-assignee-delete', 'child-assignee-delete')",
+            ),
+            (
+                "session_messages",
+                "id IN ('anchor-assignee-delete', 'delivered-parent-delete', 'delivered-child-delete')",
+            ),
+            (
+                "session_delegations",
+                "id = 'delegation-assignee-delete'",
+            ),
+            (
+                "goal_supervisor_notifications",
+                "id IN ('notification-parent-delete', 'notification-child-delete')",
+            ),
+            (
+                "pending_cli_sends",
+                "id IN ('pending-parent-delete', 'pending-child-delete')",
+            ),
+            (
+                "session_command_audit_log",
+                "id IN ('audit-parent-delete', 'audit-child-delete')",
+            ),
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE {expected}"),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0, "{table} should be cleaned up");
+        }
     }
 }
