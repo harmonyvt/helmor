@@ -5,9 +5,18 @@ import {
 	Pencil,
 } from "lucide-react";
 import type React from "react";
-import { Button } from "@/components/ui/button";
-import type { PrSyncState, WorkspaceState } from "@/lib/api";
-import { parsePrUrl } from "@/lib/pr-url";
+import type {
+	CommitButtonState,
+	WorkspaceCommitButtonMode,
+} from "@/features/commit/button";
+import { GitSectionHeader } from "@/features/inspector/sections/git-section-header";
+import type {
+	ChangeRequestInfo,
+	ForgeActionStatus,
+	ForgeDetection,
+	PrSyncState,
+	WorkspaceState,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type GoalSetupStatus = {
@@ -20,7 +29,6 @@ type GoalHeaderProps = {
 	headerLeading?: React.ReactNode;
 	goalTitle: string;
 	goalDescription: string | null;
-	prUrl?: string | null;
 	prSyncState?: PrSyncState | null;
 	workspaceState?: WorkspaceState | null;
 	hasSetupScript?: boolean;
@@ -28,21 +36,20 @@ type GoalHeaderProps = {
 	setupScriptState?: "no-script" | "idle" | "running" | "success" | "failure";
 	hasBranch?: boolean;
 	hasTargetBranch?: boolean;
+	commitButtonMode?: WorkspaceCommitButtonMode;
+	commitButtonState?: CommitButtonState;
+	changeRequest?: ChangeRequestInfo | null;
+	changeRequestName?: string;
+	forgeDetection?: ForgeDetection | null;
+	forgeRemoteState?: ForgeActionStatus["remoteState"] | null;
+	workspaceId?: string | null;
+	hasGitChanges?: boolean;
+	forgeIsRefreshing?: boolean;
+	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	onOpenChangeRequest?: () => void;
+	onRefreshPrStatus?: () => Promise<void>;
 	onEditGoal: () => void;
 };
-
-function prAccentClass(prSyncState?: PrSyncState | null) {
-	switch (prSyncState) {
-		case "open":
-			return "border-[var(--workspace-pr-open-accent)] bg-[color-mix(in_srgb,var(--workspace-pr-open-accent)_10%,transparent)] text-[var(--workspace-pr-open-accent)] hover:bg-[color-mix(in_srgb,var(--workspace-pr-open-accent)_16%,transparent)] hover:text-[var(--workspace-pr-open-accent)]";
-		case "merged":
-			return "border-[var(--workspace-pr-merged-accent)] bg-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_10%,transparent)] text-[var(--workspace-pr-merged-accent)] hover:bg-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_16%,transparent)] hover:text-[var(--workspace-pr-merged-accent)]";
-		case "closed":
-			return "border-[var(--workspace-pr-closed-accent)] bg-[color-mix(in_srgb,var(--workspace-pr-closed-accent)_10%,transparent)] text-[var(--workspace-pr-closed-accent)] hover:bg-[color-mix(in_srgb,var(--workspace-pr-closed-accent)_16%,transparent)] hover:text-[var(--workspace-pr-closed-accent)]";
-		default:
-			return null;
-	}
-}
 
 function setupStatus({
 	canCreateCards,
@@ -139,7 +146,6 @@ export function GoalHeader({
 	headerLeading,
 	goalTitle,
 	goalDescription,
-	prUrl,
 	prSyncState,
 	workspaceState,
 	hasSetupScript = false,
@@ -147,9 +153,20 @@ export function GoalHeader({
 	setupScriptState = "no-script",
 	hasBranch = false,
 	hasTargetBranch = false,
+	commitButtonMode = "create-pr",
+	commitButtonState,
+	changeRequest = null,
+	changeRequestName = "PR",
+	forgeDetection = null,
+	forgeRemoteState = null,
+	workspaceId = null,
+	hasGitChanges = false,
+	forgeIsRefreshing = false,
+	onCommitAction,
+	onOpenChangeRequest,
+	onRefreshPrStatus,
 	onEditGoal,
 }: GoalHeaderProps) {
-	const parsedPr = parsePrUrl(prUrl);
 	const setup = setupStatus({
 		// Pass false — we never want to suppress the badge here based on
 		// card-creation readiness. The tab bar owns the Add card gating.
@@ -162,7 +179,6 @@ export function GoalHeader({
 		setupScriptsLoaded,
 		setupScriptState,
 	});
-	const prClassName = prAccentClass(prSyncState);
 
 	return (
 		<>
@@ -183,23 +199,31 @@ export function GoalHeader({
 					</div>
 				</div>
 
-				{/* Setup badge + PR button live in the title row */}
-				<div className="flex shrink-0 items-center gap-2">
-					{setup ? <GoalSetupBadge status={setup} /> : null}
-					{prUrl ? (
-						<Button
-							asChild
-							variant="outline"
-							size="sm"
-							className={cn("cursor-pointer", prClassName)}
-						>
-							<a href={prUrl} target="_blank" rel="noreferrer">
-								{parsedPr ? `Open PR #${parsedPr.number}` : "Open PR"}
-							</a>
-						</Button>
-					) : null}
-				</div>
+				{setup ? (
+					<div className="flex shrink-0 items-center">
+						<GoalSetupBadge status={setup} />
+					</div>
+				) : null}
 			</header>
+
+			{/* Git status banner — full-width action strip below the title row */}
+			<GitSectionHeader
+				commitButtonMode={commitButtonMode}
+				commitButtonState={commitButtonState}
+				changeRequest={changeRequest}
+				changeRequestName={changeRequestName}
+				forgeDetection={forgeDetection}
+				forgeRemoteState={forgeRemoteState}
+				workspaceId={workspaceId}
+				hasChanges={hasGitChanges}
+				isRefreshing={forgeIsRefreshing}
+				onChangeRequestClick={onOpenChangeRequest}
+				onCommit={
+					onCommitAction ? () => onCommitAction(commitButtonMode) : undefined
+				}
+				onRefreshPrStatus={onRefreshPrStatus}
+				className="px-5"
+			/>
 
 			{/* Description row — click to edit */}
 			<button

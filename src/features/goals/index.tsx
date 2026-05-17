@@ -111,6 +111,16 @@ export function GoalWorkspaceContainer({
 	onOpenEditorFile,
 	onSendingWorkspacesChange,
 	onOpenSettings,
+	commitButtonMode = "create-pr",
+	commitButtonState,
+	changeRequest = null,
+	forgeDetection = null,
+	forgeRemoteState = null,
+	forgeIsRefreshing = false,
+	hasGitChanges = false,
+	onCommitAction,
+	onOpenChangeRequest,
+	onRefreshPrStatus,
 }: GoalWorkspaceContainerProps) {
 	const queryClient = useQueryClient();
 
@@ -675,7 +685,6 @@ export function GoalWorkspaceContainer({
 					headerLeading={headerLeading}
 					goalTitle={goalTitle}
 					goalDescription={goalDescription}
-					prUrl={workspace?.prUrl}
 					prSyncState={workspace?.prSyncState ?? null}
 					workspaceState={workspace?.state ?? null}
 					hasBranch={Boolean(workspace?.branch)}
@@ -683,6 +692,18 @@ export function GoalWorkspaceContainer({
 					hasSetupScript={hasSetupScript}
 					setupScriptsLoaded={repoScriptsQuery.isSuccess}
 					setupScriptState={setupScriptState}
+					commitButtonMode={commitButtonMode}
+					commitButtonState={commitButtonState}
+					changeRequest={changeRequest}
+					changeRequestName={forgeDetection?.labels.changeRequestName ?? "PR"}
+					forgeDetection={forgeDetection}
+					forgeRemoteState={forgeRemoteState}
+					workspaceId={workspaceId}
+					hasGitChanges={hasGitChanges}
+					forgeIsRefreshing={forgeIsRefreshing}
+					onCommitAction={onCommitAction}
+					onOpenChangeRequest={onOpenChangeRequest}
+					onRefreshPrStatus={onRefreshPrStatus}
 					onEditGoal={() => setShowGoalSheet(true)}
 				/>
 
