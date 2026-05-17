@@ -1380,6 +1380,7 @@ export type HelmorSkillsStatus = {
 	installed: boolean;
 	claude: boolean;
 	codex: boolean;
+	agents: boolean;
 	command: string;
 };
 

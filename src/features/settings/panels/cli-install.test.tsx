@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
 	getCliStatus: vi.fn(),
+	getHelmorSkillsStatus: vi.fn(),
 	installCli: vi.fn(),
+	installHelmorSkills: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -12,7 +14,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		getCliStatus: apiMocks.getCliStatus,
+		getHelmorSkillsStatus: apiMocks.getHelmorSkillsStatus,
 		installCli: apiMocks.installCli,
+		installHelmorSkills: apiMocks.installHelmorSkills,
 	};
 });
 
@@ -21,7 +25,16 @@ import { CliInstallPanel } from "./cli-install";
 describe("CliInstallPanel", () => {
 	beforeEach(() => {
 		apiMocks.getCliStatus.mockReset();
+		apiMocks.getHelmorSkillsStatus.mockReset();
 		apiMocks.installCli.mockReset();
+		apiMocks.installHelmorSkills.mockReset();
+		apiMocks.getHelmorSkillsStatus.mockResolvedValue({
+			installed: true,
+			claude: true,
+			codex: true,
+			agents: true,
+			command: "helmor-dev skills export --target all",
+		});
 	});
 
 	afterEach(() => {
@@ -79,6 +92,46 @@ describe("CliInstallPanel", () => {
 		});
 		await waitFor(() => {
 			expect(screen.getByText(/Installed at/)).toBeInTheDocument();
+		});
+	});
+
+	it("renders skills status and allows reinstalling bundled skills", async () => {
+		const user = userEvent.setup();
+		apiMocks.getCliStatus.mockResolvedValue({
+			installed: true,
+			installPath: "/usr/local/bin/helmor-dev",
+			buildMode: "development",
+			installState: "managed",
+		});
+		apiMocks.getHelmorSkillsStatus.mockResolvedValue({
+			installed: false,
+			claude: true,
+			codex: false,
+			agents: false,
+			command: "helmor-dev skills export --target all",
+		});
+		apiMocks.installHelmorSkills.mockResolvedValue({
+			installed: true,
+			claude: true,
+			codex: true,
+			agents: true,
+			command: "helmor-dev skills export --target all",
+		});
+
+		render(<CliInstallPanel />);
+
+		await waitFor(() => {
+			expect(screen.getByText("Agent Skills")).toBeInTheDocument();
+		});
+		expect(screen.getByText(/Codex missing/)).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Reinstall skills" }));
+
+		await waitFor(() => {
+			expect(apiMocks.installHelmorSkills).toHaveBeenCalledTimes(1);
+		});
+		await waitFor(() => {
+			expect(screen.getByText(/Codex installed/)).toBeInTheDocument();
 		});
 	});
 });

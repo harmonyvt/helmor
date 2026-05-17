@@ -86,6 +86,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: ScriptsAction,
     },
+    /// Export bundled Helmor skills to local agent skill directories.
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
     /// Migrate from Helmor v1 (Conductor).
     Conductor {
         #[command(subcommand)]
@@ -132,6 +137,31 @@ pub enum SettingsAction {
     },
     /// Delete a setting key.
     Delete { key: String },
+}
+
+// ---------------------------------------------------------------------------
+// skills
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+pub enum SkillsAction {
+    /// Copy repo-bundled Helmor skills into agent skill directories.
+    Export {
+        /// Which agent runtime's skill directory to update.
+        #[arg(long, value_enum, default_value_t = SkillExportTarget::All)]
+        target: SkillExportTarget,
+        /// Print the planned operations without writing files.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+pub enum SkillExportTarget {
+    All,
+    Codex,
+    Claude,
+    Agents,
 }
 
 // ---------------------------------------------------------------------------

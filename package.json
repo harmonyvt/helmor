@@ -13,6 +13,7 @@
 	"scripts": {
 		"changeset": "changeset",
 		"install:deps": "sfw bun install",
+		"skills:export": "node scripts/export-skills.mjs",
 		"setup:envs": "bun scripts/setup-envs.ts",
 		"dev": "bun run dev:prepare && tauri dev",
 		"dev:preview": "bun scripts/dev-preview.ts",

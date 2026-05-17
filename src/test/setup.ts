@@ -167,8 +167,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 					installed: false,
 					claude: false,
 					codex: false,
-					command:
-						"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+					agents: false,
+					command: "helmor-dev skills export --target all",
 				};
 			case "load_auto_close_action_kinds":
 				return [];
