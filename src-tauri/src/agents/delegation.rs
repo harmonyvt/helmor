@@ -3,7 +3,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::AppHandle;
@@ -212,6 +212,26 @@ struct ChildTurnOutput {
     provider_session_id: Option<String>,
 }
 
+struct SidecarSubscription<'a> {
+    sidecar: &'a crate::sidecar::ManagedSidecar,
+    request_id: String,
+}
+
+impl<'a> SidecarSubscription<'a> {
+    fn new(sidecar: &'a crate::sidecar::ManagedSidecar, request_id: String) -> Self {
+        Self {
+            sidecar,
+            request_id,
+        }
+    }
+}
+
+impl Drop for SidecarSubscription<'_> {
+    fn drop(&mut self) {
+        self.sidecar.unsubscribe(&self.request_id);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_child_turn(
     app: &AppHandle,
@@ -261,6 +281,7 @@ fn run_child_turn(
         params,
     };
     let rx = sidecar.subscribe(&request_id);
+    let _subscription = SidecarSubscription::new(sidecar, request_id.clone());
     sidecar.send(&request)?;
 
     let ctx = ExchangeContext {
@@ -350,18 +371,27 @@ fn run_child_turn(
                     "idle",
                     pipeline.accumulator.take_result_id(),
                 )?;
-                restore_parent_active_if_child_selected(
+                if let Err(error) = restore_parent_active_if_child_selected_on(
+                    &conn,
                     &created.workspace_id,
                     &created.parent_session_id,
                     &created.child_session_id,
-                );
+                ) {
+                    tracing::warn!(
+                        workspace_id = %created.workspace_id,
+                        parent_session_id = %created.parent_session_id,
+                        child_session_id = %created.child_session_id,
+                        error = ?error,
+                        "Failed to restore parent active session after delegation child turn"
+                    );
+                }
+                drop(conn);
                 publish_delegation_updates(
                     app,
                     &created.workspace_id,
                     &created.parent_session_id,
                     &created.child_session_id,
                 );
-                sidecar.unsubscribe(&request_id);
                 return Ok(ChildTurnOutput {
                     assistant_text,
                     provider_session_id: output.session_id,
@@ -376,7 +406,6 @@ fn run_child_turn(
                     .unwrap_or("Delegated child stream failed")
                     .to_string();
                 finalize_child_error(&ctx, model, &message)?;
-                sidecar.unsubscribe(&request_id);
                 return Err(anyhow::anyhow!(message));
             }
             _ => {
@@ -515,12 +544,38 @@ fn restore_parent_active_if_child_selected(
     parent_session_id: &str,
     child_session_id: &str,
 ) {
-    if let Ok(conn) = crate::models::db::write_conn() {
-        let _ = conn.execute(
-            "UPDATE workspaces SET active_session_id = ?2 WHERE id = ?1 AND active_session_id = ?3",
-            params![workspace_id, parent_session_id, child_session_id],
-        );
+    match crate::models::db::write_conn().and_then(|conn| {
+        restore_parent_active_if_child_selected_on(
+            &conn,
+            workspace_id,
+            parent_session_id,
+            child_session_id,
+        )
+    }) {
+        Ok(()) => {}
+        Err(error) => {
+            tracing::warn!(
+                workspace_id,
+                parent_session_id,
+                child_session_id,
+                error = ?error,
+                "Failed to restore parent active session after delegation"
+            );
+        }
     }
+}
+
+fn restore_parent_active_if_child_selected_on(
+    conn: &Connection,
+    workspace_id: &str,
+    parent_session_id: &str,
+    child_session_id: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE workspaces SET active_session_id = ?2 WHERE id = ?1 AND active_session_id = ?3",
+        params![workspace_id, parent_session_id, child_session_id],
+    )?;
+    Ok(())
 }
 
 fn publish_delegation_updates(
@@ -618,5 +673,34 @@ mod tests {
             resolved,
             std::path::PathBuf::from("/source/demo-repo/delegate-ws")
         );
+    }
+
+    #[test]
+    fn restore_parent_active_session_reuses_existing_writer() {
+        let _env = crate::testkit::TestEnv::new("delegation-restore-active");
+        let conn = crate::models::db::write_conn().unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, active_session_id) VALUES ('workspace-1', 'child-session')",
+            [],
+        )
+        .unwrap();
+
+        restore_parent_active_if_child_selected_on(
+            &conn,
+            "workspace-1",
+            "parent-session",
+            "child-session",
+        )
+        .unwrap();
+
+        let active_session_id: String = conn
+            .query_row(
+                "SELECT active_session_id FROM workspaces WHERE id = 'workspace-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(active_session_id, "parent-session");
     }
 }
