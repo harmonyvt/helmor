@@ -432,13 +432,20 @@ pub(super) fn stream_via_sidecar(
                             id: Uuid::new_v4().to_string(),
                             method: "stopSession".to_string(),
                             params: serde_json::json!({
-                                "sessionId": sidecar_session_id_copy,
-                                "provider": provider,
+                                "sessionId": sidecar_session_id_copy.clone(),
+                                "provider": provider.clone(),
                             }),
                         };
                         if let Err(e) = sidecar_state.send(&stop_req) {
                             tracing::warn!(rid = %rid, "stopSession during abnormal exit failed: {e}");
                         }
+                        tracing::warn!(
+                            rid = %rid,
+                            sidecar_session_id = %sidecar_session_id_copy,
+                            provider = %provider,
+                            "heartbeat timeout reached; restarting sidecar after stopSession"
+                        );
+                        sidecar_state.restart_after_unresponsive_stop("stream heartbeat timeout");
                     }
 
                     let resolved_model = pipeline

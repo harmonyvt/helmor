@@ -50,6 +50,9 @@ use self::support::{non_empty, parse_claude_output, parse_codex_output};
 
 type CmdResult<T> = std::result::Result<T, CommandError>;
 
+const STOP_AGENT_STREAM_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+const STOP_AGENT_STREAM_DRAIN_POLL: Duration = Duration::from_millis(50);
+
 pub fn prewarm_slash_command_cache(app: &AppHandle) {
     queries::prewarm_slash_command_cache(app);
 }
@@ -392,20 +395,62 @@ pub struct AgentStopRequest {
 #[tauri::command]
 pub async fn stop_agent_stream(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    active_streams: tauri::State<'_, ActiveStreams>,
     request: AgentStopRequest,
 ) -> CmdResult<()> {
+    let session_id = request.session_id;
+    let provider = request.provider.unwrap_or_else(|| "claude".to_string());
+    let was_active = active_streams
+        .lookup_by_sidecar_session_id(&session_id)
+        .is_some();
     let stop_req = crate::sidecar::SidecarRequest {
         id: Uuid::new_v4().to_string(),
         method: "stopSession".to_string(),
         params: serde_json::json!({
-            "sessionId": request.session_id,
-            "provider": request.provider.unwrap_or_else(|| "claude".to_string()),
+            "sessionId": session_id.clone(),
+            "provider": provider.clone(),
         }),
     };
     sidecar
         .send(&stop_req)
         .map_err(|e| anyhow::anyhow!("Failed to stop session: {e}"))?;
+    if was_active
+        && !wait_for_active_stream_drain(
+            &active_streams,
+            &session_id,
+            STOP_AGENT_STREAM_DRAIN_TIMEOUT,
+        )
+        .await
+    {
+        tracing::warn!(
+            session_id = %session_id,
+            provider = %provider,
+            timeout_ms = STOP_AGENT_STREAM_DRAIN_TIMEOUT.as_millis() as u64,
+            "stopSession did not drain active stream; restarting sidecar"
+        );
+        sidecar.restart_after_unresponsive_stop("manual stop_agent_stream did not drain");
+    }
     Ok(())
+}
+
+async fn wait_for_active_stream_drain(
+    active_streams: &ActiveStreams,
+    sidecar_session_id: &str,
+    timeout: Duration,
+) -> bool {
+    let started = Instant::now();
+    loop {
+        if active_streams
+            .lookup_by_sidecar_session_id(sidecar_session_id)
+            .is_none()
+        {
+            return true;
+        }
+        if started.elapsed() >= timeout {
+            return false;
+        }
+        tokio::time::sleep(STOP_AGENT_STREAM_DRAIN_POLL).await;
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
