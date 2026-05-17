@@ -1,6 +1,6 @@
 use tauri::AppHandle;
 
-use crate::{db, git_watcher, repos, settings};
+use crate::{db, git_watcher, github_cli, repos, settings};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -34,6 +34,19 @@ pub async fn clone_repository_from_url(
 ) -> CmdResult<repos::AddRepositoryResponse> {
     let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
     run_blocking(move || repos::clone_repository_from_url(&git_url, &clone_directory)).await
+}
+
+#[tauri::command]
+pub async fn create_github_project_repository(
+    project_name: String,
+    parent_directory: String,
+    visibility: github_cli::GithubRepositoryVisibility,
+) -> CmdResult<repos::AddRepositoryResponse> {
+    let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+    run_blocking(move || {
+        repos::create_github_project_repository(&project_name, &parent_directory, visibility)
+    })
+    .await
 }
 
 #[tauri::command]

@@ -54,18 +54,22 @@ export const WorkspacesSidebarContainer = memo(
 			handleArchiveWorkspace,
 			handleAssignWorkspaceToGoal,
 			handleCloneFromUrl,
+			handleCreateGithubProject,
 			handleConvertWorkspaceToGoal,
 			handleCreateWorkspaceFromRepo,
 			handleCreateGoalWorkspace,
 			handleDeleteWorkspace,
 			handleMarkWorkspaceUnread,
 			handleOpenCloneDialog,
+			handleOpenCreateGithubProjectDialog,
 			handleRestoreWorkspace,
 			handleSelectWorkspace,
 			handleSetWorkspaceStatus,
 			handleTogglePin,
+			isCreateGithubProjectDialogOpen,
 			isCloneDialogOpen,
 			prefetchWorkspace,
+			setIsCreateGithubProjectDialogOpen,
 			setIsCloneDialogOpen,
 		} = useWorkspacesSidebarController({
 			selectedWorkspaceId,
@@ -96,10 +100,16 @@ export const WorkspacesSidebarContainer = memo(
 					void handleAddRepository();
 				}}
 				onOpenCloneDialog={handleOpenCloneDialog}
+				onOpenCreateGithubProjectDialog={handleOpenCreateGithubProjectDialog}
+				isCreateGithubProjectDialogOpen={isCreateGithubProjectDialogOpen}
+				onCreateGithubProjectDialogOpenChange={
+					setIsCreateGithubProjectDialogOpen
+				}
 				isCloneDialogOpen={isCloneDialogOpen}
 				onCloneDialogOpenChange={setIsCloneDialogOpen}
 				cloneDefaultDirectory={cloneDefaultDirectory}
 				onSubmitClone={handleCloneFromUrl}
+				onSubmitCreateGithubProject={handleCreateGithubProject}
 				onSelectWorkspace={handleSelectWorkspace}
 				onPrefetchWorkspace={prefetchWorkspace}
 				onCreateWorkspace={(repoId, source) =>

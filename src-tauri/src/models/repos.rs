@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    git_ops, helpers,
+    git_ops,
+    github_cli::{GithubCliUser, GithubRepositoryVisibility},
+    helpers,
     workspace_state::{self, WorkspaceState},
 };
 
@@ -861,6 +863,191 @@ pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedR
     })
 }
 
+pub fn create_github_project_repository(
+    project_name: &str,
+    parent_directory: &str,
+    visibility: GithubRepositoryVisibility,
+) -> Result<AddRepositoryResponse> {
+    let project_name = normalize_new_project_name(project_name)?;
+    let parent_dir = resolve_new_project_parent(parent_directory)?;
+    let target_dir = parent_dir.join(&project_name);
+
+    if target_dir.exists() {
+        bail!(
+            "Project directory already exists: {}. Choose a different project name or location.",
+            target_dir.display()
+        );
+    }
+
+    let github_user = crate::github_cli::get_github_cli_user()?
+        .context("GitHub CLI is not authenticated. Run `gh auth login`.")?;
+
+    fs::create_dir_all(&target_dir).with_context(|| {
+        format!(
+            "Failed to create project directory {}",
+            target_dir.display()
+        )
+    })?;
+
+    let mut preserve_local_project = false;
+    let result = (|| {
+        create_initial_project_commit(&target_dir, &project_name, &github_user)?;
+
+        if let Err(error) =
+            crate::github_cli::create_repository_from_source(&target_dir, &project_name, visibility)
+        {
+            preserve_local_project = repository_has_origin_remote(&target_dir);
+            return Err(error);
+        }
+        preserve_local_project = true;
+
+        crate::settings::upsert_setting_value(
+            "last_clone_directory",
+            &parent_dir.display().to_string(),
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+        add_repository_from_local_path(&target_dir.display().to_string())
+    })();
+
+    if result.is_err() && !preserve_local_project {
+        let _ = fs::remove_dir_all(&target_dir);
+    }
+
+    result
+}
+
+fn normalize_new_project_name(project_name: &str) -> Result<String> {
+    let name = project_name.trim();
+    if name.is_empty() {
+        bail!("Project name is required.");
+    }
+    if name == "." || name == ".." {
+        bail!("Project name cannot be {name:?}.");
+    }
+    let Some(first) = name.chars().next() else {
+        bail!("Project name is required.");
+    };
+    if !first.is_ascii_alphanumeric() {
+        bail!("Project name must start with a letter or number.");
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        bail!("Project name can only contain letters, numbers, hyphens, underscores, or periods.");
+    }
+
+    Ok(name.to_string())
+}
+
+fn resolve_new_project_parent(parent_directory: &str) -> Result<PathBuf> {
+    let trimmed = parent_directory.trim();
+    if trimmed.is_empty() {
+        bail!("Project location is required.");
+    }
+
+    let parent = PathBuf::from(trimmed);
+    if !parent.exists() {
+        bail!(
+            "Project location does not exist: {}. Choose an existing directory.",
+            parent.display()
+        );
+    }
+    if !parent.is_dir() {
+        bail!("Project location is not a directory: {}", parent.display());
+    }
+
+    fs::canonicalize(&parent)
+        .with_context(|| format!("Failed to resolve project location {}", parent.display()))
+}
+
+fn create_initial_project_commit(
+    target_dir: &Path,
+    project_name: &str,
+    github_user: &GithubCliUser,
+) -> Result<()> {
+    let target_arg = target_dir.display().to_string();
+    git_ops::run_git(["init", "-b", "main", target_arg.as_str()], None).with_context(|| {
+        format!(
+            "Failed to initialize Git repository in {}",
+            target_dir.display()
+        )
+    })?;
+
+    fs::write(target_dir.join("README.md"), format!("# {project_name}\n"))
+        .with_context(|| format!("Failed to write README.md in {}", target_dir.display()))?;
+
+    let author_name = github_commit_author_name(github_user);
+    let author_email = github_commit_author_email(github_user);
+    git_ops::run_git(
+        [
+            "-C",
+            target_arg.as_str(),
+            "config",
+            "user.name",
+            author_name.as_str(),
+        ],
+        None,
+    )
+    .context("Failed to configure Git author name")?;
+    git_ops::run_git(
+        [
+            "-C",
+            target_arg.as_str(),
+            "config",
+            "user.email",
+            author_email.as_str(),
+        ],
+        None,
+    )
+    .context("Failed to configure Git author email")?;
+    git_ops::run_git(["-C", target_arg.as_str(), "add", "README.md"], None)
+        .context("Failed to stage initial README")?;
+    git_ops::run_git(
+        ["-C", target_arg.as_str(), "commit", "-m", "Initial commit"],
+        None,
+    )
+    .context("Failed to create initial project commit")?;
+
+    Ok(())
+}
+
+fn github_commit_author_name(github_user: &GithubCliUser) -> String {
+    github_user
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(github_user.login.as_str())
+        .to_string()
+}
+
+fn github_commit_author_email(github_user: &GithubCliUser) -> String {
+    github_user
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            format!(
+                "{}+{}@users.noreply.github.com",
+                github_user.id, github_user.login
+            )
+        })
+}
+
+fn repository_has_origin_remote(repo_root: &Path) -> bool {
+    let repo_root_arg = repo_root.display().to_string();
+    git_ops::run_git(
+        ["-C", repo_root_arg.as_str(), "remote", "get-url", "origin"],
+        None,
+    )
+    .map(|url| !url.trim().is_empty())
+    .unwrap_or(false)
+}
+
 pub fn clone_repository_from_url(
     git_url: &str,
     clone_directory: &str,
@@ -1198,6 +1385,62 @@ mod tests {
 
         let loaded = load_repository_by_id(&repo_id).unwrap().unwrap();
         assert_eq!(loaded.forge_provider.as_deref(), Some("github"));
+    }
+
+    #[test]
+    fn normalize_new_project_name_rejects_shell_or_path_shapes() {
+        assert_eq!(
+            normalize_new_project_name(" fresh-app ").unwrap(),
+            "fresh-app"
+        );
+        assert!(normalize_new_project_name("../fresh-app").is_err());
+        assert!(normalize_new_project_name("-fresh-app").is_err());
+        assert!(normalize_new_project_name("fresh app").is_err());
+        assert!(normalize_new_project_name("").is_err());
+    }
+
+    #[test]
+    fn create_initial_project_commit_creates_main_branch_readme() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("fresh-app");
+        fs::create_dir_all(&target).unwrap();
+        let github_user = GithubCliUser {
+            login: "octocat".to_string(),
+            id: 583_231,
+            name: Some("Octocat".to_string()),
+            avatar_url: None,
+            email: None,
+        };
+
+        create_initial_project_commit(&target, "fresh-app", &github_user).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target.join("README.md")).unwrap(),
+            "# fresh-app\n"
+        );
+        let target_arg = target.display().to_string();
+        let branch = git_ops::run_git(
+            [
+                "-C",
+                target_arg.as_str(),
+                "rev-parse",
+                "--abbrev-ref",
+                "HEAD",
+            ],
+            None,
+        )
+        .unwrap();
+        let author = git_ops::run_git(
+            ["-C", target_arg.as_str(), "log", "-1", "--pretty=%an <%ae>"],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(branch.trim(), "main");
+        assert_eq!(
+            author.trim(),
+            "Octocat <583231+octocat@users.noreply.github.com>"
+        );
     }
 
     #[test]

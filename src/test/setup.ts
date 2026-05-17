@@ -151,8 +151,23 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return [];
 			case "list_agent_model_sections":
 				return [];
+			case "check_pi_models":
+				return {
+					status: "unavailable",
+					providers: [],
+					models: [],
+					error: null,
+				};
 			case "get_add_repository_defaults":
 				return { lastCloneDirectory: null };
+			case "create_github_project_repository":
+				return {
+					repositoryId: "repo-created",
+					createdRepository: true,
+					selectedWorkspaceId: "workspace-created",
+					createdWorkspaceId: "workspace-created",
+					createdWorkspaceState: "ready",
+				};
 			case "get_data_info":
 				return null;
 			case "get_cli_status":

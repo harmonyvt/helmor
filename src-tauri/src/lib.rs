@@ -277,6 +277,7 @@ pub fn run() {
             commands::workspace_commands::mark_workspace_landed,
             commands::repository_commands::add_repository_from_local_path,
             commands::repository_commands::clone_repository_from_url,
+            commands::repository_commands::create_github_project_repository,
             commands::github_commands::list_github_accessible_repositories,
             commands::github_commands::list_github_pull_requests_for_repo,
             commands::github_commands::resolve_github_pull_request_for_repo,
