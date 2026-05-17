@@ -465,17 +465,22 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         }
     }
     if has_table(connection, "workspaces") {
+        let landed_at_expr = if has_column(connection, "workspaces", "updated_at") {
+            "COALESCE(landed_at, updated_at, datetime('now'))"
+        } else {
+            "COALESCE(landed_at, datetime('now'))"
+        };
         connection
-            .execute_batch(
+            .execute_batch(&format!(
                 r#"
                 UPDATE workspaces
                 SET landing_state = 'landed',
                     landing_source = COALESCE(landing_source, 'pull-request'),
-                    landed_at = COALESCE(landed_at, updated_at, datetime('now'))
+                    landed_at = {landed_at_expr}
                 WHERE pr_sync_state = 'merged'
                   AND COALESCE(landing_state, 'unlanded') != 'landed';
-                "#,
-            )
+                "#
+            ))
             .context("Failed to backfill workspace landing state")?;
     }
 

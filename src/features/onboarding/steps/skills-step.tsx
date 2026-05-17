@@ -154,6 +154,7 @@ Commands:
   models       List available AI models
   github       GitHub integration - auth, PR lookup, merge
   scripts      Inspect repo-level setup/run/archive scripts
+  skills       Export bundled Helmor skills
   conductor    Migrate from Helmor v1 (Conductor)
   completions  Shell completion scripts
   cli-status   Report whether helmor is installed to PATH

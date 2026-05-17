@@ -270,6 +270,7 @@ pub struct ResolvedModel {
     pub claude_base_url: Option<String>,
     pub claude_auth_token: Option<String>,
     pub codex_profile: Option<String>,
+    pub codex_model_provider: Option<String>,
 }
 
 /// Resolve a model ID to provider + cli_model. Built-in and custom catalog
@@ -284,6 +285,10 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         return model;
     }
 
+    if let Some(model) = codex_profile_model(model_id) {
+        return model;
+    }
+
     if let Some(model) = super::custom_providers::resolve(model_id) {
         return ResolvedModel {
             id: model.id,
@@ -293,6 +298,7 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
             claude_base_url: Some(model.base_url),
             claude_auth_token: Some(model.api_key),
             codex_profile: None,
+            codex_model_provider: None,
         };
     }
 
@@ -309,6 +315,7 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
             claude_base_url: None,
             claude_auth_token: None,
             codex_profile: option.codex_profile,
+            codex_model_provider: None,
         };
     }
 
@@ -325,6 +332,7 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         claude_base_url: None,
         claude_auth_token: None,
         codex_profile: None,
+        codex_model_provider: None,
     }
 }
 
@@ -338,6 +346,7 @@ fn dynamic_pi_model(model_id: &str) -> Option<ResolvedModel> {
         claude_base_url: None,
         claude_auth_token: None,
         codex_profile: None,
+        codex_model_provider: None,
     })
 }
 
@@ -351,6 +360,30 @@ fn legacy_pi_azure_model(model_id: &str) -> Option<ResolvedModel> {
         claude_base_url: None,
         claude_auth_token: None,
         codex_profile: None,
+        codex_model_provider: None,
+    })
+}
+
+fn codex_profile_model(model_id: &str) -> Option<ResolvedModel> {
+    let rest = model_id.strip_prefix("codex:")?;
+    let (profile, model) = rest.split_once(':')?;
+    if profile.trim().is_empty() || model.trim().is_empty() {
+        return None;
+    }
+    let model_provider = super::codex_profiles::configured_models()
+        .into_iter()
+        .find(|entry| entry.profile == profile && entry.model == model)
+        .map(|entry| entry.model_provider);
+
+    Some(ResolvedModel {
+        id: model_id.to_string(),
+        provider: "codex".to_string(),
+        cli_model: model.to_string(),
+        supports_effort: true,
+        claude_base_url: None,
+        claude_auth_token: None,
+        codex_profile: Some(profile.to_string()),
+        codex_model_provider: model_provider,
     })
 }
 
@@ -531,6 +564,15 @@ mod tests {
     fn resolve_gpt_5_4_routes_to_codex() {
         let m = resolve_model("gpt-5.4");
         assert_eq!(m.provider, "codex");
+    }
+
+    #[test]
+    fn resolve_codex_profile_model_routes_to_codex_profile() {
+        let m = resolve_model("codex:azure:gpt-5.5");
+        assert_eq!(m.provider, "codex");
+        assert_eq!(m.cli_model, "gpt-5.5");
+        assert_eq!(m.id, "codex:azure:gpt-5.5");
+        assert_eq!(m.codex_profile.as_deref(), Some("azure"));
     }
 
     #[test]

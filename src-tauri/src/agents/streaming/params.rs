@@ -22,6 +22,7 @@ pub struct BuildSendMessageParamsInput<'a> {
     pub claude_base_url: Option<&'a str>,
     pub claude_auth_token: Option<&'a str>,
     pub codex_profile: Option<&'a str>,
+    pub codex_model_provider: Option<&'a str>,
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
@@ -77,6 +78,11 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
         }
     }
     insert_optional_string(&mut params, "codexProfile", input.codex_profile);
+    insert_optional_string(
+        &mut params,
+        "codexModelProvider",
+        input.codex_model_provider,
+    );
     insert_optional_string(&mut params, "kanbanWorkspaceId", input.kanban_workspace_id);
     insert_optional_string(&mut params, "kanbanSnapshot", input.kanban_snapshot);
     insert_optional_string(&mut params, "goalTitle", input.goal_title);
@@ -178,6 +184,35 @@ mod tests {
             [sess_id, ws_id],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn build_params_includes_codex_profile_when_present() {
+        let params = build_send_message_params(BuildSendMessageParamsInput {
+            sidecar_session_id: "s-1",
+            prompt: "hello",
+            cli_model: "gpt-5.5",
+            cwd: "/tmp/work",
+            resume_session_id: None,
+            provider: "codex",
+            effort_level: Some("high"),
+            permission_mode: Some("bypassPermissions"),
+            fast_mode: false,
+            helmor_session_id: None,
+            claude_base_url: None,
+            claude_auth_token: None,
+            codex_profile: Some("azure"),
+            codex_model_provider: Some("azure"),
+            images: &[],
+            kanban_workspace_id: None,
+            kanban_snapshot: None,
+            goal_title: None,
+            goal_description: None,
+        });
+
+        assert_eq!(params["model"], "gpt-5.5");
+        assert_eq!(params["codexProfile"], "azure");
+        assert_eq!(params["codexModelProvider"], "azure");
     }
 
     #[test]

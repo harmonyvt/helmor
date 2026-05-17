@@ -1,7 +1,7 @@
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
+use crate::workspace::scripts::{PtySize, ScriptContext, ScriptEvent, ScriptProcessManager};
 use crate::{repos, terminal_profiles, tmux};
 
 use super::common::CmdResult;
@@ -92,12 +92,15 @@ pub async fn spawn_terminal(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn spawn_session_terminal(
     manager: State<'_, ScriptProcessManager>,
     repo_id: String,
     workspace_id: String,
     session_id: String,
     runtime: Option<String>,
+    initial_cols: Option<u16>,
+    initial_rows: Option<u16>,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
     let (repo, workspace) = tauri::async_runtime::spawn_blocking({
@@ -139,6 +142,10 @@ pub async fn spawn_session_terminal(
     let profile_command = profile.command_line();
     let tmux_session_name = tmux::session_name(&workspace_id, &session_id);
     let tmux_available = tmux::is_available();
+    let initial_size = match (initial_cols, initial_rows) {
+        (Some(cols), Some(rows)) if cols > 0 && rows > 0 => Some(PtySize { cols, rows }),
+        _ => None,
+    };
 
     tauri::async_runtime::spawn_blocking(move || {
         let result = if tmux_available {
@@ -158,13 +165,14 @@ pub async fn spawn_session_terminal(
                 channel.clone(),
                 "/bin/sh",
                 &args,
+                initial_size,
             )
         } else {
             let _ = channel.send(ScriptEvent::Stdout {
                 data: "\r\n\x1b[33mtmux not found; running in a transient Helmor PTY.\x1b[0m\r\n"
                     .to_string(),
             });
-            crate::workspace::scripts::run_terminal_session(
+            crate::workspace::scripts::run_terminal_session_with_size(
                 &mgr,
                 &repo_id,
                 &script_type,
@@ -173,6 +181,7 @@ pub async fn spawn_session_terminal(
                 &context,
                 channel.clone(),
                 profile_command.as_deref(),
+                initial_size,
             )
         };
         match result {

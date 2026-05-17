@@ -303,6 +303,12 @@ pub fn send_message(
                 .collect(),
         );
     }
+    if let Some(profile) = model.codex_profile.as_deref() {
+        payload["codexProfile"] = serde_json::Value::String(profile.to_string());
+    }
+    if let Some(provider) = model.codex_model_provider.as_deref() {
+        payload["codexModelProvider"] = serde_json::Value::String(provider.to_string());
+    }
 
     let sidecar_req = crate::sidecar::SidecarRequest {
         id: request_id.clone(),

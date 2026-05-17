@@ -57,14 +57,21 @@ const GITHUB_UNAUTH = {
 };
 
 function installTauriRuntime() {
+	let callbackId = 0;
 	Object.defineProperty(window, "__TAURI_INTERNALS__", {
-		value: {},
+		value: {
+			transformCallback: vi.fn(() => ++callbackId),
+			unregisterCallback: vi.fn(),
+			invoke: vi.fn(async () => undefined),
+			convertFileSrc: vi.fn((path: string) => `asset://localhost${path}`),
+		},
 		configurable: true,
 	});
 }
 
 function removeTauriRuntime() {
-	Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+	// Dynamic Channel imports can resolve after React cleanup; keep the shim
+	// available until jsdom tears down this test file's window.
 }
 
 function mockWorkspaceData() {

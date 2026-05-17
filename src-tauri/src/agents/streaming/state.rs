@@ -118,13 +118,13 @@ pub(super) enum TerminalReason {
 
 /// Why the receiver loop synthesized an abnormal exit. Distinct from
 /// `TerminalReason` because the call site needs to know which message
-/// to log + whether to send `stopSession` to the sidecar BEFORE the
-/// state-machine transition runs.
+/// to log + whether to stop/restart the sidecar BEFORE the state-machine
+/// transition runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AbnormalExit {
     /// `HEARTBEAT_TIMEOUT` elapsed without a sidecar event. Sidecar may
-    /// still be alive but stuck; the call site sends stopSession before
-    /// transitioning so a wedged turn doesn't keep eating tokens.
+    /// still be alive but stuck; the call site sends stopSession, then
+    /// restarts the sidecar so a wedged turn cannot poison later requests.
     HeartbeatTimeout,
     /// The sidecar mpsc channel disconnected. The sidecar process is
     /// almost certainly dead, so stopSession is best-effort and
@@ -481,8 +481,8 @@ impl TurnSession {
     ///
     /// Synthesized by the call site when `rx.recv_timeout` fires
     /// `RecvTimeoutError::{Timeout,Disconnected}`. The call site has
-    /// already (a) logged the underlying cause, (b) optionally sent
-    /// `stopSession` to the sidecar (timeout only), and (c) called
+    /// already (a) logged the underlying cause, (b) optionally stopped
+    /// and restarted the sidecar (timeout only), and (c) called
     /// `cleanup_abnormal_stream_exit` to persist a generic error row +
     /// flip the session to `idle`. `persisted` carries that DB result
     /// so the emitted `Error` event mirrors the on-disk state.

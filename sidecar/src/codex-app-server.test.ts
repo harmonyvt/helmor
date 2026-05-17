@@ -19,4 +19,16 @@ describe("codex app-server args", () => {
 			"notify=[]",
 		]);
 	});
+
+	it("pins the profile model provider when supplied", () => {
+		expect(buildCodexAppServerArgs("azure", "azure")).toEqual([
+			"--profile",
+			"azure",
+			"app-server",
+			"-c",
+			"notify=[]",
+			"-c",
+			'model_provider="azure"',
+		]);
+	});
 });

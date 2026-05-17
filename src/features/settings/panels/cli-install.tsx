@@ -1,7 +1,14 @@
-import { Download, Loader2, Terminal } from "lucide-react";
+import { Download, Loader2, PackageCheck, Terminal } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { type CliStatus, getCliStatus, installCli } from "@/lib/api";
+import {
+	type CliStatus,
+	getCliStatus,
+	getHelmorSkillsStatus,
+	type HelmorSkillsStatus,
+	installCli,
+	installHelmorSkills,
+} from "@/lib/api";
 import {
 	SettingsGroup,
 	SettingsNotice,
@@ -10,8 +17,13 @@ import {
 
 export function CliInstallPanel() {
 	const [status, setStatus] = useState<CliStatus | null>(null);
+	const [skillsStatus, setSkillsStatus] = useState<HelmorSkillsStatus | null>(
+		null,
+	);
 	const [installing, setInstalling] = useState(false);
+	const [installingSkills, setInstallingSkills] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [skillsError, setSkillsError] = useState<string | null>(null);
 	const commandName =
 		status?.buildMode === "development" ? "helmor-dev" : "helmor";
 	const buildLabel = status?.buildMode === "development" ? "Debug" : "Release";
@@ -22,6 +34,7 @@ export function CliInstallPanel() {
 
 	useEffect(() => {
 		void getCliStatus().then(setStatus).catch(setError);
+		void getHelmorSkillsStatus().then(setSkillsStatus).catch(setSkillsError);
 	}, []);
 
 	const handleInstall = useCallback(async () => {
@@ -34,6 +47,19 @@ export function CliInstallPanel() {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
 			setInstalling(false);
+		}
+	}, []);
+
+	const handleInstallSkills = useCallback(async () => {
+		setInstallingSkills(true);
+		setSkillsError(null);
+		try {
+			const result = await installHelmorSkills();
+			setSkillsStatus(result);
+		} catch (e) {
+			setSkillsError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setInstallingSkills(false);
 		}
 	}, []);
 
@@ -94,6 +120,48 @@ export function CliInstallPanel() {
 						<Download className="size-3.5" strokeWidth={1.8} />
 					)}
 					{buttonLabel}
+				</Button>
+			</SettingsRow>
+			<SettingsRow
+				align="start"
+				title={
+					<span className="flex items-center gap-1.5">
+						<PackageCheck
+							className="size-3.5 text-muted-foreground"
+							strokeWidth={1.8}
+						/>
+						<span>Agent Skills</span>
+					</span>
+				}
+				description={
+					<>
+						Install bundled Helmor skills into Codex, Claude, and generic agent
+						skill directories.
+						{skillsStatus ? (
+							<SettingsNotice tone={skillsStatus.installed ? "ok" : "warn"}>
+								Codex {skillsStatus.codex ? "installed" : "missing"} | Claude{" "}
+								{skillsStatus.claude ? "installed" : "missing"} | Agents{" "}
+								{skillsStatus.agents ? "installed" : "missing"}
+							</SettingsNotice>
+						) : null}
+						{skillsError ? (
+							<SettingsNotice tone="error">{skillsError}</SettingsNotice>
+						) : null}
+					</>
+				}
+			>
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={handleInstallSkills}
+					disabled={installingSkills}
+				>
+					{installingSkills ? (
+						<Loader2 className="size-3.5 animate-spin" />
+					) : (
+						<Download className="size-3.5" strokeWidth={1.8} />
+					)}
+					Reinstall skills
 				</Button>
 			</SettingsRow>
 		</SettingsGroup>

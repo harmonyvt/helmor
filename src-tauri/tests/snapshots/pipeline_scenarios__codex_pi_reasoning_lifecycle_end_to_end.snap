@@ -1,6 +1,6 @@
 ---
 source: tests/pipeline_scenarios.rs
-assertion_line: 1376
+assertion_line: 1447
 expression: normalize_stream_fingerprint(&fingerprint)
 ---
 emissions:
@@ -64,16 +64,13 @@ emissions:
         - type: text
           text: ""
       streaming: true
-  - kind: partial
+  - kind: delta
     line_index: 7
     event_type: item/agentMessage/delta
-    message:
-      role: assistant
-      id: msg-3
-      content:
-        - type: text
-          text: Done.
-      streaming: true
+    message_id: msg-3
+    part_id: msg-4
+    part_type: Text
+    text_delta: Done.
   - kind: full
     line_index: 8
     event_type: item/completed
@@ -107,7 +104,7 @@ emissions:
             text: Done.
         streaming: ~
       - role: system
-        id: msg-4
+        id: msg-5
         content:
           - type: text
             text: 0.0s
@@ -126,7 +123,7 @@ final_render:
         text: Done.
     streaming: ~
   - role: system
-    id: msg-4
+    id: msg-5
     content:
       - type: text
         text: 0.0s
@@ -137,7 +134,7 @@ persisted_turn_blocks:
   - []
 historical_render:
   - role: assistant
-    id: msg-5
+    id: msg-6
     content:
       - type: reasoning
         text_preview: Pi is thinking.

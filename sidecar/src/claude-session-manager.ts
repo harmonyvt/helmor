@@ -613,7 +613,7 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 			emitter.end(requestId);
 		} catch (err) {
-			if (isAbortError(err)) {
+			if (isAbortError(err) || abortController.signal.aborted) {
 				emitter.aborted(requestId, "user_requested");
 				return;
 			}
@@ -1072,10 +1072,22 @@ export class ClaudeSessionManager implements SessionManager {
 
 	async stopSession(sessionId: string): Promise<void> {
 		const session = this.sessions.get(sessionId);
-		if (session) {
+		if (!session) return;
+		try {
 			session.abortController.abort();
-			this.sessions.delete(sessionId);
+		} catch {
+			/* noop */
 		}
+		try {
+			session.query.close();
+		} catch (closeErr) {
+			logger.error("Claude stopSession failed during query.close()", {
+				sessionId,
+				...errorDetails(closeErr),
+			});
+		}
+		session.promptSource.close();
+		this.sessions.delete(sessionId);
 	}
 
 	async shutdown(): Promise<void> {

@@ -136,12 +136,13 @@ export function SetupTab({
 						/>
 					</div>
 
-					{isZoomPresented && (status === "running" || status === "exited") && (
+					{(status === "running" || status === "exited") && (
 						<div
 							className="absolute bottom-3 right-4"
 							style={{
-								opacity: isHoverExpanded ? 1 : 0,
-								pointerEvents: isHoverExpanded ? "auto" : "none",
+								opacity: !isZoomPresented || isHoverExpanded ? 1 : 0,
+								pointerEvents:
+									!isZoomPresented || isHoverExpanded ? "auto" : "none",
 								transition: `opacity ${TABS_HOVER_TRANSITION_MS}ms ${TABS_EASING}`,
 							}}
 						>

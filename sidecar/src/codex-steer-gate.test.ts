@@ -128,6 +128,8 @@ async function driveToSendMessage(sessionId: string) {
 		activeEmitter: null,
 		notificationGate: null,
 		lastSentModel: "",
+		codexProfile: null,
+		codexModelProvider: null,
 		lastRetryAt: null,
 		lastRetryNotice: null,
 	});

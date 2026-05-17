@@ -1380,6 +1380,7 @@ export type HelmorSkillsStatus = {
 	installed: boolean;
 	claude: boolean;
 	codex: boolean;
+	agents: boolean;
 	command: string;
 };
 
@@ -3885,6 +3886,7 @@ export async function spawnSessionTerminal(
 	sessionId: string,
 	runtime: string | null,
 	onEvent: (event: ScriptEvent) => void,
+	initialSize?: { cols: number; rows: number } | null,
 ): Promise<void> {
 	const channel = new Channel<ScriptEvent>();
 	channel.onmessage = onEvent;
@@ -3893,6 +3895,8 @@ export async function spawnSessionTerminal(
 		workspaceId,
 		sessionId,
 		runtime,
+		initialCols: initialSize?.cols,
+		initialRows: initialSize?.rows,
 		channel,
 	});
 }

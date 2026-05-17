@@ -167,8 +167,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 					installed: false,
 					claude: false,
 					codex: false,
-					command:
-						"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+					agents: false,
+					command: "helmor-dev skills export --target all",
 				};
 			case "load_auto_close_action_kinds":
 				return [];
@@ -263,6 +263,19 @@ vi.mock("@tauri-apps/api/core", () => ({
 		onmessage: ((event: unknown) => void) | null = null;
 	},
 }));
+
+if (typeof window !== "undefined") {
+	let tauriCallbackId = 0;
+	Object.defineProperty(window, "__TAURI_INTERNALS__", {
+		configurable: true,
+		value: {
+			transformCallback: vi.fn(() => ++tauriCallbackId),
+			unregisterCallback: vi.fn(),
+			invoke: vi.fn(async () => undefined),
+			convertFileSrc: vi.fn((path: string) => `asset://localhost${path}`),
+		},
+	});
+}
 
 // cmdk calls `scrollIntoView` which jsdom doesn't implement.
 if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
