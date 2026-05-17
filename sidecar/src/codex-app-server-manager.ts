@@ -341,6 +341,8 @@ interface AppServerContext {
 	lastSentModel: string;
 	/** Codex config profile used to launch this app-server process. */
 	codexProfile: string | null;
+	/** Explicit model_provider override used to launch this app-server process. */
+	codexModelProvider: string | null;
 	/** Wall-clock ms of the most recent "Reconnecting…" line on the
 	 *  Codex child process's stderr. Used to suppress the transient
 	 *  {method:"error"} notifications that Codex emits during its own
@@ -463,10 +465,13 @@ export class CodexAppServerManager implements SessionManager {
 			permissionMode,
 			fastMode,
 			codexProfile,
+			codexModelProvider,
 			additionalDirectories,
 			images,
 		} = params;
 		const effectiveCodexProfile = normalizeCodexProfile(codexProfile);
+		const effectiveCodexModelProvider =
+			normalizeCodexProfile(codexModelProvider);
 		const workDir = cwd ?? process.cwd();
 		const effectiveFastMode =
 			fastMode === true &&
@@ -480,6 +485,7 @@ export class CodexAppServerManager implements SessionManager {
 			sessionId,
 			model: model ?? "(default)",
 			codexProfile: effectiveCodexProfile ?? "(default)",
+			codexModelProvider: effectiveCodexModelProvider ?? "(default)",
 			cwd: workDir,
 			resume: resume ?? "(none)",
 			promptLen: prompt.length,
@@ -512,6 +518,7 @@ export class CodexAppServerManager implements SessionManager {
 			permissionMode,
 			effectiveFastMode,
 			effectiveCodexProfile,
+			effectiveCodexModelProvider,
 		);
 		if (goalCommand) {
 			this.assertCanDispatchGoalCommand(ctx.providerThreadId, goalCommand);
@@ -1402,14 +1409,22 @@ export class CodexAppServerManager implements SessionManager {
 		permissionMode?: string,
 		fastMode?: boolean,
 		codexProfile?: string | null,
+		codexModelProvider?: string | null,
 	): Promise<AppServerContext> {
 		const existing = this.sessions.get(sessionId);
 		if (existing && !existing.server.killed) {
-			if (existing.codexProfile === (codexProfile ?? null)) return existing;
+			if (
+				existing.codexProfile === (codexProfile ?? null) &&
+				existing.codexModelProvider === (codexModelProvider ?? null)
+			) {
+				return existing;
+			}
 			logger.info("Restarting Codex app-server for profile switch", {
 				sessionId,
 				from: existing.codexProfile ?? "(default)",
 				to: codexProfile ?? "(default)",
+				fromModelProvider: existing.codexModelProvider ?? "(default)",
+				toModelProvider: codexModelProvider ?? "(default)",
 			});
 			// Provider thread ids are profile-scoped. Keep an explicit caller resume,
 			// but never synthesize one from the context being replaced.
@@ -1428,6 +1443,7 @@ export class CodexAppServerManager implements SessionManager {
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
 			profile: codexProfile ?? undefined,
+			modelProvider: codexModelProvider ?? undefined,
 			onNotification: () => {},
 			onRequest: () => {},
 			onExit: () => {
@@ -1463,6 +1479,7 @@ export class CodexAppServerManager implements SessionManager {
 				logger.info(`Attempting thread/resume`, {
 					threadId: resume,
 					codexProfile: codexProfile ?? "(default)",
+					codexModelProvider: codexModelProvider ?? "(default)",
 				});
 				const response = await server.sendRequest<Record<string, unknown>>(
 					"thread/resume",
@@ -1472,6 +1489,7 @@ export class CodexAppServerManager implements SessionManager {
 				logger.info(`Resumed Codex thread`, {
 					threadId,
 					codexProfile: codexProfile ?? "(default)",
+					codexModelProvider: codexModelProvider ?? "(default)",
 				});
 			} catch (err) {
 				if (isRecoverableResumeError(err)) {
@@ -1490,6 +1508,7 @@ export class CodexAppServerManager implements SessionManager {
 				cwd,
 				model: model ?? "(default)",
 				codexProfile: codexProfile ?? "(default)",
+				codexModelProvider: codexModelProvider ?? "(default)",
 			});
 			const response = await server.sendRequest<Record<string, unknown>>(
 				"thread/start",
@@ -1499,6 +1518,7 @@ export class CodexAppServerManager implements SessionManager {
 			logger.info("Codex thread started", {
 				threadId: threadId ?? "(none)",
 				codexProfile: codexProfile ?? "(default)",
+				codexModelProvider: codexModelProvider ?? "(default)",
 			});
 		}
 
@@ -1513,6 +1533,7 @@ export class CodexAppServerManager implements SessionManager {
 			notificationGate: null,
 			lastSentModel: model ?? "",
 			codexProfile: codexProfile ?? null,
+			codexModelProvider: codexModelProvider ?? null,
 			lastRetryAt: null,
 			lastRetryNotice: null,
 		};

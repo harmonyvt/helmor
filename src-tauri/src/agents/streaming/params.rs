@@ -22,6 +22,7 @@ pub struct BuildSendMessageParamsInput<'a> {
     pub claude_base_url: Option<&'a str>,
     pub claude_auth_token: Option<&'a str>,
     pub codex_profile: Option<&'a str>,
+    pub codex_model_provider: Option<&'a str>,
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
@@ -77,6 +78,11 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
         }
     }
     insert_optional_string(&mut params, "codexProfile", input.codex_profile);
+    insert_optional_string(
+        &mut params,
+        "codexModelProvider",
+        input.codex_model_provider,
+    );
     insert_optional_string(&mut params, "kanbanWorkspaceId", input.kanban_workspace_id);
     insert_optional_string(&mut params, "kanbanSnapshot", input.kanban_snapshot);
     insert_optional_string(&mut params, "goalTitle", input.goal_title);
@@ -196,6 +202,7 @@ mod tests {
             claude_base_url: None,
             claude_auth_token: None,
             codex_profile: Some("azure"),
+            codex_model_provider: Some("azure"),
             images: &[],
             kanban_workspace_id: None,
             kanban_snapshot: None,
@@ -205,6 +212,7 @@ mod tests {
 
         assert_eq!(params["model"], "gpt-5.5");
         assert_eq!(params["codexProfile"], "azure");
+        assert_eq!(params["codexModelProvider"], "azure");
     }
 
     #[test]

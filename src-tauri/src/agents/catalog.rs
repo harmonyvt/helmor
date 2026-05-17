@@ -270,6 +270,7 @@ pub struct ResolvedModel {
     pub claude_base_url: Option<String>,
     pub claude_auth_token: Option<String>,
     pub codex_profile: Option<String>,
+    pub codex_model_provider: Option<String>,
 }
 
 /// Resolve a model ID to provider + cli_model. Built-in and custom catalog
@@ -297,6 +298,7 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
             claude_base_url: Some(model.base_url),
             claude_auth_token: Some(model.api_key),
             codex_profile: None,
+            codex_model_provider: None,
         };
     }
 
@@ -313,6 +315,7 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
             claude_base_url: None,
             claude_auth_token: None,
             codex_profile: option.codex_profile,
+            codex_model_provider: None,
         };
     }
 
@@ -329,6 +332,7 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         claude_base_url: None,
         claude_auth_token: None,
         codex_profile: None,
+        codex_model_provider: None,
     }
 }
 
@@ -342,6 +346,7 @@ fn dynamic_pi_model(model_id: &str) -> Option<ResolvedModel> {
         claude_base_url: None,
         claude_auth_token: None,
         codex_profile: None,
+        codex_model_provider: None,
     })
 }
 
@@ -355,6 +360,7 @@ fn legacy_pi_azure_model(model_id: &str) -> Option<ResolvedModel> {
         claude_base_url: None,
         claude_auth_token: None,
         codex_profile: None,
+        codex_model_provider: None,
     })
 }
 
@@ -364,6 +370,11 @@ fn codex_profile_model(model_id: &str) -> Option<ResolvedModel> {
     if profile.trim().is_empty() || model.trim().is_empty() {
         return None;
     }
+    let model_provider = super::codex_profiles::configured_models()
+        .into_iter()
+        .find(|entry| entry.profile == profile && entry.model == model)
+        .map(|entry| entry.model_provider);
+
     Some(ResolvedModel {
         id: model_id.to_string(),
         provider: "codex".to_string(),
@@ -372,6 +383,7 @@ fn codex_profile_model(model_id: &str) -> Option<ResolvedModel> {
         claude_base_url: None,
         claude_auth_token: None,
         codex_profile: Some(profile.to_string()),
+        codex_model_provider: model_provider,
     })
 }
 

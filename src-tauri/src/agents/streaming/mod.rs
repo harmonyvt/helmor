@@ -238,6 +238,7 @@ pub(super) fn stream_via_sidecar(
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
         codex_profile: model.codex_profile.as_deref(),
+        codex_model_provider: model.codex_model_provider.as_deref(),
         images: &images_for_wire,
         kanban_workspace_id: request.kanban_workspace_id.as_deref(),
         kanban_snapshot: request.kanban_snapshot.as_deref(),
