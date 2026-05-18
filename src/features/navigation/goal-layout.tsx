@@ -355,8 +355,9 @@ function GoalProjectHeader({
 // GoalFolderHeader
 //
 // Click semantics:
-//   • Folder icon + title  → toggle expand/collapse
-//   • ArrowRight button    → navigate to the goal workspace view
+//   • Folder icon   → toggle expand/collapse (only when hasChildren)
+//   • Title button  → navigate to the goal workspace view (onSelect)
+//   • ArrowRight    → same as title (secondary affordance, visible on hover)
 // ---------------------------------------------------------------------------
 
 function GoalFolderHeader({
@@ -454,7 +455,7 @@ function GoalFolderHeader({
 
 						<button
 							type="button"
-							onClick={onToggle}
+							onClick={() => onSelect?.(goalGroup.goalWorkspaceId)}
 							className={cn(
 								"flex min-w-0 flex-1 cursor-pointer select-none items-center gap-2 rounded-md px-1.5 py-1.5 text-[13px] font-semibold leading-tight tracking-[-0.01em] transition-colors",
 								selected
