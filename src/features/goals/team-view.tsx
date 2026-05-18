@@ -143,7 +143,7 @@ export function GoalTeamView({
 				{sorted.length > 0 && (
 					<section>
 						<h2 className="mb-3 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-							Agents ({sorted.length})
+							Assignees ({sorted.length})
 						</h2>
 						<div className="space-y-2">
 							{sorted.map((assignee) => (

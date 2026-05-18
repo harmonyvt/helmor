@@ -178,7 +178,7 @@ export function WorkspaceCard({
 							e.stopPropagation();
 							onAssigneeClick();
 						}}
-						title={`Open ${agentType} thread`}
+						title={`Open active ${agentType} assignee`}
 					>
 						<Bot className="size-2.5 shrink-0" />
 						<AgentStatusDot status={status} />

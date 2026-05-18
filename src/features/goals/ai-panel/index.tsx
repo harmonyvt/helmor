@@ -199,7 +199,7 @@ export function GoalsAiPanel({
 	);
 
 	const overlayTitle =
-		overlayMode === "threads" ? "Goal threads" : "Conversations";
+		overlayMode === "threads" ? "Card assignees" : "Conversations";
 
 	const handleKanbanToolCall = useCallback(
 		async (event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>) => {
@@ -592,7 +592,7 @@ export function GoalsAiPanel({
 							size="icon"
 							className="size-7 cursor-pointer"
 							onClick={() => setOverlayMode("threads")}
-							aria-label="Manage goal card threads"
+							aria-label="Manage card assignees"
 						>
 							<ListTree className="size-3.5" />
 						</Button>
