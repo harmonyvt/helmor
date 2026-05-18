@@ -31,6 +31,8 @@ export type AppSettings = {
 	defaultFastMode: boolean;
 	/** Optional model override for PR comment Review all sessions. */
 	prCommentReviewModelId: string | null;
+	/** Optional model override for Git change summary sessions. */
+	gitChangeSummaryModelId: string | null;
 	/** Pi model ids allowed for Goals handoffs. Empty means unrestricted. */
 	piHandoffModelIds: string[];
 	/** Allow Goals assignee handoffs to use every Pi provider instead of the default Anthropic/Codex subset. */
@@ -78,6 +80,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	defaultEffort: "high",
 	defaultFastMode: false,
 	prCommentReviewModelId: null,
+	gitChangeSummaryModelId: null,
 	piHandoffModelIds: [],
 	allowAllGoalAssigneePiModels: false,
 	zoomLevel: 1.0,
@@ -113,6 +116,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	defaultEffort: "app.default_effort",
 	defaultFastMode: "app.default_fast_mode",
 	prCommentReviewModelId: "app.pr_comment_review_model_id",
+	gitChangeSummaryModelId: "app.git_change_summary_model_id",
 	piHandoffModelIds: "app.pi_handoff_model_ids",
 	allowAllGoalAssigneePiModels: "app.allow_all_goal_assignee_pi_models",
 	zoomLevel: "app.zoom_level",
@@ -228,6 +232,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			prCommentReviewModelId:
 				raw[SETTINGS_KEY_MAP.prCommentReviewModelId] ||
 				DEFAULT_SETTINGS.prCommentReviewModelId,
+			gitChangeSummaryModelId:
+				raw[SETTINGS_KEY_MAP.gitChangeSummaryModelId] ||
+				DEFAULT_SETTINGS.gitChangeSummaryModelId,
 			piHandoffModelIds: parseStringArray(
 				raw[SETTINGS_KEY_MAP.piHandoffModelIds],
 				DEFAULT_SETTINGS.piHandoffModelIds,

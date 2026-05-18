@@ -4,6 +4,7 @@ import {
 	type ActionKind,
 	type AgentProvider,
 	type BrowserTabRecord,
+	buildWorkspaceChangeSummaryContext,
 	type ChangeRequestInfo,
 	DEFAULT_WORKSPACE_GROUPS,
 	type DetectedEditor,
@@ -43,6 +44,7 @@ import {
 	type PrCommentData,
 	type PrSyncState,
 	refreshWorkspaceChangeRequest,
+	type WorkspaceChangeSummaryScope,
 } from "./api";
 import { postDebugEvidence } from "./debug-evidence";
 import { parsePrUrl } from "./pr-url";
@@ -141,6 +143,15 @@ export const helmorQueryKeys = {
 		["sessionDelegations", sessionId] as const,
 	workspaceChanges: (workspaceRootPath: string) =>
 		["workspaceChanges", workspaceRootPath] as const,
+	workspaceChangeSummary: (
+		workspaceRootPath: string,
+		scopes: WorkspaceChangeSummaryScope[] | null,
+	) =>
+		[
+			"workspaceChangeSummary",
+			workspaceRootPath,
+			scopes?.join(",") ?? "all",
+		] as const,
 	workspaceFiles: (workspaceRootPath: string) =>
 		["workspaceFiles", workspaceRootPath] as const,
 	workspaceChangeRequest: (workspaceId: string) =>
@@ -768,6 +779,21 @@ export function workspaceChangesQueryOptions(workspaceRootPath: string) {
 		staleTime: CHANGES_STALE_TIME,
 		refetchOnWindowFocus: true,
 		refetchInterval: CHANGES_REFETCH_INTERVAL,
+	});
+}
+
+export function workspaceChangeSummaryQueryOptions(
+	workspaceRootPath: string,
+	scopes: WorkspaceChangeSummaryScope[] | null = null,
+) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspaceChangeSummary(workspaceRootPath, scopes),
+		queryFn: () =>
+			buildWorkspaceChangeSummaryContext(workspaceRootPath, scopes),
+		staleTime: CHANGES_STALE_TIME,
+		refetchOnWindowFocus: true,
+		refetchInterval: CHANGES_REFETCH_INTERVAL,
+		retry: 0,
 	});
 }
 

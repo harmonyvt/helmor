@@ -1,5 +1,5 @@
 mod editor_files;
-mod support;
+pub(crate) mod support;
 mod workspace_changes;
 mod workspace_targets;
 

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,4 +54,42 @@ pub struct EditorFilePrefetchItem {
 pub struct EditorFilesWithContentResponse {
     pub items: Vec<EditorFileListItem>,
     pub prefetched: Vec<EditorFilePrefetchItem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceChangeSummaryScope {
+    Branch,
+    Staged,
+    Unstaged,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceChangeSummaryFile {
+    pub path: String,
+    pub status: String,
+    pub insertions: u32,
+    pub deletions: u32,
+    pub diff: Option<String>,
+    pub diff_truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceChangeSummarySection {
+    pub scope: WorkspaceChangeSummaryScope,
+    pub title: String,
+    pub files: Vec<WorkspaceChangeSummaryFile>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceChangeSummaryContext {
+    pub workspace_root_path: String,
+    pub target_ref: String,
+    pub head_sha: Option<String>,
+    pub fingerprint: String,
+    pub prompt: String,
+    pub sections: Vec<WorkspaceChangeSummarySection>,
 }

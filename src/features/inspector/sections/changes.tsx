@@ -13,6 +13,7 @@ import {
 	LoaderCircleIcon,
 	MinusIcon,
 	PlusIcon,
+	SparklesIcon,
 	Undo2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -36,6 +37,7 @@ import {
 	type ForgeDetection,
 	stageWorkspaceFile,
 	unstageWorkspaceFile,
+	type WorkspaceChangeSummaryContext,
 } from "@/lib/api";
 import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
@@ -47,6 +49,7 @@ import {
 import { cn } from "@/lib/utils";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import { SummaryTabPanel } from "./changes-summary-tab";
 import { GitSectionHeader } from "./git-section-header";
 
 const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
@@ -54,6 +57,8 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	A: "text-green-500",
 	D: "text-red-500",
 };
+
+type ChangesTabId = "all" | "staged" | "unstaged" | "remote" | "summary";
 
 type ChangesSectionProps = {
 	sectionRef?: React.RefObject<HTMLElement | null>;
@@ -72,6 +77,8 @@ type ChangesSectionProps = {
 	changeRequest: ChangeRequestInfo | null;
 	/** Cold-fetch indicator owned by App; drives the git-header shimmer. */
 	forgeIsRefreshing?: boolean;
+	/** Called when the user requests an AI summary; parent creates+routes to the session. */
+	onRequestAiSummary?: (context: WorkspaceChangeSummaryContext) => void;
 };
 
 export function ChangesSection({
@@ -90,6 +97,7 @@ export function ChangesSection({
 	commitButtonState,
 	changeRequest,
 	forgeIsRefreshing = false,
+	onRequestAiSummary,
 }: ChangesSectionProps) {
 	const queryClient = useQueryClient();
 	const [changesTreeView, setChangesTreeView] = useState(true);
@@ -98,6 +106,7 @@ export function ChangesSection({
 	const [stagedOpen, setStagedOpen] = useState(true);
 	const [branchDiffOpen, setBranchDiffOpen] = useState(true);
 	const [isContinuingWorkspace, setIsContinuingWorkspace] = useState(false);
+	const [changesTab, setChangesTab] = useState<ChangesTabId>("all");
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -175,6 +184,24 @@ export function ChangesSection({
 	const hasUncommittedChanges =
 		stagedChanges.length > 0 || unstagedChanges.length > 0;
 	const hasChanges = hasUncommittedChanges || committedChanges.length > 0;
+
+	// Auto-reset to "all" when a focused tab's scope becomes empty (e.g. after
+	// staging all files the "staged" tab would be empty — fall back gracefully).
+	useEffect(() => {
+		if (changesTab === "staged" && stagedChanges.length === 0) {
+			setChangesTab("all");
+		} else if (changesTab === "unstaged" && unstagedChanges.length === 0) {
+			setChangesTab("all");
+		} else if (changesTab === "remote" && committedChanges.length === 0) {
+			setChangesTab("all");
+		}
+	}, [
+		changesTab,
+		stagedChanges.length,
+		unstagedChanges.length,
+		committedChanges.length,
+	]);
+
 	const invalidateChanges = useCallback(() => {
 		if (!workspaceRootPath) {
 			return;
@@ -386,18 +413,108 @@ export function ChangesSection({
 				onRefreshPrStatus={workspaceId ? handleRefreshPrStatus : undefined}
 			/>
 
-			<ScrollArea
-				aria-label="Changes panel body"
-				className="min-h-0 flex-1 bg-muted/20 font-mono text-[11.5px]"
-			>
-				{hasUncommittedChanges && (
-					<>
-						{stagedChanges.length > 0 && (
+			<ChangesTabBar
+				activeTab={changesTab}
+				onSelect={setChangesTab}
+				stagedCount={stagedChanges.length}
+				unstagedCount={unstagedChanges.length}
+				remoteCount={committedChanges.length}
+			/>
+
+			{changesTab === "summary" ? (
+				<SummaryTabPanel
+					workspaceRootPath={workspaceRootPath}
+					stagedChanges={stagedChanges}
+					unstagedChanges={unstagedChanges}
+					committedChanges={committedChanges}
+					onRequestAiSummary={onRequestAiSummary}
+				/>
+			) : (
+				<ScrollArea
+					aria-label="Changes panel body"
+					className="min-h-0 flex-1 bg-muted/20 font-mono text-[11.5px]"
+				>
+					{/* "All" tab — show all three groups stacked */}
+					{changesTab === "all" && hasUncommittedChanges && (
+						<>
+							{stagedChanges.length > 0 && (
+								<ChangesGroup
+									label="Staged Changes"
+									count={stagedChanges.length}
+									open={stagedOpen}
+									onToggle={() => setStagedOpen((current) => !current)}
+									changes={stagedChanges}
+									treeView={changesTreeView}
+									onToggleTreeView={() => setChangesTreeView((v) => !v)}
+									action="unstage"
+									onStageAction={unstageFile}
+									onBatchAction={unstageAll}
+									editorMode={editorMode}
+									activeEditorPath={activeEditorPath}
+									onOpenEditorFile={onOpenEditorFile}
+									flashingPaths={flashingPaths}
+									workspaceRootPath={workspaceRootPath}
+									diffScope={{ kind: "staged" }}
+								/>
+							)}
+							{unstagedChanges.length > 0 && (
+								<ChangesGroup
+									label="Changes"
+									icon={
+										<LaptopIcon
+											className="size-3 shrink-0 text-muted-foreground"
+											strokeWidth={2}
+										/>
+									}
+									count={unstagedChanges.length}
+									open={changesOpen}
+									onToggle={() => setChangesOpen((current) => !current)}
+									changes={unstagedChanges}
+									treeView={changesTreeView}
+									onToggleTreeView={() => setChangesTreeView((v) => !v)}
+									action="stage"
+									onStageAction={stageFile}
+									onBatchAction={stageAll}
+									onDiscard={discardFile}
+									editorMode={editorMode}
+									activeEditorPath={activeEditorPath}
+									onOpenEditorFile={onOpenEditorFile}
+									flashingPaths={flashingPaths}
+									workspaceRootPath={workspaceRootPath}
+									diffScope={{ kind: "unstaged" }}
+								/>
+							)}
+						</>
+					)}
+
+					{/* "All" tab — remote section */}
+					{changesTab === "all" &&
+						(committedChanges.length > 0 || branchSwitching) && (
+							<BranchDiffSection
+								targetBranch={workspaceTargetBranch}
+								count={committedChanges.length}
+								loading={branchSwitching}
+								open={branchDiffOpen}
+								onToggle={() => setBranchDiffOpen((current) => !current)}
+								changes={committedChanges}
+								treeView={branchDiffTreeView}
+								onToggleTreeView={() => setBranchDiffTreeView((v) => !v)}
+								editorMode={editorMode}
+								activeEditorPath={activeEditorPath}
+								onOpenEditorFile={onOpenEditorFile}
+								flashingPaths={flashingPaths}
+								workspaceRootPath={workspaceRootPath}
+							/>
+						)}
+
+					{/* "Staged" focused tab */}
+					{changesTab === "staged" &&
+						(stagedChanges.length > 0 ? (
 							<ChangesGroup
 								label="Staged Changes"
 								count={stagedChanges.length}
-								open={stagedOpen}
-								onToggle={() => setStagedOpen((current) => !current)}
+								open={true}
+								onToggle={() => {}}
 								changes={stagedChanges}
 								treeView={changesTreeView}
 								onToggleTreeView={() => setChangesTreeView((v) => !v)}
@@ -411,8 +528,13 @@ export function ChangesSection({
 								workspaceRootPath={workspaceRootPath}
 								diffScope={{ kind: "staged" }}
 							/>
-						)}
-						{unstagedChanges.length > 0 && (
+						) : (
+							<EmptyTabMessage message="No staged changes." />
+						))}
+
+					{/* "Changes" (unstaged) focused tab */}
+					{changesTab === "unstaged" &&
+						(unstagedChanges.length > 0 ? (
 							<ChangesGroup
 								label="Changes"
 								icon={
@@ -422,8 +544,8 @@ export function ChangesSection({
 									/>
 								}
 								count={unstagedChanges.length}
-								open={changesOpen}
-								onToggle={() => setChangesOpen((current) => !current)}
+								open={true}
+								onToggle={() => {}}
 								changes={unstagedChanges}
 								treeView={changesTreeView}
 								onToggleTreeView={() => setChangesTreeView((v) => !v)}
@@ -438,34 +560,40 @@ export function ChangesSection({
 								workspaceRootPath={workspaceRootPath}
 								diffScope={{ kind: "unstaged" }}
 							/>
-						)}
-					</>
-				)}
+						) : (
+							<EmptyTabMessage message="No unstaged changes." />
+						))}
 
-				{(committedChanges.length > 0 || branchSwitching) && (
-					<BranchDiffSection
-						targetBranch={workspaceTargetBranch}
-						count={committedChanges.length}
-						loading={branchSwitching}
-						open={branchDiffOpen}
-						onToggle={() => setBranchDiffOpen((current) => !current)}
-						changes={committedChanges}
-						treeView={branchDiffTreeView}
-						onToggleTreeView={() => setBranchDiffTreeView((v) => !v)}
-						editorMode={editorMode}
-						activeEditorPath={activeEditorPath}
-						onOpenEditorFile={onOpenEditorFile}
-						flashingPaths={flashingPaths}
-						workspaceRootPath={workspaceRootPath}
-					/>
-				)}
+					{/* "Remote" focused tab */}
+					{changesTab === "remote" &&
+						(committedChanges.length > 0 ? (
+							<BranchDiffSection
+								targetBranch={workspaceTargetBranch}
+								count={committedChanges.length}
+								loading={branchSwitching}
+								open={true}
+								onToggle={() => {}}
+								changes={committedChanges}
+								treeView={branchDiffTreeView}
+								onToggleTreeView={() => setBranchDiffTreeView((v) => !v)}
+								editorMode={editorMode}
+								activeEditorPath={activeEditorPath}
+								onOpenEditorFile={onOpenEditorFile}
+								flashingPaths={flashingPaths}
+								workspaceRootPath={workspaceRootPath}
+							/>
+						) : (
+							<EmptyTabMessage message="No remote changes." />
+						))}
 
-				{!hasChanges && (
-					<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
-						No changes on this branch yet.
-					</div>
-				)}
-			</ScrollArea>
+					{/* Empty state when "All" tab has nothing */}
+					{changesTab === "all" && !hasChanges && (
+						<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
+							No changes on this branch yet.
+						</div>
+					)}
+				</ScrollArea>
+			)}
 		</section>
 	);
 }
@@ -1341,6 +1469,84 @@ function LineStats({
 				</span>
 			)}
 		</span>
+	);
+}
+
+function ChangesTabBar({
+	activeTab,
+	onSelect,
+	stagedCount,
+	unstagedCount,
+	remoteCount,
+}: {
+	activeTab: ChangesTabId;
+	onSelect: (tab: ChangesTabId) => void;
+	stagedCount: number;
+	unstagedCount: number;
+	remoteCount: number;
+}) {
+	type TabDef = {
+		id: ChangesTabId;
+		label: string;
+		count?: number;
+		icon?: React.ReactNode;
+	};
+
+	const tabs: TabDef[] = [
+		{ id: "all", label: "All" },
+		...(stagedCount > 0
+			? [{ id: "staged" as const, label: "Staged", count: stagedCount }]
+			: []),
+		...(unstagedCount > 0
+			? [{ id: "unstaged" as const, label: "Changes", count: unstagedCount }]
+			: []),
+		...(remoteCount > 0
+			? [{ id: "remote" as const, label: "Remote", count: remoteCount }]
+			: []),
+		{
+			id: "summary",
+			label: "Summary",
+			icon: (
+				<SparklesIcon
+					className="size-3 shrink-0 opacity-70"
+					strokeWidth={1.8}
+				/>
+			),
+		},
+	];
+
+	return (
+		<div className="flex h-7 shrink-0 items-stretch overflow-x-auto border-b border-border/60 bg-muted/10">
+			{tabs.map((tab) => (
+				<button
+					key={tab.id}
+					type="button"
+					onClick={() => onSelect(tab.id)}
+					className={cn(
+						"relative flex shrink-0 cursor-pointer items-center gap-1.5 px-3 text-[11px] font-medium transition-colors focus-visible:outline-none",
+						activeTab === tab.id
+							? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:rounded-t-sm after:bg-foreground/70"
+							: "text-muted-foreground hover:text-foreground/80",
+					)}
+				>
+					{tab.icon}
+					<span>{tab.label}</span>
+					{tab.count != null && (
+						<span className="flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-muted px-1 text-[9px] font-semibold tabular-nums">
+							{tab.count}
+						</span>
+					)}
+				</button>
+			))}
+		</div>
+	);
+}
+
+function EmptyTabMessage({ message }: { message: string }) {
+	return (
+		<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
+			{message}
+		</div>
 	);
 }
 

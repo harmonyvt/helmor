@@ -56,6 +56,17 @@ pub async fn list_workspace_changes_with_content(
 }
 
 #[tauri::command]
+pub async fn build_workspace_change_summary_context(
+    workspace_root_path: String,
+    scopes: Option<Vec<editor_files::WorkspaceChangeSummaryScope>>,
+) -> CmdResult<editor_files::WorkspaceChangeSummaryContext> {
+    run_blocking(move || {
+        editor_files::build_workspace_change_summary_context(&workspace_root_path, scopes)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn discard_workspace_file(
     workspace_root_path: String,
     relative_path: String,

@@ -71,13 +71,13 @@ impl EditorFilesHarness {
     }
 }
 
-pub(super) struct GitRepoHarness {
+pub(crate) struct GitRepoHarness {
     root: PathBuf,
     _temp: tempfile::TempDir,
 }
 
 impl GitRepoHarness {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().to_path_buf();
 
@@ -94,11 +94,11 @@ impl GitRepoHarness {
         Self { root, _temp: temp }
     }
 
-    pub(super) fn path_str(&self) -> &str {
+    pub(crate) fn path_str(&self) -> &str {
         self.root.to_str().unwrap()
     }
 
-    pub(super) fn write_file(&self, relative: &str, content: &str) {
+    pub(crate) fn write_file(&self, relative: &str, content: &str) {
         let absolute = self.root.join(relative);
         if let Some(parent) = absolute.parent() {
             fs::create_dir_all(parent).unwrap();
@@ -106,15 +106,15 @@ impl GitRepoHarness {
         fs::write(absolute, content).unwrap();
     }
 
-    pub(super) fn git(&self, args: &[&str]) -> String {
+    pub(crate) fn git(&self, args: &[&str]) -> String {
         git_ops::run_git(args.iter().copied(), Some(&self.root)).unwrap_or_default()
     }
 
-    pub(super) fn changes(&self) -> Vec<EditorFileListItem> {
+    pub(crate) fn changes(&self) -> Vec<EditorFileListItem> {
         list_workspace_changes(self.path_str()).unwrap()
     }
 
-    pub(super) fn find(&self, path: &str) -> Option<EditorFileListItem> {
+    pub(crate) fn find(&self, path: &str) -> Option<EditorFileListItem> {
         self.changes().into_iter().find(|item| item.path == path)
     }
 }

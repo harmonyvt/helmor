@@ -149,6 +149,40 @@ vi.mock("@tauri-apps/api/core", () => ({
 				};
 			case "list_repositories":
 				return [];
+			case "list_workspace_groups":
+				return [
+					{
+						id: "done",
+						label: "Done",
+						tone: "done",
+						rows: [
+							{
+								id: "workspace-done",
+								title: "Done workspace",
+								repoName: "helmor",
+								state: "ready",
+							},
+						],
+					},
+					{ id: "review", label: "In review", tone: "review", rows: [] },
+					{
+						id: "progress",
+						label: "In progress",
+						tone: "progress",
+						rows: [
+							{
+								id: "workspace-progress",
+								title: "Progress workspace",
+								repoName: "helmor",
+								state: "ready",
+							},
+						],
+					},
+					{ id: "backlog", label: "Backlog", tone: "backlog", rows: [] },
+					{ id: "canceled", label: "Canceled", tone: "canceled", rows: [] },
+				];
+			case "list_archived_workspaces":
+				return [];
 			case "list_agent_model_sections":
 				return [];
 			case "check_pi_models":
@@ -200,6 +234,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 			case "list_slash_commands":
 				return [];
 			case "list_workspace_linked_directories":
+				return [];
+			case "list_terminal_profiles":
 				return [];
 			case "export_workspace_directories_to_codex":
 				return { added: 0, total: 0, directories: [] };
