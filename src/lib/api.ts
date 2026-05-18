@@ -65,7 +65,8 @@ export type ActionKind =
 	| "merge"
 	| "open-pr"
 	| "merged"
-	| "closed";
+	| "closed"
+	| "summarize-changes";
 
 export type WorkspaceRow = {
 	id: string;
@@ -1004,6 +1005,32 @@ export type EditorFilePrefetchItem = {
 export type EditorFilesWithContentResponse = {
 	items: InspectorFileItem[];
 	prefetched: EditorFilePrefetchItem[];
+};
+
+export type WorkspaceChangeSummaryScope = "branch" | "staged" | "unstaged";
+
+export type WorkspaceChangeSummaryFile = {
+	path: string;
+	status: string;
+	insertions: number;
+	deletions: number;
+	diff?: string | null;
+	diffTruncated: boolean;
+};
+
+export type WorkspaceChangeSummarySection = {
+	scope: WorkspaceChangeSummaryScope;
+	title: string;
+	files: WorkspaceChangeSummaryFile[];
+};
+
+export type WorkspaceChangeSummaryContext = {
+	workspaceRootPath: string;
+	targetRef: string;
+	headSha?: string | null;
+	fingerprint: string;
+	prompt: string;
+	sections: WorkspaceChangeSummarySection[];
 };
 
 const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
@@ -2221,6 +2248,22 @@ export async function listWorkspaceChangesWithContent(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to list workspace changes."),
+		);
+	}
+}
+
+export async function buildWorkspaceChangeSummaryContext(
+	workspaceRootPath: string,
+	scopes?: WorkspaceChangeSummaryScope[] | null,
+): Promise<WorkspaceChangeSummaryContext> {
+	try {
+		return await invoke<WorkspaceChangeSummaryContext>(
+			"build_workspace_change_summary_context",
+			{ workspaceRootPath, scopes: scopes ?? null },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to build workspace change summary."),
 		);
 	}
 }

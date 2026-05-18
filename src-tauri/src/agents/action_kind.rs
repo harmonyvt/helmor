@@ -27,6 +27,7 @@ pub enum ActionKind {
     OpenPr,
     Merged,
     Closed,
+    SummarizeChanges,
 }
 
 impl ActionKind {
@@ -41,6 +42,7 @@ impl ActionKind {
             Self::OpenPr => "open-pr",
             Self::Merged => "merged",
             Self::Closed => "closed",
+            Self::SummarizeChanges => "summarize-changes",
         }
     }
 
@@ -59,6 +61,7 @@ impl ActionKind {
             Self::OpenPr => "Open PR",
             Self::Merged => "Merged",
             Self::Closed => "Closed",
+            Self::SummarizeChanges => "Summarize Changes",
         }
     }
 
@@ -105,6 +108,7 @@ impl FromStr for ActionKind {
             "open-pr" => Ok(Self::OpenPr),
             "merged" => Ok(Self::Merged),
             "closed" => Ok(Self::Closed),
+            "summarize-changes" => Ok(Self::SummarizeChanges),
             _ => Err(UnknownActionKind(s.to_string())),
         }
     }
@@ -141,6 +145,7 @@ mod tests {
         ActionKind::OpenPr,
         ActionKind::Merged,
         ActionKind::Closed,
+        ActionKind::SummarizeChanges,
     ];
 
     #[test]

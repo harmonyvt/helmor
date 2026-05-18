@@ -17,6 +17,7 @@ import {
 	type DebugIngestStatus,
 	type PrComment,
 	type PrCommentData,
+	type WorkspaceChangeSummaryContext,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
@@ -237,6 +238,45 @@ export function WorkspaceInspectorSidebar({
 			onQueuePendingPromptForSession,
 			onSelectSession,
 			prCommentData,
+			queryClient,
+			workspaceId,
+		],
+	);
+
+	// Creates a dedicated "summarize-changes" session and queues the pre-built
+	// prompt from the summary context. Navigates to the new session so the
+	// user sees streaming output immediately.
+	const handleRequestAiSummary = useCallback(
+		async (context: WorkspaceChangeSummaryContext) => {
+			if (!workspaceId || !onQueuePendingPromptForSession) return;
+			const { sessionId } = await createSession(workspaceId, {
+				actionKind: "summarize-changes",
+			});
+			seedNewSessionInCache({
+				queryClient,
+				workspaceId,
+				sessionId,
+				workspace:
+					queryClient.getQueryData<WorkspaceDetail | null>(
+						helmorQueryKeys.workspaceDetail(workspaceId),
+					) ?? null,
+				existingSessions:
+					queryClient.getQueryData<WorkspaceSessionSummary[]>(
+						helmorQueryKeys.workspaceSessions(workspaceId),
+					) ?? [],
+			});
+			onQueuePendingPromptForSession({
+				sessionId,
+				prompt: context.prompt,
+				modelId: appSettings.gitChangeSummaryModelId,
+				forceQueue: true,
+			});
+			onSelectSession?.(sessionId);
+		},
+		[
+			appSettings.gitChangeSummaryModelId,
+			onQueuePendingPromptForSession,
+			onSelectSession,
 			queryClient,
 			workspaceId,
 		],
@@ -517,6 +557,7 @@ export function WorkspaceInspectorSidebar({
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
+				onRequestAiSummary={handleRequestAiSummary}
 			/>
 
 			<HorizontalResizeHandle

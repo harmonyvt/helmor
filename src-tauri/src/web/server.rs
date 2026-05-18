@@ -469,6 +469,15 @@ async fn dispatch_invoke(command: &str, args: Value) -> Result<Value> {
                 &workspace_root_path,
             ))
         }
+        "build_workspace_change_summary_context" => {
+            let workspace_root_path: String = arg(&args, "workspaceRootPath")?;
+            let scopes: Option<Vec<crate::editor_files::WorkspaceChangeSummaryScope>> =
+                opt_arg(&args, "scopes")?;
+            json_any(crate::editor_files::build_workspace_change_summary_context(
+                &workspace_root_path,
+                scopes,
+            ))
+        }
         "discard_workspace_file" => {
             let workspace_root_path: String = arg(&args, "workspaceRootPath")?;
             let relative_path: String = arg(&args, "relativePath")?;

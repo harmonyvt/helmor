@@ -26,6 +26,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceForgeActionStatus: vi.fn(),
 	getWorkspacePrComments: vi.fn(),
 	syncWorkspaceWithTargetBranch: vi.fn(),
+	buildWorkspaceChangeSummaryContext: vi.fn(),
 }));
 
 const openerMocks = vi.hoisted(() => ({
@@ -62,6 +63,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
 		getWorkspacePrComments: apiMocks.getWorkspacePrComments,
 		syncWorkspaceWithTargetBranch: apiMocks.syncWorkspaceWithTargetBranch,
+		buildWorkspaceChangeSummaryContext:
+			apiMocks.buildWorkspaceChangeSummaryContext,
 	};
 });
 
@@ -162,6 +165,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
 		apiMocks.getWorkspacePrComments.mockReset();
 		apiMocks.syncWorkspaceWithTargetBranch.mockReset();
+		apiMocks.buildWorkspaceChangeSummaryContext.mockReset();
 		openerMocks.openUrl.mockReset();
 		toastMocks.toast.mockReset();
 		toastMocks.error.mockReset();
@@ -178,6 +182,29 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			"PR Comment by @reviewer",
 		);
 		apiMocks.createSession.mockResolvedValue({ sessionId: "session-review" });
+		apiMocks.buildWorkspaceChangeSummaryContext.mockResolvedValue({
+			workspaceRootPath: "/tmp/workspace",
+			targetRef: "origin/main",
+			headSha: "abc123",
+			fingerprint: "summary-fingerprint",
+			prompt: "Summarize these git changes",
+			sections: [
+				{
+					scope: "unstaged",
+					title: "Unstaged changes",
+					files: [
+						{
+							path: "src/change.ts",
+							status: "M",
+							insertions: 1,
+							deletions: 0,
+							diff: "+change",
+							diffTruncated: false,
+						},
+					],
+				},
+			],
+		});
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue(cleanGitStatus());
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(emptyPrStatus());
 		apiMocks.getWorkspacePrComments.mockResolvedValue({
@@ -1295,6 +1322,68 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 					modelId: "gpt-5.4",
 				}),
 			);
+		});
+	});
+
+	it("uses the configured Git change summary model", async () => {
+		const user = userEvent.setup();
+		const onQueuePendingPromptForSession = vi.fn();
+		apiMocks.createSession.mockResolvedValue({ sessionId: "session-summary" });
+		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
+			items: [
+				{
+					path: "src/change.ts",
+					absolutePath: "/tmp/workspace/src/change.ts",
+					name: "change.ts",
+					status: "M",
+					insertions: 1,
+					deletions: 0,
+					unstagedStatus: "M",
+				},
+			],
+			prefetched: [],
+		});
+
+		renderWithProviders(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						gitChangeSummaryModelId: "gpt-5.4",
+					},
+					isLoaded: true,
+					updateSettings: vi.fn(),
+				}}
+			>
+				<WorkspaceInspectorSidebar
+					workspaceId="workspace-1"
+					workspaceRootPath="/tmp/workspace"
+					workspaceBranch="feature/actions"
+					workspaceTargetBranch="main"
+					workspaceRemote="testuser"
+					editorMode={false}
+					onOpenEditorFile={vi.fn()}
+					currentSessionId="session-1"
+					onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+				/>
+			</SettingsContext.Provider>,
+		);
+
+		await user.click(await screen.findByRole("button", { name: /Summary/ }));
+		await user.click(
+			await screen.findByRole("button", { name: "Generate AI Summary" }),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
+				actionKind: "summarize-changes",
+			});
+		});
+		expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
+			sessionId: "session-summary",
+			prompt: "Summarize these git changes",
+			modelId: "gpt-5.4",
+			forceQueue: true,
 		});
 	});
 

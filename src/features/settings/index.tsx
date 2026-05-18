@@ -62,6 +62,7 @@ import { ConductorImportPanel } from "./panels/conductor-import";
 import { DataSourceSettingsRow } from "./panels/data-source";
 import { DebugIngestNgrokPanel } from "./panels/debug-ingest-ngrok";
 import { DevToolsPanel } from "./panels/dev-tools";
+import { GitChangeSummaryModelRow } from "./panels/git-change-summary-model";
 import { LibsqlExperimentPanel } from "./panels/libsql-experiment";
 import { LocalAppUpdatePanel } from "./panels/local-app-update";
 import { LogExportPanel } from "./panels/log-export";
@@ -577,6 +578,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										</div>
 									</SettingsRow>
 									<PrCommentReviewModelRow />
+									<GitChangeSummaryModelRow />
 									<SettingsRow
 										title="Goal assignee models"
 										description="Allow Goal child assignees to use every Pi model provider. When off, handoffs are limited to Anthropic and Codex-backed Pi models."
