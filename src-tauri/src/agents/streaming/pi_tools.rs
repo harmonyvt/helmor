@@ -17,7 +17,7 @@ use std::future::Future;
 use std::str::FromStr;
 use tauri::AppHandle;
 
-use crate::ui_sync::{notify_running_app, UiMutationEvent};
+use crate::ui_sync::{self, UiMutationEvent};
 use crate::workspace_status::WorkspaceStatus;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,31 +44,33 @@ pub(super) fn execute_pi_tool_call(
     match tool {
         // ── Board ─────────────────────────────────────────────────────────────
         "list_kanban_cards" => handle_list_kanban_cards(goal_workspace_id),
-        "create_kanban_card" => handle_create_kanban_card(app, goal_workspace_id, args),
-        "move_kanban_card" => handle_move_kanban_card(goal_workspace_id, args),
-        "update_kanban_card" => handle_update_kanban_card(goal_workspace_id, args),
+        "create_kanban_card" => handle_create_kanban_card(&app, goal_workspace_id, args),
+        "move_kanban_card" => handle_move_kanban_card(&app, goal_workspace_id, args),
+        "update_kanban_card" => handle_update_kanban_card(&app, goal_workspace_id, args),
         "list_assignee_models" => super::pi_assignee_models::handle_list_assignee_models(),
         // ── Thread management ─────────────────────────────────────────────────
         "list_threads" => handle_list_threads(args),
-        "create_thread" => handle_create_thread(args),
+        "create_thread" => handle_create_thread(&app, args),
         "get_thread" => handle_get_thread(goal_workspace_id, args),
         "update_thread" => handle_update_thread(args),
         "delete_thread" => handle_delete_thread(args),
         "send_thread_message" => handle_send_thread_message(app, goal_workspace_id, args),
         // ── Assignee coordination ─────────────────────────────────────────────
         "send_assignee_message" => handle_send_assignee_message(app, goal_workspace_id, args),
-        "set_card_assignee_thread" => handle_set_card_assignee_thread(goal_workspace_id, args),
+        "set_card_assignee_thread" => {
+            handle_set_card_assignee_thread(&app, goal_workspace_id, args)
+        }
         "read_assignee_thread" => handle_read_assignee_thread(goal_workspace_id, args),
         "summarize_assignee_status" => handle_summarize_assignee_status(goal_workspace_id, args),
         "list_assignees" => handle_list_assignees(goal_workspace_id, args),
         // ── Merge / landing ───────────────────────────────────────────────────
         "inspect_workspace_merge_state" => handle_inspect_workspace_merge_state(args),
-        "refresh_change_request" => handle_refresh_change_request(args),
-        "sync_workspace_target_branch" => handle_sync_workspace_target_branch(args),
-        "push_workspace_branch" => handle_push_workspace_branch(args),
-        "merge_change_request" => handle_merge_change_request(args),
-        "check_workspace_landed" => handle_check_workspace_landed(args),
-        "mark_workspace_landed" => handle_mark_workspace_landed(args),
+        "refresh_change_request" => handle_refresh_change_request(&app, args),
+        "sync_workspace_target_branch" => handle_sync_workspace_target_branch(&app, args),
+        "push_workspace_branch" => handle_push_workspace_branch(&app, args),
+        "merge_change_request" => handle_merge_change_request(&app, args),
+        "check_workspace_landed" => handle_check_workspace_landed(&app, args),
+        "mark_workspace_landed" => handle_mark_workspace_landed(&app, args),
         _ => anyhow::bail!("Unknown Pi tool: {tool}"),
     }
 }
@@ -107,7 +109,7 @@ fn handle_list_kanban_cards(goal_workspace_id: &str) -> Result<Value> {
 }
 
 fn handle_create_kanban_card(
-    app: AppHandle,
+    app: &AppHandle,
     goal_workspace_id: &str,
     args: &Value,
 ) -> Result<Value> {
@@ -135,15 +137,19 @@ fn handle_create_kanban_card(
 
     let prepared = crate::goal_orchestration::prepare_goal_child_workspace_start(params)?;
     if let Some(send_params) = prepared.send_params {
-        crate::background_agents::enqueue(app, send_params)?;
+        crate::background_agents::enqueue(app.clone(), send_params)?;
     }
 
-    publish_board_changed(goal_workspace_id, &prepared.result.workspace_id);
+    publish_board_changed(app, goal_workspace_id, &prepared.result.workspace_id);
 
     Ok(serde_json::to_value(&prepared.result)?)
 }
 
-fn handle_move_kanban_card(goal_workspace_id: &str, args: &Value) -> Result<Value> {
+fn handle_move_kanban_card(
+    app: &AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;
     let lane_str = req_str(args, "lane")?;
 
@@ -169,12 +175,16 @@ fn handle_move_kanban_card(goal_workspace_id: &str, args: &Value) -> Result<Valu
         },
     )?;
 
-    publish_board_changed(goal_workspace_id, card_id);
+    publish_board_changed(app, goal_workspace_id, card_id);
 
     Ok(json!({ "success": true, "cardId": card_id, "lane": lane_str }))
 }
 
-fn handle_update_kanban_card(goal_workspace_id: &str, args: &Value) -> Result<Value> {
+fn handle_update_kanban_card(
+    app: &AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;
     let new_title = args.get("title").and_then(Value::as_str);
 
@@ -207,7 +217,7 @@ fn handle_update_kanban_card(goal_workspace_id: &str, args: &Value) -> Result<Va
         ))?;
     }
 
-    publish_board_changed(goal_workspace_id, card_id);
+    publish_board_changed(app, goal_workspace_id, card_id);
 
     Ok(json!({ "success": true, "cardId": card_id, "changed": true }))
 }
@@ -242,7 +252,7 @@ fn handle_list_threads(args: &Value) -> Result<Value> {
     Ok(json!(threads))
 }
 
-fn handle_create_thread(args: &Value) -> Result<Value> {
+fn handle_create_thread(app: &AppHandle, args: &Value) -> Result<Value> {
     let workspace_id = req_str(args, "workspaceId")?;
     let title = args.get("title").and_then(Value::as_str);
     let model_id = args
@@ -278,9 +288,12 @@ fn handle_create_thread(args: &Value) -> Result<Value> {
         ));
     }
 
-    let _ = notify_running_app(UiMutationEvent::SessionListChanged {
-        workspace_id: workspace_id.to_string(),
-    });
+    ui_sync::publish(
+        app,
+        UiMutationEvent::SessionListChanged {
+            workspace_id: workspace_id.to_string(),
+        },
+    );
 
     Ok(json!({
         "sessionId": session_id,
@@ -351,7 +364,7 @@ fn handle_send_thread_message(
 
     let mut prepared = crate::goal_assignees::prepare_thread_message(request)?;
     let receipt = crate::background_agents::enqueue_assignee(
-        app,
+        app.clone(),
         prepared.send_params,
         prepared.goal_workspace_id.clone(),
         prepared.run_id,
@@ -361,9 +374,12 @@ fn handle_send_thread_message(
     prepared.result.execution_state = receipt.execution_state.to_string();
     let result_value = serde_json::to_value(&prepared.result)?;
 
-    let _ = notify_running_app(UiMutationEvent::GoalOrchestratorStateChanged {
-        goal_workspace_id: goal_workspace_id.to_string(),
-    });
+    ui_sync::publish(
+        &app,
+        UiMutationEvent::GoalOrchestratorStateChanged {
+            goal_workspace_id: goal_workspace_id.to_string(),
+        },
+    );
 
     Ok(result_value)
 }
@@ -396,7 +412,7 @@ fn handle_send_assignee_message(
 
     let mut prepared = crate::goal_assignees::prepare_assignee_message(request)?;
     let receipt = crate::background_agents::enqueue_assignee(
-        app,
+        app.clone(),
         prepared.send_params,
         prepared.goal_workspace_id.clone(),
         prepared.run_id,
@@ -406,14 +422,21 @@ fn handle_send_assignee_message(
     prepared.result.execution_state = receipt.execution_state.to_string();
     let result_value = serde_json::to_value(&prepared.result)?;
 
-    let _ = notify_running_app(UiMutationEvent::GoalOrchestratorStateChanged {
-        goal_workspace_id: goal_workspace_id.to_string(),
-    });
+    ui_sync::publish(
+        &app,
+        UiMutationEvent::GoalOrchestratorStateChanged {
+            goal_workspace_id: goal_workspace_id.to_string(),
+        },
+    );
 
     Ok(result_value)
 }
 
-fn handle_set_card_assignee_thread(goal_workspace_id: &str, args: &Value) -> Result<Value> {
+fn handle_set_card_assignee_thread(
+    app: &AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;
     let thread_id = req_str(args, "threadId")?;
 
@@ -433,9 +456,12 @@ fn handle_set_card_assignee_thread(goal_workspace_id: &str, args: &Value) -> Res
 
     let result = crate::goal_assignees::set_card_assignee_thread(request)?;
 
-    let _ = notify_running_app(UiMutationEvent::GoalOrchestratorStateChanged {
-        goal_workspace_id: goal_workspace_id.to_string(),
-    });
+    ui_sync::publish(
+        app,
+        UiMutationEvent::GoalOrchestratorStateChanged {
+            goal_workspace_id: goal_workspace_id.to_string(),
+        },
+    );
 
     Ok(serde_json::to_value(&result)?)
 }
@@ -495,15 +521,18 @@ fn handle_inspect_workspace_merge_state(args: &Value) -> Result<Value> {
     }))
 }
 
-fn handle_refresh_change_request(args: &Value) -> Result<Value> {
+fn handle_refresh_change_request(app: &AppHandle, args: &Value) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;
     let change_request = crate::forge::refresh_workspace_change_request(card_id)?;
     let changed = crate::workspaces::sync_workspace_pr_state(card_id, change_request.as_ref())?;
     if changed {
-        let _ = notify_running_app(UiMutationEvent::WorkspaceChangeRequestChanged {
-            workspace_id: card_id.to_string(),
-        });
-        let _ = notify_running_app(UiMutationEvent::WorkspaceListChanged);
+        ui_sync::publish(
+            app,
+            UiMutationEvent::WorkspaceChangeRequestChanged {
+                workspace_id: card_id.to_string(),
+            },
+        );
+        ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
     }
     Ok(json!({
         "cardId": card_id,
@@ -512,35 +541,44 @@ fn handle_refresh_change_request(args: &Value) -> Result<Value> {
     }))
 }
 
-fn handle_sync_workspace_target_branch(args: &Value) -> Result<Value> {
+fn handle_sync_workspace_target_branch(app: &AppHandle, args: &Value) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;
     // Branching domain functions acquire workspace_fs_mutation_lock internally.
     let result = crate::workspaces::sync_workspace_with_target_branch(card_id)?;
-    let _ = notify_running_app(UiMutationEvent::WorkspaceGitStateChanged {
-        workspace_id: card_id.to_string(),
-    });
+    ui_sync::publish(
+        app,
+        UiMutationEvent::WorkspaceGitStateChanged {
+            workspace_id: card_id.to_string(),
+        },
+    );
     Ok(serde_json::to_value(&result)?)
 }
 
-fn handle_push_workspace_branch(args: &Value) -> Result<Value> {
+fn handle_push_workspace_branch(app: &AppHandle, args: &Value) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;
     // Branching domain functions acquire workspace_fs_mutation_lock internally.
     let result = crate::workspaces::push_workspace_to_remote(card_id)?;
-    let _ = notify_running_app(UiMutationEvent::WorkspaceGitStateChanged {
-        workspace_id: card_id.to_string(),
-    });
+    ui_sync::publish(
+        app,
+        UiMutationEvent::WorkspaceGitStateChanged {
+            workspace_id: card_id.to_string(),
+        },
+    );
     Ok(serde_json::to_value(&result)?)
 }
 
-fn handle_merge_change_request(args: &Value) -> Result<Value> {
+fn handle_merge_change_request(app: &AppHandle, args: &Value) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;
     let change_request = crate::forge::merge_workspace_change_request(card_id)?;
     let changed = crate::workspaces::sync_workspace_pr_state(card_id, change_request.as_ref())?;
     if changed {
-        let _ = notify_running_app(UiMutationEvent::WorkspaceChangeRequestChanged {
-            workspace_id: card_id.to_string(),
-        });
-        let _ = notify_running_app(UiMutationEvent::WorkspaceListChanged);
+        ui_sync::publish(
+            app,
+            UiMutationEvent::WorkspaceChangeRequestChanged {
+                workspace_id: card_id.to_string(),
+            },
+        );
+        ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
     }
     Ok(json!({
         "cardId": card_id,
@@ -549,22 +587,28 @@ fn handle_merge_change_request(args: &Value) -> Result<Value> {
     }))
 }
 
-fn handle_check_workspace_landed(args: &Value) -> Result<Value> {
+fn handle_check_workspace_landed(app: &AppHandle, args: &Value) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;
     let result = crate::workspaces::reconcile_workspace_landing_state(card_id)?;
-    let _ = notify_running_app(UiMutationEvent::WorkspaceLandingChanged {
-        workspace_id: card_id.to_string(),
-    });
+    ui_sync::publish(
+        app,
+        UiMutationEvent::WorkspaceLandingChanged {
+            workspace_id: card_id.to_string(),
+        },
+    );
     Ok(serde_json::to_value(&result)?)
 }
 
-fn handle_mark_workspace_landed(args: &Value) -> Result<Value> {
+fn handle_mark_workspace_landed(app: &AppHandle, args: &Value) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;
     let result = crate::workspaces::mark_workspace_landed_manually(card_id)?;
-    let _ = notify_running_app(UiMutationEvent::WorkspaceLandingChanged {
-        workspace_id: card_id.to_string(),
-    });
-    let _ = notify_running_app(UiMutationEvent::WorkspaceListChanged);
+    ui_sync::publish(
+        app,
+        UiMutationEvent::WorkspaceLandingChanged {
+            workspace_id: card_id.to_string(),
+        },
+    );
+    ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
     Ok(serde_json::to_value(&result)?)
 }
 
@@ -574,14 +618,26 @@ fn handle_mark_workspace_landed(args: &Value) -> Result<Value> {
 
 /// Fire the standard set of UI mutation events after a board card was created
 /// or mutated (lane/title change).
-fn publish_board_changed(goal_workspace_id: &str, workspace_id: &str) {
-    let _ = notify_running_app(UiMutationEvent::WorkspaceListChanged);
-    let _ = notify_running_app(UiMutationEvent::WorkspaceChanged {
-        workspace_id: workspace_id.to_string(),
-    });
-    let _ = notify_running_app(UiMutationEvent::GoalOrchestratorStateChanged {
-        goal_workspace_id: goal_workspace_id.to_string(),
-    });
+fn publish_board_changed(app: &AppHandle, goal_workspace_id: &str, workspace_id: &str) {
+    ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
+    ui_sync::publish(
+        app,
+        UiMutationEvent::WorkspaceChanged {
+            workspace_id: goal_workspace_id.to_string(),
+        },
+    );
+    ui_sync::publish(
+        app,
+        UiMutationEvent::WorkspaceChanged {
+            workspace_id: workspace_id.to_string(),
+        },
+    );
+    ui_sync::publish(
+        app,
+        UiMutationEvent::GoalOrchestratorStateChanged {
+            goal_workspace_id: goal_workspace_id.to_string(),
+        },
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

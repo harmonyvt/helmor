@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 #[cfg(test)]
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
+use tauri::AppHandle;
 
 use crate::pipeline::types::{AgentUsage, CollectedTurn, MessageRole};
 use crate::sessions::mark_session_read_in_libsql_transaction;
@@ -176,6 +177,17 @@ pub(super) async fn persist_turn_message_libsql(
     persist_collected_turn_message_libsql(conn, &ctx.helmor_session_id, turn).await
 }
 
+pub(super) async fn persist_turn_message_libsql_with_app(
+    conn: &libsql::Connection,
+    app: &AppHandle,
+    ctx: &ExchangeContext,
+    turn: &CollectedTurn,
+    _resolved_model: &str,
+) -> Result<String> {
+    persist_collected_turn_message_libsql_with_app(conn, Some(app), &ctx.helmor_session_id, turn)
+        .await
+}
+
 #[allow(dead_code)]
 pub(super) async fn persist_turn_messages_libsql(
     conn: &libsql::Connection,
@@ -186,6 +198,26 @@ pub(super) async fn persist_turn_messages_libsql(
     let mut persisted = 0;
     for turn in turns {
         if let Err(error) = persist_turn_message_libsql(conn, ctx, turn, resolved_model).await {
+            return (persisted, Some(error));
+        }
+        persisted += 1;
+    }
+    (persisted, None)
+}
+
+#[allow(dead_code)]
+pub(super) async fn persist_turn_messages_libsql_with_app(
+    conn: &libsql::Connection,
+    app: &AppHandle,
+    ctx: &ExchangeContext,
+    turns: &[CollectedTurn],
+    resolved_model: &str,
+) -> (usize, Option<anyhow::Error>) {
+    let mut persisted = 0;
+    for turn in turns {
+        if let Err(error) =
+            persist_turn_message_libsql_with_app(conn, app, ctx, turn, resolved_model).await
+        {
             return (persisted, Some(error));
         }
         persisted += 1;
@@ -228,6 +260,15 @@ pub(crate) async fn persist_collected_turn_message_libsql(
     session_id: &str,
     turn: &CollectedTurn,
 ) -> Result<String> {
+    persist_collected_turn_message_libsql_with_app(conn, None, session_id, turn).await
+}
+
+pub(crate) async fn persist_collected_turn_message_libsql_with_app(
+    conn: &libsql::Connection,
+    app: Option<&AppHandle>,
+    session_id: &str,
+    turn: &CollectedTurn,
+) -> Result<String> {
     let now = current_timestamp_string()?;
     let msg_id = turn.id.clone();
     let content =
@@ -253,8 +294,8 @@ pub(crate) async fn persist_collected_turn_message_libsql(
         ],
     )
     .await?;
-    crate::goal_assignees::maybe_deliver_assignee_report_libsql(
-        conn, session_id, &msg_id, turn.role, &content,
+    crate::goal_assignees::maybe_deliver_assignee_report_libsql_with_app(
+        conn, app, session_id, &msg_id, turn.role, &content,
     )
     .await?;
     Ok(msg_id)

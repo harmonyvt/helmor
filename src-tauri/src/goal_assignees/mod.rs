@@ -11,9 +11,11 @@ mod storage;
 
 #[cfg(test)]
 pub(crate) use notifications::maybe_deliver_assignee_report;
+#[cfg(test)]
+pub(crate) use notifications::notify_runtime_issue_for_session;
 pub(crate) use notifications::{
-    maybe_deliver_assignee_report_libsql, maybe_notify_missing_report_after_terminal,
-    notify_runtime_issue_for_session,
+    maybe_deliver_assignee_report_libsql_with_app,
+    maybe_notify_missing_report_after_terminal_with_app, notify_runtime_issue_for_session_with_app,
 };
 use prompt::format_supervisor_update;
 pub use prompt::{assignee_bootstrap_prompt, AssigneeBootstrapPromptInput};
