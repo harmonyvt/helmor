@@ -20,6 +20,10 @@ use super::persistence::{
 use super::streaming::{build_send_message_params, BuildSendMessageParamsInput};
 use super::{resolve_model, ExchangeContext};
 
+// Historical compatibility: Pi no longer receives the generic `delegate_agent`
+// tool. Keep this backend/read path for existing delegation records until the
+// later backend-pruning phase removes `session_delegations` and anchors.
+
 const CHILD_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Deserialize)]

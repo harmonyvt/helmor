@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	Bot,
 	CheckCircle2,
 	Loader2,
 	MoreHorizontal,
@@ -72,6 +73,10 @@ export function ThreadManagerView({
 	});
 	const sessions = sessionsQuery.data ?? [];
 	const activeThreadId = selectedCard?.activeSessionId ?? null;
+	const activeThread =
+		sessions.find((session) => session.id === activeThreadId) ??
+		sessions.find((session) => session.active) ??
+		null;
 
 	const invalidateSelectedCard = async () => {
 		if (!selectedCardId) return;
@@ -88,7 +93,7 @@ export function ThreadManagerView({
 	const createActiveThread = async () => {
 		if (!selectedCard) return;
 		const title = window.prompt(
-			"Thread title",
+			"Assignee thread title",
 			`Retry — ${selectedCard.title ?? selectedCard.directoryName ?? "Card"}`,
 		);
 		if (title === null) return;
@@ -160,7 +165,7 @@ export function ThreadManagerView({
 	if (cards.length === 0) {
 		return (
 			<div className="flex flex-1 items-center justify-center px-4 text-center text-[12px] text-muted-foreground/60">
-				No cards yet. Create a card before managing assignee threads.
+				No cards yet.
 			</div>
 		);
 	}
@@ -168,6 +173,33 @@ export function ThreadManagerView({
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<div className="border-b px-3 py-2">
+				<div className="mb-2 flex min-w-0 items-center gap-2 rounded-md border border-border/60 bg-background/70 px-2.5 py-2">
+					<Bot className="size-3.5 shrink-0 text-muted-foreground" />
+					<div className="min-w-0 flex-1">
+						<div className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/65">
+							Active assignee
+						</div>
+						<div className="mt-0.5 truncate text-[12px] font-medium">
+							{activeThread?.title?.trim() ||
+								selectedCard?.activeSessionTitle ||
+								"No active assignee"}
+						</div>
+						{activeThread?.model || selectedCard?.activeSessionAgentType ? (
+							<div className="mt-0.5 truncate text-[10px] text-muted-foreground/60">
+								{activeThread?.model ??
+									selectedCard?.activeSessionAgentType ??
+									"agent"}
+							</div>
+						) : null}
+					</div>
+					{activeThread?.status || selectedCard?.activeSessionStatus ? (
+						<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+							{activeThread?.threadStatus ??
+								activeThread?.status ??
+								selectedCard?.activeSessionStatus}
+						</span>
+					) : null}
+				</div>
 				<Button
 					type="button"
 					variant="outline"
@@ -181,7 +213,7 @@ export function ThreadManagerView({
 					) : (
 						<Plus className="mr-1.5 size-3" />
 					)}
-					New active thread
+					New active assignee
 				</Button>
 			</div>
 			<div className="grid min-h-0 flex-1 grid-cols-[minmax(110px,0.42fr)_minmax(0,1fr)]">
@@ -212,7 +244,7 @@ export function ThreadManagerView({
 						</div>
 					) : sessions.length === 0 ? (
 						<div className="flex h-full items-center justify-center px-4 text-center text-[12px] text-muted-foreground/60">
-							No threads in this card yet.
+							No assignee threads yet.
 						</div>
 					) : (
 						sessions.map((session) => (
@@ -382,7 +414,7 @@ function ThreadRow({
 					</DropdownMenuItem>
 					<DropdownMenuItem onClick={onSetActive} disabled={isActive}>
 						<CheckCircle2 className="size-3" />
-						Set active assignee
+						Make active assignee
 					</DropdownMenuItem>
 					<DropdownMenuItem onClick={onStartRename}>
 						<Pencil className="size-3" />
