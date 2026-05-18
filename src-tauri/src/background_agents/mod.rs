@@ -3,7 +3,7 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::{
@@ -299,8 +299,13 @@ fn spawn_next(app: AppHandle, expected_task_id: String) {
             publish_event(&app, &workspace_id, &session_id, event);
         };
 
+        let background_sidecar = app.state::<crate::sidecar::BackgroundSidecar>();
         let mut send_error: Option<String> = None;
-        match service::send_message(send.params, &mut on_event) {
+        match service::send_message_on_sidecar(
+            send.params,
+            &mut on_event,
+            background_sidecar.managed(),
+        ) {
             Ok(result) => {
                 if !result.persisted {
                     send_error = Some(

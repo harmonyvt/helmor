@@ -1136,6 +1136,8 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
         )
     };
     sidecar.shutdown(cooperative, escalation);
+    app.state::<sidecar::BackgroundSidecar>()
+        .shutdown(cooperative, escalation);
 
     // 4. Done — terminate the process.
     app.exit(0);
@@ -1160,6 +1162,10 @@ pub async fn restart_app(app: tauri::AppHandle, force: bool) {
 
     let sidecar = app.state::<sidecar::ManagedSidecar>();
     sidecar.shutdown(
+        std::time::Duration::from_millis(1000),
+        std::time::Duration::from_millis(500),
+    );
+    app.state::<sidecar::BackgroundSidecar>().shutdown(
         std::time::Duration::from_millis(1000),
         std::time::Duration::from_millis(500),
     );
@@ -1196,6 +1202,10 @@ pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResu
             &sidecar_state,
             &active,
             std::time::Duration::from_millis(1500),
+        );
+        app.state::<sidecar::BackgroundSidecar>().shutdown(
+            std::time::Duration::from_millis(1000),
+            std::time::Duration::from_millis(500),
         );
     }
 

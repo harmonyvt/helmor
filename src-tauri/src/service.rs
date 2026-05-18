@@ -158,6 +158,25 @@ pub fn send_message(
     params: SendMessageParams,
     on_event: &mut dyn FnMut(&crate::agents::AgentStreamEvent),
 ) -> Result<SendMessageResult> {
+    send_message_inner(params, on_event, None)
+}
+
+/// Send a prompt through a caller-provided sidecar instead of creating a
+/// short-lived standalone sidecar. Background app work uses this to keep
+/// assignee/workspace automation off the foreground UI stream lane.
+pub fn send_message_on_sidecar(
+    params: SendMessageParams,
+    on_event: &mut dyn FnMut(&crate::agents::AgentStreamEvent),
+    sidecar: &crate::sidecar::ManagedSidecar,
+) -> Result<SendMessageResult> {
+    send_message_inner(params, on_event, Some(sidecar))
+}
+
+fn send_message_inner(
+    params: SendMessageParams,
+    on_event: &mut dyn FnMut(&crate::agents::AgentStreamEvent),
+    shared_sidecar: Option<&crate::sidecar::ManagedSidecar>,
+) -> Result<SendMessageResult> {
     use crate::agents::AgentStreamEvent;
     use crate::pipeline::PipelineEmit;
 
@@ -299,11 +318,19 @@ pub fn send_message(
         });
     }
 
-    // ── Standalone mode (app not running) ────────────────────────────
-    // 4. Create sidecar
-    let sidecar = crate::sidecar::ManagedSidecar::new();
+    // ── Direct sidecar mode ─────────────────────────────────────────
+    // CLI/web daemon calls create a short-lived standalone sidecar. App
+    // background queues pass a shared background sidecar so they cannot block
+    // the foreground sidecar waiting for an unrelated thread/start.
+    let owned_sidecar = shared_sidecar
+        .is_none()
+        .then(crate::sidecar::ManagedSidecar::new);
+    let sidecar = shared_sidecar
+        .or(owned_sidecar.as_ref())
+        .expect("direct sidecar mode must have an owned or shared sidecar");
+    let shutdown_sidecar = owned_sidecar.is_some();
 
-    // 5. Build and send request
+    // 4. Build and send request
     let request_id = Uuid::new_v4().to_string();
 
     // Merge explicit linked dirs with any persisted on the workspace so a
@@ -345,7 +372,7 @@ pub fn send_message(
     };
 
     let rx = sidecar.subscribe(&request_id);
-    // 6. Persist user message + set session streaming before starting the
+    // 5. Persist user message + set session streaming before starting the
     // provider. This makes a just-spawned background handoff visible even if
     // the model takes a long time to emit its first assistant/tool event.
     persist_standalone_send_start(
@@ -378,10 +405,14 @@ pub fn send_message(
             },
         );
         let _ = set_session_idle(&session_id);
+        sidecar.unsubscribe(&request_id);
+        if shutdown_sidecar {
+            sidecar.shutdown(Duration::from_millis(500), Duration::from_secs(2));
+        }
         return Err(error).context("Failed to send request to sidecar");
     }
 
-    // 7. Event loop
+    // 6. Event loop
     let mut pipeline = crate::pipeline::MessagePipeline::new(
         &model.provider,
         &model.cli_model,
@@ -567,9 +598,11 @@ pub fn send_message(
         }
     }
 
-    // 8. Cleanup
+    // 7. Cleanup
     sidecar.unsubscribe(&request_id);
-    sidecar.shutdown(Duration::from_millis(500), Duration::from_secs(2));
+    if shutdown_sidecar {
+        sidecar.shutdown(Duration::from_millis(500), Duration::from_secs(2));
+    }
 
     Ok(SendMessageResult {
         session_id,
