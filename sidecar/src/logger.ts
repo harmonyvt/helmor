@@ -10,13 +10,14 @@
  */
 
 import {
-	createWriteStream,
+	closeSync,
 	existsSync,
 	mkdirSync,
+	openSync,
 	renameSync,
 	statSync,
 	unlinkSync,
-	type WriteStream,
+	writeSync,
 } from "node:fs";
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -79,15 +80,31 @@ export function errorDetails(err: unknown): Record<string, unknown> {
 	return { error: String(err) };
 }
 
-class Logger {
+type LoggerOptions = {
+	maxBytes?: number;
+	enableFileInTest?: boolean;
+};
+
+type SdkEventSummary = {
+	type: string;
+	method?: string;
+	id?: string;
+	itemType?: string;
+	keyCount?: number;
+};
+
+export class Logger {
 	private minLevel: number;
-	private file: WriteStream | undefined;
+	private fd: number | undefined;
 	private devStderr: boolean;
 	private primaryPath: string | undefined;
 	private backupPath: string | undefined;
 	private bytes = 0;
+	private maxBytes: number;
+	private sdkFullEvents: boolean;
 
-	constructor() {
+	constructor(options: LoggerOptions = {}) {
+		this.maxBytes = options.maxBytes ?? MAX_BYTES;
 		const envLevel = process.env.HELMOR_LOG?.toLowerCase();
 		const level: Level =
 			envLevel === "debug" || envLevel === "trace"
@@ -97,6 +114,7 @@ class Logger {
 					: "info";
 		this.minLevel = LEVELS[level];
 		this.devStderr = level === "debug";
+		this.sdkFullEvents = process.env.HELMOR_LOG_SDK_EVENTS === "1";
 
 		// Skip file writes under `bun test`. This singleton is created on first
 		// import, before any test-level env override can fire, so agent-spawned
@@ -105,12 +123,12 @@ class Logger {
 		const isTest =
 			process.env.NODE_ENV === "test" || process.env.BUN_TEST === "1";
 		const logDir = process.env.HELMOR_LOG_DIR;
-		if (logDir && !isTest) {
+		if (logDir && (!isTest || options.enableFileInTest)) {
 			mkdirSync(logDir, { recursive: true });
 			this.primaryPath = `${logDir}/sidecar.jsonl`;
 			this.backupPath = `${logDir}/sidecar.jsonl.1`;
 			this.bytes = fileSize(this.primaryPath);
-			this.file = createWriteStream(this.primaryPath, { flags: "a" });
+			this.fd = openSync(this.primaryPath, "a");
 		}
 	}
 
@@ -124,23 +142,22 @@ class Logger {
 		this.emit("error", msg, data);
 	}
 
-	/** Log a raw SDK event. Full payload → JSONL; compact summary → stderr. */
+	/** Log SDK event summaries by default; full payloads require HELMOR_LOG_SDK_EVENTS=1. */
 	sdkEvent(requestId: string, event: unknown): void {
 		if (LEVELS.debug < this.minLevel) return;
 
 		const ts = localTs();
-		const evt =
-			typeof event === "object" && event !== null
-				? (event as Record<string, unknown>)
-				: {};
-		const type = String(evt.type ?? "unknown");
+		const summary = summarizeSdkEvent(event);
+		const payload = this.sdkFullEvents
+			? { ...summary, event }
+			: { ...summary, eventSummary: summary };
 
-		const line = `${JSON.stringify({ ts, level: "debug", source: "sidecar", msg: "sdk_event", requestId, type, event })}\n`;
+		const line = `${JSON.stringify({ ts, level: "debug", source: "sidecar", msg: "sdk_event", requestId, ...payload })}\n`;
 		this.writeLine(line);
 
 		if (this.devStderr) {
 			const { label, color } = LEVEL_FMT.debug;
-			const json = JSON.stringify(event);
+			const json = JSON.stringify(this.sdkFullEvents ? event : summary);
 			process.stderr.write(
 				`${DIM}${localTs()}${RESET} ${color}${label}${RESET} ${DIM}sidecar:${RESET} [${requestId}] ← sdk ${json}\n`,
 			);
@@ -174,29 +191,78 @@ class Logger {
 	}
 
 	private writeLine(line: string): void {
-		if (!this.file || !this.primaryPath || !this.backupPath) return;
+		if (this.fd === undefined || !this.primaryPath || !this.backupPath) return;
 		const len = Buffer.byteLength(line);
-		if (this.bytes + len > MAX_BYTES) {
+		if (this.bytes + len > this.maxBytes) {
 			this.rotate();
 		}
-		this.file.write(line);
-		this.bytes += len;
+		if (this.fd === undefined) return;
+		try {
+			writeSync(this.fd, line);
+			this.bytes += len;
+		} catch {
+			this.close();
+		}
 	}
 
 	private rotate(): void {
-		if (!this.file || !this.primaryPath || !this.backupPath) return;
-		// Close async; already-buffered writes flush to the old fd (which, after
-		// rename, points to the backup file) — that's the desired behaviour.
-		this.file.end();
+		if (this.fd === undefined || !this.primaryPath || !this.backupPath) return;
+		this.close();
 		try {
 			if (existsSync(this.backupPath)) unlinkSync(this.backupPath);
-			renameSync(this.primaryPath, this.backupPath);
+			if (existsSync(this.primaryPath)) {
+				renameSync(this.primaryPath, this.backupPath);
+			}
 		} catch {
 			// Best-effort: keep appending to whatever primary currently is.
 		}
-		this.file = createWriteStream(this.primaryPath, { flags: "a" });
-		this.bytes = fileSize(this.primaryPath);
+		try {
+			this.fd = openSync(this.primaryPath, "a");
+			this.bytes = fileSize(this.primaryPath);
+		} catch {
+			this.fd = undefined;
+			this.bytes = 0;
+		}
 	}
+
+	close(): void {
+		if (this.fd === undefined) return;
+		try {
+			closeSync(this.fd);
+		} catch {
+			// Ignore close failures; logging must never bring down the sidecar.
+		} finally {
+			this.fd = undefined;
+		}
+	}
+}
+
+function summarizeSdkEvent(event: unknown): SdkEventSummary {
+	if (!event || typeof event !== "object") {
+		return { type: "unknown" };
+	}
+
+	const evt = event as Record<string, unknown>;
+	const params =
+		evt.params && typeof evt.params === "object"
+			? (evt.params as Record<string, unknown>)
+			: undefined;
+	const item =
+		params?.item && typeof params.item === "object"
+			? (params.item as Record<string, unknown>)
+			: undefined;
+	const keyCount = Object.keys(evt).length;
+
+	return {
+		type: String(evt.type ?? params?.type ?? evt.method ?? "unknown"),
+		method: typeof evt.method === "string" ? evt.method : undefined,
+		id:
+			typeof evt.id === "string" || typeof evt.id === "number"
+				? String(evt.id)
+				: undefined,
+		itemType: typeof item?.type === "string" ? item.type : undefined,
+		keyCount: keyCount > 0 ? keyCount : undefined,
+	};
 }
 
 function fileSize(path: string): number {
