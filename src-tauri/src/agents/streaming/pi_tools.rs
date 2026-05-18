@@ -47,6 +47,7 @@ pub(super) fn execute_pi_tool_call(
         "create_kanban_card" => handle_create_kanban_card(app, goal_workspace_id, args),
         "move_kanban_card" => handle_move_kanban_card(goal_workspace_id, args),
         "update_kanban_card" => handle_update_kanban_card(goal_workspace_id, args),
+        "list_assignee_models" => super::pi_assignee_models::handle_list_assignee_models(),
         // ── Thread management ─────────────────────────────────────────────────
         "list_threads" => handle_list_threads(args),
         "create_thread" => handle_create_thread(args),
