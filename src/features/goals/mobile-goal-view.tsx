@@ -10,7 +10,7 @@ import {
 	workspaceDetailQueryOptions,
 } from "@/lib/query-client";
 import { MobileShellContext } from "@/shell/mobile-shell";
-import MobileGoalKanban from "./mobile-goal-kanban";
+import MobileGoalFlowBoard from "./mobile-goal-flow-board";
 
 interface MobileGoalViewProps {
 	workspaceId: string;
@@ -143,7 +143,7 @@ export default function MobileGoalView({
 				prUrl={workspace?.prUrl}
 				onBack={() => navigateToTab("workspaces")}
 			/>
-			<MobileGoalKanban
+			<MobileGoalFlowBoard
 				workspaces={childWorkspaces}
 				onOpenWorkspace={(childId) => {
 					setDrilldownChildId(childId);
