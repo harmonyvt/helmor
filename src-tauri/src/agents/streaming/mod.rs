@@ -50,7 +50,7 @@ use crate::pipeline::types::{
 use super::persistence::{
     finalize_session_metadata_libsql, persist_error_message_libsql,
     persist_exit_plan_message_libsql, persist_result_and_finalize_libsql,
-    persist_stream_start_metadata_libsql, persist_turn_messages_libsql,
+    persist_stream_start_metadata_libsql, persist_turn_messages_libsql_with_app,
     persist_user_message_libsql,
 };
 use super::{AgentSendRequest, AgentStreamEvent, CmdResult, ExchangeContext};
@@ -76,6 +76,7 @@ fn clone_exchange_context(ctx: &ExchangeContext) -> ExchangeContext {
 }
 
 fn persist_available_turns_libsql(
+    app: &AppHandle,
     pipeline_state: &crate::pipeline::MessagePipeline,
     ctx: &ExchangeContext,
     persisted_turn_count: &mut usize,
@@ -91,8 +92,10 @@ fn persist_available_turns_libsql(
         .collect();
     let model = pipeline_state.accumulator.resolved_model().to_string();
     let ctx = clone_exchange_context(ctx);
+    let app = app.clone();
     match block_on_streaming_db(crate::models::db::libsql_write_async(|conn| async move {
-        let (persisted, error) = persist_turn_messages_libsql(&conn, &ctx, &turns, &model).await;
+        let (persisted, error) =
+            persist_turn_messages_libsql_with_app(&conn, &app, &ctx, &turns, &model).await;
         Ok((persisted, error))
     })) {
         Ok((persisted, error)) => {
@@ -796,11 +799,13 @@ pub(super) fn stream_via_sidecar(
                             let assistant_text = output.assistant_text.clone();
                             let usage = output.usage.clone();
                             let result_json = output.result_json.clone();
+                            let app_for_db = app.clone();
                             match block_on_streaming_db(crate::models::db::libsql_write_async(
                                 |conn| async move {
                                     let (turns_persisted, turn_error) =
-                                        persist_turn_messages_libsql(
+                                        persist_turn_messages_libsql_with_app(
                                             &conn,
+                                            &app_for_db,
                                             &ctx_for_db,
                                             &pending_turns,
                                             &model_str,
@@ -975,11 +980,13 @@ pub(super) fn stream_via_sidecar(
                             let resolved_model_for_db = resolved_model.clone();
                             let tool_use_id_for_db = tool_use_id.clone();
                             let tool_input_for_db = tool_input.clone();
+                            let app_for_db = app.clone();
                             match block_on_streaming_db(crate::models::db::libsql_write_async(
                                 |conn| async move {
                                     let (turns_persisted, turn_error) =
-                                        persist_turn_messages_libsql(
+                                        persist_turn_messages_libsql_with_app(
                                             &conn,
+                                            &app_for_db,
                                             &ctx_for_db,
                                             &pending_turns,
                                             &resolved_model_for_db,
@@ -1092,11 +1099,13 @@ pub(super) fn stream_via_sidecar(
                             let resolved_model_for_db = resolved_model.clone();
                             let effort_for_db = effort_copy.clone();
                             let permission_mode_for_db = turn_session.ctx.permission_mode.clone();
+                            let app_for_db = app.clone();
                             match block_on_streaming_db(crate::models::db::libsql_write_async(
                                 |conn| async move {
                                     let (turns_persisted, turn_error) =
-                                        persist_turn_messages_libsql(
+                                        persist_turn_messages_libsql_with_app(
                                             &conn,
+                                            &app_for_db,
                                             &ctx_for_db,
                                             &pending_turns,
                                             &resolved_model_for_db,
@@ -1510,6 +1519,7 @@ pub(super) fn stream_via_sidecar(
 
                             if let Some(ctx) = exchange_ctx.as_ref() {
                                 if let Some(error) = persist_available_turns_libsql(
+                                    &app,
                                     pipeline_state,
                                     ctx,
                                     &mut persisted_turn_count,

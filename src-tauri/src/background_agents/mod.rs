@@ -306,21 +306,25 @@ fn spawn_next(app: AppHandle, expected_task_id: String) {
                     send_error = Some(
                         "Provider completed, but one or more Helmor DB writes failed.".to_string(),
                     );
-                    let _ = crate::goal_assignees::notify_runtime_issue_for_session(
+                    let _ = crate::goal_assignees::notify_runtime_issue_for_session_with_app(
+                        &app,
                         &session_id,
                         "persist_failed",
                         "Provider completed, but one or more Helmor DB writes failed.",
                     );
                 } else if result.agent_started {
-                    let _ = crate::goal_assignees::maybe_notify_missing_report_after_terminal(
-                        &session_id,
-                    );
+                    let _ =
+                        crate::goal_assignees::maybe_notify_missing_report_after_terminal_with_app(
+                            &app,
+                            &session_id,
+                        );
                 }
             }
             Err(error) => {
                 send_error = Some(error.to_string());
                 remember_runtime_error(&session_id, &error.to_string());
-                let _ = crate::goal_assignees::notify_runtime_issue_for_session(
+                let _ = crate::goal_assignees::notify_runtime_issue_for_session_with_app(
+                    &app,
                     &session_id,
                     "background_send_failed",
                     &format!("Background agent send failed: {error}"),

@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 #[allow(unused_imports)]
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
+use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::pipeline::{
@@ -36,6 +37,14 @@ fn block_on_goal_notification_db<T>(future: impl Future<Output = Result<T>>) -> 
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
         Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
+
+fn publish_ui_event(app: Option<&AppHandle>, event: UiMutationEvent) {
+    if let Some(app) = app {
+        crate::ui_sync::publish(app, event);
+    } else {
+        let _ = crate::ui_sync::notify_running_app(event);
     }
 }
 
@@ -75,8 +84,9 @@ pub(crate) fn maybe_deliver_assignee_report(
     ensure_delivered_report_notification(conn, &target, assignee_session_id, &marker)
 }
 
-pub(crate) async fn maybe_deliver_assignee_report_libsql(
+pub(crate) async fn maybe_deliver_assignee_report_libsql_with_app(
     conn: &libsql::Connection,
+    app: Option<&AppHandle>,
     assignee_session_id: &str,
     message_id: &str,
     role: MessageRole,
@@ -108,16 +118,22 @@ pub(crate) async fn maybe_deliver_assignee_report_libsql(
         )
     })?;
 
-    ensure_delivered_report_notification_async(conn, &target, assignee_session_id, &marker).await
+    ensure_delivered_report_notification_async(conn, app, &target, assignee_session_id, &marker)
+        .await
 }
 
-pub(crate) fn maybe_notify_missing_report_after_terminal(
+pub(crate) fn maybe_notify_missing_report_after_terminal_with_app(
+    app: &AppHandle,
     session_id: &str,
 ) -> Result<Option<String>> {
-    block_on_goal_notification_db(maybe_notify_missing_report_after_terminal_async(session_id))
+    block_on_goal_notification_db(maybe_notify_missing_report_after_terminal_async(
+        Some(app),
+        session_id,
+    ))
 }
 
 async fn maybe_notify_missing_report_after_terminal_async(
+    app: Option<&AppHandle>,
     session_id: &str,
 ) -> Result<Option<String>> {
     crate::models::db::libsql_write_async(|connection| async move {
@@ -129,6 +145,7 @@ async fn maybe_notify_missing_report_after_terminal_async(
         }
         notify_runtime_issue_on_async(
             &connection,
+            app,
             &target,
             session_id,
             "missing_milestone_report",
@@ -139,17 +156,33 @@ async fn maybe_notify_missing_report_after_terminal_async(
     .await
 }
 
+#[cfg(test)]
 pub(crate) fn notify_runtime_issue_for_session(
     session_id: &str,
     issue_kind: &str,
     issue: &str,
 ) -> Result<Option<String>> {
     block_on_goal_notification_db(notify_runtime_issue_for_session_async(
-        session_id, issue_kind, issue,
+        None, session_id, issue_kind, issue,
+    ))
+}
+
+pub(crate) fn notify_runtime_issue_for_session_with_app(
+    app: &AppHandle,
+    session_id: &str,
+    issue_kind: &str,
+    issue: &str,
+) -> Result<Option<String>> {
+    block_on_goal_notification_db(notify_runtime_issue_for_session_async(
+        Some(app),
+        session_id,
+        issue_kind,
+        issue,
     ))
 }
 
 async fn notify_runtime_issue_for_session_async(
+    app: Option<&AppHandle>,
     session_id: &str,
     issue_kind: &str,
     issue: &str,
@@ -158,7 +191,8 @@ async fn notify_runtime_issue_for_session_async(
         let Some(target) = resolve_notification_target_async(&connection, session_id).await? else {
             return Ok(None);
         };
-        notify_runtime_issue_on_async(&connection, &target, session_id, issue_kind, issue).await
+        notify_runtime_issue_on_async(&connection, app, &target, session_id, issue_kind, issue)
+            .await
     })
     .await
 }
@@ -425,6 +459,7 @@ fn ensure_delivered_report_notification(
 
 async fn ensure_delivered_report_notification_async(
     conn: &libsql::Connection,
+    app: Option<&AppHandle>,
     target: &AssigneeNotificationTarget,
     assignee_session_id: &str,
     marker: &AssigneeReportMarker,
@@ -479,6 +514,7 @@ async fn ensure_delivered_report_notification_async(
     });
     deliver_notification_message_async(
         conn,
+        app,
         &notification.id,
         &target.goal_workspace_id,
         supervisor_session_id,
@@ -487,6 +523,7 @@ async fn ensure_delivered_report_notification_async(
     .await?;
     queue_supervisor_auto_resume_async(
         conn,
+        app,
         target,
         supervisor_session_id,
         assignee_session_id,
@@ -498,6 +535,7 @@ async fn ensure_delivered_report_notification_async(
 
 async fn notify_runtime_issue_on_async(
     conn: &libsql::Connection,
+    app: Option<&AppHandle>,
     target: &AssigneeNotificationTarget,
     assignee_session_id: &str,
     issue_kind: &str,
@@ -541,6 +579,7 @@ async fn notify_runtime_issue_on_async(
     });
     deliver_notification_message_async(
         conn,
+        app,
         &notification.id,
         &target.goal_workspace_id,
         supervisor_session_id,
@@ -549,6 +588,7 @@ async fn notify_runtime_issue_on_async(
     .await?;
     queue_supervisor_auto_resume_async(
         conn,
+        app,
         target,
         supervisor_session_id,
         assignee_session_id,
@@ -602,6 +642,7 @@ fn queue_supervisor_auto_resume(
 
 async fn queue_supervisor_auto_resume_async(
     conn: &libsql::Connection,
+    app: Option<&AppHandle>,
     target: &AssigneeNotificationTarget,
     supervisor_session_id: &str,
     assignee_session_id: &str,
@@ -635,14 +676,17 @@ async fn queue_supervisor_auto_resume_async(
         format!("Failed to queue supervisor auto-resume for assignee session {assignee_session_id}")
     })?;
 
-    let _ = crate::ui_sync::notify_running_app(UiMutationEvent::PendingCliSendQueued {
-        pending_send_id,
-        workspace_id: target.goal_workspace_id.clone(),
-        session_id: supervisor_session_id.to_string(),
-        prompt,
-        model_id: target.supervisor_model.clone(),
-        permission_mode: target.supervisor_permission_mode.clone(),
-    });
+    publish_ui_event(
+        app,
+        UiMutationEvent::PendingCliSendQueued {
+            pending_send_id,
+            workspace_id: target.goal_workspace_id.clone(),
+            session_id: supervisor_session_id.to_string(),
+            prompt,
+            model_id: target.supervisor_model.clone(),
+            permission_mode: target.supervisor_permission_mode.clone(),
+        },
+    );
     Ok(())
 }
 
@@ -828,6 +872,7 @@ fn deliver_notification_message(
 
 async fn deliver_notification_message_async(
     conn: &libsql::Connection,
+    app: Option<&AppHandle>,
     notification_id: &str,
     goal_workspace_id: &str,
     supervisor_session_id: &str,
@@ -866,13 +911,19 @@ async fn deliver_notification_message_async(
         format!("Failed to mark supervisor notification {notification_id} delivered")
     })?;
 
-    let _ = crate::ui_sync::notify_running_app(UiMutationEvent::SessionMessagesChanged {
-        workspace_id: goal_workspace_id.to_string(),
-        session_id: supervisor_session_id.to_string(),
-    });
-    let _ = crate::ui_sync::notify_running_app(UiMutationEvent::WorkspaceChanged {
-        workspace_id: goal_workspace_id.to_string(),
-    });
+    publish_ui_event(
+        app,
+        UiMutationEvent::SessionMessagesChanged {
+            workspace_id: goal_workspace_id.to_string(),
+            session_id: supervisor_session_id.to_string(),
+        },
+    );
+    publish_ui_event(
+        app,
+        UiMutationEvent::WorkspaceChanged {
+            workspace_id: goal_workspace_id.to_string(),
+        },
+    );
     Ok(())
 }
 

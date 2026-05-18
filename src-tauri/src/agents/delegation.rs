@@ -17,7 +17,8 @@ use crate::ui_sync::{self, UiMutationEvent};
 
 use super::persistence::{
     finalize_session_metadata_libsql, persist_error_message_libsql,
-    persist_result_and_finalize_libsql, persist_turn_message_libsql, persist_user_message_libsql,
+    persist_result_and_finalize_libsql, persist_turn_message_libsql_with_app,
+    persist_user_message_libsql,
 };
 use super::streaming::{build_send_message_params, BuildSendMessageParamsInput};
 use super::{resolve_model, ExchangeContext};
@@ -383,7 +384,7 @@ fn run_child_turn(
                     pipeline.accumulator.append_aborted_notice();
                 }
                 pipeline.accumulator.flush_pending();
-                persist_pending_turns(&mut pipeline, &ctx, &mut persisted_turn_count)?;
+                persist_pending_turns(app, &mut pipeline, &ctx, &mut persisted_turn_count)?;
                 let output = pipeline
                     .accumulator
                     .drain_output(resolved_session_id.as_deref());
@@ -469,7 +470,7 @@ fn run_child_turn(
                     }
                     PipelineEmit::None => {}
                 }
-                persist_pending_turns(&mut pipeline, &ctx, &mut persisted_turn_count)?;
+                persist_pending_turns(app, &mut pipeline, &ctx, &mut persisted_turn_count)?;
             }
         }
     }
@@ -513,6 +514,7 @@ fn build_delegation_wire_prompt(task: &str, schema_text: &str) -> String {
 }
 
 fn persist_pending_turns(
+    app: &AppHandle,
     pipeline: &mut crate::pipeline::MessagePipeline,
     ctx: &ExchangeContext,
     persisted_turn_count: &mut usize,
@@ -521,7 +523,7 @@ fn persist_pending_turns(
     block_on_delegation_db(crate::models::db::libsql_write_async(|conn| async move {
         while *persisted_turn_count < pipeline.accumulator.turns_len() {
             let turn = pipeline.accumulator.turn_at(*persisted_turn_count).clone();
-            persist_turn_message_libsql(&conn, ctx, &turn, &model).await?;
+            persist_turn_message_libsql_with_app(&conn, app, ctx, &turn, &model).await?;
             *persisted_turn_count += 1;
         }
         Ok(())
