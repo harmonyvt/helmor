@@ -3,10 +3,14 @@ import { FitAddon as XtermFitAddon } from "@xterm/addon-fit";
 import {
 	type IDisposable,
 	type IEvent,
-	type ITheme,
 	Terminal as XtermTerminal,
 } from "@xterm/xterm";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
+import {
+	getTerminalThemeRevision,
+	resolveTerminalTheme,
+	type TerminalRenderer,
+} from "@/components/terminal-theme";
 import { useSettings } from "@/lib/settings";
 import "@xterm/xterm/css/xterm.css";
 
@@ -38,8 +42,6 @@ type TerminalOutputProps = {
 	onReady?: () => void;
 };
 
-type TerminalRenderer = "xterm" | "libghostty";
-
 type TerminalBufferLine = {
 	readonly isWrapped: boolean;
 	translateToString(trimRight?: boolean): string;
@@ -55,7 +57,7 @@ type TerminalLike = {
 		readonly active: TerminalBuffer;
 	};
 	options: {
-		theme?: ITheme;
+		theme?: ReturnType<typeof resolveTerminalTheme>;
 	};
 	open(parent: HTMLElement): void;
 	write(data: string | Uint8Array, callback?: () => void): void;
@@ -294,42 +296,27 @@ export function suspendTerminalFit(): () => void {
 	};
 }
 
-/** Read --terminal-* and --foreground CSS variables and build a terminal theme. */
-function resolveTerminalTheme(): ITheme {
-	const s = getComputedStyle(document.documentElement);
-	const v = (suffix: string) =>
-		s.getPropertyValue(`--terminal-${suffix}`).trim();
+function useTerminalThemeRevision(enabled: boolean): string {
+	const [revision, setRevision] = useState(() =>
+		enabled ? getTerminalThemeRevision() : "",
+	);
 
-	// Match the app's global scrollbar colors (foreground @ 18%/30%/40%).
-	const fg = s.getPropertyValue("--foreground").trim();
-	const mix = (pct: number) =>
-		`color-mix(in oklch, ${fg} ${pct}%, transparent)`;
+	useEffect(() => {
+		if (!enabled) {
+			setRevision("");
+			return;
+		}
+		const syncRevision = () => setRevision(getTerminalThemeRevision());
+		syncRevision();
+		const observer = new MutationObserver(syncRevision);
+		observer.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ["class", "style"],
+		});
+		return () => observer.disconnect();
+	}, [enabled]);
 
-	return {
-		background: v("background"),
-		foreground: v("foreground"),
-		cursor: v("cursor"),
-		selectionBackground: v("selection"),
-		scrollbarSliderBackground: mix(18),
-		scrollbarSliderHoverBackground: mix(30),
-		scrollbarSliderActiveBackground: mix(40),
-		black: v("black"),
-		red: v("red"),
-		green: v("green"),
-		yellow: v("yellow"),
-		blue: v("blue"),
-		magenta: v("magenta"),
-		cyan: v("cyan"),
-		white: v("white"),
-		brightBlack: v("bright-black"),
-		brightRed: v("bright-red"),
-		brightGreen: v("bright-green"),
-		brightYellow: v("bright-yellow"),
-		brightBlue: v("bright-blue"),
-		brightMagenta: v("bright-magenta"),
-		brightCyan: v("bright-cyan"),
-		brightWhite: v("bright-white"),
-	};
+	return enabled ? revision : "";
 }
 
 // Memoized so parent re-renders (e.g. inspector width drag) don't push a
@@ -350,6 +337,9 @@ function TerminalOutputImpl({
 	const renderer: TerminalRenderer = settings.libghosttyEnabled
 		? "libghostty"
 		: "xterm";
+	const terminalThemeRevision = useTerminalThemeRevision(
+		renderer === "libghostty",
+	);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const terminalRuntimeRef = useRef<TerminalLike | null>(null);
 	const fitRef = useRef<FitAddonLike | null>(null);
@@ -415,7 +405,7 @@ function TerminalOutputImpl({
 				fontSize,
 				fontFamily: "'GeistMono', 'SF Mono', Monaco, Menlo, monospace",
 				lineHeight,
-				theme: resolveTerminalTheme(),
+				theme: resolveTerminalTheme(backend.renderer),
 				cursorBlink: false,
 				cursorStyle: "bar",
 			};
@@ -443,6 +433,7 @@ function TerminalOutputImpl({
 				fit = new backend.FitAddon();
 				terminal = new backend.Terminal({
 					...options,
+					theme: resolveTerminalTheme("xterm"),
 					cursorInactiveStyle: "none",
 					macOptionIsMeta: true,
 				});
@@ -541,11 +532,16 @@ function TerminalOutputImpl({
 			const refitListener = () => runFit();
 			terminalRefitListeners.add(refitListener);
 
-			// Re-resolve CSS variables when app light/dark mode changes.
-			const themeObserver = new MutationObserver(() => {
-				terminal.options.theme = resolveTerminalTheme();
-			});
-			themeObserver.observe(document.documentElement, {
+			// Re-resolve CSS variables when app light/dark mode changes. The
+			// libghostty renderer is remounted instead because theme changes after
+			// open() do not fully update its WASM palette.
+			const themeObserver =
+				backend.renderer === "xterm"
+					? new MutationObserver(() => {
+							terminal.options.theme = resolveTerminalTheme("xterm");
+						})
+					: null;
+			themeObserver?.observe(document.documentElement, {
 				attributes: true,
 				attributeFilter: ["class"],
 			});
@@ -578,7 +574,7 @@ function TerminalOutputImpl({
 				titleSub.dispose();
 				linkProviderDisposable?.dispose();
 				linkProvider?.dispose?.();
-				themeObserver.disconnect();
+				themeObserver?.disconnect();
 				resizeObserver.disconnect();
 				terminalRefitListeners.delete(refitListener);
 				fit.dispose?.();
@@ -620,7 +616,14 @@ function TerminalOutputImpl({
 					null;
 			}
 		};
-	}, [detectLinks, fontSize, lineHeight, renderer, terminalRef]);
+	}, [
+		detectLinks,
+		fontSize,
+		lineHeight,
+		renderer,
+		terminalRef,
+		terminalThemeRevision,
+	]);
 
 	return (
 		<div
