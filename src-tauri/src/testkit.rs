@@ -34,15 +34,7 @@ impl TestEnv {
         env::set_var("HELMOR_DATA_DIR", root.display().to_string());
         crate::data_dir::ensure_directory_structure().expect("failed to create test dirs");
 
-        let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
-        crate::models::db::init_connection(&connection, true)
-            .expect("failed to apply PRAGMA init in test env");
-        crate::schema::ensure_schema(&connection).expect("failed to init test DB schema");
-        drop(connection);
-
-        // Rebuild pools against the fresh tempdir. `init_pools` is re-entrant
-        // so back-to-back tests each get their own isolated pools.
-        crate::models::db::init_pools().expect("failed to init test DB pools");
+        crate::models::db::ensure_ready().expect("failed to init test DB schema");
 
         Self { root, _lock: lock }
     }

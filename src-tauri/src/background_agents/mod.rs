@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
-use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tauri::AppHandle;
 use uuid::Uuid;
@@ -153,7 +152,10 @@ fn spawn_when_idle(app: AppHandle, session_id: String) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            if session_is_streaming(&session_id).unwrap_or(false) {
+            if session_is_streaming_async(&session_id)
+                .await
+                .unwrap_or(false)
+            {
                 continue;
             }
 
@@ -447,14 +449,22 @@ fn settle_runtime_after_send(session_id: &str) {
 }
 
 fn session_is_streaming(session_id: &str) -> Result<bool> {
-    let conn = crate::models::db::read_conn()?;
-    let status: Option<String> = conn
-        .query_row(
+    tauri::async_runtime::block_on(session_is_streaming_async(session_id))
+}
+
+async fn session_is_streaming_async(session_id: &str) -> Result<bool> {
+    let conn = crate::models::db::libsql_conn_async().await?;
+    let mut rows = conn
+        .query(
             "SELECT status FROM sessions WHERE id = ?1",
-            [session_id],
-            |row| row.get(0),
+            [session_id.to_string()],
         )
-        .optional()?;
+        .await
+        .with_context(|| format!("Failed to query session streaming status for {session_id}"))?;
+    let status: Option<String> = match rows.next().await? {
+        Some(row) => row.get(0).context("Failed to read session status")?,
+        None => None,
+    };
     Ok(status.as_deref() == Some("streaming"))
 }
 
@@ -518,12 +528,20 @@ fn publish_session_list_changed(app: &AppHandle, workspace_id: &str) {
 }
 
 fn goal_workspace_id_for_child(workspace_id: &str) -> Result<Option<String>> {
-    let conn = crate::models::db::read_conn()?;
-    Ok(conn
-        .query_row(
+    tauri::async_runtime::block_on(goal_workspace_id_for_child_async(workspace_id))
+}
+
+async fn goal_workspace_id_for_child_async(workspace_id: &str) -> Result<Option<String>> {
+    let conn = crate::models::db::libsql_conn_async().await?;
+    let mut rows = conn
+        .query(
             "SELECT goal_workspace_id FROM workspaces WHERE id = ?1",
-            [workspace_id],
-            |row| row.get(0),
+            [workspace_id.to_string()],
         )
-        .optional()?)
+        .await
+        .with_context(|| format!("Failed to query goal workspace for child {workspace_id}"))?;
+    match rows.next().await? {
+        Some(row) => row.get(0).context("Failed to read goal workspace id"),
+        None => Ok(None),
+    }
 }

@@ -64,13 +64,52 @@ pub fn normalize_browser_url(raw: Option<&str>) -> Result<String> {
 }
 
 pub fn list_workspace_browser_tabs(workspace_id: &str) -> Result<Vec<BrowserTabRecord>> {
-    let connection = db::read_conn()?;
-    list_workspace_browser_tabs_on(&connection, workspace_id)
+    tauri::async_runtime::block_on(list_workspace_browser_tabs_async(workspace_id))
 }
 
 pub fn get_browser_tab(tab_id: &str) -> Result<Option<BrowserTabRecord>> {
-    let connection = db::read_conn()?;
-    load_browser_tab_on(&connection, tab_id)
+    tauri::async_runtime::block_on(get_browser_tab_async(tab_id))
+}
+
+async fn list_workspace_browser_tabs_async(workspace_id: &str) -> Result<Vec<BrowserTabRecord>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            r#"
+        SELECT id, workspace_id, url, title, display_order, active, created_at, updated_at
+        FROM workspace_browser_tabs
+        WHERE workspace_id = ?1
+        ORDER BY display_order ASC, datetime(created_at) ASC, id ASC
+        "#,
+            [workspace_id.to_string()],
+        )
+        .await
+        .context("Failed to query workspace browser tabs")?;
+
+    let mut tabs = Vec::new();
+    while let Some(row) = rows.next().await? {
+        tabs.push(record_from_libsql_row(&row)?);
+    }
+    Ok(tabs)
+}
+
+async fn get_browser_tab_async(tab_id: &str) -> Result<Option<BrowserTabRecord>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            r#"
+            SELECT id, workspace_id, url, title, display_order, active, created_at, updated_at
+            FROM workspace_browser_tabs
+            WHERE id = ?1
+            "#,
+            [tab_id.to_string()],
+        )
+        .await
+        .context("Failed to query browser tab")?;
+    rows.next()
+        .await?
+        .map(|row| record_from_libsql_row(&row))
+        .transpose()
 }
 
 pub fn list_workspace_browser_tabs_on(
@@ -265,6 +304,30 @@ fn load_browser_tab_on(connection: &Connection, tab_id: &str) -> Result<Option<B
         )
         .optional()
         .map_err(Into::into)
+}
+
+fn record_from_libsql_row(row: &libsql::Row) -> Result<BrowserTabRecord> {
+    let active: i64 = row
+        .get(5)
+        .context("Failed to read browser tab active flag")?;
+    Ok(BrowserTabRecord {
+        id: row.get(0).context("Failed to read browser tab id")?,
+        workspace_id: row
+            .get(1)
+            .context("Failed to read browser tab workspace id")?,
+        url: row.get(2).context("Failed to read browser tab url")?,
+        title: row.get(3).context("Failed to read browser tab title")?,
+        display_order: row
+            .get(4)
+            .context("Failed to read browser tab display order")?,
+        active: active != 0,
+        created_at: row
+            .get(6)
+            .context("Failed to read browser tab created_at")?,
+        updated_at: row
+            .get(7)
+            .context("Failed to read browser tab updated_at")?,
+    })
 }
 
 #[cfg(test)]

@@ -11,12 +11,9 @@ pub async fn list_repositories() -> CmdResult<Vec<repos::RepositoryCreateOption>
 
 #[tauri::command]
 pub async fn get_add_repository_defaults() -> CmdResult<repos::AddRepositoryDefaults> {
-    run_blocking(|| {
-        Ok(repos::AddRepositoryDefaults {
-            last_clone_directory: settings::load_setting_value("last_clone_directory")?,
-        })
+    Ok(repos::AddRepositoryDefaults {
+        last_clone_directory: settings::load_setting_value_async("last_clone_directory").await?,
     })
-    .await
 }
 
 #[tauri::command]

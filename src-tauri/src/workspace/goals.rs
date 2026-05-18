@@ -1,5 +1,6 @@
 use std::{
     fs,
+    future::Future,
     path::{Path, PathBuf},
 };
 
@@ -15,6 +16,13 @@ use crate::{
     workspace_state::WorkspaceState,
     workspace_status::WorkspaceStatus,
 };
+
+fn block_on_libsql<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -562,49 +570,62 @@ fn update_initial_session_agent_settings(
     model_id: Option<&str>,
     effort_level: Option<&str>,
 ) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            r#"
-            UPDATE sessions SET
-              model = COALESCE(?2, model),
-              effort_level = COALESCE(?3, effort_level)
-            WHERE id = ?1
-            "#,
-            rusqlite::params![
-                session_id,
-                model_id.map(str::trim).filter(|value| !value.is_empty()),
-                effort_level
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty()),
-            ],
-        )
-        .context("Failed to update initial goal child session settings")?;
-    Ok(())
+    let session_id = session_id.to_string();
+    let model_id = model_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let effort_level = effort_level
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                r#"
+                UPDATE sessions SET
+                  model = COALESCE(?2, model),
+                  effort_level = COALESCE(?3, effort_level)
+                WHERE id = ?1
+                "#,
+                libsql::params![session_id, model_id, effort_level],
+            )
+            .await
+            .context("Failed to update initial goal child session settings")?;
+        Ok(())
+    }))
 }
 
 fn update_goal_pr_metadata(workspace_id: &str, title: &str, pr_url: Option<&str>) -> Result<()> {
-    let connection = db::write_conn()?;
-    let updated = connection.execute(
-        r#"
-        UPDATE workspaces
-        SET pr_title = ?2,
-            pr_url = ?3,
-            pr_sync_state = ?4,
-            status = ?5,
-            updated_at = datetime('now')
-        WHERE id = ?1
-        "#,
-        (
-            workspace_id,
-            title,
-            pr_url,
-            PrSyncState::Open,
-            WorkspaceStatus::Review,
-        ),
-    )?;
+    let workspace_id = workspace_id.to_string();
+    let title = title.to_string();
+    let pr_url = pr_url.map(str::to_string);
+    let workspace_id_for_error = workspace_id.clone();
+    let updated = block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                r#"
+                UPDATE workspaces
+                SET pr_title = ?2,
+                    pr_url = ?3,
+                    pr_sync_state = ?4,
+                    status = ?5,
+                    updated_at = datetime('now')
+                WHERE id = ?1
+                "#,
+                libsql::params![
+                    workspace_id,
+                    title,
+                    pr_url,
+                    PrSyncState::Open.as_str(),
+                    WorkspaceStatus::Review.as_str(),
+                ],
+            )
+            .await
+            .context("Failed to update goal PR metadata")
+    }))?;
     if updated != 1 {
-        bail!("Workspace not found: {workspace_id}");
+        bail!("Workspace not found: {workspace_id_for_error}");
     }
     Ok(())
 }
@@ -726,19 +747,31 @@ fn build_goal_pr_body(description: &str) -> String {
 
 fn allocate_goal_directory_name(repo_id: &str, repo_name: &str, title: &str) -> Result<String> {
     let base = format!("goal-{}", slugify(title));
-    let connection = db::read_conn()?;
+    let repo_id = repo_id.to_string();
+    let repo_name = repo_name.to_string();
     for suffix in 0..=999 {
         let candidate = if suffix == 0 {
             base.clone()
         } else {
             format!("{base}-{suffix}")
         };
-        let exists: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM workspaces WHERE repository_id = ?1 AND lower(directory_name) = lower(?2))",
-            (repo_id, &candidate),
-            |row| row.get(0),
-        )?;
-        let path_exists = crate::data_dir::workspace_dir(repo_name, &candidate)?.exists();
+        let repo_id_for_query = repo_id.clone();
+        let candidate_for_query = candidate.clone();
+        let exists: bool = block_on_libsql(async move {
+            let connection = db::libsql_conn_async().await?;
+            let mut rows = connection
+                .query(
+                    "SELECT EXISTS(SELECT 1 FROM workspaces WHERE repository_id = ?1 AND lower(directory_name) = lower(?2))",
+                    libsql::params![repo_id_for_query, candidate_for_query],
+                )
+                .await?;
+            let Some(row) = rows.next().await? else {
+                return Ok(false);
+            };
+            let exists: i64 = row.get(0)?;
+            Ok(exists != 0)
+        })?;
+        let path_exists = crate::data_dir::workspace_dir(&repo_name, &candidate)?.exists();
         if !exists && !path_exists {
             return Ok(candidate);
         }

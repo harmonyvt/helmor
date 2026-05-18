@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -8,8 +10,10 @@ mod report;
 mod resolver;
 mod storage;
 
+#[cfg(test)]
+pub(crate) use notifications::maybe_deliver_assignee_report;
 pub(crate) use notifications::{
-    maybe_deliver_assignee_report, maybe_notify_missing_report_after_terminal,
+    maybe_deliver_assignee_report_libsql, maybe_notify_missing_report_after_terminal,
     notify_runtime_issue_for_session,
 };
 use prompt::format_supervisor_update;
@@ -20,6 +24,23 @@ use resolver::{resolve_assignee, resolve_thread_assignee};
 use storage::queue_assignee_prompt;
 
 use crate::{pipeline, service, sessions, ui_sync::UiMutationEvent};
+
+fn block_on_goal_assignee_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
+
+async fn run_goal_assignee_blocking<F, T>(f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|error| anyhow::anyhow!("goal assignee blocking task failed: {error}"))?
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -247,6 +268,12 @@ pub(crate) fn prepare_assignee_message(
     })
 }
 
+pub(crate) async fn prepare_assignee_message_async(
+    request: SendAssigneeMessageRequest,
+) -> Result<PreparedAssigneeMessage> {
+    run_goal_assignee_blocking(move || prepare_assignee_message(request)).await
+}
+
 pub(crate) fn prepare_thread_message(
     request: SendThreadMessageRequest,
 ) -> Result<PreparedAssigneeMessage> {
@@ -290,6 +317,12 @@ pub(crate) fn prepare_thread_message(
     })
 }
 
+pub(crate) async fn prepare_thread_message_async(
+    request: SendThreadMessageRequest,
+) -> Result<PreparedAssigneeMessage> {
+    run_goal_assignee_blocking(move || prepare_thread_message(request)).await
+}
+
 fn resolve_assignee_for_send(
     request: &SendAssigneeMessageRequest,
 ) -> Result<resolver::ResolvedAssignee> {
@@ -302,14 +335,25 @@ fn resolve_assignee_for_send(
 }
 
 pub fn read_assignee_thread(request: ReadAssigneeThreadRequest) -> Result<AssigneeThreadResult> {
-    let assignee = match request.thread_id.as_deref() {
+    block_on_goal_assignee_db(read_assignee_thread_async(request))
+}
+
+pub async fn read_assignee_thread_async(
+    request: ReadAssigneeThreadRequest,
+) -> Result<AssigneeThreadResult> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
+    let card_id = request.card_id.clone();
+    let thread_id = request.thread_id.clone();
+    let assignee = run_goal_assignee_blocking(move || match thread_id.as_deref() {
         Some(thread_id) if !thread_id.trim().is_empty() => {
-            resolve_thread_assignee(&request.goal_workspace_id, &request.card_id, thread_id)?
+            resolve_thread_assignee(&goal_workspace_id, &card_id, thread_id)
         }
-        _ => resolve_assignee(&request.goal_workspace_id, &request.card_id)?,
-    };
+        _ => resolve_assignee(&goal_workspace_id, &card_id),
+    })
+    .await?;
     let messages =
-        load_assignee_messages(&assignee.session.id, request.since_message_id.as_deref())?;
+        load_assignee_messages_async(&assignee.session.id, request.since_message_id.as_deref())
+            .await?;
     let latest_report = latest_report_marker(&messages);
     Ok(AssigneeThreadResult {
         card_id: assignee.card_id,
@@ -323,21 +367,26 @@ pub fn read_assignee_thread(request: ReadAssigneeThreadRequest) -> Result<Assign
 pub fn get_thread_runtime_status(
     request: ThreadRuntimeStatusRequest,
 ) -> Result<ThreadRuntimeStatus> {
-    let assignee = resolve_thread_assignee(
-        &request.goal_workspace_id,
-        &request.workspace_id,
-        &request.thread_id,
-    )?;
+    block_on_goal_assignee_db(get_thread_runtime_status_async(request))
+}
+
+pub async fn get_thread_runtime_status_async(
+    request: ThreadRuntimeStatusRequest,
+) -> Result<ThreadRuntimeStatus> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
+    let workspace_id = request.workspace_id.clone();
+    let thread_id = request.thread_id.clone();
+    let assignee = run_goal_assignee_blocking(move || {
+        resolve_thread_assignee(&goal_workspace_id, &workspace_id, &thread_id)
+    })
+    .await?;
     let runtime = crate::background_agents::get_runtime_status(&assignee.session.id);
-    let conn = crate::models::db::read_conn()?;
-    let last_persisted_message_at: Option<String> = conn
-        .query_row(
-            "SELECT MAX(created_at) FROM session_messages WHERE session_id = ?1",
-            rusqlite::params![assignee.session.id],
-            |row| row.get(0),
-        )
+    let last_persisted_message_at = last_persisted_message_at_async(&assignee.session.id)
+        .await
         .unwrap_or(None);
-    let persisted_message_count = persisted_message_count(&conn, &assignee.session.id);
+    let persisted_message_count = persisted_message_count_async(&assignee.session.id)
+        .await
+        .unwrap_or(0);
     let stalled_seconds = streaming_stall_seconds(
         &assignee.session,
         runtime.last_sidecar_event_at.as_deref(),
@@ -377,12 +426,27 @@ pub fn get_thread_runtime_status(
 pub fn set_card_assignee_thread(
     request: SetCardAssigneeThreadRequest,
 ) -> Result<SetCardAssigneeThreadResult> {
-    let new_assignee = resolve_thread_assignee(
-        &request.goal_workspace_id,
-        &request.card_id,
-        &request.thread_id,
-    )?;
-    let previous_assignee = resolve_assignee(&request.goal_workspace_id, &request.card_id).ok();
+    block_on_goal_assignee_db(set_card_assignee_thread_async(request))
+}
+
+pub async fn set_card_assignee_thread_async(
+    request: SetCardAssigneeThreadRequest,
+) -> Result<SetCardAssigneeThreadResult> {
+    let request_for_resolve = request.clone();
+    let (new_assignee, previous_assignee) = run_goal_assignee_blocking(move || {
+        let new_assignee = resolve_thread_assignee(
+            &request_for_resolve.goal_workspace_id,
+            &request_for_resolve.card_id,
+            &request_for_resolve.thread_id,
+        )?;
+        let previous_assignee = resolve_assignee(
+            &request_for_resolve.goal_workspace_id,
+            &request_for_resolve.card_id,
+        )
+        .ok();
+        Ok((new_assignee, previous_assignee))
+    })
+    .await?;
     let superseded_thread_id = request
         .supersedes_thread_id
         .clone()
@@ -393,36 +457,44 @@ pub fn set_card_assignee_thread(
         })
         .filter(|thread_id| thread_id != &new_assignee.session.id);
 
-    let conn = crate::models::db::write_conn()?;
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "UPDATE workspaces SET active_session_id = ?2 WHERE id = ?1",
-        rusqlite::params![new_assignee.workspace_id, new_assignee.session.id],
-    )
-    .with_context(|| {
-        format!(
-            "Failed to set active assignee thread for workspace {}",
-            new_assignee.workspace_id
-        )
-    })?;
-    tx.execute(
-        "UPDATE sessions SET thread_role = 'assignee', thread_status = 'active', stale_reason = NULL WHERE id = ?1",
-        rusqlite::params![new_assignee.session.id],
-    )
-    .with_context(|| format!("Failed to mark thread {} active", new_assignee.session.id))?;
-    if let Some(thread_id) = superseded_thread_id.as_deref() {
+    let workspace_id = new_assignee.workspace_id.clone();
+    let session_id = new_assignee.session.id.clone();
+    let superseded_thread_id_for_write = superseded_thread_id.clone();
+    let reason = request.reason.clone();
+    crate::models::db::libsql_write_async(|connection| async move {
+        let tx = connection.transaction().await?;
         tx.execute(
-            "UPDATE sessions SET thread_status = 'superseded', stale_reason = ?2 WHERE id = ?1",
-            rusqlite::params![thread_id, request.reason],
+            "UPDATE workspaces SET active_session_id = ?2 WHERE id = ?1",
+            libsql::params![workspace_id.clone(), session_id.clone()],
         )
-        .with_context(|| format!("Failed to mark thread {thread_id} superseded"))?;
+        .await
+        .with_context(|| {
+            format!("Failed to set active assignee thread for workspace {workspace_id}")
+        })?;
         tx.execute(
-            "UPDATE sessions SET supersedes_thread_id = ?2 WHERE id = ?1",
-            rusqlite::params![new_assignee.session.id, thread_id],
+            "UPDATE sessions SET thread_role = 'assignee', thread_status = 'active', stale_reason = NULL WHERE id = ?1",
+            libsql::params![session_id.clone()],
         )
-        .with_context(|| format!("Failed to link superseded thread {thread_id}"))?;
-    }
-    tx.commit()?;
+        .await
+        .with_context(|| format!("Failed to mark thread {session_id} active"))?;
+        if let Some(thread_id) = superseded_thread_id_for_write.as_deref() {
+            tx.execute(
+                "UPDATE sessions SET thread_status = 'superseded', stale_reason = ?2 WHERE id = ?1",
+                libsql::params![thread_id, reason],
+            )
+            .await
+            .with_context(|| format!("Failed to mark thread {thread_id} superseded"))?;
+            tx.execute(
+                "UPDATE sessions SET supersedes_thread_id = ?2 WHERE id = ?1",
+                libsql::params![session_id.clone(), thread_id],
+            )
+            .await
+            .with_context(|| format!("Failed to link superseded thread {thread_id}"))?;
+        }
+        tx.commit().await?;
+        Ok(())
+    })
+    .await?;
 
     Ok(SetCardAssigneeThreadResult {
         card_id: new_assignee.card_id,
@@ -436,14 +508,24 @@ pub fn set_card_assignee_thread(
 pub fn summarize_assignee_status(
     request: SummarizeAssigneeStatusRequest,
 ) -> Result<AssigneeStatusSummary> {
-    let assignee = resolve_assignee(&request.goal_workspace_id, &request.card_id)?;
-    let sessions = sessions::list_workspace_sessions(&assignee.workspace_id)?;
-    let messages = load_assignee_messages(&assignee.session.id, None)?;
+    block_on_goal_assignee_db(summarize_assignee_status_async(request))
+}
+
+pub async fn summarize_assignee_status_async(
+    request: SummarizeAssigneeStatusRequest,
+) -> Result<AssigneeStatusSummary> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
+    let card_id = request.card_id.clone();
+    let assignee =
+        run_goal_assignee_blocking(move || resolve_assignee(&goal_workspace_id, &card_id)).await?;
+    let sessions = sessions::list_workspace_sessions_async(&assignee.workspace_id).await?;
+    let messages = load_assignee_messages_async(&assignee.session.id, None).await?;
     let latest_report = latest_report_marker(&messages);
-    let stale_threads = detect_stale_threads(&sessions, &assignee.session.id)?;
+    let stale_threads = detect_stale_threads_async(&sessions, &assignee.session.id).await?;
     let runtime = crate::background_agents::get_runtime_status(&assignee.session.id);
-    let conn = crate::models::db::read_conn()?;
-    let persisted_message_count = persisted_message_count(&conn, &assignee.session.id);
+    let persisted_message_count = persisted_message_count_async(&assignee.session.id)
+        .await
+        .unwrap_or(0);
     let persistence_state = classify_persistence_state(
         &assignee.session.status,
         &runtime.process_state,
@@ -507,7 +589,15 @@ pub fn summarize_assignee_status(
 }
 
 pub fn list_assignees(request: ListAssigneesRequest) -> Result<Vec<AssigneeSummary>> {
-    let workspaces = crate::workspaces::list_goal_child_workspaces(&request.goal_workspace_id)?;
+    block_on_goal_assignee_db(list_assignees_async(request))
+}
+
+pub async fn list_assignees_async(request: ListAssigneesRequest) -> Result<Vec<AssigneeSummary>> {
+    let goal_workspace_id = request.goal_workspace_id.clone();
+    let workspaces = run_goal_assignee_blocking(move || {
+        crate::workspaces::list_goal_child_workspaces(&goal_workspace_id)
+    })
+    .await?;
     let status_filter = request
         .status
         .as_deref()
@@ -517,15 +607,22 @@ pub fn list_assignees(request: ListAssigneesRequest) -> Result<Vec<AssigneeSumma
     let mut out = Vec::new();
 
     for workspace in workspaces {
-        let Ok(assignee) = resolve_assignee(&request.goal_workspace_id, &workspace.id) else {
+        let goal_workspace_id = request.goal_workspace_id.clone();
+        let card_id = workspace.id.clone();
+        let Ok(assignee) =
+            run_goal_assignee_blocking(move || resolve_assignee(&goal_workspace_id, &card_id))
+                .await
+        else {
             continue;
         };
-        let messages = load_assignee_messages(&assignee.session.id, None).with_context(|| {
-            format!(
-                "Failed to load assignee messages for session {}",
-                assignee.session.id
-            )
-        })?;
+        let messages = load_assignee_messages_async(&assignee.session.id, None)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to load assignee messages for session {}",
+                    assignee.session.id
+                )
+            })?;
         let latest_report = latest_report_marker(&messages);
         let effective_status = latest_report
             .as_ref()
@@ -553,11 +650,11 @@ pub fn list_assignees(request: ListAssigneesRequest) -> Result<Vec<AssigneeSumma
     Ok(out)
 }
 
-fn load_assignee_messages(
+async fn load_assignee_messages_async(
     session_id: &str,
     since_message_id: Option<&str>,
 ) -> Result<Vec<pipeline::types::ThreadMessageLike>> {
-    let historical = sessions::list_session_historical_records(session_id)?;
+    let historical = sessions::list_session_historical_records_async(session_id).await?;
     let mut messages = pipeline::MessagePipeline::convert_historical(&historical);
     if let Some(since_message_id) = since_message_id {
         if let Some(index) = messages
@@ -589,13 +686,34 @@ fn streaming_stall_seconds(
     Some((chrono::Utc::now() - started_at).num_seconds().max(0))
 }
 
-fn persisted_message_count(conn: &rusqlite::Connection, session_id: &str) -> i64 {
-    conn.query_row(
-        "SELECT COUNT(*) FROM session_messages WHERE session_id = ?1",
-        rusqlite::params![session_id],
-        |row| row.get(0),
-    )
-    .unwrap_or(0)
+async fn persisted_message_count_async(session_id: &str) -> Result<i64> {
+    let connection = crate::models::db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT COUNT(*) FROM session_messages WHERE session_id = ?1",
+            [session_id.to_string()],
+        )
+        .await?;
+    let Some(row) = rows.next().await? else {
+        return Ok(0);
+    };
+    row.get(0).context("Failed to read persisted message count")
+}
+
+async fn last_persisted_message_at_async(session_id: &str) -> Result<Option<String>> {
+    let connection = crate::models::db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT MAX(created_at) FROM session_messages WHERE session_id = ?1",
+            [session_id.to_string()],
+        )
+        .await?;
+    match rows.next().await? {
+        Some(row) => row
+            .get(0)
+            .context("Failed to read latest persisted message timestamp"),
+        None => Ok(None),
+    }
 }
 
 fn provider_session_path(provider_session_id: Option<&str>) -> Option<String> {
@@ -634,13 +752,13 @@ fn classify_persistence_state(
     "synced".to_string()
 }
 
-fn detect_stale_threads(
+async fn detect_stale_threads_async(
     sessions: &[sessions::WorkspaceSessionSummary],
     active_thread_id: &str,
 ) -> Result<Vec<StaleThreadSummary>> {
     let mut stale_threads = Vec::new();
     for session in sessions {
-        let messages = load_assignee_messages(&session.id, None)?;
+        let messages = load_assignee_messages_async(&session.id, None).await?;
         let explicit_reason = match session.thread_status.as_deref() {
             Some("stale" | "superseded" | "blocked") => session
                 .stale_reason

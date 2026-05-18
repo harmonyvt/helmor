@@ -1,4 +1,8 @@
-//! DB connection pools + unified API.
+//! DB connection management + unified API.
+//!
+//! libSQL is the canonical local database opener for startup/schema readiness.
+//! The rusqlite pools remain as a compatibility layer while call sites migrate
+//! from raw synchronous rusqlite handles to the libSQL facade in slices.
 //!
 //! Two pools match SQLite's concurrency model:
 //!   - read pool  (size = 8) — WAL readers run fully concurrently
@@ -9,11 +13,13 @@
 //! through [`read_conn`] / [`write_conn`] or the closure helpers
 //! [`read`] / [`write_transaction`].
 use std::collections::HashMap;
+use std::future::Future;
 use std::panic::Location;
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
@@ -51,9 +57,15 @@ pub fn remove_workspace_lock(workspace_id: &str) {
 // ── Pools ────────────────────────────────────────────────────────────────
 
 struct PoolBundle {
-    path: std::path::PathBuf,
+    path: PathBuf,
     read: Pool<SqliteConnectionManager>,
     write: Pool<SqliteConnectionManager>,
+}
+
+struct LibsqlBundle {
+    path: PathBuf,
+    database: Arc<libsql::Database>,
+    write_lock: Arc<Mutex<()>>,
 }
 
 /// RwLock-wrapped so tests can transparently rebuild the pools when they
@@ -61,6 +73,11 @@ struct PoolBundle {
 /// lock sees a single writer forever.
 fn pool_slot() -> &'static RwLock<Option<PoolBundle>> {
     static P: OnceLock<RwLock<Option<PoolBundle>>> = OnceLock::new();
+    P.get_or_init(|| RwLock::new(None))
+}
+
+fn libsql_slot() -> &'static RwLock<Option<LibsqlBundle>> {
+    static P: OnceLock<RwLock<Option<LibsqlBundle>>> = OnceLock::new();
     P.get_or_init(|| RwLock::new(None))
 }
 
@@ -118,6 +135,243 @@ fn build_bundle(path: std::path::PathBuf) -> Result<PoolBundle> {
         .map_err(|e| anyhow!("Failed to build read pool: {e}"))?;
 
     Ok(PoolBundle { path, read, write })
+}
+
+fn build_libsql_bundle(path: PathBuf) -> Result<LibsqlBundle> {
+    // During the compatibility phase Helmor loads both rusqlite and libSQL in
+    // one process. rusqlite may initialize SQLite first, which makes libSQL's
+    // global threading-mode assertion panic even though our app-level read/write
+    // discipline is still explicit. Remove this once rusqlite is gone.
+    let database = tauri::async_runtime::block_on(unsafe {
+        libsql::Builder::new_local(&path)
+            .skip_safety_assert(true)
+            .build()
+    })
+    .with_context(|| format!("Failed to build libSQL database at {}", path.display()))?;
+    Ok(LibsqlBundle {
+        path,
+        database: Arc::new(database),
+        write_lock: Arc::new(Mutex::const_new(())),
+    })
+}
+
+async fn build_libsql_bundle_async(path: PathBuf) -> Result<LibsqlBundle> {
+    // During the compatibility phase Helmor loads both rusqlite and libSQL in
+    // one process. rusqlite may initialize SQLite first, which makes libSQL's
+    // global threading-mode assertion panic even though our app-level read/write
+    // discipline is still explicit. Remove this once rusqlite is gone.
+    let database = unsafe {
+        libsql::Builder::new_local(&path)
+            .skip_safety_assert(true)
+            .build()
+            .await
+    }
+    .with_context(|| format!("Failed to build libSQL database at {}", path.display()))?;
+    Ok(LibsqlBundle {
+        path,
+        database: Arc::new(database),
+        write_lock: Arc::new(Mutex::const_new(())),
+    })
+}
+
+/// Unified per-libSQL-connection initialization. This mirrors
+/// [`init_connection`] for the new local DB facade.
+async fn init_libsql_connection_async(conn: &libsql::Connection, writable: bool) -> Result<()> {
+    let mut sql = String::from(
+        r#"
+        PRAGMA temp_store = MEMORY;
+        PRAGMA cache_size = -20000;
+        PRAGMA mmap_size = 268435456;
+        "#,
+    );
+    if writable {
+        sql.push_str(
+            r#"
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA busy_timeout = 3000;
+            "#,
+        );
+    }
+    conn.execute_batch(&sql)
+        .await
+        .map(|_| ())
+        .context("Failed to apply libSQL connection PRAGMAs")
+}
+
+pub fn init_libsql_connection(conn: &libsql::Connection, writable: bool) -> Result<()> {
+    tauri::async_runtime::block_on(init_libsql_connection_async(conn, writable))
+}
+
+fn with_libsql_bundle<T>(f: impl FnOnce(&LibsqlBundle) -> Result<T>) -> Result<T> {
+    #[cfg(not(test))]
+    {
+        let guard = libsql_slot()
+            .read()
+            .map_err(|_| anyhow!("libSQL bundle lock poisoned"))?;
+        if let Some(bundle) = guard.as_ref() {
+            return f(bundle);
+        }
+    }
+
+    let current_path = crate::data_dir::db_path()?;
+
+    {
+        let guard = libsql_slot()
+            .read()
+            .map_err(|_| anyhow!("libSQL bundle lock poisoned"))?;
+        if let Some(bundle) = guard.as_ref() {
+            if bundle.path == current_path {
+                return f(bundle);
+            }
+        }
+    }
+
+    let mut guard = libsql_slot()
+        .write()
+        .map_err(|_| anyhow!("libSQL bundle lock poisoned"))?;
+    if guard
+        .as_ref()
+        .map(|b| b.path != current_path)
+        .unwrap_or(true)
+    {
+        tracing::debug!(
+            path = %current_path.display(),
+            "db: rebuilding libSQL bundle (first access or HELMOR_DATA_DIR changed)"
+        );
+        *guard = Some(build_libsql_bundle(current_path)?);
+    }
+    f(guard.as_ref().expect("libSQL bundle just initialised"))
+}
+
+/// Initialise the local libSQL database handle against the current
+/// `HELMOR_DATA_DIR`.
+pub fn init_libsql() -> Result<()> {
+    let path = crate::data_dir::db_path()?;
+    tracing::info!(path = %path.display(), "db: initialising libSQL local database");
+    let bundle = build_libsql_bundle(path)?;
+    *libsql_slot()
+        .write()
+        .map_err(|_| anyhow!("libSQL bundle lock poisoned"))? = Some(bundle);
+    Ok(())
+}
+
+/// Async variant of [`init_libsql`] for code already running on Tokio.
+pub async fn init_libsql_async() -> Result<()> {
+    let path = crate::data_dir::db_path()?;
+    tracing::info!(path = %path.display(), "db: initialising libSQL local database");
+    let bundle = build_libsql_bundle_async(path).await?;
+    *libsql_slot()
+        .write()
+        .map_err(|_| anyhow!("libSQL bundle lock poisoned"))? = Some(bundle);
+    Ok(())
+}
+
+async fn ensure_libsql_bundle_async() -> Result<()> {
+    let current_path = crate::data_dir::db_path()?;
+
+    {
+        let guard = libsql_slot()
+            .read()
+            .map_err(|_| anyhow!("libSQL bundle lock poisoned"))?;
+        if let Some(bundle) = guard.as_ref() {
+            if bundle.path == current_path {
+                return Ok(());
+            }
+        }
+    }
+
+    tracing::debug!(
+        path = %current_path.display(),
+        "db: rebuilding libSQL bundle asynchronously (first access or HELMOR_DATA_DIR changed)"
+    );
+    let bundle = build_libsql_bundle_async(current_path.clone()).await?;
+    let mut guard = libsql_slot()
+        .write()
+        .map_err(|_| anyhow!("libSQL bundle lock poisoned"))?;
+    if guard
+        .as_ref()
+        .map(|b| b.path != current_path)
+        .unwrap_or(true)
+    {
+        *guard = Some(bundle);
+    }
+    Ok(())
+}
+
+async fn libsql_async_parts() -> Result<(Arc<libsql::Database>, Arc<Mutex<()>>)> {
+    ensure_libsql_bundle_async().await?;
+    with_libsql_bundle(|bundle| Ok((Arc::clone(&bundle.database), Arc::clone(&bundle.write_lock))))
+}
+
+/// Open a libSQL connection against the current local database.
+pub fn libsql_conn() -> Result<libsql::Connection> {
+    with_libsql_bundle(|bundle| {
+        let conn = bundle
+            .database
+            .connect()
+            .context("Failed to connect to local libSQL database")?;
+        init_libsql_connection(&conn, true)?;
+        Ok(conn)
+    })
+}
+
+/// Open a libSQL connection from async code without nesting a Tokio runtime.
+pub async fn libsql_conn_async() -> Result<libsql::Connection> {
+    let (database, _) = libsql_async_parts().await?;
+    let conn = database
+        .connect()
+        .context("Failed to connect to local libSQL database")?;
+    init_libsql_connection_async(&conn, true).await?;
+    Ok(conn)
+}
+
+/// Run a closure with a libSQL connection under the single-writer lock.
+///
+/// This is the target write path for migrated call sites. The legacy
+/// `write_conn` compatibility API below keeps using the rusqlite pool until
+/// its callers are converted.
+#[allow(dead_code)]
+pub async fn libsql_write<F, T>(f: F) -> Result<T>
+where
+    F: FnOnce(&libsql::Connection) -> Result<T>,
+{
+    let (database, write_lock) = with_libsql_bundle(|bundle| {
+        Ok((Arc::clone(&bundle.database), Arc::clone(&bundle.write_lock)))
+    })?;
+    let _guard = write_lock.lock().await;
+    let conn = database
+        .connect()
+        .context("Failed to connect to local libSQL database")?;
+    init_libsql_connection_async(&conn, true).await?;
+    f(&conn)
+}
+
+/// Run an async closure with a libSQL connection under the single-writer lock.
+#[allow(dead_code)]
+pub async fn libsql_write_async<F, Fut, T>(f: F) -> Result<T>
+where
+    F: FnOnce(libsql::Connection) -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let (database, write_lock) = libsql_async_parts().await?;
+    let _guard = write_lock.lock().await;
+    let conn = database
+        .connect()
+        .context("Failed to connect to local libSQL database")?;
+    init_libsql_connection_async(&conn, true).await?;
+    f(conn).await
+}
+
+/// Ensure the local database file, libSQL handle, schema, and compatibility
+/// rusqlite pools are ready.
+pub fn ensure_ready() -> Result<()> {
+    crate::data_dir::ensure_directory_structure()?;
+    init_libsql()?;
+    let conn = libsql_conn()?;
+    crate::schema::ensure_schema_libsql(&conn)?;
+    init_pools()?;
+    Ok(())
 }
 
 /// Initialise both pools against the current `HELMOR_DATA_DIR`. Called once
@@ -389,5 +643,35 @@ mod tests {
             msg.contains("read-only") || msg.contains("readonly"),
             "expected read-only rejection, got: {msg}",
         );
+    }
+
+    #[test]
+    fn libsql_readiness_creates_schema_for_compatibility_pool() {
+        let _env = test_env();
+        ensure_ready().unwrap();
+
+        let conn = libsql_conn().unwrap();
+        let has_sessions: i64 = tauri::async_runtime::block_on(async {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            row.get(0).unwrap()
+        });
+        assert_eq!(has_sessions, 1);
+
+        let compat_count: i64 = read_conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(compat_count, 1);
     }
 }

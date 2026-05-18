@@ -1,22 +1,35 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::agents::{DelegateAgentRequest, DelegateAgentResponse};
 use crate::error::CommandError;
 use crate::models::delegations::DelegationRecord;
 
+use super::common::{run_blocking, CmdResult};
+
 #[tauri::command]
 pub async fn delegate_agent(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    _sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     request: DelegateAgentRequest,
 ) -> Result<DelegateAgentResponse, CommandError> {
-    crate::agents::delegation::delegate_agent_blocking(app, sidecar.inner(), request, None)
-        .map_err(Into::into)
+    let app_for_blocking = app.clone();
+    run_blocking(move || {
+        let sidecar = app_for_blocking.state::<crate::sidecar::ManagedSidecar>();
+        crate::agents::delegation::delegate_agent_blocking(
+            app_for_blocking.clone(),
+            sidecar.inner(),
+            request,
+            None,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn list_session_delegations(
     parent_session_id: String,
-) -> Result<Vec<DelegationRecord>, CommandError> {
-    crate::models::delegations::get_delegations_for_parent(&parent_session_id).map_err(Into::into)
+) -> CmdResult<Vec<DelegationRecord>> {
+    crate::models::delegations::get_delegations_for_parent_async(&parent_session_id)
+        .await
+        .map_err(Into::into)
 }

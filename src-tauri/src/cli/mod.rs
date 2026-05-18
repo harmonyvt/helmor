@@ -114,10 +114,5 @@ fn dispatch(cli: &Cli) -> Result<()> {
 /// commands — a typo in one dispatcher arm shouldn't leave the DB
 /// half-initialised, so this runs unconditionally.
 fn ensure_ready() -> Result<()> {
-    crate::data_dir::ensure_directory_structure()?;
-    let db_path = crate::data_dir::db_path()?;
-    let conn = rusqlite::Connection::open(&db_path)
-        .with_context(|| format!("Failed to open database at {db_path:?}"))?;
-    crate::schema_init(&conn);
-    Ok(())
+    crate::db::ensure_ready().context("Failed to initialize Helmor database")
 }

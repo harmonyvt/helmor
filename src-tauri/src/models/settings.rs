@@ -1,7 +1,16 @@
+use std::{collections::HashMap, future::Future};
+
 use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::db;
+
+fn block_on_settings_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct BranchPrefixSettings {
@@ -18,16 +27,22 @@ pub struct EffectiveBranchPrefixSettings {
 }
 
 pub fn load_setting_value(key: &str) -> Result<Option<String>> {
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare("SELECT value FROM settings WHERE key = ?1")
-        .with_context(|| format!("Failed to prepare settings lookup for {key}"))?;
-    let mut rows = statement
-        .query_map([key], |row| row.get::<_, String>(0))
+    block_on_settings_db(load_setting_value_async(key))
+}
+
+pub async fn load_setting_value_async(key: &str) -> Result<Option<String>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT value FROM settings WHERE key = ?1",
+            [key.to_string()],
+        )
+        .await
         .with_context(|| format!("Failed to query settings value for {key}"))?;
 
-    match rows.next() {
-        Some(result) => result
+    match rows.next().await? {
+        Some(row) => row
+            .get(0)
             .map(Some)
             .with_context(|| format!("Failed to deserialize settings value for {key}")),
         None => Ok(None),
@@ -35,30 +50,44 @@ pub fn load_setting_value(key: &str) -> Result<Option<String>> {
 }
 
 pub fn upsert_setting_value(key: &str, value: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            r#"
-            INSERT INTO settings (key, value, created_at, updated_at)
-            VALUES (?1, ?2, datetime('now'), datetime('now'))
-            ON CONFLICT(key) DO UPDATE SET
-              value = excluded.value,
-              updated_at = datetime('now')
-            "#,
-            (key, value),
-        )
-        .with_context(|| format!("Failed to store setting {key}"))?;
+    block_on_settings_db(upsert_setting_value_async(key, value))
+}
 
-    Ok(())
+pub async fn upsert_setting_value_async(key: &str, value: &str) -> Result<()> {
+    let key = key.to_string();
+    let value = value.to_string();
+    db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                r#"
+                INSERT INTO settings (key, value, created_at, updated_at)
+                VALUES (?1, ?2, datetime('now'), datetime('now'))
+                ON CONFLICT(key) DO UPDATE SET
+                  value = excluded.value,
+                  updated_at = datetime('now')
+                "#,
+                (key.clone(), value),
+            )
+            .await
+            .with_context(|| format!("Failed to store setting {key}"))?;
+        Ok(())
+    })
+    .await
 }
 
 pub fn delete_setting_value(key: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute("DELETE FROM settings WHERE key = ?1", [key])
-        .with_context(|| format!("Failed to delete setting {key}"))?;
+    block_on_settings_db(delete_setting_value_async(key)).map(|_| ())
+}
 
-    Ok(())
+pub async fn delete_setting_value_async(key: &str) -> Result<u64> {
+    let key = key.to_string();
+    db::libsql_write_async(|connection| async move {
+        connection
+            .execute("DELETE FROM settings WHERE key = ?1", [key.clone()])
+            .await
+            .with_context(|| format!("Failed to delete setting {key}"))
+    })
+    .await
 }
 
 pub fn load_setting_json<T: DeserializeOwned>(key: &str) -> Result<Option<T>> {
@@ -72,10 +101,27 @@ pub fn load_setting_json<T: DeserializeOwned>(key: &str) -> Result<Option<T>> {
     Ok(Some(parsed))
 }
 
+pub async fn load_setting_json_async<T: DeserializeOwned>(key: &str) -> Result<Option<T>> {
+    let Some(value) = load_setting_value_async(key).await? else {
+        return Ok(None);
+    };
+
+    let parsed = serde_json::from_str::<T>(&value)
+        .with_context(|| format!("Failed to deserialize JSON setting {key}"))?;
+
+    Ok(Some(parsed))
+}
+
 pub fn upsert_setting_json<T: Serialize>(key: &str, value: &T) -> Result<()> {
     let serialized = serde_json::to_string(value)
         .with_context(|| format!("Failed to serialize JSON setting {key}"))?;
     upsert_setting_value(key, &serialized)
+}
+
+pub async fn upsert_setting_json_async<T: Serialize>(key: &str, value: &T) -> Result<()> {
+    let serialized = serde_json::to_string(value)
+        .with_context(|| format!("Failed to serialize JSON setting {key}"))?;
+    upsert_setting_value_async(key, &serialized).await
 }
 
 const AUTO_CLOSE_ACTION_KINDS_KEY: &str = "auto_close_action_kinds";
@@ -99,8 +145,18 @@ pub fn load_auto_close_action_kinds() -> Result<Vec<crate::agents::ActionKind>> 
         .map(|opt| opt.unwrap_or_default())
 }
 
+pub async fn load_auto_close_action_kinds_async() -> Result<Vec<crate::agents::ActionKind>> {
+    load_setting_json_async::<Vec<crate::agents::ActionKind>>(AUTO_CLOSE_ACTION_KINDS_KEY)
+        .await
+        .map(|opt| opt.unwrap_or_default())
+}
+
 pub fn save_auto_close_action_kinds(kinds: &[crate::agents::ActionKind]) -> Result<()> {
     upsert_setting_json(AUTO_CLOSE_ACTION_KINDS_KEY, &kinds)
+}
+
+pub async fn save_auto_close_action_kinds_async(kinds: &[crate::agents::ActionKind]) -> Result<()> {
+    upsert_setting_json_async(AUTO_CLOSE_ACTION_KINDS_KEY, &kinds).await
 }
 
 /// Action kinds for which we've already shown the first-time opt-in prompt.
@@ -111,22 +167,32 @@ pub fn load_auto_close_opt_in_asked() -> Result<Vec<crate::agents::ActionKind>> 
         .map(|opt| opt.unwrap_or_default())
 }
 
+pub async fn load_auto_close_opt_in_asked_async() -> Result<Vec<crate::agents::ActionKind>> {
+    load_setting_json_async::<Vec<crate::agents::ActionKind>>(AUTO_CLOSE_OPT_IN_ASKED_KEY)
+        .await
+        .map(|opt| opt.unwrap_or_default())
+}
+
 pub fn save_auto_close_opt_in_asked(kinds: &[crate::agents::ActionKind]) -> Result<()> {
     upsert_setting_json(AUTO_CLOSE_OPT_IN_ASKED_KEY, &kinds)
 }
 
-pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare(
-            "SELECT key, value FROM settings WHERE key IN ('branch_prefix_type', 'branch_prefix_custom')",
-        )
-        .context("Failed to prepare branch settings query")?;
+pub async fn save_auto_close_opt_in_asked_async(kinds: &[crate::agents::ActionKind]) -> Result<()> {
+    upsert_setting_json_async(AUTO_CLOSE_OPT_IN_ASKED_KEY, &kinds).await
+}
 
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
+pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
+    block_on_settings_db(load_branch_prefix_settings_async())
+}
+
+pub async fn load_branch_prefix_settings_async() -> Result<BranchPrefixSettings> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT key, value FROM settings WHERE key IN ('branch_prefix_type', 'branch_prefix_custom')",
+            (),
+        )
+        .await
         .context("Failed to query branch settings")?;
 
     let mut settings = BranchPrefixSettings {
@@ -134,8 +200,9 @@ pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
         branch_prefix_custom: None,
     };
 
-    for row in rows {
-        let (key, value) = row.context("Failed to read branch settings row")?;
+    while let Some(row) = rows.next().await? {
+        let key: String = row.get(0).context("Failed to read branch setting key")?;
+        let value: String = row.get(1).context("Failed to read branch setting value")?;
         match key.as_str() {
             "branch_prefix_type" => settings.branch_prefix_type = Some(value),
             "branch_prefix_custom" => settings.branch_prefix_custom = Some(value),
@@ -146,8 +213,54 @@ pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
     Ok(settings)
 }
 
+pub async fn load_app_settings_map_async() -> Result<HashMap<String, String>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT key, value FROM settings WHERE key LIKE 'app.%' OR key LIKE 'branch_prefix_%'",
+            (),
+        )
+        .await
+        .context("Failed to query app settings")?;
+
+    let mut map = HashMap::new();
+    while let Some(row) = rows.next().await? {
+        let key: String = row.get(0).context("Failed to read app setting key")?;
+        let value: String = row.get(1).context("Failed to read app setting value")?;
+        map.insert(key, value);
+    }
+
+    Ok(map)
+}
+
+pub async fn list_settings_map_async(all: bool) -> Result<HashMap<String, String>> {
+    let connection = db::libsql_conn_async().await?;
+    let sql = if all {
+        "SELECT key, value FROM settings ORDER BY key ASC"
+    } else {
+        "SELECT key, value FROM settings \
+         WHERE key LIKE 'app.%' OR key LIKE 'branch_prefix_%' \
+         ORDER BY key ASC"
+    };
+    let mut rows = connection
+        .query(sql, ())
+        .await
+        .context("Failed to query settings list")?;
+
+    let mut map = HashMap::new();
+    while let Some(row) = rows.next().await? {
+        let key: String = row.get(0).context("Failed to read setting key")?;
+        let value: String = row.get(1).context("Failed to read setting value")?;
+        map.insert(key, value);
+    }
+
+    Ok(map)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use rusqlite::Connection;
 
     fn test_db() -> (Connection, tempfile::TempDir) {
@@ -285,5 +398,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(value, "18");
+    }
+
+    #[test]
+    fn async_settings_helpers_roundtrip_through_libsql() {
+        let _env = crate::testkit::TestEnv::new("settings-libsql");
+
+        tauri::async_runtime::block_on(async {
+            upsert_setting_value_async("app.test_libsql", "one")
+                .await
+                .unwrap();
+            assert_eq!(
+                load_setting_value_async("app.test_libsql").await.unwrap(),
+                Some("one".to_string())
+            );
+
+            upsert_setting_value_async("app.test_libsql", "two")
+                .await
+                .unwrap();
+            let map = load_app_settings_map_async().await.unwrap();
+            assert_eq!(map.get("app.test_libsql"), Some(&"two".to_string()));
+
+            let removed = delete_setting_value_async("app.test_libsql").await.unwrap();
+            assert_eq!(removed, 1);
+            assert_eq!(
+                load_setting_value_async("app.test_libsql").await.unwrap(),
+                None
+            );
+        });
     }
 }

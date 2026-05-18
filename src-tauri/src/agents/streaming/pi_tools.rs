@@ -11,8 +11,9 @@
 /// 1. Add a match arm in `execute_pi_tool_call`.
 /// 2. Write a `handle_<tool>` function.
 /// 3. Call `publish_board_changed` / `publish_workspace_changed` as needed.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{json, Value};
+use std::future::Future;
 use std::str::FromStr;
 use tauri::AppHandle;
 
@@ -22,6 +23,12 @@ use crate::workspace_status::WorkspaceStatus;
 // ─────────────────────────────────────────────────────────────────────────────
 // Public entry point
 // ─────────────────────────────────────────────────────────────────────────────
+
+fn block_on_pi_tool_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    let handle = tokio::runtime::Handle::try_current()
+        .context("Pi tool DB access requires an active Tokio runtime")?;
+    tokio::task::block_in_place(|| handle.block_on(future))
+}
 
 /// Dispatch a Pi custom tool call to the appropriate handler.
 ///
@@ -180,14 +187,23 @@ fn handle_update_kanban_card(goal_workspace_id: &str, args: &Value) -> Result<Va
         if title.is_empty() {
             anyhow::bail!("title cannot be empty");
         }
-        let conn = crate::models::db::write_conn()?;
-        conn.execute(
-            "UPDATE workspaces \
-             SET pr_title = ?2, updated_at = datetime('now') \
-             WHERE id = ?1 AND goal_workspace_id = ?3",
-            rusqlite::params![card_id, title, goal_workspace_id],
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to update card title: {e}"))?;
+        let card_id = card_id.to_string();
+        let goal_workspace_id = goal_workspace_id.to_string();
+        let title = title.to_string();
+        block_on_pi_tool_db(crate::models::db::libsql_write_async(
+            |connection| async move {
+                connection
+                    .execute(
+                        "UPDATE workspaces \
+                         SET pr_title = ?2, updated_at = datetime('now') \
+                         WHERE id = ?1 AND goal_workspace_id = ?3",
+                        libsql::params![card_id, title, goal_workspace_id],
+                    )
+                    .await
+                    .context("Failed to update card title")?;
+                Ok(())
+            },
+        ))?;
     }
 
     publish_board_changed(goal_workspace_id, card_id);
@@ -246,12 +262,19 @@ fn handle_create_thread(args: &Value) -> Result<Value> {
 
     if let Some(model) = model_id.as_deref() {
         // Best-effort model assignment on the newly created session.
-        if let Ok(conn) = crate::models::db::write_conn() {
-            let _ = conn.execute(
-                "UPDATE sessions SET model = ?2 WHERE id = ?1",
-                rusqlite::params![session_id, model],
-            );
-        }
+        let session_id = session_id.to_string();
+        let model = model.to_string();
+        let _ = block_on_pi_tool_db(crate::models::db::libsql_write_async(
+            |connection| async move {
+                connection
+                    .execute(
+                        "UPDATE sessions SET model = ?2 WHERE id = ?1",
+                        libsql::params![session_id, model],
+                    )
+                    .await?;
+                Ok(())
+            },
+        ));
     }
 
     let _ = notify_running_app(UiMutationEvent::SessionListChanged {

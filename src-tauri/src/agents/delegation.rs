@@ -1,8 +1,10 @@
+use std::future::Future;
 use std::path::Path;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+#[cfg(test)]
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,13 +16,47 @@ use crate::pipeline::PipelineEmit;
 use crate::ui_sync::{self, UiMutationEvent};
 
 use super::persistence::{
-    finalize_session_metadata, persist_error_message, persist_result_and_finalize,
-    persist_turn_message, persist_user_message,
+    finalize_session_metadata_libsql, persist_error_message_libsql,
+    persist_result_and_finalize_libsql, persist_turn_message_libsql, persist_user_message_libsql,
 };
 use super::streaming::{build_send_message_params, BuildSendMessageParamsInput};
 use super::{resolve_model, ExchangeContext};
 
 const CHILD_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
+
+fn block_on_delegation_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("Failed to build delegation DB runtime")?
+            .block_on(future),
+    }
+}
+
+fn persist_child_provider_session_id_via_libsql(
+    child_session_id: String,
+    provider_session_id: String,
+    provider: String,
+) {
+    if let Err(error) = block_on_delegation_db(crate::models::db::libsql_write_async(
+        |connection| async move {
+            connection
+                .execute(
+                    "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
+                    libsql::params![child_session_id, provider_session_id, provider],
+                )
+                .await?;
+            Ok(())
+        },
+    )) {
+        tracing::warn!(
+            error = ?error,
+            "Failed to persist delegation child provider session id"
+        );
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,7 +118,7 @@ pub(crate) fn delegate_agent_blocking(
         bail!("delegate_agent cannot delegate to the same provider in this version");
     }
 
-    let created = delegations::create_delegation_anchor(CreateDelegationInput {
+    let created = create_delegation_anchor(CreateDelegationInput {
         parent_session_id: request.parent_session_id.clone(),
         provider: model.provider.clone(),
         model_id: Some(model.id.clone()),
@@ -123,7 +159,7 @@ pub(crate) fn delegate_agent_blocking(
     let mut final_output = match first {
         Ok(output) => output,
         Err(error) => {
-            let record = delegations::update_delegation_status(
+            let record = update_delegation_status(
                 &created.id,
                 status_for_error(&error),
                 None,
@@ -166,7 +202,7 @@ pub(crate) fn delegate_agent_blocking(
     let result = match parsed {
         Ok(value) => value,
         Err(error) => {
-            let record = delegations::update_delegation_status(
+            let record = update_delegation_status(
                 &created.id,
                 "failed",
                 None,
@@ -185,8 +221,7 @@ pub(crate) fn delegate_agent_blocking(
         }
     };
 
-    let delegation =
-        delegations::update_delegation_status(&created.id, "succeeded", Some(&result), None)?;
+    let delegation = update_delegation_status(&created.id, "succeeded", Some(&result), None)?;
     restore_parent_active_if_child_selected(
         &created.workspace_id,
         &created.parent_session_id,
@@ -291,10 +326,11 @@ fn run_child_turn(
         model_provider: model.provider.clone(),
         user_message_id: Uuid::new_v4().to_string(),
     };
-    {
-        let conn = crate::models::db::write_conn()?;
-        persist_user_message(&conn, &ctx, visible_prompt, &[], &[])?;
-    }
+    let user_ctx = ctx.clone();
+    let visible_prompt = visible_prompt.to_string();
+    block_on_delegation_db(crate::models::db::libsql_write_async(|conn| async move {
+        persist_user_message_libsql(&conn, &user_ctx, &visible_prompt, &[], &[]).await
+    }))?;
 
     let mut pipeline = crate::pipeline::MessagePipeline::new(
         &model.provider,
@@ -325,12 +361,11 @@ fn run_child_turn(
 
         if let Some(session_id) = event.session_id() {
             resolved_session_id = Some(session_id.to_string());
-            if let Ok(conn) = crate::models::db::write_conn() {
-                let _ = conn.execute(
-                    "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
-                    params![&created.child_session_id, session_id, &model.provider],
-                );
-            }
+            persist_child_provider_session_id_via_libsql(
+                created.child_session_id.clone(),
+                session_id.to_string(),
+                model.provider.clone(),
+            );
         }
 
         match event.event_type() {
@@ -348,45 +383,50 @@ fn run_child_turn(
                 let output = pipeline
                     .accumulator
                     .drain_output(resolved_session_id.as_deref());
-                let assistant_text = output.assistant_text.clone();
-                let conn = crate::models::db::write_conn()?;
                 if is_aborted {
-                    finalize_session_metadata(
-                        &conn,
-                        &ctx,
-                        "aborted",
-                        effort_level,
-                        permission_mode,
-                    )?;
+                    let finalize_ctx = ctx.clone();
+                    block_on_delegation_db(crate::models::db::libsql_write_async(
+                        |conn| async move {
+                            finalize_session_metadata_libsql(
+                                &conn,
+                                &finalize_ctx,
+                                "aborted",
+                                effort_level,
+                                permission_mode,
+                            )
+                            .await
+                        },
+                    ))?;
                     return Err(anyhow::anyhow!("Delegation was cancelled"));
                 }
-                persist_result_and_finalize(
-                    &conn,
-                    &ctx,
-                    &output.resolved_model,
-                    &output.assistant_text,
-                    effort_level,
-                    permission_mode,
-                    &output.usage,
-                    output.result_json.as_deref(),
-                    "idle",
-                    pipeline.accumulator.take_result_id(),
-                )?;
-                if let Err(error) = restore_parent_active_if_child_selected_on(
-                    &conn,
+                let assistant_text = output.assistant_text.clone();
+                let assistant_text_for_persist = assistant_text.clone();
+                let result_ctx = ctx.clone();
+                let resolved_model = output.resolved_model.clone();
+                let usage = output.usage.clone();
+                let result_json = output.result_json.clone();
+                let result_id = pipeline.accumulator.take_result_id();
+                block_on_delegation_db(crate::models::db::libsql_write_async(|conn| async move {
+                    persist_result_and_finalize_libsql(
+                        &conn,
+                        &result_ctx,
+                        &resolved_model,
+                        &assistant_text_for_persist,
+                        effort_level,
+                        permission_mode,
+                        &usage,
+                        result_json.as_deref(),
+                        "idle",
+                        result_id,
+                    )
+                    .await
+                    .map(|_| ())
+                }))?;
+                restore_parent_active_if_child_selected(
                     &created.workspace_id,
                     &created.parent_session_id,
                     &created.child_session_id,
-                ) {
-                    tracing::warn!(
-                        workspace_id = %created.workspace_id,
-                        parent_session_id = %created.parent_session_id,
-                        child_session_id = %created.child_session_id,
-                        error = ?error,
-                        "Failed to restore parent active session after delegation child turn"
-                    );
-                }
-                drop(conn);
+                );
                 publish_delegation_updates(
                     app,
                     &created.workspace_id,
@@ -431,6 +471,26 @@ fn run_child_turn(
     }
 }
 
+fn create_delegation_anchor(
+    input: CreateDelegationInput,
+) -> Result<delegations::CreatedDelegation> {
+    block_on_delegation_db(delegations::create_delegation_anchor_async(input))
+}
+
+fn update_delegation_status(
+    delegation_id: &str,
+    status: &str,
+    structured_result: Option<&Value>,
+    error: Option<&str>,
+) -> Result<DelegationRecord> {
+    block_on_delegation_db(delegations::update_delegation_status_async(
+        delegation_id,
+        status,
+        structured_result.cloned(),
+        error.map(str::to_string),
+    ))
+}
+
 fn debug_prompt_prefix_for_delegation(parent_prompt_prefix: Option<&str>) -> Option<String> {
     let prefix = parent_prompt_prefix?.trim();
     let debug_start = prefix.find("[DEBUG MODE ACTIVE]")?;
@@ -453,18 +513,15 @@ fn persist_pending_turns(
     ctx: &ExchangeContext,
     persisted_turn_count: &mut usize,
 ) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
     let model = pipeline.accumulator.resolved_model().to_string();
-    while *persisted_turn_count < pipeline.accumulator.turns_len() {
-        persist_turn_message(
-            &conn,
-            ctx,
-            pipeline.accumulator.turn_at(*persisted_turn_count),
-            &model,
-        )?;
-        *persisted_turn_count += 1;
-    }
-    Ok(())
+    block_on_delegation_db(crate::models::db::libsql_write_async(|conn| async move {
+        while *persisted_turn_count < pipeline.accumulator.turns_len() {
+            let turn = pipeline.accumulator.turn_at(*persisted_turn_count).clone();
+            persist_turn_message_libsql(&conn, ctx, &turn, &model).await?;
+            *persisted_turn_count += 1;
+        }
+        Ok(())
+    }))
 }
 
 fn finalize_child_error(
@@ -472,25 +529,45 @@ fn finalize_child_error(
     model: &super::ResolvedModel,
     message: &str,
 ) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
-    persist_error_message(&conn, ctx, &model.cli_model, message)?;
-    finalize_session_metadata(&conn, ctx, "idle", None, None)?;
-    Ok(())
+    let ctx = ctx.clone();
+    let model = model.cli_model.clone();
+    let message = message.to_string();
+    block_on_delegation_db(crate::models::db::libsql_write_async(|conn| async move {
+        persist_error_message_libsql(&conn, &ctx, &model, &message).await?;
+        finalize_session_metadata_libsql(&conn, &ctx, "idle", None, None).await
+    }))
 }
 
 fn resolve_session_working_directory(session_id: &str) -> Result<std::path::PathBuf> {
-    let conn = crate::models::db::read_conn()?;
-    let (repo_name, directory_name): (String, String) = conn.query_row(
-        r#"
+    block_on_delegation_db(resolve_session_working_directory_async(session_id))
+}
+
+async fn resolve_session_working_directory_async(session_id: &str) -> Result<std::path::PathBuf> {
+    let connection = crate::models::db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            r#"
         SELECT r.name, w.directory_name
         FROM sessions s
         JOIN workspaces w ON w.id = s.workspace_id
         JOIN repos r ON r.id = w.repository_id
         WHERE s.id = ?1
         "#,
-        [session_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
+            [session_id.to_string()],
+        )
+        .await
+        .context("Delegation session workspace not found")?;
+    let Some(row) = rows
+        .next()
+        .await
+        .context("Delegation session workspace not found")?
+    else {
+        bail!("Delegation session workspace not found");
+    };
+    let repo_name: String = row.get(0).context("Failed to read repository name")?;
+    let directory_name: String = row
+        .get(1)
+        .context("Failed to read workspace directory name")?;
     crate::data_dir::workspace_dir(&repo_name, &directory_name)
 }
 
@@ -545,20 +622,15 @@ fn restore_parent_active_if_child_selected(
     parent_session_id: &str,
     child_session_id: &str,
 ) {
-    match crate::models::db::write_conn().and_then(|conn| {
-        restore_parent_active_if_child_selected_on(
-            &conn,
-            workspace_id,
-            parent_session_id,
-            child_session_id,
-        )
-    }) {
+    let result = block_on_delegation_db(restore_parent_active_if_child_selected_async(
+        workspace_id,
+        parent_session_id,
+        child_session_id,
+    ));
+    match result {
         Ok(()) => {}
         Err(error) => {
             tracing::warn!(
-                workspace_id,
-                parent_session_id,
-                child_session_id,
                 error = ?error,
                 "Failed to restore parent active session after delegation"
             );
@@ -566,6 +638,27 @@ fn restore_parent_active_if_child_selected(
     }
 }
 
+async fn restore_parent_active_if_child_selected_async(
+    workspace_id: &str,
+    parent_session_id: &str,
+    child_session_id: &str,
+) -> Result<()> {
+    let workspace_id = workspace_id.to_string();
+    let parent_session_id = parent_session_id.to_string();
+    let child_session_id = child_session_id.to_string();
+    crate::models::db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE workspaces SET active_session_id = ?2 WHERE id = ?1 AND active_session_id = ?3",
+                libsql::params![workspace_id, parent_session_id, child_session_id],
+            )
+            .await?;
+        Ok(())
+    })
+    .await
+}
+
+#[cfg(test)]
 fn restore_parent_active_if_child_selected_on(
     conn: &Connection,
     workspace_id: &str,
@@ -649,7 +742,7 @@ mod tests {
     #[test]
     fn resolve_session_working_directory_uses_helmor_workspace_dir() {
         let _env = crate::testkit::TestEnv::new("delegation-workdir");
-        let conn = crate::models::db::write_conn().unwrap();
+        let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
         conn.execute(
             "INSERT INTO repos (id, name, default_branch, root_path) VALUES ('repo-1', 'demo-repo', 'main', '/source/demo-repo')",
             [],
@@ -679,7 +772,7 @@ mod tests {
     #[test]
     fn restore_parent_active_session_reuses_existing_writer() {
         let _env = crate::testkit::TestEnv::new("delegation-restore-active");
-        let conn = crate::models::db::write_conn().unwrap();
+        let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
         conn.execute(
             "INSERT INTO workspaces (id, active_session_id) VALUES ('workspace-1', 'child-session')",
             [],

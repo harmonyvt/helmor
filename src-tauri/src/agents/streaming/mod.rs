@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::path::Path;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
@@ -36,7 +37,7 @@ pub use params::{
 };
 use session_id::should_adopt_provider_session_id;
 
-use rusqlite::params;
+use anyhow::Context;
 use serde_json::{json, Value};
 use tauri::{ipc::Channel, AppHandle, Manager};
 use uuid::Uuid;
@@ -45,11 +46,109 @@ use crate::pipeline::types::{
     ExtendedMessagePart, MessagePart, MessageRole, PlanAllowedPrompt, ThreadMessageLike,
 };
 
-use super::{
-    finalize_session_metadata, persist_error_message, persist_exit_plan_message,
-    persist_result_and_finalize, persist_turn_message, persist_user_message, AgentSendRequest,
-    AgentStreamEvent, CmdResult, ExchangeContext,
+use super::persistence::{
+    finalize_session_metadata_libsql, persist_error_message_libsql,
+    persist_exit_plan_message_libsql, persist_result_and_finalize_libsql,
+    persist_stream_start_metadata_libsql, persist_turn_messages_libsql,
+    persist_user_message_libsql,
 };
+use super::{AgentSendRequest, AgentStreamEvent, CmdResult, ExchangeContext};
+
+fn block_on_streaming_db<T>(future: impl Future<Output = anyhow::Result<T>>) -> anyhow::Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("Failed to build streaming DB runtime")?
+            .block_on(future),
+    }
+}
+
+fn clone_exchange_context(ctx: &ExchangeContext) -> ExchangeContext {
+    ExchangeContext {
+        helmor_session_id: ctx.helmor_session_id.clone(),
+        model_id: ctx.model_id.clone(),
+        model_provider: ctx.model_provider.clone(),
+        user_message_id: ctx.user_message_id.clone(),
+    }
+}
+
+fn persist_available_turns_libsql(
+    pipeline_state: &crate::pipeline::MessagePipeline,
+    ctx: &ExchangeContext,
+    persisted_turn_count: &mut usize,
+) -> Option<anyhow::Error> {
+    let start = *persisted_turn_count;
+    let end = pipeline_state.accumulator.turns_len();
+    if start >= end {
+        return None;
+    }
+
+    let turns: Vec<_> = (start..end)
+        .map(|index| pipeline_state.accumulator.turn_at(index).clone())
+        .collect();
+    let model = pipeline_state.accumulator.resolved_model().to_string();
+    let ctx = clone_exchange_context(ctx);
+    match block_on_streaming_db(crate::models::db::libsql_write_async(|conn| async move {
+        let (persisted, error) = persist_turn_messages_libsql(&conn, &ctx, &turns, &model).await;
+        Ok((persisted, error))
+    })) {
+        Ok((persisted, error)) => {
+            *persisted_turn_count += persisted;
+            error
+        }
+        Err(error) => Some(error),
+    }
+}
+
+async fn read_resume_session_context_libsql(
+    helmor_session_id: String,
+) -> anyhow::Result<Option<(Option<String>, Option<String>, Option<String>)>> {
+    let conn = crate::models::db::libsql_conn_async().await?;
+    let mut rows = conn
+        .query(
+            "SELECT provider_session_id, agent_type, model FROM sessions WHERE id = ?1",
+            [helmor_session_id],
+        )
+        .await?;
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+    Ok(Some((
+        row.get(0).context("Failed to read provider_session_id")?,
+        row.get(1).context("Failed to read agent_type")?,
+        row.get(2).context("Failed to read model")?,
+    )))
+}
+
+fn persist_provider_session_id_via_libsql(
+    rid: String,
+    helmor_session_id: String,
+    provider_session_id: String,
+    provider: String,
+) {
+    tauri::async_runtime::spawn(async move {
+        match crate::models::db::libsql_write_async(|connection| async move {
+            connection
+                .execute(
+                    "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
+                    libsql::params![helmor_session_id, provider_session_id, provider],
+                )
+                .await?;
+            Ok(())
+        })
+        .await
+        {
+            Ok(()) => {
+                tracing::debug!(rid = %rid, "Session ID persisted");
+            }
+            Err(error) => {
+                tracing::error!(rid = %rid, "Failed to persist session id: {error}");
+            }
+        }
+    });
+}
 
 fn execute_delegation_tool_call(
     app: AppHandle,
@@ -147,18 +246,20 @@ pub(super) fn stream_via_sidecar(
 
     let resume_session_id = request.session_id.clone().or_else(|| {
         request.helmor_session_id.as_deref().and_then(|hsid| {
-            let conn = crate::models::db::read_conn().ok()?;
-            let (stored_sid, stored_provider, stored_model_id): (
-                Option<String>,
-                Option<String>,
-                Option<String>,
-            ) = conn
-                .query_row(
-                    "SELECT provider_session_id, agent_type, model FROM sessions WHERE id = ?1",
-                    [hsid],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .ok()?;
+            let (stored_sid, stored_provider, stored_model_id) = match block_on_streaming_db(
+                read_resume_session_context_libsql(hsid.to_string()),
+            ) {
+                Ok(Some(context)) => context,
+                Ok(None) => return None,
+                Err(error) => {
+                    tracing::warn!(
+                        helmor_session_id = %hsid,
+                        error = ?error,
+                        "Failed to read stored provider session resume context"
+                    );
+                    return None;
+                }
+            };
             let sid = stored_sid?;
             if can_resume_provider_session_for_model(
                 stored_provider.as_deref(),
@@ -354,63 +455,65 @@ pub(super) fn stream_via_sidecar(
                     .unwrap_or_else(|| Uuid::new_v4().to_string()),
             };
 
-            match crate::models::db::write_conn() {
-                Ok(conn) => {
-                    let now = crate::models::db::current_timestamp()
-                        .map(Some)
-                        .unwrap_or_else(|error| {
-                            tracing::warn!(
-                                rid = %rid,
-                                error = %error,
-                                "Failed to build stream-start timestamp"
-                            );
-                            None
-                        });
-                    if let Err(e) = conn.execute(
-                        r#"
-                        UPDATE sessions
-                        SET fast_mode = ?1,
-                            status = 'streaming',
-                            model = ?3,
-                            agent_type = ?4,
-                            permission_mode = COALESCE(?5, permission_mode),
-                            updated_at = COALESCE(?6, updated_at)
-                        WHERE id = ?2
-                        "#,
-                        rusqlite::params![
-                            fast_mode,
-                            &ctx.helmor_session_id,
-                            &ctx.model_id,
-                            &ctx.model_provider,
-                            permission_mode_initial.as_deref(),
-                            now.as_deref()
-                        ],
-                    ) {
-                        tracing::error!(rid = %rid, "Failed to update stream-start session metadata: {e}");
-                    }
+            let now = crate::models::db::current_timestamp()
+                .map(Some)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        rid = %rid,
+                        error = %error,
+                        "Failed to build stream-start timestamp"
+                    );
+                    None
+                });
+            let ctx_for_db = clone_exchange_context(&ctx);
+            let permission_mode_for_db = permission_mode_initial.clone();
+            match block_on_streaming_db(crate::models::db::libsql_write_async(|conn| async move {
+                let metadata_error = persist_stream_start_metadata_libsql(
+                    &conn,
+                    &ctx_for_db,
+                    fast_mode,
+                    permission_mode_for_db.as_deref(),
+                    now.as_deref(),
+                )
+                .await
+                .err()
+                .map(|error| error.to_string());
 
-                    if resume_only {
-                        exchange_ctx = Some(ctx);
+                let user_error = if resume_only {
+                    None
+                } else {
+                    persist_user_message_libsql(
+                        &conn,
+                        &ctx_for_db,
+                        &prompt_copy,
+                        &files_copy,
+                        &images_copy,
+                    )
+                    .await
+                    .err()
+                    .map(|error| error.to_string())
+                };
+
+                Ok((metadata_error, user_error))
+            })) {
+                Ok((metadata_error, user_error)) => {
+                    if let Some(error) = metadata_error {
+                        tracing::error!(
+                            rid = %rid,
+                            "Failed to update stream-start session metadata: {error}"
+                        );
+                    }
+                    if let Some(error) = user_error {
+                        tracing::error!(rid = %rid, "Failed to persist user message: {error}");
                     } else {
-                        match persist_user_message(
-                            &conn,
-                            &ctx,
-                            &prompt_copy,
-                            &files_copy,
-                            &images_copy,
-                        ) {
-                            Ok(()) => {
-                                tracing::debug!(rid = %rid, "User message persisted to DB");
-                                exchange_ctx = Some(ctx);
-                            }
-                            Err(error) => {
-                                tracing::error!(rid = %rid, "Failed to persist user message: {error}");
-                            }
+                        if !resume_only {
+                            tracing::debug!(rid = %rid, "User message persisted to DB");
                         }
+                        exchange_ctx = Some(ctx);
                     }
                 }
                 Err(e) => {
-                    tracing::error!(rid = %rid, "Failed to borrow write conn for initial persist: {e}");
+                    tracing::error!(rid = %rid, "Failed to run initial libSQL persist: {e}");
                 }
             }
         }
@@ -608,17 +711,13 @@ pub(super) fn stream_via_sidecar(
                                 provider_session_id = sid,
                                 "Skipping provider session persistence for resume-only stream"
                             );
-                        } else if let (Some(ctx), Some(conn)) =
-                            (&exchange_ctx, &crate::models::db::write_conn().ok())
-                        {
-                            if let Err(error) = conn.execute(
-                                "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
-                                params![ctx.helmor_session_id, sid, ctx.model_provider],
-                            ) {
-                                tracing::error!(rid = %rid, "Failed to persist session id: {error}");
-                            } else {
-                                tracing::debug!(rid = %rid, provider_session_id = sid, "Session ID persisted");
-                            }
+                        } else if let Some(ctx) = &exchange_ctx {
+                            persist_provider_session_id_via_libsql(
+                                rid.clone(),
+                                ctx.helmor_session_id.clone(),
+                                sid.to_string(),
+                                ctx.model_provider.clone(),
+                            );
                         }
                     }
                 }
@@ -668,75 +767,100 @@ pub(super) fn stream_via_sidecar(
                             pipeline_state.accumulator.append_aborted_notice();
                         }
 
-                        // Borrow writer once for both turn persistence and the
-                        // terminal finalize. drain_output between the two uses
-                        // is purely in-memory, so holding the writer pool slot
-                        // across it is cheap and halves the writer round-trips
-                        // per terminal event.
-                        let writer = exchange_ctx
-                            .as_ref()
-                            .and_then(|_| crate::models::db::write_conn().ok());
-
-                        // Persist remaining turns and sync their UUIDs back
-                        // into collected[] so streaming IDs = DB IDs.
-                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
-                            let model_str = pipeline_state.accumulator.resolved_model().to_string();
-                            while persisted_turn_count < pipeline_state.accumulator.turns_len() {
-                                match persist_turn_message(
-                                    conn,
-                                    ctx,
-                                    pipeline_state.accumulator.turn_at(persisted_turn_count),
-                                    &model_str,
-                                ) {
-                                    Ok(_) => persisted_turn_count += 1,
-                                    Err(error) => {
-                                        tracing::error!(
-                                            turn = persisted_turn_count,
-                                            "Failed to persist turn: {error}"
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        // Persist remaining turns and then terminal metadata
+                        // under one libSQL writer lock so DB row order stays
+                        // aligned with the live stream.
+                        let turn_start = persisted_turn_count;
+                        let pending_turns = (turn_start..pipeline_state.accumulator.turns_len())
+                            .map(|idx| pipeline_state.accumulator.turn_at(idx).clone())
+                            .collect::<Vec<_>>();
+                        let model_str = pipeline_state.accumulator.resolved_model().to_string();
                         let output = pipeline_state
                             .accumulator
                             .drain_output(resolved_session_id.as_deref());
                         if !output.assistant_text.is_empty() {
                             resolved_model = output.resolved_model.clone();
                         }
-                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
-                            if is_aborted {
-                                match finalize_session_metadata(
-                                    conn,
-                                    ctx,
-                                    status,
-                                    effort_copy.as_deref(),
-                                    turn_session.ctx.permission_mode.as_deref(),
-                                ) {
-                                    Ok(_) => persisted = true,
-                                    Err(error) => {
+                        let preassigned = if is_aborted {
+                            None
+                        } else {
+                            pipeline_state.accumulator.take_result_id()
+                        };
+                        if let Some(ctx) = exchange_ctx.as_ref() {
+                            let ctx_for_db = clone_exchange_context(ctx);
+                            let effort_for_db = effort_copy.clone();
+                            let permission_mode_for_db = turn_session.ctx.permission_mode.clone();
+                            let status_for_db = status.to_string();
+                            let output_resolved_model = output.resolved_model.clone();
+                            let assistant_text = output.assistant_text.clone();
+                            let usage = output.usage.clone();
+                            let result_json = output.result_json.clone();
+                            match block_on_streaming_db(crate::models::db::libsql_write_async(
+                                |conn| async move {
+                                    let (turns_persisted, turn_error) =
+                                        persist_turn_messages_libsql(
+                                            &conn,
+                                            &ctx_for_db,
+                                            &pending_turns,
+                                            &model_str,
+                                        )
+                                        .await;
+
+                                    let final_error = if is_aborted {
+                                        finalize_session_metadata_libsql(
+                                            &conn,
+                                            &ctx_for_db,
+                                            &status_for_db,
+                                            effort_for_db.as_deref(),
+                                            permission_mode_for_db.as_deref(),
+                                        )
+                                        .await
+                                        .err()
+                                    } else {
+                                        persist_result_and_finalize_libsql(
+                                            &conn,
+                                            &ctx_for_db,
+                                            &output_resolved_model,
+                                            &assistant_text,
+                                            effort_for_db.as_deref(),
+                                            permission_mode_for_db.as_deref(),
+                                            &usage,
+                                            result_json.as_deref(),
+                                            &status_for_db,
+                                            preassigned,
+                                        )
+                                        .await
+                                        .map(|_| ())
+                                        .err()
+                                    };
+
+                                    Ok((
+                                        turns_persisted,
+                                        turn_error.map(|error| error.to_string()),
+                                        final_error.map(|error| error.to_string()),
+                                    ))
+                                },
+                            )) {
+                                Ok((turns_persisted, turn_error, final_error)) => {
+                                    persisted_turn_count += turns_persisted;
+                                    if let Some(error) = turn_error {
+                                        tracing::error!(
+                                            rid = %rid,
+                                            turn = persisted_turn_count,
+                                            "Failed to persist turn: {error}"
+                                        );
+                                    }
+                                    if let Some(error) = final_error {
                                         tracing::error!(rid = %rid, "Failed to finalize exchange: {error}");
+                                    } else {
+                                        persisted = true;
                                     }
                                 }
-                            } else {
-                                let preassigned = pipeline_state.accumulator.take_result_id();
-                                match persist_result_and_finalize(
-                                    conn,
-                                    ctx,
-                                    &output.resolved_model,
-                                    &output.assistant_text,
-                                    effort_copy.as_deref(),
-                                    turn_session.ctx.permission_mode.as_deref(),
-                                    &output.usage,
-                                    output.result_json.as_deref(),
-                                    status,
-                                    preassigned,
-                                ) {
-                                    Ok(_) => persisted = true,
-                                    Err(error) => {
-                                        tracing::error!(rid = %rid, "Failed to finalize exchange: {error}");
-                                    }
+                                Err(error) => {
+                                    tracing::error!(
+                                        rid = %rid,
+                                        "Failed to run terminal libSQL persistence: {error}"
+                                    );
                                 }
                             }
                         } else if exchange_ctx.is_some() {
@@ -745,7 +869,6 @@ pub(super) fn stream_via_sidecar(
                                 "Failed to borrow writer for finalize — reporting persisted=false"
                             );
                         }
-                        drop(writer);
 
                         // Final render with DB-synced IDs so the frontend
                         // cache matches what the historical loader returns.
@@ -840,52 +963,74 @@ pub(super) fn stream_via_sidecar(
                     if let Some(pipeline_state) = pipeline.as_mut() {
                         pipeline_state.accumulator.flush_pending();
 
-                        // Single writer borrow covers turn persistence and
-                        // the exit-plan message write below; only an
-                        // in-memory `resolved_model` read sits between them.
-                        let writer = exchange_ctx
-                            .as_ref()
-                            .and_then(|_| crate::models::db::write_conn().ok());
-
-                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
-                            let model_str = pipeline_state.accumulator.resolved_model().to_string();
-                            while persisted_turn_count < pipeline_state.accumulator.turns_len() {
-                                match persist_turn_message(
-                                    conn,
-                                    ctx,
-                                    pipeline_state.accumulator.turn_at(persisted_turn_count),
-                                    &model_str,
-                                ) {
-                                    Ok(_) => persisted_turn_count += 1,
-                                    Err(error) => {
+                        let resolved_model =
+                            pipeline_state.accumulator.resolved_model().to_string();
+                        let pending_turns = (persisted_turn_count
+                            ..pipeline_state.accumulator.turns_len())
+                            .map(|idx| pipeline_state.accumulator.turn_at(idx).clone())
+                            .collect::<Vec<_>>();
+                        let persisted_metadata = if let Some(ctx) = exchange_ctx.as_ref() {
+                            let ctx_for_db = clone_exchange_context(ctx);
+                            let resolved_model_for_db = resolved_model.clone();
+                            let tool_use_id_for_db = tool_use_id.clone();
+                            let tool_input_for_db = tool_input.clone();
+                            match block_on_streaming_db(crate::models::db::libsql_write_async(
+                                |conn| async move {
+                                    let (turns_persisted, turn_error) =
+                                        persist_turn_messages_libsql(
+                                            &conn,
+                                            &ctx_for_db,
+                                            &pending_turns,
+                                            &resolved_model_for_db,
+                                        )
+                                        .await;
+                                    let metadata = persist_exit_plan_message_libsql(
+                                        &conn,
+                                        &ctx_for_db,
+                                        &resolved_model_for_db,
+                                        &tool_use_id_for_db,
+                                        "ExitPlanMode",
+                                        &tool_input_for_db,
+                                    )
+                                    .await;
+                                    Ok((
+                                        turns_persisted,
+                                        turn_error.map(|error| error.to_string()),
+                                        metadata.map_err(|error| error.to_string()),
+                                    ))
+                                },
+                            )) {
+                                Ok((turns_persisted, turn_error, metadata_result)) => {
+                                    persisted_turn_count += turns_persisted;
+                                    if let Some(error) = turn_error {
                                         tracing::error!(
+                                            rid = %rid,
                                             turn = persisted_turn_count,
                                             "Failed to persist turn: {error}"
                                         );
-                                        break;
+                                    }
+                                    match metadata_result {
+                                        Ok(metadata) => Some(metadata),
+                                        Err(error) => {
+                                            tracing::error!(
+                                                rid = %rid,
+                                                "Failed to persist exit-plan message: {error}"
+                                            );
+                                            None
+                                        }
                                     }
                                 }
+                                Err(error) => {
+                                    tracing::error!(
+                                        rid = %rid,
+                                        "Failed to run plan-capture libSQL persistence: {error}"
+                                    );
+                                    None
+                                }
                             }
-                        }
-
-                        let resolved_model =
-                            pipeline_state.accumulator.resolved_model().to_string();
-                        let persisted_metadata = if let (Some(ctx), Some(conn)) =
-                            (exchange_ctx.as_ref(), writer.as_ref())
-                        {
-                            persist_exit_plan_message(
-                                conn,
-                                ctx,
-                                &resolved_model,
-                                &tool_use_id,
-                                "ExitPlanMode",
-                                &tool_input,
-                            )
-                            .ok()
                         } else {
                             None
                         };
-                        drop(writer);
                         let (msg_id, created_at) = persisted_metadata.unwrap_or_default();
                         let plan_message = build_exit_plan_review_message(
                             (!msg_id.is_empty()).then_some(msg_id),
@@ -930,56 +1075,73 @@ pub(super) fn stream_via_sidecar(
                     if let Some(mut pipeline_state) = pipeline.take() {
                         pipeline_state.accumulator.flush_pending();
 
-                        // Borrow writer once for both turn persist and the
-                        // deferred-finalize. The pipeline_state.finish()
-                        // between them is purely in-memory.
-                        let writer = exchange_ctx
-                            .as_ref()
-                            .and_then(|_| crate::models::db::write_conn().ok());
-
-                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
-                            let model_str = pipeline_state.accumulator.resolved_model().to_string();
-                            while persisted_turn_count < pipeline_state.accumulator.turns_len() {
-                                match persist_turn_message(
-                                    conn,
-                                    ctx,
-                                    pipeline_state.accumulator.turn_at(persisted_turn_count),
-                                    &model_str,
-                                ) {
-                                    Ok(_) => persisted_turn_count += 1,
-                                    Err(error) => {
-                                        tracing::error!(
-                                            turn = persisted_turn_count,
-                                            "Failed to persist turn: {error}"
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
                         // Deferred pause is terminal for this stream from the
                         // frontend's perspective. IDs are already stable by
                         // construction (same UUID in `collected[]` and
                         // `CollectedTurn`), so no post-hoc sync is needed.
                         resolved_model = pipeline_state.accumulator.resolved_model().to_string();
+                        let pending_turns = (persisted_turn_count
+                            ..pipeline_state.accumulator.turns_len())
+                            .map(|idx| pipeline_state.accumulator.turn_at(idx).clone())
+                            .collect::<Vec<_>>();
                         final_messages = pipeline_state.finish();
 
-                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
-                            if let Err(error) = finalize_session_metadata(
-                                conn,
-                                ctx,
-                                "idle",
-                                effort_copy.as_deref(),
-                                turn_session.ctx.permission_mode.as_deref(),
-                            ) {
-                                tracing::error!(
-                                    rid = %rid,
-                                    "Failed to finalize deferred exchange: {error}"
-                                );
+                        if let Some(ctx) = exchange_ctx.as_ref() {
+                            let ctx_for_db = clone_exchange_context(ctx);
+                            let resolved_model_for_db = resolved_model.clone();
+                            let effort_for_db = effort_copy.clone();
+                            let permission_mode_for_db = turn_session.ctx.permission_mode.clone();
+                            match block_on_streaming_db(crate::models::db::libsql_write_async(
+                                |conn| async move {
+                                    let (turns_persisted, turn_error) =
+                                        persist_turn_messages_libsql(
+                                            &conn,
+                                            &ctx_for_db,
+                                            &pending_turns,
+                                            &resolved_model_for_db,
+                                        )
+                                        .await;
+                                    let final_error = finalize_session_metadata_libsql(
+                                        &conn,
+                                        &ctx_for_db,
+                                        "idle",
+                                        effort_for_db.as_deref(),
+                                        permission_mode_for_db.as_deref(),
+                                    )
+                                    .await
+                                    .err()
+                                    .map(|error| error.to_string());
+                                    Ok((
+                                        turns_persisted,
+                                        turn_error.map(|error| error.to_string()),
+                                        final_error,
+                                    ))
+                                },
+                            )) {
+                                Ok((turns_persisted, turn_error, final_error)) => {
+                                    persisted_turn_count += turns_persisted;
+                                    if let Some(error) = turn_error {
+                                        tracing::error!(
+                                            rid = %rid,
+                                            turn = persisted_turn_count,
+                                            "Failed to persist turn: {error}"
+                                        );
+                                    }
+                                    if let Some(error) = final_error {
+                                        tracing::error!(
+                                            rid = %rid,
+                                            "Failed to finalize deferred exchange: {error}"
+                                        );
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        rid = %rid,
+                                        "Failed to run deferred libSQL persistence: {error}"
+                                    );
+                                }
                             }
                         }
-                        drop(writer);
                     }
 
                     match turn_session.handle_deferred_tool_use(
@@ -1249,31 +1411,63 @@ pub(super) fn stream_via_sidecar(
                     tracing::debug!(rid = %rid, internal, "Sidecar error: {message}");
                     let mut persisted = false;
 
-                    if let (Some(ctx), Some(conn)) =
-                        (&exchange_ctx, &crate::models::db::write_conn().ok())
-                    {
+                    if let Some(ctx) = exchange_ctx.as_ref() {
                         let resolved_model = pipeline
                             .as_ref()
                             .map(|pipeline_state| {
                                 pipeline_state.accumulator.resolved_model().to_string()
                             })
                             .unwrap_or_else(|| model_copy.cli_model.to_string());
-
-                        match persist_error_message(conn, ctx, &resolved_model, &message) {
-                            Ok(_) => persisted = true,
-                            Err(error) => {
-                                tracing::error!(rid = %rid, "Failed to persist error message: {error}");
+                        let ctx_for_db = clone_exchange_context(ctx);
+                        let effort_for_db = effort_copy.clone();
+                        let permission_mode_for_db = turn_session.ctx.permission_mode.clone();
+                        match block_on_streaming_db(crate::models::db::libsql_write_async(
+                            |conn| async move {
+                                let error_persisted = match persist_error_message_libsql(
+                                    &conn,
+                                    &ctx_for_db,
+                                    &resolved_model,
+                                    &message,
+                                )
+                                .await
+                                {
+                                    Ok(_) => Ok(true),
+                                    Err(error) => Err(error.to_string()),
+                                };
+                                let final_error = finalize_session_metadata_libsql(
+                                    &conn,
+                                    &ctx_for_db,
+                                    "idle",
+                                    effort_for_db.as_deref(),
+                                    permission_mode_for_db.as_deref(),
+                                )
+                                .await
+                                .err()
+                                .map(|error| error.to_string());
+                                Ok((error_persisted, final_error))
+                            },
+                        )) {
+                            Ok((error_persisted, final_error)) => {
+                                match error_persisted {
+                                    Ok(true) => persisted = true,
+                                    Ok(false) => {}
+                                    Err(error) => {
+                                        tracing::error!(
+                                            rid = %rid,
+                                            "Failed to persist error message: {error}"
+                                        );
+                                    }
+                                }
+                                if let Some(error) = final_error {
+                                    tracing::error!(rid = %rid, "Failed to finalize error exchange: {error}");
+                                }
                             }
-                        }
-
-                        if let Err(error) = finalize_session_metadata(
-                            conn,
-                            ctx,
-                            "idle",
-                            effort_copy.as_deref(),
-                            turn_session.ctx.permission_mode.as_deref(),
-                        ) {
-                            tracing::error!(rid = %rid, "Failed to finalize error exchange: {error}");
+                            Err(error) => {
+                                tracing::error!(
+                                    rid = %rid,
+                                    "Failed to run error libSQL persistence: {error}"
+                                );
+                            }
                         }
                     }
 
@@ -1313,30 +1507,17 @@ pub(super) fn stream_via_sidecar(
                         if let Some(pipeline_state) = pipeline.as_mut() {
                             let emit = pipeline_state.push_event(&event.raw, &line);
 
-                            if let (Some(ctx), Some(conn)) =
-                                (&exchange_ctx, &crate::models::db::write_conn().ok())
-                            {
-                                let model_str =
-                                    pipeline_state.accumulator.resolved_model().to_string();
-                                while persisted_turn_count < pipeline_state.accumulator.turns_len()
-                                {
-                                    match persist_turn_message(
-                                        conn,
-                                        ctx,
-                                        pipeline_state.accumulator.turn_at(persisted_turn_count),
-                                        &model_str,
-                                    ) {
-                                        Ok(_) => {
-                                            persisted_turn_count += 1;
-                                        }
-                                        Err(error) => {
-                                            tracing::error!(
-                                                turn = persisted_turn_count,
-                                                "Failed to persist turn: {error}"
-                                            );
-                                            break;
-                                        }
-                                    }
+                            if let Some(ctx) = exchange_ctx.as_ref() {
+                                if let Some(error) = persist_available_turns_libsql(
+                                    pipeline_state,
+                                    ctx,
+                                    &mut persisted_turn_count,
+                                ) {
+                                    tracing::error!(
+                                        rid = %rid,
+                                        turn = persisted_turn_count,
+                                        "Failed to persist turn: {error}"
+                                    );
                                 }
                             }
 

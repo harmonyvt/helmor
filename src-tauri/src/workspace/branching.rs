@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    future::Future,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
@@ -21,6 +22,13 @@ use crate::{
 struct RepoContext {
     root: PathBuf,
     remote: String,
+}
+
+fn block_on_libsql<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
 }
 
 /// Resolve the repository root and remote from either a workspace_id or a repo_id.
@@ -108,11 +116,18 @@ pub fn rename_workspace_branch(workspace_id: &str, new_branch: &str) -> Result<(
 
     git_ops::rename_branch(repo_root_path, old_branch, new_branch)?;
 
-    let connection = db::write_conn()?;
-    if let Err(db_err) = connection.execute(
-        "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-        (new_branch, workspace_id),
-    ) {
+    let new_branch_for_write = new_branch.to_string();
+    let workspace_id_for_write = workspace_id.to_string();
+    if let Err(db_err) = block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+                libsql::params![new_branch_for_write, workspace_id_for_write],
+            )
+            .await
+            .context("Failed to update branch name in database")?;
+        Ok(())
+    })) {
         if let Err(rb_err) = git_ops::rename_branch(repo_root_path, new_branch, old_branch) {
             tracing::error!(
                 old = old_branch,
@@ -120,7 +135,7 @@ pub fn rename_workspace_branch(workspace_id: &str, new_branch: &str) -> Result<(
                 "Rollback git branch -m failed: {rb_err:#}"
             );
         }
-        return Err(db_err).context("Failed to update branch name in database");
+        return Err(db_err);
     }
 
     Ok(())
@@ -161,19 +176,24 @@ pub fn update_intended_target_branch_local(
     target_branch: &str,
 ) -> Result<UpdateIntendedTargetBranchInternal> {
     {
-        let connection = db::write_conn()?;
-        let updated_rows = connection
-            .execute(
-                &format!(
-                    "UPDATE workspaces SET intended_target_branch = ?2 WHERE id = ?1 AND state {}",
-                    workspace_state::OPERATIONAL_FILTER,
-                ),
-                (workspace_id, target_branch),
-            )
-            .context("Failed to update intended target branch")?;
+        let workspace_id = workspace_id.to_string();
+        let workspace_id_for_error = workspace_id.clone();
+        let target_branch = target_branch.to_string();
+        let updated_rows = block_on_libsql(db::libsql_write_async(|connection| async move {
+            connection
+                .execute(
+                    &format!(
+                        "UPDATE workspaces SET intended_target_branch = ?2 WHERE id = ?1 AND state {}",
+                        workspace_state::OPERATIONAL_FILTER,
+                    ),
+                    libsql::params![workspace_id, target_branch],
+                )
+                .await
+                .context("Failed to update intended target branch")
+        }))?;
 
         if updated_rows != 1 {
-            bail!("Cannot update target branch: workspace {workspace_id} not found or archived");
+            bail!("Cannot update target branch: workspace {workspace_id_for_error} not found or archived");
         }
     }
 
@@ -183,13 +203,18 @@ pub fn update_intended_target_branch_local(
     let post_reset_sha = try_realign_local_branch(&record, target_branch)?;
 
     if post_reset_sha.is_some() {
-        let connection = db::write_conn()?;
-        connection
-            .execute(
-                "UPDATE workspaces SET initialization_parent_branch = ?2 WHERE id = ?1",
-                (workspace_id, target_branch),
-            )
-            .context("Failed to update initialization parent branch after reset")?;
+        let workspace_id = workspace_id.to_string();
+        let target_branch = target_branch.to_string();
+        block_on_libsql(db::libsql_write_async(|connection| async move {
+            connection
+                .execute(
+                    "UPDATE workspaces SET initialization_parent_branch = ?2 WHERE id = ?1",
+                    libsql::params![workspace_id, target_branch],
+                )
+                .await
+                .context("Failed to update initialization parent branch after reset")?;
+            Ok(())
+        }))?;
     }
 
     Ok(UpdateIntendedTargetBranchInternal {
@@ -615,43 +640,48 @@ pub fn continue_workspace_from_target_branch(
         None,
     );
 
-    let persist_result = (|| -> Result<()> {
-        let connection = db::write_conn()?;
+    let workspace_id_for_write = workspace_id.to_string();
+    let branch_for_write = branch.clone();
+    let target_branch_for_write = target_branch.clone();
+    let persist_result = block_on_libsql(db::libsql_write_async(|connection| async move {
         let updated_rows = connection
             .execute(
                 r#"
-                UPDATE workspaces
-                SET branch = ?2,
-                    status = ?3,
-                    initialization_parent_branch = ?4,
-                    intended_target_branch = ?4,
-                    pr_sync_state = ?5,
-                    pr_title = NULL,
-                    pr_url = NULL,
-                    landing_state = 'unlanded',
-                    landing_source = NULL,
-                    landed_at = NULL,
-                    landed_target_branch = NULL,
-                    landed_source_ref = NULL,
-                    landed_commit_sha = NULL,
-                    last_known_head_sha = NULL,
-                    updated_at = datetime('now')
-                WHERE id = ?1
-                "#,
-                rusqlite::params![
-                    workspace_id,
-                    branch,
-                    WorkspaceStatus::InProgress,
-                    target_branch,
-                    PrSyncState::None,
+                    UPDATE workspaces
+                    SET branch = ?2,
+                        status = ?3,
+                        initialization_parent_branch = ?4,
+                        intended_target_branch = ?4,
+                        pr_sync_state = ?5,
+                        pr_title = NULL,
+                        pr_url = NULL,
+                        landing_state = 'unlanded',
+                        landing_source = NULL,
+                        landed_at = NULL,
+                        landed_target_branch = NULL,
+                        landed_source_ref = NULL,
+                        landed_commit_sha = NULL,
+                        last_known_head_sha = NULL,
+                        updated_at = datetime('now')
+                    WHERE id = ?1
+                    "#,
+                libsql::params![
+                    workspace_id_for_write.clone(),
+                    branch_for_write,
+                    WorkspaceStatus::InProgress.as_str(),
+                    target_branch_for_write,
+                    PrSyncState::None.as_str(),
                 ],
             )
+            .await
             .context("Failed to persist continued workspace branch")?;
         if updated_rows != 1 {
-            bail!("Continue workspace update affected {updated_rows} rows for {workspace_id}");
+            bail!(
+                "Continue workspace update affected {updated_rows} rows for {workspace_id_for_write}"
+            );
         }
         Ok(())
-    })();
+    }));
     if let Err(error) = persist_result {
         rollback_continue_branch(&workspace_dir_arg, &old_branch, &branch, workspace_id);
         return Err(error);

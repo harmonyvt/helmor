@@ -99,17 +99,11 @@ pub fn run() {
             let logs_dir = data_dir::logs_dir()?;
             logging::init(&logs_dir)?;
 
-            // Initialize database schema. We apply the same PRAGMA init as
-            // the pools to get WAL mode persisted to the file before any
-            // pool connection opens.
+            // Initialize database schema through the libSQL local DB facade,
+            // then build the rusqlite compatibility pools for unmigrated
+            // synchronous call sites.
             let db_path = data_dir::db_path()?;
-            let connection = rusqlite::Connection::open(&db_path)?;
-            db::init_connection(&connection, true)?;
-            schema::ensure_schema(&connection)?;
-            drop(connection);
-
-            // Build read/write connection pools (must happen after schema).
-            db::init_pools()?;
+            db::ensure_ready()?;
 
             tracing::info!(
                 mode = data_dir::data_mode_label(),
@@ -152,12 +146,15 @@ pub fn run() {
             forge::init_bundled_cli_paths();
 
             agents::prewarm_slash_command_cache(app.handle());
-            if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
-                tracing::warn!(
-                    error = %format!("{error:#}"),
-                    "Failed to register startup global hotkey",
-                );
-            }
+            let hotkey_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = global_hotkey::sync_from_settings(hotkey_handle).await {
+                    tracing::warn!(
+                        error = %format!("{error:#}"),
+                        "Failed to register startup global hotkey",
+                    );
+                }
+            });
 
             // Start git filesystem watchers for all ready workspaces.
             let watcher_handle = app.handle().clone();
@@ -214,6 +211,7 @@ pub fn run() {
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
+            commands::settings_commands::run_libsql_experiment,
             commands::settings_commands::set_data_dir_preference,
             commands::system_commands::export_verbose_logs,
             commands::system_commands::get_cli_status,

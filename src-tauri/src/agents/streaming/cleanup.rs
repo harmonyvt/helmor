@@ -8,7 +8,24 @@
 //! `streaming/mod.rs` and the regression tests below drive the same
 //! code path.
 
-use crate::agents::{finalize_session_metadata, persist_error_message, ExchangeContext};
+use std::future::Future;
+
+use anyhow::{bail, Context, Result};
+use serde_json::json;
+
+use crate::agents::ExchangeContext;
+use crate::pipeline::types::MessageRole;
+
+fn block_on_cleanup_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("Failed to build cleanup DB runtime")?
+            .block_on(future),
+    }
+}
 
 /// Persist an error message and finalize the session after an abnormal
 /// stream exit (heartbeat timeout, channel disconnect). Returns `true` iff
@@ -28,32 +45,16 @@ pub(crate) fn cleanup_abnormal_stream_exit(
         );
         return false;
     };
-    let conn = match crate::models::db::write_conn() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(
-                rid = %rid,
-                session_id = %ctx.helmor_session_id,
-                "cleanup_abnormal_stream_exit: write_conn borrow failed — session may be stuck: {e}"
-            );
-            return false;
-        }
-    };
+    let cleanup_result = block_on_cleanup_db(cleanup_abnormal_stream_exit_libsql(
+        ctx,
+        resolved_model,
+        user_message,
+        effort_level,
+        permission_mode,
+    ));
 
-    let err_persist_ok = match persist_error_message(&conn, ctx, resolved_model, user_message) {
-        Ok(_) => true,
-        Err(error) => {
-            tracing::error!(
-                rid = %rid,
-                session_id = %ctx.helmor_session_id,
-                "cleanup_abnormal_stream_exit: persist_error_message failed: {error}"
-            );
-            false
-        }
-    };
-
-    match finalize_session_metadata(&conn, ctx, "idle", effort_level, permission_mode) {
-        Ok(_) => {
+    match cleanup_result {
+        Ok(err_persist_ok) => {
             tracing::debug!(
                 rid = %rid,
                 session_id = %ctx.helmor_session_id,
@@ -62,15 +63,225 @@ pub(crate) fn cleanup_abnormal_stream_exit(
             );
             true
         }
-        Err(error) => {
+        Err(e) => {
             tracing::error!(
                 rid = %rid,
                 session_id = %ctx.helmor_session_id,
-                "cleanup_abnormal_stream_exit: finalize_session_metadata failed: {error}"
+                "cleanup_abnormal_stream_exit: libSQL cleanup failed — session may be stuck: {e}"
             );
             false
         }
     }
+}
+
+async fn cleanup_abnormal_stream_exit_libsql(
+    ctx: &ExchangeContext,
+    resolved_model: &str,
+    user_message: &str,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<bool> {
+    let resolved_model = resolved_model.to_string();
+    let user_message = user_message.to_string();
+    let effort_level = effort_level.map(str::to_string);
+    let permission_mode = permission_mode.map(str::to_string);
+
+    crate::models::db::libsql_write_async(|conn| async move {
+        let err_persist_ok =
+            match persist_error_message_libsql(&conn, ctx, &resolved_model, &user_message).await {
+                Ok(_) => true,
+                Err(error) => {
+                    tracing::error!(
+                        session_id = %ctx.helmor_session_id,
+                        "cleanup_abnormal_stream_exit: persist_error_message failed: {error}"
+                    );
+                    false
+                }
+            };
+
+        finalize_session_metadata_libsql(
+            &conn,
+            ctx,
+            "idle",
+            effort_level.as_deref(),
+            permission_mode.as_deref(),
+        )
+        .await?;
+
+        Ok(err_persist_ok)
+    })
+    .await
+}
+
+async fn persist_error_message_libsql(
+    conn: &libsql::Connection,
+    ctx: &ExchangeContext,
+    _resolved_model: &str,
+    message: &str,
+) -> Result<String> {
+    let now = crate::models::db::current_timestamp()?;
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let payload = json!({
+        "type": "error",
+        "message": message,
+    })
+    .to_string();
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "#,
+        libsql::params![
+            msg_id.clone(),
+            ctx.helmor_session_id.clone(),
+            MessageRole::Error.as_str(),
+            payload,
+            now
+        ],
+    )
+    .await
+    .context("Failed to persist abnormal stream error message")?;
+
+    Ok(msg_id)
+}
+
+async fn finalize_session_metadata_libsql(
+    conn: &libsql::Connection,
+    ctx: &ExchangeContext,
+    status: &str,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<()> {
+    let now = crate::models::db::current_timestamp()?;
+    let transaction = conn
+        .transaction()
+        .await
+        .context("Failed to start finalize_session_metadata transaction")?;
+
+    finalize_session_metadata_in_libsql_transaction(
+        &transaction,
+        ctx,
+        &now,
+        status,
+        effort_level,
+        permission_mode,
+    )
+    .await?;
+
+    transaction
+        .commit()
+        .await
+        .context("Failed to commit finalize_session_metadata transaction")
+}
+
+async fn finalize_session_metadata_in_libsql_transaction(
+    transaction: &libsql::Transaction,
+    ctx: &ExchangeContext,
+    now: &str,
+    status: &str,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<()> {
+    transaction
+        .execute(
+            r#"
+            UPDATE sessions
+            SET
+              status = ?5,
+              model = ?2,
+              agent_type = ?3,
+              last_user_message_at = ?4,
+              effort_level = COALESCE(?6, effort_level),
+              permission_mode = COALESCE(?7, permission_mode)
+            WHERE id = ?1
+            "#,
+            libsql::params![
+                ctx.helmor_session_id.clone(),
+                ctx.model_id.clone(),
+                ctx.model_provider.clone(),
+                now,
+                status,
+                effort_level,
+                permission_mode
+            ],
+        )
+        .await
+        .context("Failed to update session metadata")?;
+
+    transaction
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET
+              active_session_id = ?2
+            WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)
+            "#,
+            libsql::params![ctx.helmor_session_id.clone(), ctx.helmor_session_id.clone()],
+        )
+        .await
+        .context("Failed to update active workspace session")?;
+
+    mark_session_read_in_libsql_transaction(transaction, &ctx.helmor_session_id).await
+}
+
+async fn mark_session_read_in_libsql_transaction(
+    transaction: &libsql::Transaction,
+    session_id: &str,
+) -> Result<()> {
+    let mut workspace_rows = transaction
+        .query(
+            "SELECT workspace_id FROM sessions WHERE id = ?1",
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to resolve workspace for session {session_id}"))?;
+    let Some(workspace_row) = workspace_rows.next().await? else {
+        bail!("Failed to resolve workspace for session {session_id}");
+    };
+    let workspace_id: String = workspace_row
+        .get(0)
+        .with_context(|| format!("Failed to resolve workspace for session {session_id}"))?;
+
+    let updated_rows = transaction
+        .execute(
+            "UPDATE sessions SET unread_count = 0 WHERE id = ?1",
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to mark session {session_id} as read"))?;
+
+    if updated_rows != 1 {
+        bail!("Session read update affected {updated_rows} rows for session {session_id}");
+    }
+
+    clear_workspace_unread_if_no_session_unread_in_libsql_transaction(transaction, &workspace_id)
+        .await
+}
+
+async fn clear_workspace_unread_if_no_session_unread_in_libsql_transaction(
+    transaction: &libsql::Transaction,
+    workspace_id: &str,
+) -> Result<()> {
+    transaction
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET unread = 0
+            WHERE id = ?1
+              AND NOT EXISTS (
+                SELECT 1
+                FROM sessions
+                WHERE workspace_id = ?1
+                  AND COALESCE(unread_count, 0) > 0
+              )
+            "#,
+            [workspace_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to clear workspace unread for {workspace_id}"))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -121,7 +332,8 @@ mod tests {
     }
 
     fn session_status() -> String {
-        crate::models::db::read_conn()
+        let db_path = crate::data_dir::db_path().unwrap();
+        rusqlite::Connection::open(db_path)
             .unwrap()
             .query_row("SELECT status FROM sessions WHERE id = 's-1'", [], |r| {
                 r.get::<_, String>(0)
@@ -130,7 +342,8 @@ mod tests {
     }
 
     fn error_message_count() -> i64 {
-        crate::models::db::read_conn()
+        let db_path = crate::data_dir::db_path().unwrap();
+        rusqlite::Connection::open(db_path)
             .unwrap()
             .query_row(
                 "SELECT COUNT(*) FROM session_messages

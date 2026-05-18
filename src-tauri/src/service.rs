@@ -3,9 +3,11 @@
 //! Re-exports domain types and functions from the core backend modules so
 //! that `[[bin]]` targets can use them without going through Tauri commands.
 
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 use anyhow::{bail, Context, Result};
+#[cfg(test)]
+#[allow(unused_imports)]
 use rusqlite::params;
 use serde::Serialize;
 use serde_json::Value;
@@ -108,6 +110,13 @@ fn looks_like_uuid(s: &str) -> bool {
     s.len() == 36 && s.chars().filter(|c| *c == '-').count() == 4
 }
 
+fn block_on_service_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Agent streaming — `helmor send`
 // ---------------------------------------------------------------------------
@@ -203,40 +212,59 @@ pub fn send_message(
         // Persist the visible handoff and selected runtime metadata before
         // notifying the app so the UI never shows an active thread with
         // model = NULL / permissionMode = default while work is queued.
-        let mut conn = crate::models::db::write_conn()?;
-        let tx = conn.transaction()?;
         let timestamp = crate::models::db::current_timestamp()?;
-        persist_send_start_on(
-            &tx,
-            &session_id,
-            model_id,
-            &model.provider,
-            params.permission_mode.as_deref(),
-            &params.prompt,
-            &timestamp,
-        )?;
-        let pending_send_id = insert_pending_cli_send_on(
-            &tx,
-            &workspace_id,
-            &session_id,
-            &params.prompt,
-            Some(model_id),
-            params.permission_mode.as_deref(),
-        )?;
-        persist_runtime_notice_on(
-            &tx,
-            &session_id,
-            RuntimeNoticeInput {
-                subtype: "agent_starting",
-                model_id,
-                provider: &model.provider,
-                permission_mode: params.permission_mode.as_deref(),
-                pending_send_id: Some(&pending_send_id),
-                provider_session_id: None,
-                message: Some("Queued for the running Helmor app. Waiting for first model output."),
-            },
-        )?;
-        tx.commit()?;
+        let session_id_for_db = session_id.clone();
+        let workspace_id_for_db = workspace_id.clone();
+        let prompt_for_db = params.prompt.clone();
+        let model_provider_for_db = model.provider.to_string();
+        let permission_mode_for_db = params.permission_mode.clone();
+        let model_id_for_db = model_id.to_string();
+        let pending_send_id =
+            block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+                let tx = conn
+                    .transaction()
+                    .await
+                    .context("Failed to start pending CLI send transaction")?;
+                persist_send_start_on_libsql_tx(
+                    &tx,
+                    &session_id_for_db,
+                    &model_id_for_db,
+                    &model_provider_for_db,
+                    permission_mode_for_db.as_deref(),
+                    &prompt_for_db,
+                    &timestamp,
+                )
+                .await?;
+                let pending_send_id = insert_pending_cli_send_on_libsql_tx(
+                    &tx,
+                    &workspace_id_for_db,
+                    &session_id_for_db,
+                    &prompt_for_db,
+                    Some(&model_id_for_db),
+                    permission_mode_for_db.as_deref(),
+                )
+                .await?;
+                persist_runtime_notice_on_libsql_tx(
+                    &tx,
+                    &session_id_for_db,
+                    RuntimeNoticeInput {
+                        subtype: "agent_starting",
+                        model_id: &model_id_for_db,
+                        provider: &model_provider_for_db,
+                        permission_mode: permission_mode_for_db.as_deref(),
+                        pending_send_id: Some(&pending_send_id),
+                        provider_session_id: None,
+                        message: Some(
+                            "Queued for the running Helmor app. Waiting for first model output.",
+                        ),
+                    },
+                )
+                .await?;
+                tx.commit()
+                    .await
+                    .context("Failed to commit pending CLI send transaction")?;
+                Ok(pending_send_id)
+            }))?;
 
         let _ = crate::ui_sync::notify_running_app(
             crate::ui_sync::UiMutationEvent::PendingCliSendQueued {
@@ -563,31 +591,40 @@ fn persist_standalone_send_start(
     prompt: &str,
     request_id: &str,
 ) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
     let timestamp = crate::models::db::current_timestamp()?;
-    persist_send_start_on(
-        &conn,
-        session_id,
-        model_id,
-        provider,
-        permission_mode,
-        prompt,
-        &timestamp,
-    )?;
-    persist_runtime_notice_on(
-        &conn,
-        session_id,
-        RuntimeNoticeInput {
-            subtype: "agent_starting",
-            model_id,
-            provider,
-            permission_mode,
-            pending_send_id: Some(request_id),
-            provider_session_id: None,
-            message: Some("Agent process spawned. Waiting for first model output."),
-        },
-    )?;
-    Ok(())
+    let session_id = session_id.to_string();
+    let model_id = model_id.to_string();
+    let provider = provider.to_string();
+    let permission_mode = permission_mode.map(str::to_string);
+    let prompt = prompt.to_string();
+    let request_id = request_id.to_string();
+    block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+        persist_send_start_on_libsql(
+            &conn,
+            &session_id,
+            &model_id,
+            &provider,
+            permission_mode.as_deref(),
+            &prompt,
+            &timestamp,
+        )
+        .await?;
+        persist_runtime_notice_on_libsql(
+            &conn,
+            &session_id,
+            RuntimeNoticeInput {
+                subtype: "agent_starting",
+                model_id: &model_id,
+                provider: &provider,
+                permission_mode: permission_mode.as_deref(),
+                pending_send_id: Some(&request_id),
+                provider_session_id: None,
+                message: Some("Agent process spawned. Waiting for first model output."),
+            },
+        )
+        .await?;
+        Ok(())
+    }))
 }
 
 fn persist_provider_session_opened(
@@ -595,29 +632,45 @@ fn persist_provider_session_opened(
     provider_session_id: &str,
     input: RuntimeNoticeInput<'_>,
 ) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
-    conn.execute(
-        "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
-        params![session_id, provider_session_id, input.provider],
-    )?;
-    persist_runtime_notice_on(&conn, session_id, input)?;
-    Ok(())
+    let input = input.into_owned_for_session(session_id);
+    let provider_session_id = provider_session_id.to_string();
+    block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+        conn.execute(
+            "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
+            libsql::params![
+                input.session_id.clone(),
+                provider_session_id,
+                input.provider.clone()
+            ],
+        )
+        .await
+        .context("Failed to persist provider session id")?;
+        persist_runtime_notice_on_libsql(&conn, &input.session_id, input.as_notice_input()).await?;
+        Ok(())
+    }))
 }
 
 fn persist_runtime_notice(session_id: &str, input: RuntimeNoticeInput<'_>) -> Result<String> {
-    let conn = crate::models::db::write_conn()?;
-    persist_runtime_notice_on(&conn, session_id, input)
+    let input = input.into_owned_for_session(session_id);
+    block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+        persist_runtime_notice_on_libsql(&conn, &input.session_id, input.as_notice_input()).await
+    }))
 }
 
 fn set_session_idle(session_id: &str) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
-    conn.execute(
-        "UPDATE sessions SET status = 'idle', updated_at = datetime('now') WHERE id = ?1",
-        params![session_id],
-    )?;
-    Ok(())
+    let session_id = session_id.to_string();
+    block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+        conn.execute(
+            "UPDATE sessions SET status = 'idle', updated_at = datetime('now') WHERE id = ?1",
+            [session_id],
+        )
+        .await
+        .context("Failed to set session idle")?;
+        Ok(())
+    }))
 }
 
+#[cfg(test)]
 fn persist_send_start_on(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -666,6 +719,47 @@ struct RuntimeNoticeInput<'a> {
     message: Option<&'a str>,
 }
 
+struct RuntimeNoticeOwned {
+    session_id: String,
+    subtype: String,
+    model_id: String,
+    provider: String,
+    permission_mode: Option<String>,
+    pending_send_id: Option<String>,
+    provider_session_id: Option<String>,
+    message: Option<String>,
+}
+
+impl RuntimeNoticeInput<'_> {
+    fn into_owned_for_session(self, session_id: &str) -> RuntimeNoticeOwned {
+        RuntimeNoticeOwned {
+            session_id: session_id.to_string(),
+            subtype: self.subtype.to_string(),
+            model_id: self.model_id.to_string(),
+            provider: self.provider.to_string(),
+            permission_mode: self.permission_mode.map(str::to_string),
+            pending_send_id: self.pending_send_id.map(str::to_string),
+            provider_session_id: self.provider_session_id.map(str::to_string),
+            message: self.message.map(str::to_string),
+        }
+    }
+}
+
+impl RuntimeNoticeOwned {
+    fn as_notice_input(&self) -> RuntimeNoticeInput<'_> {
+        RuntimeNoticeInput {
+            subtype: &self.subtype,
+            model_id: &self.model_id,
+            provider: &self.provider,
+            permission_mode: self.permission_mode.as_deref(),
+            pending_send_id: self.pending_send_id.as_deref(),
+            provider_session_id: self.provider_session_id.as_deref(),
+            message: self.message.as_deref(),
+        }
+    }
+}
+
+#[cfg(test)]
 fn persist_runtime_notice_on(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -693,11 +787,153 @@ fn persist_runtime_notice_on(
     Ok(notice_id)
 }
 
-fn persist_turn(session_id: &str, turn: &crate::pipeline::types::CollectedTurn) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
-    persist_turn_on(&conn, session_id, turn)
+async fn persist_send_start_on_libsql(
+    conn: &libsql::Connection,
+    session_id: &str,
+    model_id: &str,
+    provider: &str,
+    permission_mode: Option<&str>,
+    prompt: &str,
+    timestamp: &str,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE sessions
+        SET status = 'streaming',
+            model = ?2,
+            agent_type = ?3,
+            permission_mode = COALESCE(?4, permission_mode),
+            last_user_message_at = ?5,
+            updated_at = ?5
+        WHERE id = ?1
+        "#,
+        libsql::params![session_id, model_id, provider, permission_mode, timestamp],
+    )
+    .await
+    .context("Failed to update session send-start metadata")?;
+
+    let user_msg_id = Uuid::new_v4().to_string();
+    let user_content = serde_json::json!({
+        "type": "user_prompt",
+        "text": prompt,
+    })
+    .to_string();
+    conn.execute(
+        r#"INSERT INTO session_messages
+           (id, session_id, role, content, created_at, sent_at)
+           VALUES (?1, ?2, 'user', ?3, ?4, ?4)"#,
+        libsql::params![user_msg_id, session_id, user_content, timestamp],
+    )
+    .await
+    .context("Failed to persist user prompt message")?;
+    Ok(())
 }
 
+async fn persist_send_start_on_libsql_tx(
+    tx: &libsql::Transaction,
+    session_id: &str,
+    model_id: &str,
+    provider: &str,
+    permission_mode: Option<&str>,
+    prompt: &str,
+    timestamp: &str,
+) -> Result<()> {
+    tx.execute(
+        r#"
+        UPDATE sessions
+        SET status = 'streaming',
+            model = ?2,
+            agent_type = ?3,
+            permission_mode = COALESCE(?4, permission_mode),
+            last_user_message_at = ?5,
+            updated_at = ?5
+        WHERE id = ?1
+        "#,
+        libsql::params![session_id, model_id, provider, permission_mode, timestamp],
+    )
+    .await
+    .context("Failed to update session send-start metadata")?;
+
+    let user_msg_id = Uuid::new_v4().to_string();
+    let user_content = serde_json::json!({
+        "type": "user_prompt",
+        "text": prompt,
+    })
+    .to_string();
+    tx.execute(
+        r#"INSERT INTO session_messages
+           (id, session_id, role, content, created_at, sent_at)
+           VALUES (?1, ?2, 'user', ?3, ?4, ?4)"#,
+        libsql::params![user_msg_id, session_id, user_content, timestamp],
+    )
+    .await
+    .context("Failed to persist user prompt message")?;
+    Ok(())
+}
+
+async fn persist_runtime_notice_on_libsql(
+    conn: &libsql::Connection,
+    session_id: &str,
+    input: RuntimeNoticeInput<'_>,
+) -> Result<String> {
+    let timestamp = crate::models::db::current_timestamp()?;
+    let notice_id = Uuid::new_v4().to_string();
+    let content = runtime_notice_content(input)?;
+    conn.execute(
+        r#"INSERT INTO session_messages
+           (id, session_id, role, content, created_at, sent_at)
+           VALUES (?1, ?2, 'system', ?3, ?4, ?4)"#,
+        libsql::params![notice_id.clone(), session_id, content, timestamp],
+    )
+    .await
+    .context("Failed to persist runtime notice")?;
+    Ok(notice_id)
+}
+
+async fn persist_runtime_notice_on_libsql_tx(
+    tx: &libsql::Transaction,
+    session_id: &str,
+    input: RuntimeNoticeInput<'_>,
+) -> Result<String> {
+    let timestamp = crate::models::db::current_timestamp()?;
+    let notice_id = Uuid::new_v4().to_string();
+    let content = runtime_notice_content(input)?;
+    tx.execute(
+        r#"INSERT INTO session_messages
+           (id, session_id, role, content, created_at, sent_at)
+           VALUES (?1, ?2, 'system', ?3, ?4, ?4)"#,
+        libsql::params![notice_id.clone(), session_id, content, timestamp],
+    )
+    .await
+    .context("Failed to persist runtime notice")?;
+    Ok(notice_id)
+}
+
+fn runtime_notice_content(input: RuntimeNoticeInput<'_>) -> Result<String> {
+    Ok(serde_json::json!({
+        "type": "system",
+        "subtype": input.subtype,
+        "model": input.model_id,
+        "provider": input.provider,
+        "permissionMode": input.permission_mode,
+        "pendingSendId": input.pending_send_id,
+        "providerSessionId": input.provider_session_id,
+        "message": input.message,
+    })
+    .to_string())
+}
+
+fn persist_turn(session_id: &str, turn: &crate::pipeline::types::CollectedTurn) -> Result<()> {
+    let session_id = session_id.to_string();
+    let turn = turn.clone();
+    block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+        crate::agents::persist_collected_turn_message_libsql(&conn, &session_id, &turn)
+            .await
+            .map(|_| ())
+    }))
+}
+
+#[cfg(test)]
 fn persist_turn_on(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -714,17 +950,27 @@ fn finalize_session(
     status: &str,
     permission_mode: Option<&str>,
 ) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
     let now = crate::models::db::current_timestamp()?;
-    conn.execute(
-        "UPDATE sessions SET status = ?2, model = ?3, agent_type = ?4, last_user_message_at = ?5, updated_at = ?5, permission_mode = COALESCE(?6, permission_mode) WHERE id = ?1",
-        params![session_id, status, model_id, provider, now, permission_mode],
-    )?;
-    conn.execute(
-        "UPDATE workspaces SET active_session_id = ?2 WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)",
-        params![session_id, session_id],
-    )?;
-    Ok(())
+    let session_id = session_id.to_string();
+    let model_id = model_id.to_string();
+    let provider = provider.to_string();
+    let status = status.to_string();
+    let permission_mode = permission_mode.map(str::to_string);
+    block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+        conn.execute(
+            "UPDATE sessions SET status = ?2, model = ?3, agent_type = ?4, last_user_message_at = ?5, updated_at = ?5, permission_mode = COALESCE(?6, permission_mode) WHERE id = ?1",
+            libsql::params![session_id.clone(), status, model_id, provider, now, permission_mode],
+        )
+        .await
+        .context("Failed to finalize session metadata")?;
+        conn.execute(
+            "UPDATE workspaces SET active_session_id = ?2 WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)",
+            libsql::params![session_id.clone(), session_id],
+        )
+        .await
+        .context("Failed to update active workspace session")?;
+        Ok(())
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -755,17 +1001,25 @@ pub fn insert_pending_cli_send(
     model_id: Option<&str>,
     permission_mode: Option<&str>,
 ) -> Result<String> {
-    let conn = crate::models::db::write_conn()?;
-    insert_pending_cli_send_on(
-        &conn,
-        workspace_id,
-        session_id,
-        prompt,
-        model_id,
-        permission_mode,
-    )
+    let workspace_id = workspace_id.to_string();
+    let session_id = session_id.to_string();
+    let prompt = prompt.to_string();
+    let model_id = model_id.map(str::to_string);
+    let permission_mode = permission_mode.map(str::to_string);
+    block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+        insert_pending_cli_send_on_libsql(
+            &conn,
+            &workspace_id,
+            &session_id,
+            &prompt,
+            model_id.as_deref(),
+            permission_mode.as_deref(),
+        )
+        .await
+    }))
 }
 
+#[cfg(test)]
 pub(crate) fn insert_pending_cli_send_on(
     conn: &rusqlite::Connection,
     workspace_id: &str,
@@ -784,95 +1038,176 @@ pub(crate) fn insert_pending_cli_send_on(
     Ok(id)
 }
 
+async fn insert_pending_cli_send_on_libsql(
+    conn: &libsql::Connection,
+    workspace_id: &str,
+    session_id: &str,
+    prompt: &str,
+    model_id: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<String> {
+    let id = Uuid::new_v4().to_string();
+    conn.execute(
+        r#"INSERT INTO pending_cli_sends (id, workspace_id, session_id, prompt, model_id, permission_mode)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
+        libsql::params![
+            id.clone(),
+            workspace_id,
+            session_id,
+            prompt,
+            model_id,
+            permission_mode
+        ],
+    )
+    .await
+    .context("Failed to insert pending CLI send")?;
+    Ok(id)
+}
+
+pub(crate) async fn insert_pending_cli_send_on_libsql_tx(
+    tx: &libsql::Transaction,
+    workspace_id: &str,
+    session_id: &str,
+    prompt: &str,
+    model_id: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<String> {
+    let id = Uuid::new_v4().to_string();
+    tx.execute(
+        r#"INSERT INTO pending_cli_sends (id, workspace_id, session_id, prompt, model_id, permission_mode)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
+        libsql::params![
+            id.clone(),
+            workspace_id,
+            session_id,
+            prompt,
+            model_id,
+            permission_mode
+        ],
+    )
+    .await
+    .context("Failed to insert pending CLI send")?;
+    Ok(id)
+}
+
+fn pending_cli_send_from_libsql_row(row: &libsql::Row) -> Result<PendingCliSend> {
+    Ok(PendingCliSend {
+        id: row.get(0).context("Failed to read pending send id")?,
+        workspace_id: row
+            .get(1)
+            .context("Failed to read pending send workspace id")?,
+        session_id: row
+            .get(2)
+            .context("Failed to read pending send session id")?,
+        prompt: row.get(3).context("Failed to read pending send prompt")?,
+        model_id: row.get(4).context("Failed to read pending send model id")?,
+        permission_mode: row
+            .get(5)
+            .context("Failed to read pending send permission mode")?,
+        status: row.get(6).context("Failed to read pending send status")?,
+        last_drained_at: row
+            .get(7)
+            .context("Failed to read pending send last drained time")?,
+        started_at: row
+            .get(8)
+            .context("Failed to read pending send started time")?,
+        created_at: row
+            .get(9)
+            .context("Failed to read pending send created time")?,
+    })
+}
+
 /// Claim the next queued pending send without deleting it. The frontend must
 /// call [`ack_pending_cli_send_started`] after the prompt has been handed to
 /// the composer submit path. This avoids silently losing prompts if the app
 /// drains the table but never starts streaming.
 pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
-    let mut conn = crate::models::db::write_conn()?;
-    let tx = conn
-        .transaction()
-        .context("Failed to start pending send drain")?;
+    block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+        let tx = conn
+            .transaction()
+            .await
+            .context("Failed to start pending send drain")?;
 
-    tx.execute(
-        r#"
-        UPDATE pending_cli_sends
-        SET status = 'queued', last_drained_at = NULL
-        WHERE status = 'draining'
-          AND last_drained_at IS NOT NULL
-          AND datetime(last_drained_at) < datetime('now', '-30 seconds')
-        "#,
-        [],
-    )
-    .context("Failed to reset stale pending CLI sends")?;
-
-    let row = {
-        let mut stmt = tx.prepare(
+        tx.execute(
             r#"
-            SELECT id, workspace_id, session_id, prompt, model_id, permission_mode,
-                   status, last_drained_at, started_at, created_at
-            FROM pending_cli_sends
-            WHERE status = 'queued'
-            ORDER BY datetime(created_at) ASC, rowid ASC
-            LIMIT 1
+            UPDATE pending_cli_sends
+            SET status = 'queued', last_drained_at = NULL
+            WHERE status = 'draining'
+              AND last_drained_at IS NOT NULL
+              AND datetime(last_drained_at) < datetime('now', '-30 seconds')
             "#,
-        )?;
-        let mut rows = stmt.query_map([], |row| {
-            Ok(PendingCliSend {
-                id: row.get(0)?,
-                workspace_id: row.get(1)?,
-                session_id: row.get(2)?,
-                prompt: row.get(3)?,
-                model_id: row.get(4)?,
-                permission_mode: row.get(5)?,
-                status: row.get(6)?,
-                last_drained_at: row.get(7)?,
-                started_at: row.get(8)?,
-                created_at: row.get(9)?,
-            })
-        })?;
-        rows.next()
-            .transpose()
-            .context("Failed to read pending CLI send")?
-    };
+            (),
+        )
+        .await
+        .context("Failed to reset stale pending CLI sends")?;
 
-    let Some(send) = row else {
+        let row = {
+            let mut rows = tx
+                .query(
+                    r#"
+                    SELECT id, workspace_id, session_id, prompt, model_id, permission_mode,
+                           status, last_drained_at, started_at, created_at
+                    FROM pending_cli_sends
+                    WHERE status = 'queued'
+                    ORDER BY datetime(created_at) ASC, rowid ASC
+                    LIMIT 1
+                    "#,
+                    (),
+                )
+                .await
+                .context("Failed to read pending CLI send")?;
+            match rows.next().await? {
+                Some(row) => Some(pending_cli_send_from_libsql_row(&row)?),
+                None => None,
+            }
+        };
+
+        let Some(send) = row else {
+            tx.commit()
+                .await
+                .context("Failed to commit empty pending send drain")?;
+            return Ok(Vec::new());
+        };
+
+        let drained_at = crate::models::db::current_timestamp()?;
+        tx.execute(
+            "UPDATE pending_cli_sends SET status = 'draining', last_drained_at = ?2 WHERE id = ?1",
+            libsql::params![send.id.clone(), drained_at.clone()],
+        )
+        .await
+        .context("Failed to mark pending CLI send as draining")?;
         tx.commit()
-            .context("Failed to commit empty pending send drain")?;
-        return Ok(Vec::new());
-    };
+            .await
+            .context("Failed to commit pending send drain")?;
 
-    let drained_at = crate::models::db::current_timestamp()?;
-    tx.execute(
-        "UPDATE pending_cli_sends SET status = 'draining', last_drained_at = ?2 WHERE id = ?1",
-        params![&send.id, &drained_at],
-    )
-    .context("Failed to mark pending CLI send as draining")?;
-    tx.commit().context("Failed to commit pending send drain")?;
-
-    Ok(vec![PendingCliSend {
-        status: "draining".to_string(),
-        last_drained_at: Some(drained_at),
-        ..send
-    }])
+        Ok(vec![PendingCliSend {
+            status: "draining".to_string(),
+            last_drained_at: Some(drained_at),
+            ..send
+        }])
+    }))
 }
 
 /// Acknowledge that the frontend has handed a pending CLI send to the normal
 /// submit/start path. The row is removed only after this acknowledgement.
 pub fn ack_pending_cli_send_started(id: &str) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
-    conn.execute(
-        r#"
-        UPDATE pending_cli_sends
-        SET status = 'started', started_at = datetime('now')
-        WHERE id = ?1
-        "#,
-        [id],
-    )
-    .with_context(|| format!("Failed to acknowledge pending CLI send {id}"))?;
-    conn.execute("DELETE FROM pending_cli_sends WHERE id = ?1", [id])
-        .with_context(|| format!("Failed to delete acknowledged pending CLI send {id}"))?;
-    Ok(())
+    let id = id.to_string();
+    block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
+        conn.execute(
+            r#"
+            UPDATE pending_cli_sends
+            SET status = 'started', started_at = datetime('now')
+            WHERE id = ?1
+            "#,
+            [id.clone()],
+        )
+        .await
+        .with_context(|| format!("Failed to acknowledge pending CLI send {id}"))?;
+        conn.execute("DELETE FROM pending_cli_sends WHERE id = ?1", [id.clone()])
+            .await
+            .with_context(|| format!("Failed to delete acknowledged pending CLI send {id}"))?;
+        Ok(())
+    }))
 }
 
 /// Check if the Helmor App is running by testing the MCP bridge port.

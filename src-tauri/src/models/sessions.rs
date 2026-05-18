@@ -1,12 +1,23 @@
+use std::future::Future;
+
 use anyhow::{bail, Context, Result};
-use rusqlite::{Connection, OptionalExtension, Transaction};
+use rusqlite::Transaction;
+#[cfg(test)]
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agents::ActionKind;
-use crate::pipeline::types::HistoricalRecord;
+use crate::pipeline::types::{HistoricalRecord, MessageRole};
 
 use super::{db, settings};
+
+fn block_on_session_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -246,16 +257,127 @@ pub struct WorkspaceSessionSummary {
     pub active: bool,
 }
 
-pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>> {
-    let connection = db::read_conn()?;
-    let active_session_id: Option<String> = connection.query_row(
-        "SELECT active_session_id FROM workspaces WHERE id = ?1",
-        [workspace_id],
-        |row| row.get(0),
-    )?;
+fn action_kind_from_libsql_row(
+    row: &libsql::Row,
+    index: i32,
+    column_name: &str,
+) -> Result<Option<ActionKind>> {
+    let raw: Option<String> = row
+        .get(index)
+        .with_context(|| format!("Failed to read {column_name}"))?;
+    raw.map(|value| {
+        value
+            .parse()
+            .with_context(|| format!("Failed to parse {column_name} value {value:?}"))
+    })
+    .transpose()
+}
 
-    let mut statement = connection.prepare(
-        r#"
+fn workspace_session_summary_from_libsql_row(
+    row: &libsql::Row,
+    active_session_id: Option<&str>,
+) -> Result<WorkspaceSessionSummary> {
+    let id: String = row.get(0).context("Failed to read session id")?;
+    Ok(WorkspaceSessionSummary {
+        active: active_session_id == Some(id.as_str()),
+        id,
+        workspace_id: row.get(1).context("Failed to read session workspace_id")?,
+        title: row.get(2).context("Failed to read session title")?,
+        agent_type: row.get(3).context("Failed to read session agent_type")?,
+        status: row.get(4).context("Failed to read session status")?,
+        model: row.get(5).context("Failed to read session model")?,
+        permission_mode: row
+            .get(6)
+            .context("Failed to read session permission_mode")?,
+        provider_session_id: row
+            .get(7)
+            .context("Failed to read session provider_session_id")?,
+        effort_level: row.get(8).context("Failed to read session effort_level")?,
+        unread_count: row.get(9).context("Failed to read session unread_count")?,
+        fast_mode: row
+            .get::<i64>(10)
+            .context("Failed to read session fast_mode")?
+            != 0,
+        created_at: row.get(11).context("Failed to read session created_at")?,
+        updated_at: row.get(12).context("Failed to read session updated_at")?,
+        last_user_message_at: row
+            .get(13)
+            .context("Failed to read session last_user_message_at")?,
+        is_hidden: row
+            .get::<i64>(14)
+            .context("Failed to read session is_hidden")?
+            != 0,
+        action_kind: action_kind_from_libsql_row(row, 15, "session action_kind")?,
+        thread_role: row.get(16).context("Failed to read session thread_role")?,
+        thread_status: row
+            .get(17)
+            .context("Failed to read session thread_status")?,
+        supersedes_thread_id: row
+            .get(18)
+            .context("Failed to read session supersedes_thread_id")?,
+        stale_reason: row.get(19).context("Failed to read session stale_reason")?,
+        last_supervisor_message_id: row
+            .get(20)
+            .context("Failed to read session last_supervisor_message_id")?,
+        last_milestone_report_id: row
+            .get(21)
+            .context("Failed to read session last_milestone_report_id")?,
+        surface_kind: row.get(22).context("Failed to read session surface_kind")?,
+        surface_mode: row.get(23).context("Failed to read session surface_mode")?,
+        control_owner: row
+            .get(24)
+            .context("Failed to read session control_owner")?,
+        input_policy: row.get(25).context("Failed to read session input_policy")?,
+        created_by: row.get(26).context("Failed to read session created_by")?,
+        terminal_runtime: row
+            .get(27)
+            .context("Failed to read session terminal_runtime")?,
+        terminal_cwd: row.get(28).context("Failed to read session terminal_cwd")?,
+        terminal_started_at: row
+            .get(29)
+            .context("Failed to read session terminal_started_at")?,
+        terminal_stopped_at: row
+            .get(30)
+            .context("Failed to read session terminal_stopped_at")?,
+        terminal_exit_code: row
+            .get(31)
+            .context("Failed to read session terminal_exit_code")?,
+        parent_session_id: row
+            .get(32)
+            .context("Failed to read delegation parent_session_id")?,
+        parent_message_id: row
+            .get(33)
+            .context("Failed to read delegation parent_message_id")?,
+        delegation_status: row.get(34).context("Failed to read delegation status")?,
+        child_count: row.get(35).context("Failed to read child_count")?,
+    })
+}
+
+pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>> {
+    block_on_session_db(list_workspace_sessions_async(workspace_id))
+}
+
+pub async fn list_workspace_sessions_async(
+    workspace_id: &str,
+) -> Result<Vec<WorkspaceSessionSummary>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut active_rows = connection
+        .query(
+            "SELECT active_session_id FROM workspaces WHERE id = ?1",
+            [workspace_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to read active session for workspace {workspace_id}"))?;
+    let Some(active_row) = active_rows.next().await? else {
+        bail!("Workspace {workspace_id} does not exist");
+    };
+    let active_session_id: Option<String> = active_row
+        .get(0)
+        .with_context(|| format!("Failed to read active session for workspace {workspace_id}"))?;
+
+    let mut rows = connection
+        .query(
+            r#"
             SELECT
               s.id,
               s.workspace_id,
@@ -305,53 +427,19 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
             ORDER BY
               datetime(s.created_at) ASC
             "#,
-    )?;
+            [workspace_id.to_string()],
+        )
+        .await
+        .context("Failed to query workspace sessions")?;
 
-    let rows = statement.query_map([workspace_id], |row| {
-        let id: String = row.get(0)?;
-
-        Ok(WorkspaceSessionSummary {
-            active: active_session_id.as_deref() == Some(id.as_str()),
-            id,
-            workspace_id: row.get(1)?,
-            title: row.get(2)?,
-            agent_type: row.get(3)?,
-            status: row.get(4)?,
-            model: row.get(5)?,
-            permission_mode: row.get(6)?,
-            provider_session_id: row.get(7)?,
-            effort_level: row.get(8)?,
-            unread_count: row.get(9)?,
-            fast_mode: row.get::<_, i64>(10)? != 0,
-            created_at: row.get(11)?,
-            updated_at: row.get(12)?,
-            last_user_message_at: row.get(13)?,
-            is_hidden: row.get::<_, i64>(14)? != 0,
-            action_kind: row.get(15)?,
-            thread_role: row.get(16)?,
-            thread_status: row.get(17)?,
-            supersedes_thread_id: row.get(18)?,
-            stale_reason: row.get(19)?,
-            last_supervisor_message_id: row.get(20)?,
-            last_milestone_report_id: row.get(21)?,
-            surface_kind: row.get(22)?,
-            surface_mode: row.get(23)?,
-            control_owner: row.get(24)?,
-            input_policy: row.get(25)?,
-            created_by: row.get(26)?,
-            terminal_runtime: row.get(27)?,
-            terminal_cwd: row.get(28)?,
-            terminal_started_at: row.get(29)?,
-            terminal_stopped_at: row.get(30)?,
-            terminal_exit_code: row.get(31)?,
-            parent_session_id: row.get(32)?,
-            parent_message_id: row.get(33)?,
-            delegation_status: row.get(34)?,
-            child_count: row.get(35)?,
-        })
-    })?;
-
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    let mut sessions = Vec::new();
+    while let Some(row) = rows.next().await? {
+        sessions.push(workspace_session_summary_from_libsql_row(
+            &row,
+            active_session_id.as_deref(),
+        )?);
+    }
+    Ok(sessions)
 }
 
 /// Lightweight result returned by the cross-workspace session search used by
@@ -373,10 +461,15 @@ pub struct SessionSearchResult {
 /// (case-insensitive substring). Only sessions in non-archived workspaces are
 /// returned. Results are ordered by recency and capped at 25.
 pub fn search_sessions(query: &str) -> Result<Vec<SessionSearchResult>> {
-    let connection = db::read_conn()?;
+    block_on_session_db(search_sessions_async(query))
+}
+
+pub async fn search_sessions_async(query: &str) -> Result<Vec<SessionSearchResult>> {
+    let connection = db::libsql_conn_async().await?;
     let pattern = format!("%{}%", query.to_lowercase());
-    let mut statement = connection.prepare(
-        r#"
+    let mut rows = connection
+        .query(
+            r#"
         SELECT
           s.id,
           s.workspace_id,
@@ -395,27 +488,73 @@ pub fn search_sessions(query: &str) -> Result<Vec<SessionSearchResult>> {
         ORDER BY s.updated_at DESC
         LIMIT 25
         "#,
-    )?;
+            [pattern],
+        )
+        .await
+        .context("Failed to search sessions")?;
 
-    let rows = statement.query_map([&pattern], |row| {
-        Ok(SessionSearchResult {
-            id: row.get(0)?,
-            workspace_id: row.get(1)?,
-            session_title: row.get(2)?,
-            workspace_directory_name: row.get(3)?,
-            workspace_branch: row.get(4)?,
-            workspace_repo_name: row.get(5)?,
-        })
-    })?;
-
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        results.push(SessionSearchResult {
+            id: row.get(0).context("Failed to read session id")?,
+            workspace_id: row.get(1).context("Failed to read workspace id")?,
+            session_title: row.get(2).context("Failed to read session title")?,
+            workspace_directory_name: row
+                .get(3)
+                .context("Failed to read workspace directory name")?,
+            workspace_branch: row.get(4).context("Failed to read workspace branch")?,
+            workspace_repo_name: row.get(5).context("Failed to read repo name")?,
+        });
+    }
+    Ok(results)
 }
 
 pub fn list_session_historical_records(session_id: &str) -> Result<Vec<HistoricalRecord>> {
-    let connection = db::read_conn()?;
-    list_session_historical_records_with_connection(&connection, session_id)
+    block_on_session_db(list_session_historical_records_async(session_id))
 }
 
+pub async fn list_session_historical_records_async(
+    session_id: &str,
+) -> Result<Vec<HistoricalRecord>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            r#"
+            SELECT
+              sm.id,
+              sm.role,
+              sm.content,
+              sm.created_at
+            FROM session_messages sm
+            WHERE sm.session_id = ?1
+            ORDER BY COALESCE(julianday(sm.sent_at), julianday(sm.created_at)) ASC, sm.rowid ASC
+            "#,
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to list historical records for session {session_id}"))?;
+
+    let mut records = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let content: String = row.get(2).context("Failed to read message content")?;
+        let parsed_content = serde_json::from_str::<Value>(&content).ok();
+        let role = row
+            .get::<String>(1)
+            .context("Failed to read message role")?
+            .parse::<MessageRole>()
+            .context("Failed to parse message role")?;
+        records.push(HistoricalRecord {
+            id: row.get(0).context("Failed to read message id")?,
+            role,
+            content,
+            parsed_content,
+            created_at: row.get(3).context("Failed to read message created_at")?,
+        });
+    }
+    Ok(records)
+}
+
+#[cfg(test)]
 fn adjacent_visible_session_id(
     transaction: &Transaction<'_>,
     workspace_id: &str,
@@ -452,6 +591,48 @@ fn adjacent_visible_session_id(
         .cloned())
 }
 
+async fn adjacent_visible_session_id_libsql(
+    transaction: &libsql::Transaction,
+    workspace_id: &str,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let mut rows = transaction
+        .query(
+            r#"
+            SELECT s.id FROM sessions s
+            LEFT JOIN session_delegations child ON child.child_session_id = s.id
+            WHERE s.workspace_id = ?1
+              AND COALESCE(s.is_hidden, 0) = 0
+              AND child.child_session_id IS NULL
+            ORDER BY datetime(s.created_at) ASC
+            "#,
+            [workspace_id.to_string()],
+        )
+        .await
+        .context("Failed to query adjacent visible sessions")?;
+    let mut visible_session_ids = Vec::new();
+    while let Some(row) = rows.next().await? {
+        visible_session_ids.push(row.get::<String>(0).context("Failed to read session id")?);
+    }
+
+    let Some(index) = visible_session_ids
+        .iter()
+        .position(|candidate| candidate == session_id)
+    else {
+        return Ok(None);
+    };
+
+    Ok(visible_session_ids
+        .get(index + 1)
+        .or_else(|| {
+            index
+                .checked_sub(1)
+                .and_then(|prev| visible_session_ids.get(prev))
+        })
+        .cloned())
+}
+
+#[cfg(test)]
 fn list_session_historical_records_with_connection(
     connection: &Connection,
     session_id: &str,
@@ -492,49 +673,61 @@ fn list_session_historical_records_with_connection(
 // ---- Session read/unread functions ----
 
 pub fn mark_session_read(session_id: &str) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start mark-read transaction")?;
+    block_on_session_db(mark_session_read_async(session_id))
+}
 
-    mark_session_read_in_transaction(&transaction, session_id)?;
+pub async fn mark_session_read_async(session_id: &str) -> Result<()> {
+    let session_id = session_id.to_string();
+    db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction()
+            .await
+            .context("Failed to start mark-read transaction")?;
 
-    transaction
-        .commit()
-        .context("Failed to commit session read transaction")
+        mark_session_read_in_libsql_transaction(&transaction, &session_id).await?;
+
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit session read transaction")
+    })
+    .await
 }
 
 pub fn mark_session_unread(session_id: &str) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start mark-unread transaction")?;
-
-    mark_session_unread_in_transaction(&transaction, session_id)?;
-
-    transaction
-        .commit()
-        .context("Failed to commit session unread transaction")
+    block_on_session_db(mark_session_unread_async(session_id))
 }
 
-pub(crate) fn mark_session_unread_in_transaction(
-    transaction: &Transaction<'_>,
+pub async fn mark_session_unread_async(session_id: &str) -> Result<()> {
+    let session_id = session_id.to_string();
+    db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction()
+            .await
+            .context("Failed to start mark-unread transaction")?;
+
+        mark_session_unread_in_libsql_transaction(&transaction, &session_id).await?;
+
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit session unread transaction")
+    })
+    .await
+}
+
+async fn mark_session_unread_in_libsql_transaction(
+    transaction: &libsql::Transaction,
     session_id: &str,
 ) -> Result<()> {
-    // Bump to at least 1 — idempotent for a session that's already marked
-    // unread, and avoids drifting upwards on repeated background completions.
-    // `workspaces.unread` is an independent flag, not mirrored from sessions,
-    // so we don't touch it here; `has_unread` is derived as
-    // `workspaces.unread OR (any session unread_count > 0)`.
     let updated_rows = transaction
         .execute(
             "UPDATE sessions SET unread_count = MAX(COALESCE(unread_count, 0), 1) WHERE id = ?1",
-            [session_id],
+            [session_id.to_string()],
         )
+        .await
         .with_context(|| format!("Failed to mark session {session_id} as unread"))?;
 
-    // 0 rows = session was deleted mid-flight; benign race, skip silently.
-    // >1 rows = duplicate primary key, genuinely broken schema.
     if updated_rows > 1 {
         bail!("Session unread update affected {updated_rows} rows for session {session_id}");
     }
@@ -542,6 +735,65 @@ pub(crate) fn mark_session_unread_in_transaction(
     Ok(())
 }
 
+pub(crate) async fn mark_session_read_in_libsql_transaction(
+    transaction: &libsql::Transaction,
+    session_id: &str,
+) -> Result<()> {
+    let mut workspace_rows = transaction
+        .query(
+            "SELECT workspace_id FROM sessions WHERE id = ?1",
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to resolve workspace for session {session_id}"))?;
+    let Some(workspace_row) = workspace_rows.next().await? else {
+        bail!("Failed to resolve workspace for session {session_id}");
+    };
+    let workspace_id: String = workspace_row
+        .get(0)
+        .with_context(|| format!("Failed to resolve workspace for session {session_id}"))?;
+
+    let updated_rows = transaction
+        .execute(
+            "UPDATE sessions SET unread_count = 0 WHERE id = ?1",
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to mark session {session_id} as read"))?;
+
+    if updated_rows != 1 {
+        bail!("Session read update affected {updated_rows} rows for session {session_id}");
+    }
+
+    clear_workspace_unread_if_no_session_unread_in_libsql_transaction(transaction, &workspace_id)
+        .await
+}
+
+async fn clear_workspace_unread_if_no_session_unread_in_libsql_transaction(
+    transaction: &libsql::Transaction,
+    workspace_id: &str,
+) -> Result<()> {
+    transaction
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET unread = 0
+            WHERE id = ?1
+              AND NOT EXISTS (
+                SELECT 1
+                FROM sessions
+                WHERE workspace_id = ?1
+                  AND COALESCE(unread_count, 0) > 0
+              )
+            "#,
+            [workspace_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to clear workspace unread for {workspace_id}"))?;
+    Ok(())
+}
+
+#[cfg(test)]
 pub(crate) fn mark_session_read_in_transaction(
     transaction: &Transaction<'_>,
     session_id: &str,
@@ -570,6 +822,8 @@ pub(crate) fn mark_session_read_in_transaction(
     clear_workspace_unread_if_no_session_unread_in_transaction(transaction, &workspace_id)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn mark_workspace_unread_in_transaction(
     transaction: &Transaction<'_>,
     workspace_id: &str,
@@ -595,6 +849,7 @@ pub(crate) fn mark_workspace_unread_in_transaction(
 /// already read. Called from `mark_session_read_in_transaction` so the
 /// workspace flag disappears together with the last unread session, but is
 /// preserved while any session still has unread content.
+#[cfg(test)]
 pub(crate) fn clear_workspace_unread_if_no_session_unread_in_transaction(
     transaction: &Transaction<'_>,
     workspace_id: &str,
@@ -631,6 +886,7 @@ pub struct CreateSessionResponse {
 /// so a GitLab workspace gets "Create MR" / "Open MR" instead of the
 /// GitHub-flavored defaults. Falls back to the plain `default_title` when
 /// we have no provider info (e.g. pre-migration rows).
+#[cfg(test)]
 fn default_session_title_for_action_kind_with_workspace(
     transaction: &Transaction<'_>,
     workspace_id: &str,
@@ -665,12 +921,60 @@ fn default_session_title_for_action_kind_with_workspace(
     Ok(kind.default_title_for_change_request(change_request_name))
 }
 
+async fn default_session_title_for_action_kind_with_workspace_libsql(
+    transaction: &libsql::Transaction,
+    workspace_id: &str,
+    action_kind: Option<ActionKind>,
+) -> Result<String> {
+    let Some(kind) = action_kind else {
+        return Ok("Untitled".to_string());
+    };
+
+    if !matches!(kind, ActionKind::CreatePr | ActionKind::OpenPr) {
+        return Ok(kind.default_title().to_string());
+    }
+
+    let mut rows = transaction
+        .query(
+            "SELECT r.forge_provider \
+             FROM workspaces w JOIN repos r ON r.id = w.repository_id \
+             WHERE w.id = ?1",
+            [workspace_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to read forge_provider for {workspace_id}"))?;
+    let provider: Option<String> = match rows.next().await? {
+        Some(row) => row
+            .get(0)
+            .with_context(|| format!("Failed to read forge_provider for {workspace_id}"))?,
+        None => None,
+    };
+
+    let change_request_name = match provider.as_deref() {
+        Some("gitlab") => "MR",
+        _ => "PR",
+    };
+    Ok(kind.default_title_for_change_request(change_request_name))
+}
+
 pub fn create_session(
     workspace_id: &str,
     action_kind: Option<ActionKind>,
     permission_mode: Option<&str>,
 ) -> Result<CreateSessionResponse> {
-    create_session_with_options(
+    block_on_session_db(create_session_async(
+        workspace_id,
+        action_kind,
+        permission_mode,
+    ))
+}
+
+pub async fn create_session_async(
+    workspace_id: &str,
+    action_kind: Option<ActionKind>,
+    permission_mode: Option<&str>,
+) -> Result<CreateSessionResponse> {
+    create_session_with_options_async(
         workspace_id,
         InternalCreateSessionOptions {
             action_kind,
@@ -678,9 +982,17 @@ pub fn create_session(
             ..Default::default()
         },
     )
+    .await
 }
 
 pub fn create_user_session(
+    workspace_id: &str,
+    options: Option<CreateSessionOptions>,
+) -> Result<CreateSessionResponse> {
+    block_on_session_db(create_user_session_async(workspace_id, options))
+}
+
+pub async fn create_user_session_async(
     workspace_id: &str,
     options: Option<CreateSessionOptions>,
 ) -> Result<CreateSessionResponse> {
@@ -690,10 +1002,17 @@ pub fn create_user_session(
         surface_mode: None,
         runtime: None,
     });
-    create_session_with_options(workspace_id, internal_options.into_internal()?)
+    create_session_with_options_async(workspace_id, internal_options.into_internal()?).await
 }
 
 pub fn create_internal_session(
+    workspace_id: &str,
+    options: InternalCreateSessionOptions,
+) -> Result<CreateSessionResponse> {
+    block_on_session_db(create_internal_session_async(workspace_id, options))
+}
+
+pub async fn create_internal_session_async(
     workspace_id: &str,
     options: InternalCreateSessionOptions,
 ) -> Result<CreateSessionResponse> {
@@ -720,7 +1039,7 @@ pub fn create_internal_session(
             if options.created_by != SessionCreatedBy::User => {}
         _ => bail!("Invalid session mode/creator combination"),
     }
-    create_session_with_options(workspace_id, options)
+    create_session_with_options_async(workspace_id, options).await
 }
 
 pub fn update_session_control(
@@ -728,106 +1047,155 @@ pub fn update_session_control(
     control_owner: SessionControlOwner,
     input_policy: SessionInputPolicy,
 ) -> Result<String> {
-    let connection = db::write_conn()?;
-    let workspace_id: String = connection
-        .query_row(
-            r#"
+    block_on_session_db(update_session_control_async(
+        session_id,
+        control_owner,
+        input_policy,
+    ))
+}
+
+pub async fn update_session_control_async(
+    session_id: &str,
+    control_owner: SessionControlOwner,
+    input_policy: SessionInputPolicy,
+) -> Result<String> {
+    let session_id = session_id.to_string();
+    db::libsql_write_async(|connection| async move {
+        let mut rows = connection
+            .query(
+                r#"
             UPDATE sessions
             SET control_owner = ?2, input_policy = ?3
             WHERE id = ?1
             RETURNING workspace_id
             "#,
-            (session_id, control_owner.as_str(), input_policy.as_str()),
-            |row| row.get(0),
-        )
-        .with_context(|| format!("Failed to update control for session {session_id}"))?;
-    Ok(workspace_id)
+                libsql::params![
+                    session_id.clone(),
+                    control_owner.as_str(),
+                    input_policy.as_str()
+                ],
+            )
+            .await
+            .with_context(|| format!("Failed to update control for session {session_id}"))?;
+        let Some(row) = rows.next().await? else {
+            bail!("Session {session_id} does not exist");
+        };
+        row.get(0)
+            .with_context(|| format!("Failed to update control for session {session_id}"))
+    })
+    .await
 }
 
 pub fn update_terminal_started(session_id: &str, cwd: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            r#"
-            UPDATE sessions
-            SET terminal_cwd = ?2,
-                terminal_started_at = datetime('now'),
-                terminal_stopped_at = NULL,
-                terminal_exit_code = NULL,
-                status = 'running'
-            WHERE id = ?1
-            "#,
-            (session_id, cwd),
-        )
-        .with_context(|| format!("Failed to mark terminal session {session_id} started"))?;
-    Ok(())
+    block_on_session_db(update_terminal_started_async(session_id, cwd))
+}
+
+pub async fn update_terminal_started_async(session_id: &str, cwd: &str) -> Result<()> {
+    let session_id = session_id.to_string();
+    let cwd = cwd.to_string();
+    db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                r#"
+                UPDATE sessions
+                SET terminal_cwd = ?2,
+                    terminal_started_at = datetime('now'),
+                    terminal_stopped_at = NULL,
+                    terminal_exit_code = NULL,
+                    status = 'running'
+                WHERE id = ?1
+                "#,
+                libsql::params![session_id.clone(), cwd],
+            )
+            .await
+            .with_context(|| format!("Failed to mark terminal session {session_id} started"))?;
+        Ok(())
+    })
+    .await
 }
 
 pub fn update_terminal_stopped(session_id: &str, exit_code: Option<i32>) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            r#"
-            UPDATE sessions
-            SET terminal_stopped_at = datetime('now'),
-                terminal_exit_code = ?2,
-                status = 'idle'
-            WHERE id = ?1
-            "#,
-            (session_id, exit_code),
-        )
-        .with_context(|| format!("Failed to mark terminal session {session_id} stopped"))?;
-    Ok(())
+    block_on_session_db(update_terminal_stopped_async(session_id, exit_code))
 }
 
-fn create_session_with_options(
+pub async fn update_terminal_stopped_async(session_id: &str, exit_code: Option<i32>) -> Result<()> {
+    let session_id = session_id.to_string();
+    db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                r#"
+                UPDATE sessions
+                SET terminal_stopped_at = datetime('now'),
+                    terminal_exit_code = ?2,
+                    status = 'idle'
+                WHERE id = ?1
+                "#,
+                libsql::params![session_id.clone(), exit_code],
+            )
+            .await
+            .with_context(|| format!("Failed to mark terminal session {session_id} stopped"))?;
+        Ok(())
+    })
+    .await
+}
+
+async fn create_session_with_options_async(
     workspace_id: &str,
     options: InternalCreateSessionOptions,
 ) -> Result<CreateSessionResponse> {
-    let mut connection = db::write_conn()?;
+    let workspace_id = workspace_id.to_string();
 
-    // `model` is left NULL on create: the frontend owns model selection via
-    // `settings.defaultModelId` (kept valid by `useEnsureDefaultModel`), and
-    // the value gets persisted into `sessions.model` by the agent streaming
-    // finalizer on the first message. Reading settings here would be a
-    // redundant second source of truth.
-    let default_effort = settings::load_setting_value("app.default_effort")
+    let default_effort = settings::load_setting_value_async("app.default_effort")
+        .await
         .ok()
         .flatten()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "high".to_string());
 
-    let transaction = connection
-        .transaction()
-        .context("Failed to start create-session transaction")?;
+    db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction()
+            .await
+            .context("Failed to start create-session transaction")?;
 
-    // Validate workspace exists
-    let workspace_exists: bool = transaction
-        .query_row(
-            "SELECT COUNT(*) FROM workspaces WHERE id = ?1",
-            [workspace_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|count| count > 0)
-        .with_context(|| format!("Failed to verify workspace {workspace_id}"))?;
+        let mut rows = transaction
+            .query(
+                "SELECT COUNT(*) FROM workspaces WHERE id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to verify workspace {workspace_id}"))?;
+        let workspace_exists = match rows.next().await? {
+            Some(row) => {
+                let count: i64 = row
+                    .get(0)
+                    .with_context(|| format!("Failed to verify workspace {workspace_id}"))?;
+                count > 0
+            }
+            None => false,
+        };
 
-    if !workspace_exists {
-        bail!("Workspace {workspace_id} does not exist");
-    }
+        if !workspace_exists {
+            bail!("Workspace {workspace_id} does not exist");
+        }
 
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let title = match options.title {
-        Some(title) => title,
-        None => default_session_title_for_action_kind_with_workspace(
-            &transaction,
-            workspace_id,
-            options.action_kind,
-        )?,
-    };
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let title = match options.title {
+            Some(title) => title,
+            None => {
+                default_session_title_for_action_kind_with_workspace_libsql(
+                    &transaction,
+                    &workspace_id,
+                    options.action_kind,
+                )
+                .await?
+            }
+        };
+        let action_kind = options.action_kind.map(|kind| kind.as_str().to_string());
 
-    transaction
-        .execute(
-            r#"
+        transaction
+            .execute(
+                r#"
             INSERT INTO sessions (
                 id, workspace_id, status, title, permission_mode, action_kind,
                 model, effort_level, agent_type, surface_kind, surface_mode,
@@ -836,53 +1204,71 @@ fn create_session_with_options(
             )
             VALUES (?1, ?2, 'idle', ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             "#,
-            (
-                &session_id,
-                workspace_id,
-                &title,
-                options.permission_mode.as_deref().unwrap_or("default"),
-                options.action_kind,
-                &default_effort,
-                options.agent_type.as_deref(),
-                options.surface_kind.as_str(),
-                options.surface_mode.as_str(),
-                options.control_owner.as_str(),
-                options.input_policy.as_str(),
-                options.created_by.as_str(),
-                options.terminal_runtime.as_deref(),
-                options.terminal_cwd.as_deref(),
-            ),
-        )
-        .context("Failed to create session")?;
+                libsql::params![
+                    session_id.clone(),
+                    workspace_id.clone(),
+                    title,
+                    options
+                        .permission_mode
+                        .unwrap_or_else(|| "default".to_string()),
+                    action_kind,
+                    default_effort,
+                    options.agent_type,
+                    options.surface_kind.as_str(),
+                    options.surface_mode.as_str(),
+                    options.control_owner.as_str(),
+                    options.input_policy.as_str(),
+                    options.created_by.as_str(),
+                    options.terminal_runtime,
+                    options.terminal_cwd,
+                ],
+            )
+            .await
+            .context("Failed to create session")?;
 
-    // Set as active session on the workspace
-    let updated_rows = transaction
-        .execute(
-            "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
-            (&session_id, workspace_id),
-        )
-        .context("Failed to set active session")?;
+        let updated_rows = transaction
+            .execute(
+                "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
+                libsql::params![session_id.clone(), workspace_id.clone()],
+            )
+            .await
+            .context("Failed to set active session")?;
 
-    if updated_rows != 1 {
-        bail!("Active session update affected {updated_rows} rows for workspace {workspace_id}");
-    }
+        if updated_rows != 1 {
+            bail!(
+                "Active session update affected {updated_rows} rows for workspace {workspace_id}"
+            );
+        }
 
-    transaction
-        .commit()
-        .context("Failed to commit create-session")?;
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit create-session")?;
 
-    Ok(CreateSessionResponse { session_id })
+        Ok(CreateSessionResponse { session_id })
+    })
+    .await
 }
 
 /// Read the `model` column from a session row.
 pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
-    let conn = db::read_conn()?;
-    let model: Option<String> = conn
-        .query_row(
+    block_on_session_db(get_session_model_async(session_id))
+}
+
+pub async fn get_session_model_async(session_id: &str) -> Result<Option<String>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
             "SELECT model FROM sessions WHERE id = ?1",
-            [session_id],
-            |row| row.get(0),
+            [session_id.to_string()],
         )
+        .await
+        .with_context(|| format!("Failed to read model for session {session_id}"))?;
+    let Some(row) = rows.next().await? else {
+        bail!("Session {session_id} does not exist");
+    };
+    let model: Option<String> = row
+        .get(0)
         .with_context(|| format!("Failed to read model for session {session_id}"))?;
     Ok(model.filter(|s| !s.is_empty()))
 }
@@ -898,11 +1284,29 @@ pub fn record_session_send_start_metadata(
     provider: &str,
     permission_mode: Option<&str>,
 ) -> Result<()> {
-    let connection = db::write_conn()?;
+    block_on_session_db(record_session_send_start_metadata_async(
+        session_id,
+        model_id,
+        provider,
+        permission_mode,
+    ))
+}
+
+pub async fn record_session_send_start_metadata_async(
+    session_id: &str,
+    model_id: &str,
+    provider: &str,
+    permission_mode: Option<&str>,
+) -> Result<()> {
+    let session_id = session_id.to_string();
+    let model_id = model_id.to_string();
+    let provider = provider.to_string();
+    let permission_mode = permission_mode.map(str::to_string);
     let timestamp = db::current_timestamp()?;
-    let rows = connection
-        .execute(
-            r#"
+    db::libsql_write_async(|connection| async move {
+        let rows = connection
+            .execute(
+                r#"
 			UPDATE sessions
 			SET status = 'streaming',
 			    model = ?2,
@@ -912,13 +1316,22 @@ pub fn record_session_send_start_metadata(
 			    updated_at = ?5
 			WHERE id = ?1
 			"#,
-            (session_id, model_id, provider, permission_mode, &timestamp),
-        )
-        .with_context(|| format!("Failed to record send metadata for session {session_id}"))?;
-    if rows == 0 {
-        bail!("Session {session_id} does not exist");
-    }
-    Ok(())
+                libsql::params![
+                    session_id.clone(),
+                    model_id,
+                    provider,
+                    permission_mode,
+                    timestamp,
+                ],
+            )
+            .await
+            .with_context(|| format!("Failed to record send metadata for session {session_id}"))?;
+        if rows == 0 {
+            bail!("Session {session_id} does not exist");
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Read the opaque `context_usage_meta` JSON for the composer's
@@ -927,10 +1340,28 @@ pub fn record_session_send_start_metadata(
 /// promises null on "not recorded yet". This matters for the create→fetch
 /// race and the delete-while-mounted race.
 pub fn get_session_context_usage(session_id: &str) -> Result<Option<String>> {
-    let conn = db::read_conn()?;
-    read_session_context_usage(&conn, session_id)
+    block_on_session_db(get_session_context_usage_async(session_id))
 }
 
+pub async fn get_session_context_usage_async(session_id: &str) -> Result<Option<String>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT context_usage_meta FROM sessions WHERE id = ?1",
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to read context_usage_meta for session {session_id}"))?;
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+    let meta: Option<String> = row
+        .get(0)
+        .with_context(|| format!("Failed to read context_usage_meta for session {session_id}"))?;
+    Ok(meta.filter(|s| !s.is_empty()))
+}
+
+#[cfg(test)]
 fn read_session_context_usage(conn: &Connection, session_id: &str) -> Result<Option<String>> {
     let meta: Option<String> = match conn.query_row(
         "SELECT context_usage_meta FROM sessions WHERE id = ?1",
@@ -949,138 +1380,187 @@ fn read_session_context_usage(conn: &Connection, session_id: &str) -> Result<Opt
 }
 
 pub fn rename_session(session_id: &str, title: &str) -> Result<()> {
-    let connection = db::write_conn()?;
+    block_on_session_db(rename_session_async(session_id, title))
+}
 
-    let updated_rows = connection
-        .execute(
-            "UPDATE sessions SET title = ?1 WHERE id = ?2",
-            (title, session_id),
-        )
-        .with_context(|| format!("Failed to rename session {session_id}"))?;
+pub async fn rename_session_async(session_id: &str, title: &str) -> Result<()> {
+    let session_id = session_id.to_string();
+    let session_id_for_error = session_id.clone();
+    let session_id_for_update = session_id.clone();
+    let title = title.to_string();
+    let updated_rows = db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE sessions SET title = ?1 WHERE id = ?2",
+                libsql::params![title, session_id_for_update.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to rename session {session_id_for_update}"))
+    })
+    .await?;
 
     if updated_rows != 1 {
-        bail!("Session rename affected {updated_rows} rows for session {session_id}");
+        bail!("Session rename affected {updated_rows} rows for session {session_id_for_error}");
     }
 
     Ok(())
 }
 
 pub fn hide_session(session_id: &str) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start hide-session transaction")?;
+    block_on_session_db(hide_session_async(session_id))
+}
 
-    // Resolve workspace and mark session as hidden
-    let workspace_id: String = transaction
-        .query_row(
-            "SELECT workspace_id FROM sessions WHERE id = ?1",
-            [session_id],
-            |row| row.get(0),
-        )
-        .with_context(|| format!("Failed to find session {session_id}"))?;
+pub async fn hide_session_async(session_id: &str) -> Result<()> {
+    let session_id = session_id.to_string();
+    db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction()
+            .await
+            .context("Failed to start hide-session transaction")?;
 
-    // If this was the workspace's active session, switch to its right neighbor,
-    // falling back to the left neighbor when closing the rightmost tab.
-    let current_active: Option<String> = transaction
-        .query_row(
-            "SELECT active_session_id FROM workspaces WHERE id = ?1",
-            [&workspace_id],
-            |row| row.get(0),
-        )
-        .context("Failed to read active session for workspace")?;
-    let next_session_id = if current_active.as_deref() == Some(session_id) {
-        adjacent_visible_session_id(&transaction, &workspace_id, session_id)?
-    } else {
-        None
-    };
+        let mut workspace_rows = transaction
+            .query(
+                "SELECT workspace_id FROM sessions WHERE id = ?1",
+                [session_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to find session {session_id}"))?;
+        let Some(workspace_row) = workspace_rows.next().await? else {
+            bail!("Failed to find session {session_id}");
+        };
+        let workspace_id: String = workspace_row
+            .get(0)
+            .with_context(|| format!("Failed to find session {session_id}"))?;
 
-    transaction
-        .execute(
-            "UPDATE sessions SET is_hidden = 1 WHERE id = ?1",
-            [session_id],
-        )
-        .with_context(|| format!("Failed to hide session {session_id}"))?;
+        let mut active_rows = transaction
+            .query(
+                "SELECT active_session_id FROM workspaces WHERE id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .context("Failed to read active session for workspace")?;
+        let current_active: Option<String> = match active_rows.next().await? {
+            Some(row) => row
+                .get(0)
+                .context("Failed to read active session for workspace")?,
+            None => None,
+        };
+        let next_session_id = if current_active.as_deref() == Some(session_id.as_str()) {
+            adjacent_visible_session_id_libsql(&transaction, &workspace_id, &session_id).await?
+        } else {
+            None
+        };
 
-    // A hidden session can no longer contribute to the workspace unread dot —
-    // the user can't reach it to clear it. Drop its unread_count so the
-    // workspace flag can fall off too when this was the last unread session.
-    mark_session_read_in_transaction(&transaction, session_id)?;
-
-    if current_active.as_deref() == Some(session_id) {
         transaction
             .execute(
-                "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
-                (next_session_id.as_deref(), &workspace_id),
+                "UPDATE sessions SET is_hidden = 1 WHERE id = ?1",
+                [session_id.clone()],
             )
-            .context("Failed to update active session")?;
-    }
+            .await
+            .with_context(|| format!("Failed to hide session {session_id}"))?;
 
-    transaction
-        .commit()
-        .context("Failed to commit hide-session")
+        mark_session_read_in_libsql_transaction(&transaction, &session_id).await?;
+
+        if current_active.as_deref() == Some(session_id.as_str()) {
+            transaction
+                .execute(
+                    "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
+                    libsql::params![next_session_id, workspace_id],
+                )
+                .await
+                .context("Failed to update active session")?;
+        }
+
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit hide-session")
+    })
+    .await
 }
 
 pub fn unhide_session(session_id: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            "UPDATE sessions SET is_hidden = 0 WHERE id = ?1",
-            [session_id],
-        )
-        .with_context(|| format!("Failed to unhide session {session_id}"))?;
-    Ok(())
+    block_on_session_db(unhide_session_async(session_id))
+}
+
+pub async fn unhide_session_async(session_id: &str) -> Result<()> {
+    let session_id = session_id.to_string();
+    db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE sessions SET is_hidden = 0 WHERE id = ?1",
+                [session_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to unhide session {session_id}"))?;
+        Ok(())
+    })
+    .await
 }
 
 pub fn delete_session(session_id: &str) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection.transaction()?;
-
-    // Resolve workspace before deleting, so we can fix active_session_id
-    let workspace_id: Option<String> = transaction
-        .query_row(
-            "SELECT workspace_id FROM sessions WHERE id = ?1",
-            [session_id],
-            |row| row.get(0),
-        )
-        .ok();
-
-    let current_active: Option<String> = if let Some(ws_id) = &workspace_id {
-        transaction
-            .query_row(
-                "SELECT active_session_id FROM workspaces WHERE id = ?1",
-                [ws_id],
-                |row| row.get(0),
-            )
-            .ok()
-    } else {
-        None
-    };
-    let next_session_id = match (&workspace_id, current_active.as_deref()) {
-        (Some(ws_id), Some(active_id)) if active_id == session_id => {
-            adjacent_visible_session_id(&transaction, ws_id, session_id)?
-        }
-        _ => None,
-    };
-
-    delete_session_tree_in_transaction(&transaction, session_id)?;
-
-    // If this was active, persist the same right-then-left tab fallback as the UI.
-    if let Some(ws_id) = &workspace_id {
-        transaction
-            .execute(
-                "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2 AND active_session_id = ?3",
-                (next_session_id.as_deref(), ws_id, session_id),
-            )
-            .context("Failed to update active session")?;
-    }
-
-    transaction
-        .commit()
-        .context("Failed to commit session deletion")?;
-    Ok(())
+    block_on_session_db(delete_session_async(session_id))
 }
 
+pub async fn delete_session_async(session_id: &str) -> Result<()> {
+    let session_id = session_id.to_string();
+    db::libsql_write_async(|connection| async move {
+        let transaction = connection.transaction().await?;
+
+        let mut workspace_rows = transaction
+            .query(
+                "SELECT workspace_id FROM sessions WHERE id = ?1",
+                [session_id.clone()],
+            )
+            .await?;
+        let workspace_id: Option<String> = match workspace_rows.next().await? {
+            Some(row) => Some(row.get(0).context("Failed to read session workspace_id")?),
+            None => None,
+        };
+
+        let current_active: Option<String> = if let Some(ws_id) = &workspace_id {
+            let mut active_rows = transaction
+                .query(
+                    "SELECT active_session_id FROM workspaces WHERE id = ?1",
+                    [ws_id.clone()],
+                )
+                .await?;
+            match active_rows.next().await? {
+                Some(row) => row.get(0).context("Failed to read active session")?,
+                None => None,
+            }
+        } else {
+            None
+        };
+        let next_session_id = match (&workspace_id, current_active.as_deref()) {
+            (Some(ws_id), Some(active_id)) if active_id == session_id => {
+                adjacent_visible_session_id_libsql(&transaction, ws_id, &session_id).await?
+            }
+            _ => None,
+        };
+
+        delete_session_tree_in_libsql_transaction(&transaction, &session_id).await?;
+
+        if let Some(ws_id) = &workspace_id {
+            transaction
+                .execute(
+                    "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2 AND active_session_id = ?3",
+                    libsql::params![next_session_id, ws_id.clone(), session_id.clone()],
+                )
+                .await
+                .context("Failed to update active session")?;
+        }
+
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit session deletion")?;
+        Ok(())
+    })
+    .await
+}
+
+#[allow(dead_code)]
 fn delete_session_tree_in_transaction(
     transaction: &Transaction<'_>,
     session_id: &str,
@@ -1138,10 +1618,108 @@ fn delete_session_tree_in_transaction(
     Ok(())
 }
 
+async fn child_session_ids_for_parent_libsql(
+    transaction: &libsql::Transaction,
+    session_id: &str,
+) -> Result<Vec<String>> {
+    let mut rows = transaction
+        .query(
+            "SELECT child_session_id FROM session_delegations WHERE parent_session_id = ?1",
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to read child sessions for parent {session_id}"))?;
+    let mut child_session_ids = Vec::new();
+    while let Some(row) = rows.next().await? {
+        child_session_ids
+            .push(row.get(0).with_context(|| {
+                format!("Failed to read child session for parent {session_id}")
+            })?);
+    }
+    Ok(child_session_ids)
+}
+
+async fn delete_session_tree_in_libsql_transaction(
+    transaction: &libsql::Transaction,
+    session_id: &str,
+) -> Result<()> {
+    let mut stack = vec![session_id.to_string()];
+    let mut post_order = Vec::new();
+    while let Some(current_session_id) = stack.pop() {
+        for child_session_id in
+            child_session_ids_for_parent_libsql(transaction, &current_session_id).await?
+        {
+            stack.push(child_session_id);
+        }
+        post_order.push(current_session_id);
+    }
+
+    for current_session_id in post_order.into_iter().rev() {
+        transaction
+            .execute(
+                "DELETE FROM session_delegations WHERE parent_session_id = ?1 OR child_session_id = ?1",
+                [current_session_id.clone()],
+            )
+            .await
+            .context("Failed to delete delegation metadata")?;
+        transaction
+            .execute(
+                "DELETE FROM session_messages
+             WHERE role = 'system'
+               AND json_valid(content)
+               AND json_extract(content, '$.assigneeSessionId') = ?1
+               AND json_extract(content, '$.type') IN ('goal_assignee_report', 'goal_assignee_runtime_issue')",
+                [current_session_id.clone()],
+            )
+            .await
+            .context("Failed to delete delivered assignee notifications")?;
+        transaction
+            .execute(
+                "DELETE FROM goal_supervisor_notifications
+             WHERE assignee_session_id = ?1 OR delivered_to_session_id = ?1",
+                [current_session_id.clone()],
+            )
+            .await
+            .context("Failed to delete assignee notification metadata")?;
+        transaction
+            .execute(
+                "DELETE FROM pending_cli_sends WHERE session_id = ?1",
+                [current_session_id.clone()],
+            )
+            .await
+            .context("Failed to delete pending session sends")?;
+        transaction
+            .execute(
+                "DELETE FROM session_command_audit_log WHERE session_id = ?1",
+                [current_session_id.clone()],
+            )
+            .await
+            .context("Failed to delete session command audit log")?;
+        transaction
+            .execute(
+                "DELETE FROM session_messages WHERE session_id = ?1",
+                [current_session_id.clone()],
+            )
+            .await
+            .context("Failed to delete messages")?;
+        transaction
+            .execute("DELETE FROM sessions WHERE id = ?1", [current_session_id])
+            .await
+            .context("Failed to delete session")?;
+    }
+    Ok(())
+}
+
 pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>> {
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare(
+    block_on_session_db(list_hidden_sessions_async(workspace_id))
+}
+
+pub async fn list_hidden_sessions_async(
+    workspace_id: &str,
+) -> Result<Vec<WorkspaceSessionSummary>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
             r#"
             SELECT
               s.id, s.workspace_id, s.title, s.agent_type, s.status, s.model,
@@ -1168,56 +1746,16 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
             WHERE s.workspace_id = ?1 AND s.is_hidden = 1
             ORDER BY datetime(s.created_at) ASC
             "#,
+            [workspace_id.to_string()],
         )
-        .context("Failed to prepare hidden sessions query")?;
-
-    let rows = statement
-        .query_map([workspace_id], |row| {
-            let id: String = row.get(0)?;
-            Ok(WorkspaceSessionSummary {
-                active: false,
-                id,
-                workspace_id: row.get(1)?,
-                title: row.get(2)?,
-                agent_type: row.get(3)?,
-                status: row.get(4)?,
-                model: row.get(5)?,
-                permission_mode: row.get(6)?,
-                provider_session_id: row.get(7)?,
-                effort_level: row.get(8)?,
-                unread_count: row.get(9)?,
-                fast_mode: row.get::<_, i64>(10)? != 0,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
-                last_user_message_at: row.get(13)?,
-                is_hidden: row.get::<_, i64>(14)? != 0,
-                action_kind: row.get(15)?,
-                thread_role: row.get(16)?,
-                thread_status: row.get(17)?,
-                supersedes_thread_id: row.get(18)?,
-                stale_reason: row.get(19)?,
-                last_supervisor_message_id: row.get(20)?,
-                last_milestone_report_id: row.get(21)?,
-                surface_kind: row.get(22)?,
-                surface_mode: row.get(23)?,
-                control_owner: row.get(24)?,
-                input_policy: row.get(25)?,
-                created_by: row.get(26)?,
-                terminal_runtime: row.get(27)?,
-                terminal_cwd: row.get(28)?,
-                terminal_started_at: row.get(29)?,
-                terminal_stopped_at: row.get(30)?,
-                terminal_exit_code: row.get(31)?,
-                parent_session_id: row.get(32)?,
-                parent_message_id: row.get(33)?,
-                delegation_status: row.get(34)?,
-                child_count: row.get(35)?,
-            })
-        })
+        .await
         .context("Failed to query hidden sessions")?;
 
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .context("Failed to read hidden sessions")
+    let mut sessions = Vec::new();
+    while let Some(row) = rows.next().await? {
+        sessions.push(workspace_session_summary_from_libsql_row(&row, None)?);
+    }
+    Ok(sessions)
 }
 
 #[cfg(test)]
@@ -1993,7 +2531,7 @@ mod tests {
     #[test]
     fn workspace_session_list_hides_delegated_children_and_counts_them() {
         let _env = crate::testkit::TestEnv::new("delegated-root-list");
-        let conn = crate::models::db::write_conn().unwrap();
+        let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
         conn.execute(
             "INSERT INTO repos (id, name, root_path) VALUES ('repo-root-list', 'repo', '/tmp')",
             [],
@@ -2017,7 +2555,7 @@ mod tests {
     #[test]
     fn deleting_parent_session_removes_delegated_child_tree() {
         let _env = crate::testkit::TestEnv::new("delegated-delete-cascade");
-        let conn = crate::models::db::write_conn().unwrap();
+        let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
         conn.execute(
             "INSERT INTO repos (id, name, root_path) VALUES ('repo-cascade', 'repo', '/tmp')",
             [],
@@ -2032,7 +2570,7 @@ mod tests {
         drop(conn);
 
         delete_session("parent-cascade").unwrap();
-        let conn = crate::models::db::read_conn().unwrap();
+        let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
         let session_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sessions WHERE id IN ('parent-cascade', 'child-cascade')",
@@ -2056,7 +2594,7 @@ mod tests {
     #[test]
     fn deleting_session_tree_removes_assignee_artifacts() {
         let _env = crate::testkit::TestEnv::new("assignee-delete-cascade");
-        let conn = crate::models::db::write_conn().unwrap();
+        let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
         conn.execute(
             "INSERT INTO repos (id, name, root_path) VALUES ('repo-assignee-delete', 'repo', '/tmp')",
             [],
@@ -2098,7 +2636,7 @@ mod tests {
         drop(conn);
 
         delete_session("parent-assignee-delete").unwrap();
-        let conn = crate::models::db::read_conn().unwrap();
+        let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
         for (table, expected) in [
             (
                 "sessions",
@@ -2108,10 +2646,7 @@ mod tests {
                 "session_messages",
                 "id IN ('anchor-assignee-delete', 'delivered-parent-delete', 'delivered-child-delete')",
             ),
-            (
-                "session_delegations",
-                "id = 'delegation-assignee-delete'",
-            ),
+            ("session_delegations", "id = 'delegation-assignee-delete'"),
             (
                 "goal_supervisor_notifications",
                 "id IN ('notification-parent-delete', 'notification-child-delete')",

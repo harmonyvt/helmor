@@ -1,7 +1,6 @@
 //! `helmor session` — session CRUD and thread messages.
 
 use anyhow::Result;
-use rusqlite::params;
 use serde_json::Value;
 
 use crate::agents::ActionKind;
@@ -234,17 +233,26 @@ fn update_settings(
 ) -> Result<()> {
     let workspace_id = service::resolve_workspace_ref(workspace_ref)?;
     let session_id = refs::resolve_session_ref(&workspace_id, session)?;
-    let conn = crate::models::db::write_conn()?;
-    conn.execute(
-        r#"
-        UPDATE sessions SET
-          model = COALESCE(?2, model),
-          effort_level = COALESCE(?3, effort_level),
-          permission_mode = COALESCE(?4, permission_mode)
-        WHERE id = ?1
-        "#,
-        params![session_id, model, effort, permission_mode],
-    )?;
+    let model = model.map(str::to_string);
+    let effort = effort.map(str::to_string);
+    let permission_mode = permission_mode.map(str::to_string);
+    tauri::async_runtime::block_on(crate::models::db::libsql_write_async(
+        |connection| async move {
+            connection
+                .execute(
+                    r#"
+                    UPDATE sessions SET
+                      model = COALESCE(?2, model),
+                      effort_level = COALESCE(?3, effort_level),
+                      permission_mode = COALESCE(?4, permission_mode)
+                    WHERE id = ?1
+                    "#,
+                    libsql::params![session_id, model, effort, permission_mode],
+                )
+                .await?;
+            Ok(())
+        },
+    ))?;
     notify_ui_event(UiMutationEvent::SessionListChanged { workspace_id });
     output::print_ok(cli, "Session settings updated");
     Ok(())

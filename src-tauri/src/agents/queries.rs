@@ -1,6 +1,7 @@
-use rusqlite::OptionalExtension;
+use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::str::FromStr;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
@@ -37,19 +38,119 @@ fn can_replace_session_title(current_title: &str, title_seed: Option<&str>) -> b
             .is_some_and(|seed| current_title == seed)
 }
 
+async fn load_session_title_action_kind(
+    session_id: &str,
+) -> anyhow::Result<(String, Option<super::ActionKind>)> {
+    let connection = crate::models::db::libsql_conn_async()
+        .await
+        .context("Failed to open DB")?;
+    let mut rows = connection
+        .query(
+            "SELECT title, action_kind FROM sessions WHERE id = ?1",
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to query session {session_id}"))?;
+    let Some(row) = rows.next().await? else {
+        bail!("Session not found");
+    };
+
+    let title = row.get(0).context("Failed to read session title")?;
+    let action_kind = row
+        .get::<Option<String>>(1)
+        .context("Failed to read session action kind")?
+        .map(|kind| super::ActionKind::from_str(&kind))
+        .transpose()
+        .context("Failed to parse session action kind")?;
+    Ok((title, action_kind))
+}
+
+async fn load_title_workspace_info(session_id: &str) -> anyhow::Result<Option<WorkspaceInfo>> {
+    let connection = crate::models::db::libsql_conn_async()
+        .await
+        .context("Failed to open DB")?;
+    let sql = format!(
+        r#"SELECT w.id, r.id, r.root_path, w.directory_name, w.branch
+           FROM workspaces w
+           JOIN repos r ON r.id = w.repository_id
+           JOIN sessions s ON s.workspace_id = w.id
+           WHERE s.id = ?1 AND w.state {}"#,
+        workspace_state::OPERATIONAL_FILTER,
+    );
+    let mut rows = connection
+        .query(&sql, [session_id.to_string()])
+        .await
+        .with_context(|| format!("Failed to query workspace for session {session_id}"))?;
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+    Ok(Some((
+        row.get(0).context("Failed to read workspace id")?,
+        row.get(1).context("Failed to read repository id")?,
+        row.get(2).context("Failed to read repository root path")?,
+        row.get(3)
+            .context("Failed to read workspace directory name")?,
+        row.get(4).context("Failed to read workspace branch")?,
+    )))
+}
+
+async fn load_latest_session_title(session_id: &str) -> anyhow::Result<Option<String>> {
+    let connection = crate::models::db::libsql_conn_async()
+        .await
+        .context("Failed to open DB")?;
+    let mut rows = connection
+        .query(
+            "SELECT title FROM sessions WHERE id = ?1",
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to query session title for {session_id}"))?;
+    match rows.next().await? {
+        Some(row) => row.get(0).map(Some).context("Failed to read session title"),
+        None => Ok(None),
+    }
+}
+
+async fn load_workspace_branch(workspace_id: &str) -> anyhow::Result<Option<String>> {
+    let connection = crate::models::db::libsql_conn_async()
+        .await
+        .context("Failed to open DB")?;
+    let mut rows = connection
+        .query(
+            "SELECT branch FROM workspaces WHERE id = ?1",
+            [workspace_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to query workspace branch for {workspace_id}"))?;
+    match rows.next().await? {
+        Some(row) => row.get(0).context("Failed to read workspace branch"),
+        None => Ok(None),
+    }
+}
+
+async fn update_workspace_branch(workspace_id: &str, branch: &str) -> anyhow::Result<()> {
+    let workspace_id = workspace_id.to_string();
+    let branch = branch.to_string();
+    crate::models::db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+                libsql::params![branch, workspace_id],
+            )
+            .await
+            .context("Failed to update workspace branch")?;
+        Ok(())
+    })
+    .await
+}
+
 pub async fn generate_session_title(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     request: GenerateSessionTitleRequest,
 ) -> CmdResult<GenerateSessionTitleResponse> {
-    let connection =
-        crate::models::db::read_conn().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
-    let (current_title, action_kind): (String, Option<super::ActionKind>) = connection
-        .query_row(
-            "SELECT title, action_kind FROM sessions WHERE id = ?1",
-            [&request.session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
+    let (current_title, action_kind) = load_session_title_action_kind(&request.session_id)
+        .await
         .map_err(|e| anyhow::anyhow!("Session not found: {e}"))?;
 
     let should_generate_title = action_kind.is_none()
@@ -63,25 +164,8 @@ pub async fn generate_session_title(
     );
 
     let workspace_info: Option<WorkspaceInfo> = if action_kind.is_none() {
-        let sql = format!(
-            r#"SELECT w.id, r.id, r.root_path, w.directory_name, w.branch
-                   FROM workspaces w
-                   JOIN repos r ON r.id = w.repository_id
-                   JOIN sessions s ON s.workspace_id = w.id
-                   WHERE s.id = ?1 AND w.state {}"#,
-            workspace_state::OPERATIONAL_FILTER,
-        );
-        match connection.query_row(&sql, [&request.session_id], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        }) {
-            Ok(info) => Some(info),
-            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        match load_title_workspace_info(&request.session_id).await {
+            Ok(info) => info,
             Err(error) => {
                 tracing::error!(
                     session_id = %request.session_id,
@@ -255,17 +339,10 @@ pub async fn generate_session_title(
     let mut title_renamed = false;
     if should_generate_title {
         if let Some(ref title) = generated_title {
-            let connection = crate::models::db::read_conn()
-                .map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
             // Session may have been deleted while title generation was in flight.
             // Treat as a silent skip — matches the branch re-read a few lines below.
-            let latest_title: Option<String> = connection
-                .query_row(
-                    "SELECT title FROM sessions WHERE id = ?1",
-                    [&session_id],
-                    |row| row.get(0),
-                )
-                .optional()
+            let latest_title = load_latest_session_title(&session_id)
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to re-read session title: {e}"))?;
             let Some(latest_title) = latest_title else {
                 tracing::debug!(
@@ -314,16 +391,9 @@ pub async fn generate_session_title(
             // Re-read branch under lock to avoid TOCTOU: if another title-gen
             // already renamed the branch, we'll see the updated value and skip.
             let old_branch: Option<String> = {
-                let read_conn = crate::models::db::read_conn()
-                    .map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
-                read_conn
-                    .query_row(
-                        "SELECT branch FROM workspaces WHERE id = ?1",
-                        [&workspace_id],
-                        |row| row.get(0),
-                    )
-                    .ok()
-                    .flatten()
+                load_workspace_branch(&workspace_id)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to re-read workspace branch: {e}"))?
             };
 
             if !old_branch.as_deref().is_some_and(|b| {
@@ -380,13 +450,8 @@ pub async fn generate_session_title(
                     };
 
                     if fs_rename_ok {
-                        let write_result = crate::models::db::write_conn().and_then(|conn| {
-                            conn.execute(
-                                "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-                                (&new_branch, &workspace_id),
-                            )
-                            .map_err(|e| anyhow::anyhow!(e))
-                        });
+                        let write_result =
+                            update_workspace_branch(&workspace_id, &new_branch).await;
                         if let Err(error) = write_result {
                             tracing::error!(workspace_id = %workspace_id, "DB UPDATE workspaces.branch failed: {error:#}");
                             if fs_rename_attempted {

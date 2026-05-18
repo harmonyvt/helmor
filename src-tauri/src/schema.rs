@@ -17,22 +17,61 @@ fn assert_safe_identifier(value: &str) {
     );
 }
 
-fn has_column(connection: &Connection, table: &str, column: &str) -> bool {
-    assert_safe_identifier(table);
-    assert_safe_identifier(column);
-    connection
-        .prepare(&format!(
-            "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
-        ))
-        .and_then(|mut stmt| stmt.exists([column]))
-        .unwrap_or(false)
+trait SchemaExecutor {
+    fn execute_batch(&self, sql: &str) -> Result<()>;
+    fn exists(&self, sql: &str, params: &[&str]) -> bool;
 }
 
-fn has_table(connection: &Connection, table: &str) -> bool {
-    connection
-        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
-        .and_then(|mut stmt| stmt.exists([table]))
+impl SchemaExecutor for Connection {
+    fn execute_batch(&self, sql: &str) -> Result<()> {
+        Connection::execute_batch(self, sql).context("Failed to execute schema SQL")
+    }
+
+    fn exists(&self, sql: &str, params: &[&str]) -> bool {
+        self.prepare(sql)
+            .and_then(|mut stmt| stmt.exists(rusqlite::params_from_iter(params.iter().copied())))
+            .unwrap_or(false)
+    }
+}
+
+impl SchemaExecutor for libsql::Connection {
+    fn execute_batch(&self, sql: &str) -> Result<()> {
+        tauri::async_runtime::block_on(libsql::Connection::execute_batch(self, sql))
+            .map(|_| ())
+            .context("Failed to execute libSQL schema SQL")
+    }
+
+    fn exists(&self, sql: &str, params: &[&str]) -> bool {
+        let values = params
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect::<Vec<_>>();
+        tauri::async_runtime::block_on(async {
+            let mut rows = if values.is_empty() {
+                self.query(sql, ()).await?
+            } else {
+                self.query(sql, values).await?
+            };
+            rows.next().await.map(|row| row.is_some())
+        })
         .unwrap_or(false)
+    }
+}
+
+fn has_column(connection: &impl SchemaExecutor, table: &str, column: &str) -> bool {
+    assert_safe_identifier(table);
+    assert_safe_identifier(column);
+    connection.exists(
+        &format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"),
+        &[column],
+    )
+}
+
+fn has_table(connection: &impl SchemaExecutor, table: &str) -> bool {
+    connection.exists(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        &[table],
+    )
 }
 
 /// Columns that legacy installs may still carry but production no longer
@@ -106,7 +145,7 @@ const DEAD_TABLES: &[(&str, &[&str])] = &[
     ("terminal_history", &["idx_terminal_history_workspace"]),
 ];
 
-fn drop_dead_schema(connection: &Connection) -> Result<()> {
+fn drop_dead_schema(connection: &impl SchemaExecutor) -> Result<()> {
     for &(table, column) in DEAD_COLUMNS {
         if has_column(connection, table, column) {
             assert_safe_identifier(table);
@@ -148,19 +187,28 @@ fn drop_dead_schema(connection: &Connection) -> Result<()> {
 /// Ensure the database has all required tables and indexes.
 /// Safe to call on every startup — uses IF NOT EXISTS.
 pub fn ensure_schema(connection: &Connection) -> Result<()> {
-    connection
-        .execute_batch(SCHEMA_SQL)
+    SchemaExecutor::execute_batch(connection, SCHEMA_SQL)
         .context("Failed to initialize database schema")?;
     run_migrations(connection).context("Failed to run database migrations")
 }
 
+/// Ensure the database has all required tables and indexes using libSQL.
+///
+/// This mirrors [`ensure_schema`] so the local libSQL startup path owns schema
+/// creation while legacy rusqlite call sites are migrated in slices.
+pub fn ensure_schema_libsql(connection: &libsql::Connection) -> Result<()> {
+    SchemaExecutor::execute_batch(connection, SCHEMA_SQL)
+        .context("Failed to initialize database schema with libSQL")?;
+    run_migrations(connection).context("Failed to run libSQL database migrations")
+}
+
 /// Incremental migrations for schema changes to existing databases.
-fn run_migrations(connection: &Connection) -> Result<()> {
+fn run_migrations(connection: &impl SchemaExecutor) -> Result<()> {
     // Migration: rename claude_session_id → provider_session_id (supports any agent provider)
-    let has_old_column: bool = connection
-        .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'claude_session_id'")
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
+    let has_old_column = connection.exists(
+        "SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'claude_session_id'",
+        &[],
+    );
 
     if has_old_column {
         connection
@@ -171,10 +219,10 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     }
 
     // Migration: add effort_level column if missing (replaces thinking_enabled + codex_thinking_level)
-    let has_effort: bool = connection
-        .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'effort_level'")
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
+    let has_effort = connection.exists(
+        "SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'effort_level'",
+        &[],
+    );
 
     if !has_effort {
         connection
@@ -192,10 +240,10 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     // Migration: drop dead `full_message` column from session_messages.
     // It was only ever written (always with the same value as `content`),
     // never read. Cleared up to remove confusion about which column to query.
-    let has_full_message: bool = connection
-        .prepare("SELECT 1 FROM pragma_table_info('session_messages') WHERE name = 'full_message'")
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
+    let has_full_message = connection.exists(
+        "SELECT 1 FROM pragma_table_info('session_messages') WHERE name = 'full_message'",
+        &[],
+    );
 
     if has_full_message {
         connection
@@ -208,10 +256,10 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     // from normal chat sessions. NULL = chat session; any string value marks
     // the session as a dispatched action and unlocks post-stream verifiers,
     // auto-hide behavior, and inspector badges.
-    let has_action_kind: bool = connection
-        .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'action_kind'")
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
+    let has_action_kind = connection.exists(
+        "SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'action_kind'",
+        &[],
+    );
 
     if !has_action_kind {
         connection
@@ -298,16 +346,14 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     // Migration: deduplicate repos with identical root_path.
     // Keeps the oldest row per root_path, re-parents workspaces from duplicates,
     // then adds a unique index so it can't recur.
-    let has_repos_table: bool = connection
-        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'repos'")
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
-    let has_unique_idx: bool = connection
-        .prepare(
-            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_repos_root_path'",
-        )
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
+    let has_repos_table = connection.exists(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'repos'",
+        &[],
+    );
+    let has_unique_idx = connection.exists(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_repos_root_path'",
+        &[],
+    );
 
     if has_repos_table && !has_unique_idx {
         connection
@@ -346,10 +392,10 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     // These stored temp-file paths for git-worktree and setup-script output
     // that were never read back. The files themselves lived in /tmp and were
     // cleaned up by the OS on reboot.
-    let has_setup_log: bool = connection
-        .prepare("SELECT 1 FROM pragma_table_info('workspaces') WHERE name = 'setup_log_path'")
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
+    let has_setup_log = connection.exists(
+        "SELECT 1 FROM pragma_table_info('workspaces') WHERE name = 'setup_log_path'",
+        &[],
+    );
 
     if has_setup_log {
         connection
@@ -363,12 +409,10 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     }
 
     // Migration: drop all remaining DEPRECATED_ columns.
-    let has_city_name: bool = connection
-        .prepare(
-            "SELECT 1 FROM pragma_table_info('workspaces') WHERE name = 'DEPRECATED_city_name'",
-        )
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
+    let has_city_name = connection.exists(
+        "SELECT 1 FROM pragma_table_info('workspaces') WHERE name = 'DEPRECATED_city_name'",
+        &[],
+    );
 
     if has_city_name {
         connection
@@ -381,12 +425,10 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to drop deprecated workspace columns")?;
     }
 
-    let has_update_memory: bool = connection
-        .prepare(
-            "SELECT 1 FROM pragma_table_info('diff_comments') WHERE name = 'DEPRECATED_update_memory'",
-        )
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
+    let has_update_memory = connection.exists(
+        "SELECT 1 FROM pragma_table_info('diff_comments') WHERE name = 'DEPRECATED_update_memory'",
+        &[],
+    );
 
     if has_update_memory {
         connection

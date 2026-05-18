@@ -3,6 +3,8 @@
 //! meta from the DB via React Query — we don't ship the payload over the
 //! Tauri channel, only the invalidation cue.
 
+use anyhow::Context;
+#[cfg(test)]
 use rusqlite::params;
 use serde_json::Value;
 use tauri::AppHandle;
@@ -20,6 +22,7 @@ pub(super) enum ContextUsageWriteOutcome {
     UnknownSession(String),
 }
 
+#[cfg(test)]
 pub(super) fn write_context_usage_meta(
     conn: &rusqlite::Connection,
     raw: &Value,
@@ -45,40 +48,69 @@ pub(super) fn write_context_usage_meta(
     Ok(ContextUsageWriteOutcome::Wrote(session_id.to_string()))
 }
 
+pub(super) async fn write_context_usage_meta_libsql(
+    raw: &Value,
+) -> anyhow::Result<ContextUsageWriteOutcome> {
+    let Some(session_id) = raw.get("sessionId").and_then(Value::as_str) else {
+        return Ok(ContextUsageWriteOutcome::Skipped);
+    };
+    if session_id.is_empty() {
+        return Ok(ContextUsageWriteOutcome::Skipped);
+    }
+    let Some(meta) = raw.get("meta").and_then(Value::as_str) else {
+        return Ok(ContextUsageWriteOutcome::Skipped);
+    };
+    let session_id = session_id.to_string();
+    let meta = meta.to_string();
+    let outcome_session_id = session_id.clone();
+    let affected = crate::models::db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE sessions SET context_usage_meta = ?1 WHERE id = ?2",
+                libsql::params![meta, session_id],
+            )
+            .await
+            .context("Failed to update context usage meta")
+    })
+    .await?;
+    if affected == 0 {
+        return Ok(ContextUsageWriteOutcome::UnknownSession(outcome_session_id));
+    }
+    Ok(ContextUsageWriteOutcome::Wrote(outcome_session_id))
+}
+
 /// Persist a `contextUsageUpdated` event and broadcast `ContextUsageChanged`.
 /// Payload-free — the frontend refetches via React Query on invalidation.
 pub(super) fn persist_context_usage_event(app: &AppHandle, raw: &Value) {
-    let outcome = match crate::models::db::write_conn() {
-        Ok(conn) => match write_context_usage_meta(&conn, raw) {
+    let app = app.clone();
+    let raw = raw.clone();
+    tauri::async_runtime::spawn(async move {
+        let outcome = match write_context_usage_meta_libsql(&raw).await {
             Ok(outcome) => outcome,
             Err(err) => {
                 tracing::warn!("Failed to persist context_usage_meta: {err}");
                 return;
             }
-        },
-        Err(err) => {
-            tracing::warn!("context_usage write_conn borrow failed: {err}");
-            return;
-        }
-    };
-    let session_id = match outcome {
-        ContextUsageWriteOutcome::Skipped => {
-            tracing::warn!("contextUsageUpdated event malformed (missing sessionId or meta)");
-            return;
-        }
-        ContextUsageWriteOutcome::UnknownSession(id) => {
-            tracing::warn!(
-                session_id = %id,
-                "contextUsageUpdated for unknown session — likely a stale/post-delete event"
-            );
-            return;
-        }
-        ContextUsageWriteOutcome::Wrote(id) => id,
-    };
-    crate::ui_sync::publish(
-        app,
-        crate::ui_sync::UiMutationEvent::ContextUsageChanged { session_id },
-    );
+        };
+        let session_id = match outcome {
+            ContextUsageWriteOutcome::Skipped => {
+                tracing::warn!("contextUsageUpdated event malformed (missing sessionId or meta)");
+                return;
+            }
+            ContextUsageWriteOutcome::UnknownSession(id) => {
+                tracing::warn!(
+                    session_id = %id,
+                    "contextUsageUpdated for unknown session — likely a stale/post-delete event"
+                );
+                return;
+            }
+            ContextUsageWriteOutcome::Wrote(id) => id,
+        };
+        crate::ui_sync::publish(
+            &app,
+            crate::ui_sync::UiMutationEvent::ContextUsageChanged { session_id },
+        );
+    });
 }
 
 #[cfg(test)]

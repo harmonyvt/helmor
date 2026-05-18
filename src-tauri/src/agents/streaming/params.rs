@@ -109,32 +109,92 @@ pub fn lookup_workspace_linked_directories(helmor_session_id: Option<&str>) -> V
     let Some(hsid) = helmor_session_id else {
         return Vec::new();
     };
-    let conn = match crate::models::db::read_conn() {
+
+    let hsid = hsid.to_string();
+    let hsid_for_worker = hsid.clone();
+    match std::thread::spawn(move || {
+        if let Err(err) = crate::models::db::init_libsql() {
+            tracing::warn!(
+                helmor_session_id = %hsid_for_worker,
+                error = %err,
+                "Failed to initialise libSQL for linked-directory lookup; falling back to empty list",
+            );
+            return Vec::new();
+        }
+        tauri::async_runtime::block_on(async {
+            lookup_workspace_linked_directories_async(Some(&hsid_for_worker)).await
+        })
+    })
+    .join()
+    {
+        Ok(directories) => directories,
+        Err(_) => {
+            tracing::warn!(
+                helmor_session_id = %hsid,
+                "linked-directory lookup worker panicked; falling back to empty list",
+            );
+            Vec::new()
+        }
+    }
+}
+
+pub async fn lookup_workspace_linked_directories_async(
+    helmor_session_id: Option<&str>,
+) -> Vec<String> {
+    let Some(hsid) = helmor_session_id else {
+        return Vec::new();
+    };
+    let conn = match crate::models::db::libsql_conn_async().await {
         Ok(c) => c,
         Err(err) => {
             tracing::warn!(
                 helmor_session_id = %hsid,
                 error = %err,
-                "Failed to open DB for linked-directory lookup; falling back to empty list",
+                "Failed to open libSQL DB for linked-directory lookup; falling back to empty list",
             );
             return Vec::new();
         }
     };
-    let raw: Option<String> = match conn.query_row(
-        r#"SELECT w.linked_directory_paths
-           FROM sessions s
-           JOIN workspaces w ON w.id = s.workspace_id
-           WHERE s.id = ?1"#,
-        [hsid],
-        |row| row.get(0),
-    ) {
-        Ok(v) => v,
-        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+
+    let mut rows = match conn
+        .query(
+            r#"SELECT w.linked_directory_paths
+               FROM sessions s
+               JOIN workspaces w ON w.id = s.workspace_id
+               WHERE s.id = ?1"#,
+            [hsid.to_string()],
+        )
+        .await
+    {
+        Ok(rows) => rows,
         Err(err) => {
             tracing::warn!(
                 helmor_session_id = %hsid,
                 error = %err,
                 "linked_directory_paths query failed; falling back to empty list",
+            );
+            return Vec::new();
+        }
+    };
+
+    let raw: Option<String> = match rows.next().await {
+        Ok(Some(row)) => match row.get(0) {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(
+                    helmor_session_id = %hsid,
+                    error = %err,
+                    "linked_directory_paths row decode failed; falling back to empty list",
+                );
+                return Vec::new();
+            }
+        },
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!(
+                helmor_session_id = %hsid,
+                error = %err,
+                "linked_directory_paths row iteration failed; falling back to empty list",
             );
             return Vec::new();
         }

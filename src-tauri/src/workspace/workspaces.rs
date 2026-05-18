@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::{collections::HashSet, future::Future};
 
 use crate::{
     db,
@@ -8,7 +8,6 @@ use crate::{
     forge::ChangeRequestInfo,
     helpers,
     models::workspaces::{self as workspace_models, WorkspaceRecord},
-    sessions,
     workspace_kind::WorkspaceKind,
     workspace_landing::{LandingSource, LandingState},
     workspace_pr_sync::PrSyncState,
@@ -50,6 +49,13 @@ pub use super::lifecycle::{
     FinalizeWorkspaceResponse, PrepareWorkspaceResponse, RestoreWorkspaceResponse,
     TargetBranchConflict, ValidateRestoreResponse, WorkspaceCreationSource,
 };
+
+fn block_on_libsql<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -293,78 +299,105 @@ pub fn list_goal_child_workspaces(goal_workspace_id: &str) -> Result<Vec<Workspa
 // ---- Read / unread ----
 
 pub fn mark_workspace_read(workspace_id: &str) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start workspace-read transaction")?;
+    let workspace_id = workspace_id.to_string();
+    block_on_libsql(db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction()
+            .await
+            .context("Failed to start workspace-read transaction")?;
 
-    transaction
-        .execute(
-            "UPDATE sessions SET unread_count = 0 WHERE workspace_id = ?1",
-            [workspace_id],
-        )
-        .with_context(|| format!("Failed to clear unread sessions for workspace {workspace_id}"))?;
+        transaction
+            .execute(
+                "UPDATE sessions SET unread_count = 0 WHERE workspace_id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .with_context(|| {
+                format!("Failed to clear unread sessions for workspace {workspace_id}")
+            })?;
 
-    let updated_rows = transaction
-        .execute(
-            "UPDATE workspaces SET unread = 0 WHERE id = ?1",
-            [workspace_id],
-        )
-        .with_context(|| format!("Failed to mark workspace {workspace_id} as read"))?;
+        let updated_rows = transaction
+            .execute(
+                "UPDATE workspaces SET unread = 0 WHERE id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to mark workspace {workspace_id} as read"))?;
 
-    if updated_rows != 1 {
-        bail!("Workspace read update affected {updated_rows} rows for workspace {workspace_id}");
-    }
+        if updated_rows != 1 {
+            bail!(
+                "Workspace read update affected {updated_rows} rows for workspace {workspace_id}"
+            );
+        }
 
-    transaction
-        .commit()
-        .context("Failed to commit workspace read transaction")
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit workspace read transaction")
+    }))
 }
 
 pub fn mark_workspace_unread(workspace_id: &str) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start workspace-unread transaction")?;
+    let workspace_id = workspace_id.to_string();
+    block_on_libsql(db::libsql_write_async(|connection| async move {
+        let updated_rows = connection
+            .execute(
+                "UPDATE workspaces SET unread = 1 WHERE id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to mark workspace {workspace_id} as unread"))?;
 
-    sessions::mark_workspace_unread_in_transaction(&transaction, workspace_id)?;
+        if updated_rows != 1 {
+            bail!(
+                "Workspace unread update affected {updated_rows} rows for workspace {workspace_id}"
+            );
+        }
 
-    transaction
-        .commit()
-        .context("Failed to commit workspace unread transaction")
+        Ok(())
+    }))
 }
 
 pub fn pin_workspace(workspace_id: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            "UPDATE workspaces SET pinned_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to pin workspace")?;
-    Ok(())
+    let workspace_id = workspace_id.to_string();
+    block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE workspaces SET pinned_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
+                [workspace_id],
+            )
+            .await
+            .context("Failed to pin workspace")?;
+        Ok(())
+    }))
 }
 
 pub fn unpin_workspace(workspace_id: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            "UPDATE workspaces SET pinned_at = NULL, updated_at = datetime('now') WHERE id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to unpin workspace")?;
-    Ok(())
+    let workspace_id = workspace_id.to_string();
+    block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE workspaces SET pinned_at = NULL, updated_at = datetime('now') WHERE id = ?1",
+                [workspace_id],
+            )
+            .await
+            .context("Failed to unpin workspace")?;
+        Ok(())
+    }))
 }
 
 pub fn set_workspace_status(workspace_id: &str, status: WorkspaceStatus) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            "UPDATE workspaces SET status = ?2, updated_at = datetime('now') WHERE id = ?1",
-            rusqlite::params![workspace_id, status],
-        )
-        .context("Failed to set workspace status")?;
-    Ok(())
+    let workspace_id = workspace_id.to_string();
+    block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE workspaces SET status = ?2, updated_at = datetime('now') WHERE id = ?1",
+                libsql::params![workspace_id, status.as_str()],
+            )
+            .await
+            .context("Failed to set workspace status")?;
+        Ok(())
+    }))
 }
 
 pub fn sync_workspace_pr_state(
@@ -406,36 +439,55 @@ pub fn sync_workspace_pr_state(
     };
 
     if state_changed || title_changed || url_changed {
-        let connection = db::write_conn()?;
+        let workspace_id_for_update = workspace_id.to_string();
         if let Some(status) = target_status {
-            connection
-                .execute(
-                    r#"
-                    UPDATE workspaces
-                    SET pr_sync_state = ?2,
-                        pr_title = ?3,
-                        pr_url = ?4,
-                        status = ?5,
-                        updated_at = datetime('now')
-                    WHERE id = ?1
-                    "#,
-                    rusqlite::params![workspace_id, next_state, next_title, next_url, status],
-                )
-                .context("Failed to sync workspace PR state")?;
+            block_on_libsql(db::libsql_write_async(|connection| async move {
+                connection
+                    .execute(
+                        r#"
+                        UPDATE workspaces
+                        SET pr_sync_state = ?2,
+                            pr_title = ?3,
+                            pr_url = ?4,
+                            status = ?5,
+                            updated_at = datetime('now')
+                        WHERE id = ?1
+                        "#,
+                        libsql::params![
+                            workspace_id_for_update,
+                            next_state.as_str(),
+                            next_title,
+                            next_url,
+                            status.as_str()
+                        ],
+                    )
+                    .await
+                    .context("Failed to sync workspace PR state")?;
+                Ok(())
+            }))?;
         } else {
-            connection
-                .execute(
-                    r#"
-                    UPDATE workspaces
-                    SET pr_sync_state = ?2,
-                        pr_title = ?3,
-                        pr_url = ?4,
-                        updated_at = datetime('now')
-                    WHERE id = ?1
-                    "#,
-                    rusqlite::params![workspace_id, next_state, next_title, next_url],
-                )
-                .context("Failed to record workspace PR sync state")?;
+            block_on_libsql(db::libsql_write_async(|connection| async move {
+                connection
+                    .execute(
+                        r#"
+                        UPDATE workspaces
+                        SET pr_sync_state = ?2,
+                            pr_title = ?3,
+                            pr_url = ?4,
+                            updated_at = datetime('now')
+                        WHERE id = ?1
+                        "#,
+                        libsql::params![
+                            workspace_id_for_update,
+                            next_state.as_str(),
+                            next_title,
+                            next_url
+                        ],
+                    )
+                    .await
+                    .context("Failed to record workspace PR sync state")?;
+                Ok(())
+            }))?;
         }
         changed = true;
     }
@@ -474,14 +526,21 @@ fn stabilize_pr_sync_state(current: PrSyncState, next: PrSyncState) -> PrSyncSta
 // Schema pre-dates the feature (Conductor import compatibility); we own it now.
 
 pub fn get_workspace_linked_directories(workspace_id: &str) -> Result<Vec<String>> {
-    let connection = db::read_conn()?;
-    let raw: Option<String> = connection
-        .query_row(
-            "SELECT linked_directory_paths FROM workspaces WHERE id = ?1",
-            [workspace_id],
-            |row| row.get(0),
-        )
-        .context("Failed to read linked_directory_paths")?;
+    let workspace_id = workspace_id.to_string();
+    let raw: Option<String> = block_on_libsql(async move {
+        let connection = db::libsql_conn_async().await?;
+        let mut rows = connection
+            .query(
+                "SELECT linked_directory_paths FROM workspaces WHERE id = ?1",
+                [workspace_id],
+            )
+            .await
+            .context("Failed to read linked_directory_paths")?;
+        let Some(row) = rows.next().await? else {
+            bail!("Failed to read linked_directory_paths");
+        };
+        row.get(0).context("Failed to read linked_directory_paths")
+    })?;
     Ok(parse_linked_directory_paths(raw.as_deref()))
 }
 
@@ -566,13 +625,17 @@ pub fn set_workspace_linked_directories(
     } else {
         Some(serde_json::to_string(&normalized).context("Failed to encode linked directories")?)
     };
-    let connection = db::write_conn()?;
-    let updated = connection
-        .execute(
-            "UPDATE workspaces SET linked_directory_paths = ?2, updated_at = datetime('now') WHERE id = ?1",
-            rusqlite::params![workspace_id, payload],
-        )
-        .context("Failed to set linked_directory_paths")?;
+    let workspace_id = workspace_id.to_string();
+    let workspace_id_for_update = workspace_id.clone();
+    let updated = block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE workspaces SET linked_directory_paths = ?2, updated_at = datetime('now') WHERE id = ?1",
+                libsql::params![workspace_id_for_update, payload],
+            )
+            .await
+            .context("Failed to set linked_directory_paths")
+    }))?;
     if updated != 1 {
         bail!("Linked-directories update affected {updated} rows for {workspace_id}");
     }
@@ -995,34 +1058,36 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
 ///
 /// Returns the number of workspaces that were degraded.
 pub fn purge_orphaned_workspaces() -> Result<usize> {
-    let connection = db::read_conn()?;
-    let mut stmt = connection.prepare(&format!(
-        "SELECT w.id, r.name, w.directory_name, w.state
-         FROM workspaces w
-         JOIN repos r ON r.id = w.repository_id
-         WHERE w.state {}",
-        crate::workspace_state::OPERATIONAL_FILTER
-    ))?;
-    let orphans: Vec<(String, String, String, WorkspaceState)> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, WorkspaceState>(3)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .filter(|(_, repo_name, dir_name, _)| {
-            crate::data_dir::workspace_dir(repo_name, dir_name)
+    let orphans: Vec<(String, String, String, WorkspaceState)> = block_on_libsql(async {
+        let connection = db::libsql_conn_async().await?;
+        let mut rows = connection
+            .query(
+                &format!(
+                    "SELECT w.id, r.name, w.directory_name, w.state
+                     FROM workspaces w
+                     JOIN repos r ON r.id = w.repository_id
+                     WHERE w.state {}",
+                    crate::workspace_state::OPERATIONAL_FILTER
+                ),
+                (),
+            )
+            .await?;
+        let mut orphans = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let id: String = row.get(0).context("Failed to read workspace id")?;
+            let repo_name: String = row.get(1).context("Failed to read repo name")?;
+            let dir_name: String = row.get(2).context("Failed to read workspace directory")?;
+            let state_raw: String = row.get(3).context("Failed to read workspace state")?;
+            let state = state_raw.parse::<WorkspaceState>()?;
+            if crate::data_dir::workspace_dir(&repo_name, &dir_name)
                 .map(|p| !p.is_dir())
                 .unwrap_or(false)
-        })
-        .collect();
-    // Release the read connection so `degrade_workspace_to_archived`
-    // (which takes a write conn) doesn't deadlock on SQLite.
-    drop(stmt);
-    drop(connection);
+            {
+                orphans.push((id, repo_name, dir_name, state));
+            }
+        }
+        Ok(orphans)
+    })?;
 
     let mut count = 0;
     for (id, repo_name, dir_name, state) in &orphans {
@@ -1064,98 +1129,134 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
 /// vanished externally. Idempotent: returns `Ok(false)` if the row is
 /// not operational or doesn't exist.
 pub fn degrade_workspace_to_archived(workspace_id: &str) -> Result<bool> {
-    let connection = db::write_conn()?;
-    let rows = connection
-        .execute(
-            &format!(
-                "UPDATE workspaces
-             SET state = 'archived',
-                 updated_at = datetime('now')
-             WHERE id = ?1 AND state {}",
-                crate::workspace_state::OPERATIONAL_FILTER
-            ),
-            [workspace_id],
-        )
-        .context("Failed to degrade workspace to archived")?;
+    let workspace_id = workspace_id.to_string();
+    let rows = block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                &format!(
+                    "UPDATE workspaces
+                 SET state = 'archived',
+                     updated_at = datetime('now')
+                 WHERE id = ?1 AND state {}",
+                    crate::workspace_state::OPERATIONAL_FILTER
+                ),
+                [workspace_id],
+            )
+            .await
+            .context("Failed to degrade workspace to archived")
+    }))?;
     Ok(rows > 0)
 }
 
 /// Permanently delete a workspace and all its data (sessions, messages)
 /// from the database, plus any filesystem artifacts (worktree directory).
 pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
-    let mut connection = db::write_conn()?;
+    let workspace_id = workspace_id.to_string();
+    let workspace_id_for_delete = workspace_id.clone();
+    let workspace_id_for_cleanup = workspace_id.clone();
+    let record: Option<(String, String, WorkspaceState)> = block_on_libsql(
+        db::libsql_write_async(|connection| async move {
+            // Load workspace info for filesystem cleanup.
+            let mut rows = connection
+                .query(
+                    "SELECT r.name, w.directory_name, w.state FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
+                    [workspace_id_for_delete.clone()],
+                )
+                .await
+                .context("Failed to load workspace before delete")?;
+            let record = match rows.next().await? {
+                Some(row) => {
+                    let state_raw: String = row.get(2).context("Failed to read workspace state")?;
+                    Some((
+                        row.get(0).context("Failed to read repo name")?,
+                        row.get(1).context("Failed to read workspace directory")?,
+                        state_raw.parse::<WorkspaceState>()?,
+                    ))
+                }
+                None => None,
+            };
+            drop(rows);
 
-    // Load workspace info for filesystem cleanup
-    let record: Option<(String, String, WorkspaceState)> = connection
-        .query_row(
-            "SELECT r.name, w.directory_name, w.state FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
-            [workspace_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .ok();
+            // Delete all DB records in a transaction.
+            let transaction = connection
+                .transaction()
+                .await
+                .context("Failed to start delete workspace transaction")?;
 
-    // Delete all DB records in a transaction
-    let transaction = connection
-        .transaction()
-        .context("Failed to start delete workspace transaction")?;
+            transaction
+                .execute(
+                    "DELETE FROM session_messages WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+                    [workspace_id_for_delete.clone()],
+                )
+                .await
+                .context("Failed to delete workspace session messages")?;
+            transaction
+                .execute(
+                    "DELETE FROM sessions WHERE workspace_id = ?1",
+                    [workspace_id_for_delete.clone()],
+                )
+                .await
+                .context("Failed to delete workspace sessions")?;
+            transaction
+                .execute(
+                    "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
+                    [workspace_id_for_delete.clone()],
+                )
+                .await
+                .context("Failed to delete workspace browser tabs")?;
+            transaction
+                .execute(
+                    "DELETE FROM goal_cards WHERE goal_workspace_id = ?1",
+                    [workspace_id_for_delete.clone()],
+                )
+                .await
+                .context("Failed to delete goal cards")?;
+            transaction
+                .execute(
+                    "UPDATE goal_cards SET child_workspace_id = NULL, updated_at = datetime('now') WHERE child_workspace_id = ?1",
+                    [workspace_id_for_delete.clone()],
+                )
+                .await
+                .context("Failed to unlink goal card workspace")?;
+            transaction
+                .execute(
+                    "UPDATE workspaces SET goal_workspace_id = NULL, updated_at = datetime('now') WHERE goal_workspace_id = ?1",
+                    [workspace_id_for_delete.clone()],
+                )
+                .await
+                .context("Failed to unlink goal child workspaces")?;
+            let deleted_rows = transaction
+                .execute(
+                    "DELETE FROM workspaces WHERE id = ?1",
+                    [workspace_id_for_delete.clone()],
+                )
+                .await
+                .context("Failed to delete workspace row")?;
 
-    transaction
-        .execute(
-            "DELETE FROM session_messages WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
-            [workspace_id],
-        )
-        .context("Failed to delete workspace session messages")?;
-    transaction
-        .execute(
-            "DELETE FROM sessions WHERE workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to delete workspace sessions")?;
-    transaction
-        .execute(
-            "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to delete workspace browser tabs")?;
-    transaction
-        .execute(
-            "DELETE FROM goal_cards WHERE goal_workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to delete goal cards")?;
-    transaction
-        .execute(
-            "UPDATE goal_cards SET child_workspace_id = NULL, updated_at = datetime('now') WHERE child_workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to unlink goal card workspace")?;
-    transaction
-        .execute(
-            "UPDATE workspaces SET goal_workspace_id = NULL, updated_at = datetime('now') WHERE goal_workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to unlink goal child workspaces")?;
-    let deleted_rows = transaction
-        .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
-        .context("Failed to delete workspace row")?;
+            if deleted_rows != 1 {
+                bail!(
+                    "Workspace delete affected {deleted_rows} rows for {workspace_id_for_delete}"
+                );
+            }
 
-    if deleted_rows != 1 {
-        bail!("Workspace delete affected {deleted_rows} rows for {workspace_id}");
-    }
-
-    transaction
-        .commit()
-        .context("Failed to commit delete workspace transaction")?;
+            transaction
+                .commit()
+                .await
+                .context("Failed to commit delete workspace transaction")?;
+            Ok(record)
+        }),
+    )?;
 
     // Clean up in-memory caches for the deleted workspace.
-    super::branching::clear_prefetch_rate_limit(workspace_id);
-    db::remove_workspace_lock(workspace_id);
+    super::branching::clear_prefetch_rate_limit(&workspace_id_for_cleanup);
+    db::remove_workspace_lock(&workspace_id_for_cleanup);
 
     // Filesystem browser profile cleanup is best-effort. WKWebView data stores
     // are removed by the Tauri command path, where an AppHandle is available.
-    if let Err(error) = crate::browser_profile::remove_workspace_browser_profile_files(workspace_id)
+    if let Err(error) =
+        crate::browser_profile::remove_workspace_browser_profile_files(&workspace_id_for_cleanup)
     {
-        tracing::warn!(workspace_id, error = %format!("{error:#}"), "Failed to remove browser profile files");
+        tracing::warn!(workspace_id = %workspace_id_for_cleanup, error = %format!("{error:#}"), "Failed to remove browser profile files");
     }
 
     // Filesystem cleanup (best-effort)

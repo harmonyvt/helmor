@@ -1,5 +1,6 @@
 use std::{
     fs,
+    future::Future,
     path::{Path, PathBuf},
 };
 
@@ -15,6 +16,13 @@ use crate::{
 };
 
 use super::db;
+
+fn block_on_repo_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,9 +87,13 @@ pub(crate) struct RepositoryRecord {
 }
 
 pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare(
+    block_on_repo_db(list_repositories_async())
+}
+
+pub async fn list_repositories_async() -> Result<Vec<RepositoryCreateOption>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
             r#"
             SELECT
               id,
@@ -96,64 +108,60 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
             WHERE COALESCE(hidden, 0) = 0
             ORDER BY COALESCE(display_order, 0) ASC, LOWER(name) ASC
             "#,
+            (),
         )
-        .context("Failed to prepare repository list query")?;
-
-    let rows = statement
-        .query_map([], |row| {
-            let name: String = row.get(1)?;
-            let root_path: Option<String> = row.get(3)?;
-            let initials = helpers::repo_initials_for_name(&name);
-            let icon_src = helpers::repo_icon_src_for_root_path(root_path.as_deref());
-
-            Ok(RepositoryCreateOption {
-                id: row.get(0)?,
-                name,
-                remote: row.get(4)?,
-                remote_url: row.get(5)?,
-                forge_provider: row.get(6)?,
-                branch_prefix_custom: row.get(7)?,
-                default_branch: row.get(2)?,
-                repo_icon_src: icon_src,
-                repo_initials: initials,
-            })
-        })
+        .await
         .context("Failed to load repositories")?;
 
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .context("Failed to deserialize repositories")
+    let mut repositories = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let name: String = row.get(1).context("Failed to read repository name")?;
+        let root_path: Option<String> =
+            row.get(3).context("Failed to read repository root path")?;
+        let initials = helpers::repo_initials_for_name(&name);
+        let icon_src = helpers::repo_icon_src_for_root_path(root_path.as_deref());
+
+        repositories.push(RepositoryCreateOption {
+            id: row.get(0).context("Failed to read repository id")?,
+            name,
+            remote: row.get(4).context("Failed to read repository remote")?,
+            remote_url: row.get(5).context("Failed to read repository remote_url")?,
+            forge_provider: row
+                .get(6)
+                .context("Failed to read repository forge_provider")?,
+            branch_prefix_custom: row
+                .get(7)
+                .context("Failed to read repository branch_prefix_custom")?,
+            default_branch: row
+                .get(2)
+                .context("Failed to read repository default_branch")?,
+            repo_icon_src: icon_src,
+            repo_initials: initials,
+        });
+    }
+    Ok(repositories)
 }
 
 pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRecord>> {
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare(
+    block_on_repo_db(load_repository_by_id_async(repo_id))
+}
+
+pub(crate) async fn load_repository_by_id_async(repo_id: &str) -> Result<Option<RepositoryRecord>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
             r#"
             SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider
             FROM repos
             WHERE id = ?1
             "#,
+            [repo_id.to_string()],
         )
-        .with_context(|| format!("Failed to prepare repository lookup for {repo_id}"))?;
-
-    let mut rows = statement
-        .query_map([repo_id], |row| {
-            Ok(RepositoryRecord {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                remote: row.get(2)?,
-                default_branch: row.get(3)?,
-                root_path: row.get(4)?,
-                setup_script: row.get(5)?,
-                run_script: row.get(6)?,
-                auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
-                forge_provider: row.get(8)?,
-            })
-        })
+        .await
         .with_context(|| format!("Failed to query repository {repo_id}"))?;
 
-    match rows.next() {
-        Some(result) => result
+    match rows.next().await? {
+        Some(row) => repository_record_from_libsql_row(&row)
             .map(Some)
             .with_context(|| format!("Failed to deserialize repository {repo_id}")),
         None => Ok(None),
@@ -161,14 +169,21 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
 }
 
 pub(crate) fn load_repository_by_root_path(root_path: &str) -> Result<Option<RepositoryRecord>> {
-    let connection = db::read_conn()?;
-    if let Some(repository) = query_repository_by_root_path(&connection, root_path)? {
+    block_on_repo_db(load_repository_by_root_path_async(root_path))
+}
+
+pub(crate) async fn load_repository_by_root_path_async(
+    root_path: &str,
+) -> Result<Option<RepositoryRecord>> {
+    let connection = db::libsql_conn_async().await?;
+    if let Some(repository) = query_repository_by_root_path(&connection, root_path).await? {
         return Ok(Some(repository));
     }
 
     if let Some(normalized_root) = normalize_filesystem_path(Path::new(root_path)) {
         if normalized_root != root_path {
-            if let Some(repository) = query_repository_by_root_path(&connection, &normalized_root)?
+            if let Some(repository) =
+                query_repository_by_root_path(&connection, &normalized_root).await?
             {
                 return Ok(Some(repository));
             }
@@ -178,7 +193,9 @@ pub(crate) fn load_repository_by_root_path(root_path: &str) -> Result<Option<Rep
             .file_name()
             .and_then(|value| value.to_str())
         {
-            for repository in query_repository_candidates_by_name(&connection, repository_name)? {
+            for repository in
+                query_repository_candidates_by_name(&connection, repository_name).await?
+            {
                 let normalized_repository_root =
                     normalize_filesystem_path(Path::new(&repository.root_path))
                         .unwrap_or_else(|| repository.root_path.clone());
@@ -192,12 +209,12 @@ pub(crate) fn load_repository_by_root_path(root_path: &str) -> Result<Option<Rep
     Ok(None)
 }
 
-fn query_repository_by_root_path(
-    connection: &rusqlite::Connection,
+async fn query_repository_by_root_path(
+    connection: &libsql::Connection,
     root_path: &str,
 ) -> Result<Option<RepositoryRecord>> {
-    let mut statement = connection
-        .prepare(
+    let mut rows = connection
+        .query(
             r#"
             SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider
             FROM repos
@@ -205,87 +222,97 @@ fn query_repository_by_root_path(
             ORDER BY created_at ASC
             LIMIT 1
             "#,
+            [root_path.to_string()],
         )
-        .with_context(|| format!("Failed to prepare repository root lookup for {root_path}"))?;
-
-    let mut rows = statement
-        .query_map([root_path], |row| {
-            Ok(RepositoryRecord {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                remote: row.get(2)?,
-                default_branch: row.get(3)?,
-                root_path: row.get(4)?,
-                setup_script: row.get(5)?,
-                run_script: row.get(6)?,
-                auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
-                forge_provider: row.get(8)?,
-            })
-        })
+        .await
         .with_context(|| format!("Failed to query repository row for {root_path}"))?;
 
-    match rows.next() {
-        Some(result) => result
+    match rows.next().await? {
+        Some(row) => repository_record_from_libsql_row(&row)
             .map(Some)
             .with_context(|| format!("Failed to deserialize repository for {root_path}")),
         None => Ok(None),
     }
 }
 
-fn query_repository_candidates_by_name(
-    connection: &rusqlite::Connection,
+async fn query_repository_candidates_by_name(
+    connection: &libsql::Connection,
     repository_name: &str,
 ) -> Result<Vec<RepositoryRecord>> {
     let root_suffix = format!("%/{repository_name}");
-    let mut statement = connection
-        .prepare(
+    let mut rows = connection
+        .query(
             r#"
             SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider
             FROM repos
             WHERE name = ?1 OR root_path LIKE ?2
             ORDER BY created_at ASC
             "#,
+            libsql::params![repository_name, root_suffix],
         )
-        .with_context(|| {
-            format!("Failed to prepare repository candidate lookup for {repository_name}")
-        })?;
-
-    let rows = statement
-        .query_map([repository_name, root_suffix.as_str()], |row| {
-            Ok(RepositoryRecord {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                remote: row.get(2)?,
-                default_branch: row.get(3)?,
-                root_path: row.get(4)?,
-                setup_script: row.get(5)?,
-                run_script: row.get(6)?,
-                auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
-                forge_provider: row.get(8)?,
-            })
-        })
+        .await
         .with_context(|| format!("Failed to query repository candidates for {repository_name}"))?;
 
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| {
+    let mut repositories = Vec::new();
+    while let Some(row) = rows.next().await? {
+        repositories.push(repository_record_from_libsql_row(&row).with_context(|| {
             format!("Failed to deserialize repository candidates for {repository_name}")
-        })
+        })?);
+    }
+    Ok(repositories)
+}
+
+fn repository_record_from_libsql_row(row: &libsql::Row) -> Result<RepositoryRecord> {
+    Ok(RepositoryRecord {
+        id: row.get(0).context("Failed to read repository id")?,
+        name: row.get(1).context("Failed to read repository name")?,
+        remote: row.get(2).context("Failed to read repository remote")?,
+        default_branch: row
+            .get(3)
+            .context("Failed to read repository default branch")?,
+        root_path: row.get(4).context("Failed to read repository root path")?,
+        setup_script: row
+            .get(5)
+            .context("Failed to read repository setup script")?,
+        run_script: row.get(6).context("Failed to read repository run script")?,
+        auto_run_setup: row
+            .get::<Option<i64>>(7)
+            .context("Failed to read repository auto-run flag")?
+            .unwrap_or(1)
+            != 0,
+        forge_provider: row
+            .get(8)
+            .context("Failed to read repository forge provider")?,
+    })
 }
 
 pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<String> {
-    let connection = db::write_conn()?;
-    let next_display_order: i64 = connection
-        .query_row(
-            "SELECT COALESCE(MAX(display_order), 0) + 1 FROM repos",
-            [],
-            |row| row.get(0),
-        )
-        .context("Failed to resolve next repository display order")?;
-    let repo_id = uuid::Uuid::new_v4().to_string();
+    block_on_repo_db(insert_repository_async(repository))
+}
 
-    connection
-        .execute(
-            r#"
+pub(crate) async fn insert_repository_async(
+    repository: &ResolvedRepositoryInput,
+) -> Result<String> {
+    let repository = repository.clone();
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let inserted_id = repo_id.clone();
+    let repository_name = repository.name.clone();
+
+    db::libsql_write_async(|connection| async move {
+        let mut rows = connection
+            .query("SELECT COALESCE(MAX(display_order), 0) + 1 FROM repos", ())
+            .await
+            .context("Failed to resolve next repository display order")?;
+        let next_display_order = rows
+            .next()
+            .await?
+            .context("Repository display-order query returned no rows")?
+            .get::<i64>(0)
+            .context("Failed to read next repository display order")?;
+
+        connection
+            .execute(
+                r#"
             INSERT INTO repos (
               id,
               name,
@@ -303,18 +330,22 @@ pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<
               updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, NULL, NULL, ?8, datetime('now'), datetime('now'))
             "#,
-            (
-                repo_id.as_str(),
-                repository.name.as_str(),
-                repository.normalized_root_path.as_str(),
-                repository.remote.as_deref(),
-                repository.remote_url.as_deref(),
-                repository.default_branch.as_str(),
+                libsql::params![
+                inserted_id,
+                repository.name,
+                repository.normalized_root_path,
+                repository.remote,
+                repository.remote_url,
+                repository.default_branch,
                 next_display_order,
-                repository.forge_provider.as_deref(),
-            ),
-        )
-        .with_context(|| format!("Failed to insert repository {}", repository.name))?;
+                repository.forge_provider
+                ],
+            )
+            .await
+            .with_context(|| format!("Failed to insert repository {repository_name}"))?;
+        Ok(())
+    })
+    .await?;
 
     Ok(repo_id)
 }
@@ -351,42 +382,36 @@ pub fn update_repository_remote(
     );
     let new_forge_provider = new_provider.as_storage_str().to_string();
 
-    let connection = db::write_conn()?;
-    let updated = connection
-        .execute(
-            "UPDATE repos SET remote = ?1, default_branch = ?2, remote_url = ?3, forge_provider = ?4, updated_at = datetime('now') WHERE id = ?5",
-            rusqlite::params![remote, new_default_branch, new_remote_url, new_forge_provider, repo_id],
-        )
-        .with_context(|| format!("Failed to update remote for {repo_id}"))?;
+    let repo_id_for_write = repo_id.to_string();
+    let repo_id_for_error = repo_id.to_string();
+    let remote = remote.to_string();
+    let remote_for_write = remote.clone();
+    let updated = block_on_repo_db(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE repos SET remote = ?1, default_branch = ?2, remote_url = ?3, forge_provider = ?4, updated_at = datetime('now') WHERE id = ?5",
+                libsql::params![remote_for_write, new_default_branch, new_remote_url, new_forge_provider, repo_id_for_write.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to update remote for {repo_id_for_write}"))
+    }))?;
 
     if updated != 1 {
-        bail!("Repository not found: {repo_id}");
+        bail!("Repository not found: {repo_id_for_error}");
     }
 
     // Fetch refs so the branch picker and workspace creation have local
     // remote-tracking refs. This must succeed — without it,
     // create_workspace_from_repo_impl will fail to resolve the start ref.
-    git_ops::fetch_all_remote(&repo_root, remote)
+    git_ops::fetch_all_remote(&repo_root, &remote)
         .with_context(|| format!("Failed to fetch from remote \"{remote}\""))?;
 
     // Check how many ready workspaces have a target branch that doesn't
     // exist on the new remote. We don't auto-overwrite — let the user
     // decide via the header branch picker.
-    let remote_branches = git_ops::list_remote_branches(&repo_root, remote).unwrap_or_default();
+    let remote_branches = git_ops::list_remote_branches(&repo_root, &remote).unwrap_or_default();
 
-    let sql = format!(
-        "SELECT intended_target_branch FROM workspaces WHERE repository_id = ?1 AND state {}",
-        workspace_state::OPERATIONAL_FILTER,
-    );
-    let mut stmt = connection
-        .prepare(&sql)
-        .context("Failed to query workspace target branches")?;
-    let targets: Vec<String> = stmt
-        .query_map([repo_id], |row| row.get::<_, Option<String>>(0))
-        .context("Failed to read workspace target branches")?
-        .filter_map(|r| r.ok().flatten())
-        .filter(|t| !t.trim().is_empty())
-        .collect();
+    let targets = block_on_repo_db(load_operational_workspace_target_branches(repo_id))?;
 
     let orphaned = targets
         .iter()
@@ -396,6 +421,28 @@ pub fn update_repository_remote(
     Ok(UpdateRepositoryRemoteResponse {
         orphaned_workspace_count: orphaned,
     })
+}
+
+async fn load_operational_workspace_target_branches(repo_id: &str) -> Result<Vec<String>> {
+    let connection = db::libsql_conn_async().await?;
+    let sql = format!(
+        "SELECT intended_target_branch FROM workspaces WHERE repository_id = ?1 AND state {}",
+        workspace_state::OPERATIONAL_FILTER,
+    );
+    let mut rows = connection
+        .query(&sql, [repo_id.to_string()])
+        .await
+        .context("Failed to query workspace target branches")?;
+    let mut targets = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let target: Option<String> = row
+            .get(0)
+            .context("Failed to read workspace target branch")?;
+        if let Some(target) = target.filter(|value| !value.trim().is_empty()) {
+            targets.push(target);
+        }
+    }
+    Ok(targets)
 }
 
 pub fn list_repo_remotes(repo_id: &str) -> Result<Vec<String>> {
@@ -410,27 +457,52 @@ pub fn list_repo_remotes(repo_id: &str) -> Result<Vec<String>> {
 /// where `get_workspace_forge` ran detection because the row predates this
 /// feature — persisting avoids re-detecting on every subsequent query.
 pub fn update_repository_forge_provider(repo_id: &str, provider: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            "UPDATE repos SET forge_provider = ?1, updated_at = datetime('now') WHERE id = ?2",
-            rusqlite::params![provider, repo_id],
-        )
-        .with_context(|| format!("Failed to update forge_provider for {repo_id}"))?;
-    Ok(())
+    block_on_repo_db(update_repository_forge_provider_async(repo_id, provider))
+}
+
+pub async fn update_repository_forge_provider_async(repo_id: &str, provider: &str) -> Result<()> {
+    let repo_id = repo_id.to_string();
+    let provider = provider.to_string();
+    db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE repos SET forge_provider = ?1, updated_at = datetime('now') WHERE id = ?2",
+                libsql::params![provider, repo_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to update forge_provider for {repo_id}"))?;
+        Ok(())
+    })
+    .await
 }
 
 pub fn update_repository_default_branch(repo_id: &str, default_branch: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    let updated = connection
-        .execute(
-            "UPDATE repos SET default_branch = ?1, updated_at = datetime('now') WHERE id = ?2",
-            [default_branch, repo_id],
-        )
-        .with_context(|| format!("Failed to update default branch for {repo_id}"))?;
+    block_on_repo_db(update_repository_default_branch_async(
+        repo_id,
+        default_branch,
+    ))
+}
+
+pub async fn update_repository_default_branch_async(
+    repo_id: &str,
+    default_branch: &str,
+) -> Result<()> {
+    let repo_id = repo_id.to_string();
+    let repo_id_for_error = repo_id.clone();
+    let default_branch = default_branch.to_string();
+    let updated = db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE repos SET default_branch = ?1, updated_at = datetime('now') WHERE id = ?2",
+                libsql::params![default_branch, repo_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to update default branch for {repo_id}"))
+    })
+    .await?;
 
     if updated != 1 {
-        bail!("Repository not found: {repo_id}");
+        bail!("Repository not found: {repo_id_for_error}");
     }
 
     Ok(())
@@ -439,21 +511,35 @@ pub fn update_repository_default_branch(repo_id: &str, default_branch: &str) -> 
 pub fn load_repo_branch_prefix_settings(
     repo_id: &str,
 ) -> Result<crate::settings::EffectiveBranchPrefixSettings> {
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare("SELECT branch_prefix_custom, forge_provider, remote_url FROM repos WHERE id = ?1")
-        .with_context(|| format!("Failed to prepare branch prefix lookup for {repo_id}"))?;
+    block_on_repo_db(load_repo_branch_prefix_settings_async(repo_id))
+}
 
-    let repo_settings: crate::settings::EffectiveBranchPrefixSettings = statement
-        .query_row([repo_id], |row| {
-            Ok(crate::settings::EffectiveBranchPrefixSettings {
-                branch_prefix_type: None,
-                branch_prefix_custom: row.get(0)?,
-                forge_provider: row.get(1)?,
-                remote_url: row.get(2)?,
-            })
-        })
+pub async fn load_repo_branch_prefix_settings_async(
+    repo_id: &str,
+) -> Result<crate::settings::EffectiveBranchPrefixSettings> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT branch_prefix_custom, forge_provider, remote_url FROM repos WHERE id = ?1",
+            [repo_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to query branch prefix lookup for {repo_id}"))?;
+
+    let row = rows
+        .next()
+        .await?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
+    let repo_settings = crate::settings::EffectiveBranchPrefixSettings {
+        branch_prefix_type: None,
+        branch_prefix_custom: row
+            .get(0)
+            .context("Failed to read repository branch prefix")?,
+        forge_provider: row
+            .get(1)
+            .context("Failed to read repository forge provider")?,
+        remote_url: row.get(2).context("Failed to read repository remote URL")?,
+    };
 
     let custom_override = repo_settings
         .branch_prefix_custom
@@ -470,12 +556,12 @@ pub fn load_repo_branch_prefix_settings(
         });
     }
 
-    let fallback = crate::settings::load_branch_prefix_settings().unwrap_or(
-        crate::settings::BranchPrefixSettings {
+    let fallback = crate::settings::load_branch_prefix_settings_async()
+        .await
+        .unwrap_or(crate::settings::BranchPrefixSettings {
             branch_prefix_type: None,
             branch_prefix_custom: None,
-        },
-    );
+        });
 
     Ok(crate::settings::EffectiveBranchPrefixSettings {
         branch_prefix_type: fallback.branch_prefix_type,
@@ -489,20 +575,35 @@ pub fn update_repository_branch_prefix(
     repo_id: &str,
     branch_prefix_custom: Option<&str>,
 ) -> Result<()> {
+    block_on_repo_db(update_repository_branch_prefix_async(
+        repo_id,
+        branch_prefix_custom,
+    ))
+}
+
+pub async fn update_repository_branch_prefix_async(
+    repo_id: &str,
+    branch_prefix_custom: Option<&str>,
+) -> Result<()> {
     let branch_prefix_custom = branch_prefix_custom
         .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    let connection = db::write_conn()?;
-    let updated = connection
-        .execute(
-            "UPDATE repos SET branch_prefix_custom = ?1, updated_at = datetime('now') WHERE id = ?2",
-            rusqlite::params![branch_prefix_custom, repo_id],
-        )
-        .with_context(|| format!("Failed to update branch prefix for {repo_id}"))?;
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let repo_id = repo_id.to_string();
+    let repo_id_for_error = repo_id.clone();
+    let updated = db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE repos SET branch_prefix_custom = ?1, updated_at = datetime('now') WHERE id = ?2",
+                libsql::params![branch_prefix_custom, repo_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to update branch prefix for {repo_id}"))
+    })
+    .await?;
 
     if updated != 1 {
-        bail!("Repository not found: {repo_id}");
+        bail!("Repository not found: {repo_id_for_error}");
     }
 
     Ok(())
@@ -569,23 +670,8 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
 
     // Priority 3: DB values — picked up by `pick_script` when the project
     // config doesn't provide a value.
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare(
-            "SELECT setup_script, run_script, archive_script, auto_run_setup FROM repos WHERE id = ?1",
-        )
-        .with_context(|| format!("Failed to prepare script lookup for {repo_id}"))?;
-
-    let (db_setup, db_run, db_archive, auto_run_setup) = statement
-        .query_row([repo_id], |row| {
-            Ok((
-                row.get::<_, Option<String>>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<i64>>(3)?.unwrap_or(1) != 0,
-            ))
-        })
-        .with_context(|| format!("Repository not found: {repo_id}"))?;
+    let (db_setup, db_run, db_archive, auto_run_setup) =
+        block_on_repo_db(load_repo_script_overrides_async(repo_id))?;
 
     let (setup_script, setup_from_project) =
         pick_script(project.as_ref().and_then(|p| p.setup.as_deref()), db_setup);
@@ -605,6 +691,33 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
         archive_from_project,
         auto_run_setup,
     })
+}
+
+async fn load_repo_script_overrides_async(
+    repo_id: &str,
+) -> Result<(Option<String>, Option<String>, Option<String>, bool)> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT setup_script, run_script, archive_script, auto_run_setup FROM repos WHERE id = ?1",
+            [repo_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to query script lookup for {repo_id}"))?;
+    let Some(row) = rows.next().await? else {
+        bail!("Repository not found: {repo_id}");
+    };
+    Ok((
+        row.get(0)
+            .context("Failed to read repository setup script")?,
+        row.get(1).context("Failed to read repository run script")?,
+        row.get(2)
+            .context("Failed to read repository archive script")?,
+        row.get::<Option<i64>>(3)
+            .context("Failed to read repository auto_run_setup")?
+            .unwrap_or(1)
+            != 0,
+    ))
 }
 
 /// Project config wins when present; returns (value, is_from_project).
@@ -666,16 +779,38 @@ pub fn update_repo_scripts(
     run_script: Option<&str>,
     archive_script: Option<&str>,
 ) -> Result<()> {
-    let connection = db::write_conn()?;
-    let updated = connection
-        .execute(
-            "UPDATE repos SET setup_script = ?1, run_script = ?2, archive_script = ?3, updated_at = datetime('now') WHERE id = ?4",
-            rusqlite::params![setup_script, run_script, archive_script, repo_id],
-        )
-        .with_context(|| format!("Failed to update scripts for {repo_id}"))?;
+    block_on_repo_db(update_repo_scripts_async(
+        repo_id,
+        setup_script,
+        run_script,
+        archive_script,
+    ))
+}
+
+pub async fn update_repo_scripts_async(
+    repo_id: &str,
+    setup_script: Option<&str>,
+    run_script: Option<&str>,
+    archive_script: Option<&str>,
+) -> Result<()> {
+    let repo_id = repo_id.to_string();
+    let repo_id_for_error = repo_id.clone();
+    let setup_script = setup_script.map(ToOwned::to_owned);
+    let run_script = run_script.map(ToOwned::to_owned);
+    let archive_script = archive_script.map(ToOwned::to_owned);
+    let updated = db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE repos SET setup_script = ?1, run_script = ?2, archive_script = ?3, updated_at = datetime('now') WHERE id = ?4",
+                libsql::params![setup_script, run_script, archive_script, repo_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to update scripts for {repo_id}"))
+    })
+    .await?;
 
     if updated != 1 {
-        bail!("Repository not found: {repo_id}");
+        bail!("Repository not found: {repo_id_for_error}");
     }
 
     Ok(())
@@ -684,25 +819,39 @@ pub fn update_repo_scripts(
 /// Persist the user opt-in flag that controls whether the setup script
 /// auto-runs on workspace creation.
 pub fn update_repo_auto_run_setup(repo_id: &str, enabled: bool) -> Result<()> {
-    let connection = db::write_conn()?;
-    let updated = connection
-        .execute(
-            "UPDATE repos SET auto_run_setup = ?1, updated_at = datetime('now') WHERE id = ?2",
-            rusqlite::params![if enabled { 1 } else { 0 }, repo_id],
-        )
-        .with_context(|| format!("Failed to update auto_run_setup for {repo_id}"))?;
+    block_on_repo_db(update_repo_auto_run_setup_async(repo_id, enabled))
+}
+
+pub async fn update_repo_auto_run_setup_async(repo_id: &str, enabled: bool) -> Result<()> {
+    let repo_id = repo_id.to_string();
+    let repo_id_for_error = repo_id.clone();
+    let auto_run_setup = if enabled { 1_i64 } else { 0_i64 };
+    let updated = db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE repos SET auto_run_setup = ?1, updated_at = datetime('now') WHERE id = ?2",
+                libsql::params![auto_run_setup, repo_id.clone()],
+            )
+            .await
+            .with_context(|| format!("Failed to update auto_run_setup for {repo_id}"))
+    })
+    .await?;
 
     if updated != 1 {
-        bail!("Repository not found: {repo_id}");
+        bail!("Repository not found: {repo_id_for_error}");
     }
 
     Ok(())
 }
 
 pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare(
+    block_on_repo_db(load_repo_preferences_async(repo_id))
+}
+
+pub async fn load_repo_preferences_async(repo_id: &str) -> Result<RepoPreferences> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
             r#"
             SELECT
               custom_prompt_create_pr,
@@ -713,50 +862,71 @@ pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
             FROM repos
             WHERE id = ?1
             "#,
+            [repo_id.to_string()],
         )
-        .with_context(|| format!("Failed to prepare preferences lookup for {repo_id}"))?;
-
-    statement
-        .query_row([repo_id], |row| {
-            Ok(RepoPreferences {
-                create_pr: row.get(0)?,
-                fix_errors: row.get(1)?,
-                resolve_conflicts: row.get(2)?,
-                branch_rename: row.get(3)?,
-                general: row.get(4)?,
-            })
-        })
-        .with_context(|| format!("Repository not found: {repo_id}"))
+        .await
+        .with_context(|| format!("Failed to query preferences for {repo_id}"))?;
+    let Some(row) = rows.next().await? else {
+        bail!("Repository not found: {repo_id}");
+    };
+    Ok(RepoPreferences {
+        create_pr: row.get(0).context("Failed to read create-pr preference")?,
+        fix_errors: row.get(1).context("Failed to read fix-errors preference")?,
+        resolve_conflicts: row
+            .get(2)
+            .context("Failed to read resolve-conflicts preference")?,
+        branch_rename: row
+            .get(3)
+            .context("Failed to read branch-rename preference")?,
+        general: row.get(4).context("Failed to read general preference")?,
+    })
 }
 
 pub fn update_repo_preferences(repo_id: &str, preferences: &RepoPreferences) -> Result<()> {
-    let connection = db::write_conn()?;
-    let updated = connection
-        .execute(
-            r#"
-            UPDATE repos
-            SET
-              custom_prompt_create_pr = ?1,
-              custom_prompt_fix_errors = ?2,
-              custom_prompt_resolve_merge_conflicts = ?3,
-              custom_prompt_rename_branch = ?4,
-              custom_prompt_general = ?5,
-              updated_at = datetime('now')
-            WHERE id = ?6
-            "#,
-            rusqlite::params![
-                normalize_repo_preference(preferences.create_pr.as_deref()),
-                normalize_repo_preference(preferences.fix_errors.as_deref()),
-                normalize_repo_preference(preferences.resolve_conflicts.as_deref()),
-                normalize_repo_preference(preferences.branch_rename.as_deref()),
-                normalize_repo_preference(preferences.general.as_deref()),
-                repo_id
-            ],
-        )
-        .with_context(|| format!("Failed to update preferences for {repo_id}"))?;
+    block_on_repo_db(update_repo_preferences_async(repo_id, preferences))
+}
+
+pub async fn update_repo_preferences_async(
+    repo_id: &str,
+    preferences: &RepoPreferences,
+) -> Result<()> {
+    let repo_id = repo_id.to_string();
+    let repo_id_for_error = repo_id.clone();
+    let create_pr = normalize_repo_preference(preferences.create_pr.as_deref());
+    let fix_errors = normalize_repo_preference(preferences.fix_errors.as_deref());
+    let resolve_conflicts = normalize_repo_preference(preferences.resolve_conflicts.as_deref());
+    let branch_rename = normalize_repo_preference(preferences.branch_rename.as_deref());
+    let general = normalize_repo_preference(preferences.general.as_deref());
+    let updated = db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                r#"
+                UPDATE repos
+                SET
+                  custom_prompt_create_pr = ?1,
+                  custom_prompt_fix_errors = ?2,
+                  custom_prompt_resolve_merge_conflicts = ?3,
+                  custom_prompt_rename_branch = ?4,
+                  custom_prompt_general = ?5,
+                  updated_at = datetime('now')
+                WHERE id = ?6
+                "#,
+                libsql::params![
+                    create_pr,
+                    fix_errors,
+                    resolve_conflicts,
+                    branch_rename,
+                    general,
+                    repo_id.clone()
+                ],
+            )
+            .await
+            .with_context(|| format!("Failed to update preferences for {repo_id}"))
+    })
+    .await?;
 
     if updated != 1 {
-        bail!("Repository not found: {repo_id}");
+        bail!("Repository not found: {repo_id_for_error}");
     }
 
     Ok(())
@@ -770,13 +940,22 @@ fn normalize_repo_preference(value: Option<&str>) -> Option<String> {
 }
 
 pub(crate) fn delete_repository(repo_id: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    let deleted_rows = connection
-        .execute("DELETE FROM repos WHERE id = ?1", [repo_id])
-        .with_context(|| format!("Failed to delete repository {repo_id}"))?;
+    block_on_repo_db(delete_repository_async(repo_id))
+}
+
+pub(crate) async fn delete_repository_async(repo_id: &str) -> Result<()> {
+    let repo_id = repo_id.to_string();
+    let repo_id_for_error = repo_id.clone();
+    let deleted_rows = db::libsql_write_async(|connection| async move {
+        connection
+            .execute("DELETE FROM repos WHERE id = ?1", [repo_id.clone()])
+            .await
+            .with_context(|| format!("Failed to delete repository {repo_id}"))
+    })
+    .await?;
 
     if deleted_rows != 1 {
-        bail!("Repository delete affected {deleted_rows} rows for {repo_id}");
+        bail!("Repository delete affected {deleted_rows} rows for {repo_id_for_error}");
     }
 
     Ok(())
@@ -784,38 +963,51 @@ pub(crate) fn delete_repository(repo_id: &str) -> Result<()> {
 
 /// Delete a repository and all related data (workspaces, sessions, messages, etc.)
 pub fn delete_repository_cascade(repo_id: &str) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let tx = connection
-        .transaction()
-        .context("Failed to start delete repository transaction")?;
+    block_on_repo_db(delete_repository_cascade_async(repo_id))
+}
 
-    // Delete leaf data first, then parent rows.
-    tx.execute(
-        "DELETE FROM session_messages WHERE session_id IN (SELECT s.id FROM sessions s JOIN workspaces w ON s.workspace_id = w.id WHERE w.repository_id = ?1)",
-        [repo_id],
-    ).context("Failed to delete session messages for repository")?;
-    tx.execute(
-        "DELETE FROM sessions WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
-        [repo_id],
-    ).context("Failed to delete sessions for repository")?;
-    tx.execute(
-        "DELETE FROM pending_cli_sends WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
-        [repo_id],
-    ).context("Failed to delete pending sends for repository")?;
-    tx.execute(
-        "DELETE FROM workspace_browser_tabs WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
-        [repo_id],
-    )
-    .context("Failed to delete browser tabs for repository")?;
-    tx.execute("DELETE FROM workspaces WHERE repository_id = ?1", [repo_id])
-        .context("Failed to delete workspaces for repository")?;
-    tx.execute("DELETE FROM repos WHERE id = ?1", [repo_id])
-        .context("Failed to delete repository row")?;
+pub async fn delete_repository_cascade_async(repo_id: &str) -> Result<()> {
+    let repo_id = repo_id.to_string();
+    db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction()
+            .await
+            .context("Failed to start delete repository transaction")?;
 
-    tx.commit()
-        .context("Failed to commit delete repository transaction")?;
+        // Delete leaf data first, then parent rows.
+        transaction.execute(
+            "DELETE FROM session_messages WHERE session_id IN (SELECT s.id FROM sessions s JOIN workspaces w ON s.workspace_id = w.id WHERE w.repository_id = ?1)",
+            [repo_id.clone()],
+        ).await.context("Failed to delete session messages for repository")?;
+        transaction.execute(
+            "DELETE FROM sessions WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
+            [repo_id.clone()],
+        ).await.context("Failed to delete sessions for repository")?;
+        transaction.execute(
+            "DELETE FROM pending_cli_sends WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
+            [repo_id.clone()],
+        ).await.context("Failed to delete pending sends for repository")?;
+        transaction.execute(
+            "DELETE FROM workspace_browser_tabs WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
+            [repo_id.clone()],
+        )
+        .await
+        .context("Failed to delete browser tabs for repository")?;
+        transaction.execute("DELETE FROM workspaces WHERE repository_id = ?1", [repo_id.clone()])
+            .await
+            .context("Failed to delete workspaces for repository")?;
+        transaction.execute("DELETE FROM repos WHERE id = ?1", [repo_id])
+            .await
+            .context("Failed to delete repository row")?;
 
-    Ok(())
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit delete repository transaction")?;
+
+        Ok(())
+    })
+    .await
 }
 
 pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedRepositoryInput> {

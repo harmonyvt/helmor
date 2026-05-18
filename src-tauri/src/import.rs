@@ -3,7 +3,10 @@
 //! Users browse Conductor repos/workspaces, select individual workspaces,
 //! and import both database records and filesystem context files.
 
-use std::path::{Path, PathBuf};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -489,18 +492,20 @@ fn setup_workspace_filesystem(
                 })?;
 
             // Update branch in DB (best-effort, DB is already committed)
-            match crate::models::db::write_conn() {
-                Ok(conn) => {
-                    if let Err(e) = conn.execute(
+            let import_branch_for_db = import_branch.clone();
+            let workspace_id_for_db = workspace_id.to_string();
+            if let Err(e) =
+                block_on_import_db(crate::models::db::libsql_write_async(|conn| async move {
+                    conn.execute(
                         "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-                        rusqlite::params![import_branch, workspace_id],
-                    ) {
-                        tracing::error!(directory_name, "Failed to update branch: {e}");
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(directory_name, "Failed to open DB to update branch: {e}");
-                }
+                        [import_branch_for_db, workspace_id_for_db],
+                    )
+                    .await
+                    .context("Failed to update imported workspace branch")?;
+                    Ok(())
+                }))
+            {
+                tracing::error!(directory_name, "Failed to update branch: {e}");
             }
         }
     }
@@ -517,42 +522,48 @@ fn setup_workspace_filesystem(
 }
 
 fn delete_imported_workspace_records(workspace_id: &str) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
-    conn.execute_batch("BEGIN IMMEDIATE")
-        .context("Failed to start cleanup transaction")?;
-
-    let cleanup_result = (|| -> Result<()> {
-        conn.execute(
+    let workspace_id = workspace_id.to_string();
+    block_on_import_db(crate::models::db::libsql_write_async(|conn| async move {
+        let tx = conn
+            .transaction()
+            .await
+            .context("Failed to start cleanup transaction")?;
+        tx.execute(
             "DELETE FROM session_messages WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
-            [workspace_id],
+            [workspace_id.clone()],
         )
+        .await
         .context("Failed to delete imported messages")?;
-        conn.execute(
+        tx.execute(
             "DELETE FROM sessions WHERE workspace_id = ?1",
-            [workspace_id],
+            [workspace_id.clone()],
         )
+        .await
         .context("Failed to delete imported sessions")?;
-        conn.execute(
+        tx.execute(
             "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
-            [workspace_id],
+            [workspace_id.clone()],
         )
+        .await
         .context("Failed to delete imported browser tabs")?;
-        conn.execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
-            .context("Failed to delete imported workspace")?;
+        tx.execute(
+            "DELETE FROM workspaces WHERE id = ?1",
+            [workspace_id.clone()],
+        )
+        .await
+        .context("Failed to delete imported workspace")?;
+        tx.commit()
+            .await
+            .context("Failed to commit cleanup transaction")?;
+        crate::models::db::remove_workspace_lock(&workspace_id);
         Ok(())
-    })();
+    }))
+}
 
-    match cleanup_result {
-        Ok(()) => {
-            conn.execute_batch("COMMIT")
-                .context("Failed to commit cleanup transaction")?;
-            crate::models::db::remove_workspace_lock(workspace_id);
-            Ok(())
-        }
-        Err(error) => {
-            conn.execute_batch("ROLLBACK").ok();
-            Err(error)
-        }
+fn block_on_import_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
     }
 }
 
@@ -1299,29 +1310,36 @@ mod tests {
             "expected source branch resolution failure, got {:?}",
             result.errors
         );
-        let conn = crate::models::db::write_conn().unwrap();
-        let workspace_count: i64 = conn
-            .query_row("SELECT count(*) FROM workspaces WHERE id = 'w1'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        let session_count: i64 = conn
-            .query_row(
+        let (workspace_count, session_count, message_count) = block_on_import_db(async move {
+            let conn = crate::models::db::libsql_conn_async().await.unwrap();
+            let workspace_count =
+                count_rows(&conn, "SELECT count(*) FROM workspaces WHERE id = 'w1'")
+                    .await
+                    .unwrap();
+            let session_count = count_rows(
+                &conn,
                 "SELECT count(*) FROM sessions WHERE workspace_id = 'w1'",
-                [],
-                |r| r.get(0),
             )
+            .await
             .unwrap();
-        let message_count: i64 = conn
-            .query_row(
+            let message_count = count_rows(
+                &conn,
                 "SELECT count(*) FROM session_messages WHERE session_id = 's1'",
-                [],
-                |r| r.get(0),
             )
+            .await
             .unwrap();
+            Ok((workspace_count, session_count, message_count))
+        })
+        .unwrap();
 
         assert_eq!(workspace_count, 0);
         assert_eq!(session_count, 0);
         assert_eq!(message_count, 0);
+    }
+
+    async fn count_rows(conn: &libsql::Connection, sql: &str) -> Result<i64> {
+        let mut rows = conn.query(sql, ()).await?;
+        let row = rows.next().await?.context("count query returned no rows")?;
+        row.get(0).context("Failed to read count")
     }
 }
