@@ -231,7 +231,7 @@ export function ChatAssistantMessage({
 				<MessageStatusBadge reason={message.status.reason} />
 			) : null}
 			{!streaming && (
-				<div className="flex items-center opacity-0 transition-opacity group-hover/assistant:opacity-100 group-focus-within/assistant:opacity-100">
+				<div className="flex h-0 items-center opacity-0 transition-opacity group-hover/assistant:opacity-100 group-focus-within/assistant:opacity-100">
 					<CopyMessageButton
 						message={message}
 						className="size-5 shrink-0 text-muted-foreground/30 hover:text-muted-foreground"
