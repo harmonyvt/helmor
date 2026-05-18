@@ -225,9 +225,14 @@ pub async fn send_assignee_message(
     let goal_workspace_id = request.goal_workspace_id.clone();
     let prepared = crate::goal_assignees::prepare_assignee_message_async(request).await?;
     let mut result = prepared.result;
-    let receipt = crate::background_agents::enqueue(app.clone(), prepared.send_params)?;
+    let receipt = crate::background_agents::enqueue_assignee(
+        app.clone(),
+        prepared.send_params,
+        prepared.goal_workspace_id.clone(),
+        prepared.run_id,
+    )?;
     result.started = receipt.started;
-    result.pending_send_id = receipt.task_id;
+    result.run_id = receipt.task_id;
     result.execution_state = receipt.execution_state.to_string();
     publish_goal_child_workspace_changes(
         &app,
@@ -245,9 +250,14 @@ pub async fn send_thread_message(
     let goal_workspace_id = request.goal_workspace_id.clone();
     let prepared = crate::goal_assignees::prepare_thread_message_async(request).await?;
     let mut result = prepared.result;
-    let receipt = crate::background_agents::enqueue(app.clone(), prepared.send_params)?;
+    let receipt = crate::background_agents::enqueue_assignee(
+        app.clone(),
+        prepared.send_params,
+        prepared.goal_workspace_id.clone(),
+        prepared.run_id,
+    )?;
     result.started = receipt.started;
-    result.pending_send_id = receipt.task_id;
+    result.run_id = receipt.task_id;
     result.execution_state = receipt.execution_state.to_string();
     publish_goal_child_workspace_changes(
         &app,

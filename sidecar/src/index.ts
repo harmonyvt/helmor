@@ -34,6 +34,10 @@ import {
 } from "./request-parser.js";
 import type { Provider, SessionManager } from "./session-manager.js";
 import {
+	createStdoutProtocolWriter,
+	isBrokenPipeError,
+} from "./stdout-writer.js";
+import {
 	TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
@@ -47,9 +51,8 @@ const managers: Record<Provider, SessionManager> = {
 	pi: piManager,
 };
 
-const emitter = createSidecarEmitter((event) => {
-	process.stdout.write(`${JSON.stringify(event)}\n`);
-});
+const writeStdoutEvent = createStdoutProtocolWriter(process.stdout, logger);
+const emitter = createSidecarEmitter(writeStdoutEvent);
 
 // ---------------------------------------------------------------------------
 // Heartbeat — emit a lightweight keepalive every 15s for every in-flight
@@ -86,6 +89,13 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 
 process.on("uncaughtException", (err) => {
+	if (isBrokenPipeError(err)) {
+		logger.error(
+			"stdout pipe closed from uncaughtException; sidecar exiting",
+			errorDetails(err),
+		);
+		process.exit(0);
+	}
 	logger.error("uncaughtException", errorDetails(err));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
@@ -95,6 +105,13 @@ process.on("uncaughtException", (err) => {
 });
 
 process.on("unhandledRejection", (reason) => {
+	if (isBrokenPipeError(reason)) {
+		logger.error(
+			"stdout pipe closed from unhandledRejection; sidecar exiting",
+			errorDetails(reason),
+		);
+		process.exit(0);
+	}
 	logger.error("unhandledRejection", errorDetails(reason));
 	try {
 		emitter.error(null, "Internal sidecar error", true);

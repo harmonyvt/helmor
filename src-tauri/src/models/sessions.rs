@@ -1598,6 +1598,12 @@ fn delete_session_tree_in_transaction(
         .context("Failed to delete assignee notification metadata")?;
     transaction
         .execute(
+            "DELETE FROM goal_assignee_runs WHERE session_id = ?1",
+            [session_id],
+        )
+        .context("Failed to delete assignee run metadata")?;
+    transaction
+        .execute(
             "DELETE FROM pending_cli_sends WHERE session_id = ?1",
             [session_id],
         )
@@ -1683,6 +1689,13 @@ async fn delete_session_tree_in_libsql_transaction(
             )
             .await
             .context("Failed to delete assignee notification metadata")?;
+        transaction
+            .execute(
+                "DELETE FROM goal_assignee_runs WHERE session_id = ?1",
+                [current_session_id.clone()],
+            )
+            .await
+            .context("Failed to delete assignee run metadata")?;
         transaction
             .execute(
                 "DELETE FROM pending_cli_sends WHERE session_id = ?1",
@@ -2611,6 +2624,8 @@ mod tests {
         conn.execute("INSERT INTO session_delegations (id, parent_session_id, child_session_id, parent_message_id, provider, model_id, title, status, output_schema) VALUES ('delegation-assignee-delete', 'parent-assignee-delete', 'child-assignee-delete', 'anchor-assignee-delete', 'codex', 'gpt-5.4', 'Delegate', 'running', '{}')", []).unwrap();
         conn.execute("INSERT INTO goal_supervisor_notifications (id, goal_workspace_id, card_workspace_id, assignee_session_id, message_id, report_type, excerpt, delivered_to_session_id) VALUES ('notification-parent-delete', 'goal-assignee-delete', 'workspace-assignee-delete', 'parent-assignee-delete', 'report-parent-delete', 'completed', 'done', 'supervisor-assignee-delete')", []).unwrap();
         conn.execute("INSERT INTO goal_supervisor_notifications (id, goal_workspace_id, card_workspace_id, assignee_session_id, message_id, report_type, excerpt, delivered_to_session_id) VALUES ('notification-child-delete', 'goal-assignee-delete', 'workspace-assignee-delete', 'child-assignee-delete', 'report-child-delete', 'runtime_issue', 'failed', 'supervisor-assignee-delete')", []).unwrap();
+        conn.execute("INSERT INTO goal_assignee_runs (id, goal_workspace_id, workspace_id, session_id, supervisor_message_id, status, prompt) VALUES ('run-parent-delete', 'goal-assignee-delete', 'workspace-assignee-delete', 'parent-assignee-delete', 'supervisor-parent-delete', 'queued', 'continue')", []).unwrap();
+        conn.execute("INSERT INTO goal_assignee_runs (id, goal_workspace_id, workspace_id, session_id, supervisor_message_id, status, prompt) VALUES ('run-child-delete', 'goal-assignee-delete', 'workspace-assignee-delete', 'child-assignee-delete', 'supervisor-child-delete', 'queued', 'continue')", []).unwrap();
         conn.execute(
             "INSERT INTO session_messages (id, session_id, role, content) VALUES ('delivered-parent-delete', 'supervisor-assignee-delete', 'system', ?1)",
             [serde_json::json!({
@@ -2652,6 +2667,10 @@ mod tests {
             (
                 "goal_supervisor_notifications",
                 "id IN ('notification-parent-delete', 'notification-child-delete')",
+            ),
+            (
+                "goal_assignee_runs",
+                "id IN ('run-parent-delete', 'run-child-delete')",
             ),
             (
                 "pending_cli_sends",

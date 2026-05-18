@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { History, ListTree, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import type {
@@ -408,6 +409,17 @@ export function GoalsAiPanel({
 					await queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceSessions(cardId),
 					});
+					const assigneeCard = cards.find((c) => c.id === cardId);
+					const assigneeLabel =
+						assigneeCard?.title ?? assigneeCard?.directoryName ?? "assignee";
+					const sendResult = result as { executionState?: string } | undefined;
+					toast(`Dispatched to ${assigneeLabel}`, {
+						description:
+							sendResult?.executionState === "queued"
+								? "Queued — will run when current task finishes"
+								: undefined,
+						duration: 3000,
+					});
 				} else if (event.tool === "send_thread_message") {
 					const workspaceRef = String(
 						args.workspaceId ?? args.workspace_id ?? "",
@@ -429,6 +441,10 @@ export function GoalsAiPanel({
 					await queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceSessions(workspaceRef),
 					});
+					const threadCard = cards.find((c) => c.id === workspaceRef);
+					const threadLabel =
+						threadCard?.title ?? threadCard?.directoryName ?? "assignee";
+					toast(`Dispatched to ${threadLabel}`, { duration: 3000 });
 				} else if (event.tool === "set_card_assignee_thread") {
 					const cardId = String(args.cardId ?? args.card_id ?? "");
 					result = await enqueueKanbanMutation(async () => {

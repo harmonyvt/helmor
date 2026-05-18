@@ -126,6 +126,54 @@ fn send_assignee_message_queues_follow_up_without_changing_lane() {
 }
 
 #[test]
+fn prepared_assignee_message_persists_run_before_background_send() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+
+    let prepared = goal_assignees::prepare_assignee_message(SendAssigneeMessageRequest {
+        goal_workspace_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        card_id: "00000000-0000-0000-0000-000000000002".to_string(),
+        message: "Persist this before launch.".to_string(),
+        priority: None,
+        thread_id: None,
+    })
+    .unwrap();
+
+    assert!(prepared.result.queued);
+    assert!(!prepared.result.started);
+    assert_eq!(prepared.result.execution_state, "queued");
+    assert_eq!(prepared.run_id, prepared.result.pending_send_id);
+    assert!(prepared.result.supervisor_message_id.is_some());
+
+    let (status, prompt, supervisor_message_id): (String, String, String) = connection
+        .query_row(
+            "SELECT status, prompt, supervisor_message_id FROM goal_assignee_runs WHERE id = ?1",
+            [&prepared.run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "queued");
+    assert!(prompt.contains("Persist this before launch."));
+    assert_eq!(
+        Some(supervisor_message_id.as_str()),
+        prepared.result.supervisor_message_id.as_deref()
+    );
+
+    let pending_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM pending_cli_sends WHERE session_id = 'session-assignee'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pending_count, 0, "durable assignee runs replace CLI sends");
+}
+
+#[test]
 fn persisted_assignee_report_notifies_supervisor_once_with_priority_classification() {
     let _guard = TEST_LOCK
         .lock()

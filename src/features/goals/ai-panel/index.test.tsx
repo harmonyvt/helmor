@@ -556,7 +556,7 @@ describe("GoalsAiPanel", () => {
 			executionState: "spawned",
 			sessionId: "thread-1",
 			workspaceId: "child-1",
-			pendingSendId: "pending-1",
+			runId: "run-1",
 			message: "Continue",
 			supervisorMessageId: null,
 		});

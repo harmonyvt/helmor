@@ -1,6 +1,7 @@
 import {
 	AlertTriangle,
 	Bot,
+	CornerDownRight,
 	GitBranch,
 	GitMerge,
 	GitPullRequest,
@@ -26,6 +27,10 @@ type WorkspaceCardProps = {
 	onAssigneeClick?: () => void;
 	latestReport?: AssigneeReportMarker | null;
 	orchestratorStatus?: string | null;
+	assigneeSummary?: {
+		activeRunStatus?: string | null;
+		lastRunError?: string | null;
+	} | null;
 	onDragStart: () => void;
 	onDragEnd: () => void;
 };
@@ -33,10 +38,19 @@ type WorkspaceCardProps = {
 function agentStatus(
 	ws: WorkspaceDetail,
 	latestReport?: AssigneeReportMarker | null,
+	assigneeSummary?: {
+		activeRunStatus?: string | null;
+		lastRunError?: string | null;
+	} | null,
 ) {
 	if (latestReport?.reportType === "blocked") return "blocked";
 	if (latestReport?.reportType === "completed") return "completed";
 	if (ws.activeSessionStatus === "streaming") return "running";
+	if (
+		assigneeSummary?.activeRunStatus === "failed" &&
+		ws.activeSessionStatus !== "streaming"
+	)
+		return "failed";
 	return "idle";
 }
 
@@ -126,14 +140,16 @@ export function WorkspaceCard({
 	onAssigneeClick,
 	latestReport,
 	orchestratorStatus,
+	assigneeSummary,
 	onDragStart,
 	onDragEnd,
 }: WorkspaceCardProps) {
 	const agentType = ws.activeSessionAgentType;
-	const status = agentStatus(ws, latestReport);
+	const status = agentStatus(ws, latestReport, assigneeSummary);
 	const isBlocked = status === "blocked";
 	const isRunning = status === "running";
 	const isCompleted = status === "completed";
+	const isFailed = status === "failed";
 	const prBadge = prBadgeMeta(ws.prSyncState);
 	const PrBadgeIcon = prBadge.Icon;
 
@@ -147,7 +163,7 @@ export function WorkspaceCard({
 				"group cursor-pointer select-none rounded-lg border bg-background/90 px-3 py-2.5 transition-all duration-150",
 				isSelected
 					? "border-ring/50 shadow-[0_0_0_2px_color-mix(in_oklch,var(--ring)_15%,transparent)] shadow-md"
-					: isBlocked
+					: isBlocked || isFailed
 						? "border-destructive/30 hover:border-destructive/50 hover:shadow-sm"
 						: isRunning
 							? "border-foreground/15 hover:border-foreground/25 hover:shadow-sm"
@@ -165,7 +181,7 @@ export function WorkspaceCard({
 						type="button"
 						className={cn(
 							"mt-px inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium capitalize transition-opacity hover:opacity-70",
-							isBlocked
+							isBlocked || isFailed
 								? "bg-destructive/12 text-destructive"
 								: isCompleted
 									? "bg-[color-mix(in_oklch,var(--workspace-sidebar-status-progress)_15%,transparent)] text-[color:var(--workspace-sidebar-status-progress)]"
@@ -249,8 +265,21 @@ export function WorkspaceCard({
 						{isBlocked && (
 							<AlertTriangle className="mt-px size-2.5 shrink-0 opacity-80" />
 						)}
-						<span className="line-clamp-2">{latestReport.excerpt}</span>
+						<span className="line-clamp-2 flex-1">{latestReport.excerpt}</span>
 					</div>
+					{isBlocked && onAssigneeClick && (
+						<button
+							type="button"
+							onClick={(e) => {
+								e.stopPropagation();
+								onAssigneeClick();
+							}}
+							className="mt-1.5 flex cursor-pointer items-center gap-1 rounded text-[10px] font-medium text-destructive/70 transition-colors hover:text-destructive"
+						>
+							<CornerDownRight className="size-2.5 shrink-0" />
+							Reply to unblock
+						</button>
+					)}
 				</div>
 			)}
 		</article>

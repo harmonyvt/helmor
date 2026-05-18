@@ -166,10 +166,7 @@ export function GoalWorkspaceContainer({
 		goalOrchestratorStateQueryOptions(workspaceId),
 	);
 	const assigneesQuery = useQuery({
-		queryKey: [
-			...helmorQueryKeys.goalChildWorkspaces(workspaceId),
-			"assignees",
-		],
+		queryKey: helmorQueryKeys.goalAssignees(workspaceId),
 		queryFn: () => listAssignees(workspaceId),
 		enabled: childQuery.isSuccess,
 		staleTime: 5_000,
@@ -202,6 +199,20 @@ export function GoalWorkspaceContainer({
 				reports.set(assignee.workspaceId, assignee.latestReport);
 		}
 		return reports;
+	}, [assigneesQuery.data]);
+
+	const assigneeSummaryByWorkspaceId = useMemo(() => {
+		const map = new Map<
+			string,
+			{ activeRunStatus?: string | null; lastRunError?: string | null }
+		>();
+		for (const assignee of assigneesQuery.data ?? []) {
+			map.set(assignee.workspaceId, {
+				activeRunStatus: assignee.activeRunStatus,
+				lastRunError: assignee.lastRunError,
+			});
+		}
+		return map;
 	}, [assigneesQuery.data]);
 
 	// Compute unresolved PR comment count for the Comments tab badge.
@@ -745,6 +756,7 @@ export function GoalWorkspaceContainer({
 							onSelectAssignee={handleSelectAssignee}
 							reportByWorkspaceId={reportByWorkspaceId}
 							orchestratorStatusByWorkspaceId={orchestratorStatusByWorkspaceId}
+							assigneeSummaryByWorkspaceId={assigneeSummaryByWorkspaceId}
 							onMoveWorkspace={handleMoveWorkspace}
 							onMergeWorkspace={handleMergeWorkspace}
 							onCheckLanding={handleCheckLanding}
