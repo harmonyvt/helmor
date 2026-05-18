@@ -44,6 +44,7 @@ import {
 	type PrSyncState,
 	refreshWorkspaceChangeRequest,
 } from "./api";
+import { postDebugEvidence } from "./debug-evidence";
 import { parsePrUrl } from "./pr-url";
 
 const SESSION_STALE_TIME = 10 * 60_000;
@@ -53,6 +54,51 @@ const WORKSPACE_FORGE_REFETCH_INTERVAL = 60_000;
 const DEFAULT_GC_TIME = 30 * 60_000;
 const SESSION_GC_TIME = 60 * 60_000;
 const PERSIST_GC_TIME = 24 * 60 * 60_000; // 24h — persisted entries live this long
+const DEBUG_INGEST_URL =
+	"http://127.0.0.1:62813/ingest?token=6b9abcf2-2463-435f-aa0d-febc5272908b";
+
+async function probedQuery<T>(
+	name: string,
+	details: Record<string, unknown>,
+	queryFn: () => Promise<T>,
+): Promise<T> {
+	const startedAt =
+		typeof performance !== "undefined" ? performance.now() : Date.now();
+	postDebugEvidence(DEBUG_INGEST_URL, {
+		source: "query-client",
+		message: `${name} start`,
+		details,
+	});
+	try {
+		const result = await queryFn();
+		const finishedAt =
+			typeof performance !== "undefined" ? performance.now() : Date.now();
+		postDebugEvidence(DEBUG_INGEST_URL, {
+			source: "query-client",
+			message: `${name} success`,
+			details: {
+				...details,
+				durationMs: Math.round(finishedAt - startedAt),
+				resultSize: Array.isArray(result) ? result.length : null,
+			},
+		});
+		return result;
+	} catch (error) {
+		const failedAt =
+			typeof performance !== "undefined" ? performance.now() : Date.now();
+		postDebugEvidence(DEBUG_INGEST_URL, {
+			level: "warn",
+			source: "query-client",
+			message: `${name} failure`,
+			details: {
+				...details,
+				durationMs: Math.round(failedAt - startedAt),
+				error: error instanceof Error ? error.message : String(error),
+			},
+		});
+		throw error;
+	}
+}
 
 export const helmorQueryKeys = {
 	workspaceGroups: ["workspaceGroups"] as const,
@@ -271,7 +317,7 @@ const WORKSPACE_LIST_POLL_INTERVAL = 5_000;
 export function workspaceGroupsQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceGroups,
-		queryFn: loadWorkspaceGroups,
+		queryFn: () => probedQuery("workspaceGroups", {}, loadWorkspaceGroups),
 		initialData: DEFAULT_WORKSPACE_GROUPS,
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
@@ -340,7 +386,10 @@ export function goalCardsQueryOptions(workspaceId: string) {
 export function goalChildWorkspacesQueryOptions(goalWorkspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.goalChildWorkspaces(goalWorkspaceId),
-		queryFn: () => listGoalChildWorkspaces(goalWorkspaceId),
+		queryFn: () =>
+			probedQuery("goalChildWorkspaces", { goalWorkspaceId }, () =>
+				listGoalChildWorkspaces(goalWorkspaceId),
+			),
 		initialData: [] as import("./api").WorkspaceDetail[],
 		staleTime: 0,
 	});
@@ -497,7 +546,10 @@ export function sessionThreadMessagesQueryOptions(sessionId: string) {
 export function sessionDelegationsQueryOptions(sessionId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.sessionDelegations(sessionId),
-		queryFn: () => listSessionDelegations(sessionId),
+		queryFn: () =>
+			probedQuery("sessionDelegations", { sessionId }, () =>
+				listSessionDelegations(sessionId),
+			),
 		initialData: [] as import("./api").DelegationRecord[],
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
@@ -517,12 +569,17 @@ export function slashCommandsQueryOptions(
 			workspaceId,
 		),
 		queryFn: () =>
-			listSlashCommands({
-				provider,
-				workingDirectory,
-				repoId,
-				workspaceId,
-			}),
+			probedQuery(
+				"slashCommands",
+				{ provider, workingDirectory, repoId, workspaceId },
+				() =>
+					listSlashCommands({
+						provider,
+						workingDirectory,
+						repoId,
+						workspaceId,
+					}),
+			),
 		// The backend owns slash-command caching and background refresh. Keep
 		// the frontend layer as a thin request shell only.
 		staleTime: 0,

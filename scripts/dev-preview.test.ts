@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
 	createTauriConfigOverride,
 	DEV_WEB_DAEMON_PORT,
 	derivePreviewIdentity,
 	derivePreviewWebDaemonPort,
+	ensurePreviewResourceDirs,
 	PREVIEW_DATA_DIR_NAME,
 	PREVIEW_MCP_PORT_BLOCK_SIZE,
 	PREVIEW_MCP_PORT_START,
@@ -82,5 +85,17 @@ describe("dev preview identity", () => {
 				devUrl: "http://localhost:15321",
 			},
 		});
+	});
+
+	test("creates ignored resource directories needed by Tauri dev builds", () => {
+		const root = mkdtempSync(path.join(tmpdir(), "helmor-preview-"));
+		try {
+			ensurePreviewResourceDirs(root);
+
+			expect(existsSync(path.join(root, "dist-web"))).toBe(true);
+			expect(existsSync(path.join(root, "dist-web", "index.html"))).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
