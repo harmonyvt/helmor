@@ -194,24 +194,83 @@ export const WorkspaceConversationContainer = memo(
 		>({});
 		const composerDebugModes = externalDebugModes ?? internalDebugModes;
 
+		const sessionsQuery = useQuery({
+			...workspaceSessionsQueryOptions(displayedWorkspaceId ?? "__none__"),
+			enabled: Boolean(displayedWorkspaceId),
+		});
+		const sessions = sessionsQuery.data ?? [];
+		const rememberedSessionId = useMemo(() => {
+			if (sessionSelectionHistory.length === 0 || sessions.length === 0) {
+				return null;
+			}
+
+			const visibleSessionIds = new Set(sessions.map((session) => session.id));
+			for (let i = sessionSelectionHistory.length - 1; i >= 0; i -= 1) {
+				const sessionId = sessionSelectionHistory[i];
+				if (visibleSessionIds.has(sessionId)) {
+					return sessionId;
+				}
+			}
+
+			return null;
+		}, [sessionSelectionHistory, sessions]);
+		const resolvedDisplayedSessionId = useMemo(() => {
+			if (!displayedWorkspaceId) {
+				return null;
+			}
+
+			if (
+				displayedSessionId &&
+				(sessions.some((session) => session.id === displayedSessionId) ||
+					selectedSessionId === displayedSessionId)
+			) {
+				return displayedSessionId;
+			}
+
+			if (displayedSessionId && sessionsQuery.data === undefined) {
+				return displayedSessionId;
+			}
+
+			return (
+				rememberedSessionId ??
+				sessions.find((session) => session.active)?.id ??
+				sessions[0]?.id ??
+				null
+			);
+		}, [
+			displayedSessionId,
+			displayedWorkspaceId,
+			rememberedSessionId,
+			selectedSessionId,
+			sessions,
+			sessionsQuery.data,
+		]);
+
+		useEffect(() => {
+			if (resolvedDisplayedSessionId !== displayedSessionId) {
+				onResolveDisplayedSession(resolvedDisplayedSessionId);
+			}
+		}, [
+			displayedSessionId,
+			onResolveDisplayedSession,
+			resolvedDisplayedSessionId,
+		]);
+
 		const composerContextKey = getComposerContextKey(
 			displayedWorkspaceId,
-			displayedSessionId,
+			resolvedDisplayedSessionId,
 		);
 		const displayedSelectedModelId =
 			composerModelSelections[composerContextKey] ?? null;
 		const selectionPending =
 			selectedWorkspaceId !== displayedWorkspaceId ||
-			selectedSessionId !== displayedSessionId;
+			(selectedSessionId !== null &&
+				selectedSessionId !== resolvedDisplayedSessionId);
 
 		// App-level follow-up queue. Survives session / workspace
 		// switches because this container is mounted once in the App
 		// tree (not keyed by session id).
 		const { settings } = useSettings();
-		const sessionsQuery = useQuery({
-			...workspaceSessionsQueryOptions(displayedWorkspaceId ?? "__none__"),
-			enabled: Boolean(displayedWorkspaceId),
-		});
 		const { queuesBySessionId, api: submitQueueApi } = useSubmitQueue();
 
 		const handlePiUiRequest = useCallback(
@@ -246,7 +305,7 @@ export const WorkspaceConversationContainer = memo(
 		} = useConversationStreaming({
 			composerContextKey,
 			displayedSelectedModelId,
-			displayedSessionId,
+			displayedSessionId: resolvedDisplayedSessionId,
 			displayedWorkspaceId,
 			repoId,
 			selectionPending,
@@ -263,18 +322,22 @@ export const WorkspaceConversationContainer = memo(
 			onPiUiRequest: handlePiUiRequest,
 		});
 
-		const queueItems = displayedSessionId
-			? (queuesBySessionId.get(displayedSessionId) ?? EMPTY_QUEUE)
+		const queueItems = resolvedDisplayedSessionId
+			? (queuesBySessionId.get(resolvedDisplayedSessionId) ?? EMPTY_QUEUE)
 			: EMPTY_QUEUE;
 
 		// Derived from thread messages — survives refresh / session switch.
 		const threadQuery = useQuery({
-			...sessionThreadMessagesQueryOptions(displayedSessionId ?? "__none__"),
-			enabled: Boolean(displayedSessionId),
+			...sessionThreadMessagesQueryOptions(
+				resolvedDisplayedSessionId ?? "__none__",
+			),
+			enabled: Boolean(resolvedDisplayedSessionId),
 		});
 		const delegationsQuery = useQuery({
-			...sessionDelegationsQueryOptions(displayedSessionId ?? "__none__"),
-			enabled: Boolean(displayedSessionId),
+			...sessionDelegationsQueryOptions(
+				resolvedDisplayedSessionId ?? "__none__",
+			),
+			enabled: Boolean(resolvedDisplayedSessionId),
 		});
 		const delegations = delegationsQuery.data ?? [];
 		const planReview = useMemo<PlanReviewPart | null>(
@@ -415,7 +478,7 @@ export const WorkspaceConversationContainer = memo(
 			(request) =>
 				insertRequestMatchesComposer(request, {
 					workspaceId: displayedWorkspaceId,
-					sessionId: displayedSessionId,
+					sessionId: resolvedDisplayedSessionId,
 				}),
 		);
 
@@ -447,7 +510,7 @@ export const WorkspaceConversationContainer = memo(
 				</>
 			) : null;
 		const selectedSession = sessionsQuery.data?.find(
-			(session) => session.id === displayedSessionId,
+			(session) => session.id === resolvedDisplayedSessionId,
 		);
 		const selectedInputPolicy = selectedSession?.inputPolicy ?? "writable";
 		const hideComposerForMode =
@@ -486,7 +549,7 @@ export const WorkspaceConversationContainer = memo(
 					selectedWorkspaceId={selectedWorkspaceId}
 					displayedWorkspaceId={displayedWorkspaceId}
 					selectedSessionId={selectedSessionId}
-					displayedSessionId={displayedSessionId}
+					displayedSessionId={resolvedDisplayedSessionId}
 					sessionSelectionHistory={sessionSelectionHistory}
 					sending={isSending}
 					sendingSessionIds={sendingSessionIds}
@@ -514,7 +577,7 @@ export const WorkspaceConversationContainer = memo(
 							{effectiveComposerAccessory}
 							<WorkspaceComposerContainer
 								displayedWorkspaceId={displayedWorkspaceId}
-								displayedSessionId={displayedSessionId}
+								displayedSessionId={resolvedDisplayedSessionId}
 								disabled={selectionPending}
 								sending={isSending}
 								sendError={activeSendError}
