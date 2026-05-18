@@ -613,12 +613,12 @@ mod tests {
 
     #[test]
     fn extracts_debug_prompt_prefix_for_delegated_agents() {
-        let parent_prefix = "Repo preference\n\n[DEBUG MODE ACTIVE]\nUse evidence.\n\n[DEBUG INGEST SERVER]\nPOST JSON evidence to http://127.0.0.1:4321/ingest?token=t";
+        let parent_prefix = "Repo preference\n\n[DEBUG MODE ACTIVE]\nUse evidence.\n\n[DEBUG INGEST SERVER]\nThis is a live telemetry receiver.\n\nEndpoint: http://127.0.0.1:4321/ingest?token=t";
 
         let prefix = debug_prompt_prefix_for_delegation(Some(parent_prefix)).unwrap();
 
         assert!(prefix.starts_with("[DEBUG MODE ACTIVE]"));
-        assert!(prefix.contains("POST JSON evidence to http://127.0.0.1:4321/ingest?token=t"));
+        assert!(prefix.contains("http://127.0.0.1:4321/ingest?token=t"));
         assert!(!prefix.contains("Repo preference"));
     }
 
