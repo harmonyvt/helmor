@@ -14,26 +14,36 @@ function buildIngestInstructions(status: DebugIngestStatus): string | null {
 	const ingestUrl = publicIngestUrl || localIngestUrl;
 	if (!status.running || !ingestUrl) return null;
 	const publicNote = publicIngestUrl
-		? `\n- This is a public ${status.tunnelProvider ?? "tunnel"} URL forwarded to Helmor; use it for remote preview deployments such as Vercel/Netlify that cannot reach localhost.`
+		? `\n- This is a public ${status.tunnelProvider ?? "tunnel"} URL forwarded to Helmor; use it when the app runs in a remote deployment (Vercel/Netlify) that cannot reach localhost.`
 		: status.tunnelError
-			? "\n- A public ngrok tunnel was requested but failed to start; localhost ingest is still available from this machine only."
+			? "\n- A public ngrok tunnel was requested but failed to start; the localhost endpoint below is still reachable from this machine."
 			: "";
 	const localNote =
 		publicIngestUrl && localIngestUrl
-			? `\n- Local-only fallback from this machine: ${localIngestUrl}.`
+			? `\n- Local-only fallback: ${localIngestUrl}.`
 			: "";
 	return `[DEBUG INGEST SERVER]
-A Helmor workspace-scoped debug ingest endpoint is available for this turn.${publicNote}${localNote}
-- POST JSON evidence to ${ingestUrl} with a JSON object body, for example: {"level":"info","source":"agent","message":"observed failure","details":{}}.
-- GET ${ingestUrl} before making claims so you know what evidence is already buffered.
-- DELETE ${ingestUrl} to clear stale evidence when it would confuse this investigation.
-- When runtime evidence would help, add focused temporary instrumentation around the suspected hot path before making a perf/reliability claim; for frontend probes, prefer importing postDebugEvidence from "@/lib/debug-evidence" and calling it with this ingest URL.
-- After adding probes, give the user concrete testing instructions and stop; the user will prompt again after they have run the dev app or reproduced the target flow. On the follow-up, GET ${ingestUrl} again and base conclusions on the captured ordering, timings, errors, dimensions, and state transitions.
-- Include enough fields to trace the source, such as {"level":"error","source":"browser","message":"uncaught exception","details":{}}; avoid secrets, tokens, prompt contents, full env dumps, or large payloads.
-- ${RUNTIME_PROBE_EXAMPLES}
-- Remove temporary instrumentation before finishing unless the user explicitly wants it kept.
-- Do not try to stop this server; start/stop is owned by the Helmor UI/backend.
-- Use provider-neutral shell commands such as curl when helpful; keep these ingest mechanics out of the visible user-facing answer unless directly relevant.`;
+This is a live telemetry receiver, not a place to post your own observations. The workflow is: you write probe code that POSTs here when the user triggers a flow; the user runs the app; then you GET this endpoint to read what the probes captured.${publicNote}${localNote}
+
+Endpoint: ${ingestUrl}
+
+Follow this order strictly:
+1. Form a hypothesis first. State what you suspect is wrong and what you expect the probes to show — e.g. "component X mounts before Y finishes initializing, so I expect X's probe to fire before Y's ready event." This guides where probes go and gives you something to falsify.
+2. Add focused temporary probes at exactly those points. For frontend code, import postDebugEvidence from "@/lib/debug-evidence" and call it with this ingest URL. For backend/shell paths, probe code can POST directly. Do NOT manually POST your own analysis to this endpoint.
+3. Give the user concrete instructions (what to run, what to click, what flow to reproduce) and STOP. Wait for their next message.
+4. On the follow-up, GET ${ingestUrl} to read the captured telemetry. Compare it against your pre-probe expectation and form a diagnosis from the actual ordering, timings, and state — not from assumptions.
+5. Make the smallest fix that explains the data, then remove all probes.
+
+Endpoint reference:
+- GET ${ingestUrl} — read buffered telemetry (array of probe payloads)
+- DELETE ${ingestUrl} — clear stale data before a fresh investigation
+- POST is used only by your probe code at runtime, not by you directly
+
+Probe payload shape: {"level":"info","source":"component-name","message":"what happened","details":{}}. Include enough fields to trace the source. Avoid secrets, tokens, prompt contents, full env dumps, or large payloads.
+${RUNTIME_PROBE_EXAMPLES}
+Remove all temporary probes before finishing unless the user explicitly asks to keep them.
+Do not try to stop this server; start/stop is owned by the Helmor UI/backend.
+Use provider-neutral shell commands such as curl when helpful; keep these mechanics out of the visible user-facing reply unless directly relevant.`;
 }
 
 export function buildDebugPromptPrefix(
