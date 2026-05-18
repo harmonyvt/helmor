@@ -155,6 +155,7 @@ impl SidecarProcess {
         if let Ok(dir) = crate::data_dir::logs_dir() {
             cmd.env("HELMOR_LOG_DIR", dir);
         }
+        cmd.env("HELMOR_PARENT_PID", std::process::id().to_string());
         if let Ok(level) = std::env::var("HELMOR_LOG") {
             cmd.env("HELMOR_LOG", level);
         } else if crate::data_dir::is_dev() {

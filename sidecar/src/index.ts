@@ -15,6 +15,7 @@ import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
+import { startParentWatchdog } from "./parent-watchdog.js";
 import { resolvePiUiInteraction } from "./pi-extension-host.js";
 import { PiSessionManager } from "./pi-session-manager.js";
 import {
@@ -103,6 +104,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 logger.info("Sidecar starting", { pid: process.pid });
+startParentWatchdog();
 emitter.ready(1);
 
 // ---------------------------------------------------------------------------
