@@ -16,6 +16,7 @@ mod bridges;
 mod cleanup;
 mod context_usage;
 mod params;
+mod pi_tools;
 mod session_id;
 mod state;
 
@@ -1164,12 +1165,39 @@ pub(super) fn stream_via_sidecar(
                             break;
                         }
                     } else {
-                        let _ = on_event.send(AgentStreamEvent::KanbanToolCall {
-                            tool_call_id,
-                            tool,
-                            workspace_id,
-                            args,
-                        });
+                        // All non-delegate_agent Pi tools are handled in the
+                        // backend — no frontend round-trip required.
+                        let (tool_result, is_error) = match pi_tools::execute_pi_tool_call(
+                            app.clone(),
+                            &tool,
+                            &args,
+                            &workspace_id,
+                        ) {
+                            Ok(value) => (value, false),
+                            Err(error) => {
+                                tracing::warn!(
+                                    rid = %rid,
+                                    tool = %tool,
+                                    tool_call_id = %tool_call_id,
+                                    error = ?error,
+                                    "Pi tool call failed",
+                                );
+                                (serde_json::json!({ "error": error.to_string() }), true)
+                            }
+                        };
+                        if let Err(error) = send_pi_tool_result(
+                            sidecar_state.inner(),
+                            &tool_call_id,
+                            tool_result,
+                            is_error,
+                        ) {
+                            tracing::error!(
+                                rid = %rid,
+                                tool_call_id = %tool_call_id,
+                                error = ?error,
+                                "Failed to send Pi tool result — sidecar may have disconnected",
+                            );
+                        }
                     }
                 }
                 "pi_ui_request" => {
