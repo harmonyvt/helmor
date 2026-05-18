@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    future::Future,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -22,6 +23,13 @@ use crate::{
     ui_sync,
     workspace_state::{self, WorkspaceState},
 };
+
+fn block_on_git_watcher_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
 
 // -- Events --
 
@@ -549,7 +557,13 @@ fn do_triggered_fetch(workspace_id: &str) -> Result<()> {
 
 /// Returns (workspace_dir, remote, branch, repo_id).
 fn lookup_fetch_target(workspace_id: &str) -> Result<(PathBuf, String, String, String)> {
-    let connection = db::read_conn()?;
+    block_on_git_watcher_db(lookup_fetch_target_async(workspace_id))
+}
+
+async fn lookup_fetch_target_async(
+    workspace_id: &str,
+) -> Result<(PathBuf, String, String, String)> {
+    let connection = db::libsql_conn_async().await?;
     let sql = format!(
         "SELECT r.name, w.directory_name, r.remote,
                 COALESCE(w.intended_target_branch, r.default_branch), r.id
@@ -558,18 +572,17 @@ fn lookup_fetch_target(workspace_id: &str) -> Result<(PathBuf, String, String, S
          WHERE w.id = ?1 AND w.state {}",
         workspace_state::OPERATIONAL_FILTER,
     );
-    let mut stmt = connection.prepare(&sql)?;
-    let (repo_name, dir_name, remote, branch, repo_id) = stmt
-        .query_row(rusqlite::params![workspace_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, String>(4)?,
-            ))
-        })
-        .context("Workspace not found or archived")?;
+    let mut rows = connection.query(&sql, [workspace_id.to_string()]).await?;
+    let Some(row) = rows.next().await? else {
+        bail!("Workspace not found or archived");
+    };
+    let repo_name: String = row.get(0).context("Failed to read repository name")?;
+    let dir_name: String = row
+        .get(1)
+        .context("Failed to read workspace directory name")?;
+    let remote: Option<String> = row.get(2).context("Failed to read repository remote")?;
+    let branch: Option<String> = row.get(3).context("Failed to read target branch")?;
+    let repo_id: String = row.get(4).context("Failed to read repository id")?;
 
     let remote = remote.context("No remote configured")?;
     let branch = branch.context("No target branch configured")?;
@@ -651,27 +664,41 @@ fn update_branch_in_db(
     old_branch: Option<&str>,
     new_branch: &str,
 ) -> Result<()> {
-    let connection = db::write_conn()?;
-    let rows = match old_branch {
-        Some(old) => connection.execute(
-            &format!(
-                "UPDATE workspaces SET branch = ?1 WHERE id = ?2 AND state {} AND branch = ?3",
-                workspace_state::OPERATIONAL_FILTER,
-            ),
-            (new_branch, workspace_id, old),
-        ),
-        None => connection.execute(
-            &format!(
-                "UPDATE workspaces SET branch = ?1 WHERE id = ?2 AND state {} AND branch IS NULL",
-                workspace_state::OPERATIONAL_FILTER,
-            ),
-            (new_branch, workspace_id),
-        ),
-    }
-    .context("Failed to update workspace branch from git watcher")?;
+    let workspace_id = workspace_id.to_string();
+    let workspace_id_for_log = workspace_id.clone();
+    let old_branch = old_branch.map(str::to_string);
+    let new_branch = new_branch.to_string();
+    let rows = block_on_git_watcher_db(db::libsql_write_async(|connection| async move {
+        let rows = match old_branch {
+            Some(old) => {
+                connection
+                    .execute(
+                        &format!(
+                            "UPDATE workspaces SET branch = ?1 WHERE id = ?2 AND state {} AND branch = ?3",
+                            workspace_state::OPERATIONAL_FILTER,
+                        ),
+                        libsql::params![new_branch, workspace_id.clone(), old],
+                    )
+                    .await
+            }
+            None => {
+                connection
+                    .execute(
+                        &format!(
+                            "UPDATE workspaces SET branch = ?1 WHERE id = ?2 AND state {} AND branch IS NULL",
+                            workspace_state::OPERATIONAL_FILTER,
+                        ),
+                        libsql::params![new_branch, workspace_id.clone()],
+                    )
+                    .await
+            }
+        }
+        .context("Failed to update workspace branch from git watcher")?;
+        Ok(rows)
+    }))?;
     if rows == 0 {
         tracing::debug!(
-            workspace_id,
+            workspace_id = %workspace_id_for_log,
             "CAS miss: branch already changed by another path"
         );
     }
@@ -681,26 +708,40 @@ fn update_branch_in_db(
 // -- DB helper --
 
 fn load_watchable_workspaces() -> Result<Vec<WatchableWorkspace>> {
-    let connection = db::read_conn()?;
-    let mut stmt = connection.prepare(
-        "SELECT w.id, r.name, w.directory_name, w.branch, w.state,
+    block_on_git_watcher_db(load_watchable_workspaces_async())
+}
+
+async fn load_watchable_workspaces_async() -> Result<Vec<WatchableWorkspace>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT w.id, r.name, w.directory_name, w.branch, w.state,
                 r.remote, COALESCE(w.intended_target_branch, r.default_branch), r.id
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(WatchableWorkspace {
-            id: row.get(0)?,
-            repo_name: row.get(1)?,
-            directory_name: row.get(2)?,
-            branch: row.get(3)?,
-            state: row.get(4)?,
-            remote: row.get(5)?,
-            target_branch: row.get(6)?,
-            repo_id: row.get(7)?,
-        })
-    })?;
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            (),
+        )
+        .await
+        .context("Failed to query watchable workspaces")?;
+    let mut workspaces = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let state_literal: String = row.get(4).context("Failed to read workspace state")?;
+        workspaces.push(WatchableWorkspace {
+            id: row.get(0).context("Failed to read workspace id")?,
+            repo_name: row.get(1).context("Failed to read repository name")?,
+            directory_name: row
+                .get(2)
+                .context("Failed to read workspace directory name")?,
+            branch: row.get(3).context("Failed to read workspace branch")?,
+            state: state_literal
+                .parse()
+                .context("Failed to parse workspace state")?,
+            remote: row.get(5).context("Failed to read repository remote")?,
+            target_branch: row.get(6).context("Failed to read target branch")?,
+            repo_id: row.get(7).context("Failed to read repository id")?,
+        });
+    }
+    Ok(workspaces)
 }
 
 /// Called from workspace lifecycle commands to keep watchers in sync.

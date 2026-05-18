@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process;
@@ -129,13 +130,7 @@ fn initialise_runtime() -> Result<()> {
     let logs_dir = crate::data_dir::logs_dir()?;
     let _ = crate::logging::init(&logs_dir);
 
-    let db_path = crate::data_dir::db_path()?;
-    let connection = rusqlite::Connection::open(&db_path)
-        .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
-    crate::db::init_connection(&connection, true)?;
-    crate::schema::ensure_schema(&connection)?;
-    drop(connection);
-    crate::db::init_pools()?;
+    crate::db::ensure_ready()?;
     crate::shell_env::inherit_login_shell_env();
     crate::forge::init_bundled_cli_paths();
     Ok(())
@@ -261,22 +256,18 @@ async fn dispatch_invoke(command: &str, args: Value) -> Result<Value> {
             json_cmd(crate::commands::settings_commands::get_claude_rate_limits().await)
         }
         "load_auto_close_action_kinds" => {
-            json_any(crate::models::settings::load_auto_close_action_kinds())
+            json_cmd(crate::commands::settings_commands::load_auto_close_action_kinds().await)
         }
         "save_auto_close_action_kinds" => {
             let kinds: Vec<crate::agents::ActionKind> = arg(&args, "kinds")?;
-            json_any(crate::models::settings::save_auto_close_action_kinds(
-                &kinds,
-            ))
+            json_cmd(crate::commands::settings_commands::save_auto_close_action_kinds(kinds).await)
         }
         "load_auto_close_opt_in_asked" => {
-            json_any(crate::models::settings::load_auto_close_opt_in_asked())
+            json_cmd(crate::commands::settings_commands::load_auto_close_opt_in_asked().await)
         }
         "save_auto_close_opt_in_asked" => {
             let kinds: Vec<crate::agents::ActionKind> = arg(&args, "kinds")?;
-            json_any(crate::models::settings::save_auto_close_opt_in_asked(
-                &kinds,
-            ))
+            json_cmd(crate::commands::settings_commands::save_auto_close_opt_in_asked(kinds).await)
         }
         "list_repositories" => json_any(crate::repos::list_repositories()),
         "get_add_repository_defaults" => {
@@ -426,7 +417,7 @@ async fn dispatch_invoke(command: &str, args: Value) -> Result<Value> {
             let session_id: String = arg(&args, "sessionId")?;
             json_any(crate::sessions::mark_session_unread(&session_id))
         }
-        "update_session_settings" => update_session_settings(args),
+        "update_session_settings" => update_session_settings(args).await,
         "read_editor_file" => {
             let path: String = arg(&args, "path")?;
             json_any(crate::editor_files::read_editor_file(&path))
@@ -572,22 +563,28 @@ async fn dispatch_invoke(command: &str, args: Value) -> Result<Value> {
     }
 }
 
-fn update_session_settings(args: Value) -> Result<Value> {
+async fn update_session_settings(args: Value) -> Result<Value> {
     let session_id: String = arg(&args, "sessionId")?;
     let model: Option<String> = opt_arg(&args, "model")?;
     let effort_level: Option<String> = opt_arg(&args, "effortLevel")?;
     let permission_mode: Option<String> = opt_arg(&args, "permissionMode")?;
-    let connection = crate::db::write_conn()?;
-    connection.execute(
-        r#"
-        UPDATE sessions SET
-          model = COALESCE(?2, model),
-          effort_level = COALESCE(?3, effort_level),
-          permission_mode = COALESCE(?4, permission_mode)
-        WHERE id = ?1
-        "#,
-        rusqlite::params![session_id, model, effort_level, permission_mode],
-    )?;
+    crate::db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                r#"
+                UPDATE sessions SET
+                  model = COALESCE(?2, model),
+                  effort_level = COALESCE(?3, effort_level),
+                  permission_mode = COALESCE(?4, permission_mode)
+                WHERE id = ?1
+                "#,
+                libsql::params![session_id, model, effort_level, permission_mode],
+            )
+            .await
+            .context("Failed to update session settings")?;
+        Ok(())
+    })
+    .await?;
     json_value(())
 }
 
@@ -682,13 +679,24 @@ async fn ui_events() -> Sse<impl futures_util::Stream<Item = std::result::Result
 }
 
 fn workspace_id_for_session(session_id: &str) -> Option<String> {
-    let conn = crate::db::read_conn().ok()?;
-    conn.query_row(
-        "SELECT workspace_id FROM sessions WHERE id = ?1",
-        [session_id],
-        |row| row.get::<_, String>(0),
-    )
+    let session_id = session_id.to_string();
+    block_on_web_db(async move {
+        let conn = crate::db::libsql_conn_async().await?;
+        let mut rows = conn
+            .query(
+                "SELECT workspace_id FROM sessions WHERE id = ?1",
+                [session_id],
+            )
+            .await
+            .context("Failed to query workspace for session")?;
+        let Some(row) = rows.next().await? else {
+            return Ok(None);
+        };
+        let workspace_id: String = row.get(0).context("Failed to read workspace id")?;
+        Ok(Some(workspace_id))
+    })
     .ok()
+    .flatten()
 }
 
 fn workspace_id_for_working_directory(working_directory: Option<&str>) -> Option<String> {
@@ -741,5 +749,12 @@ fn opt_arg<T: DeserializeOwned>(args: &Value, name: &str) -> Result<Option<T>> {
         Some(value) => serde_json::from_value(value.clone())
             .map(Some)
             .with_context(|| format!("Invalid argument '{name}'")),
+    }
+}
+
+fn block_on_web_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
     }
 }

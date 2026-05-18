@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use rusqlite::OptionalExtension;
 #[cfg(test)]
 use serde_json::Value;
 
@@ -71,21 +70,30 @@ pub(super) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBu
     std::env::current_dir().context("Failed to resolve working directory")
 }
 
-pub(super) fn resolve_resume_working_directory(session_id: &str) -> Result<Option<PathBuf>> {
-    let connection = crate::models::db::read_conn()
+pub(super) async fn resolve_resume_working_directory(session_id: &str) -> Result<Option<PathBuf>> {
+    let connection = crate::models::db::libsql_conn_async()
+        .await
         .context("Failed to open DB while resolving resume workspace")?;
-    let workspace_info: Option<(String, String)> = connection
-        .query_row(
+    let mut rows = connection
+        .query(
             r#"SELECT r.name, w.directory_name
                FROM sessions s
                JOIN workspaces w ON w.id = s.workspace_id
                JOIN repos r ON r.id = w.repository_id
                WHERE s.id = ?1"#,
-            [session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            [session_id.to_string()],
         )
-        .optional()
+        .await
         .context("Failed to load resume workspace info")?;
+    let workspace_info: Option<(String, String)> = match rows.next().await? {
+        Some(row) => Some((
+            row.get(0)
+                .context("Failed to read resume repository name")?,
+            row.get(1)
+                .context("Failed to read resume workspace directory name")?,
+        )),
+        None => None,
+    };
 
     workspace_info
         .map(|(repo_name, directory_name)| {

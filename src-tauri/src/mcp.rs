@@ -23,10 +23,7 @@ pub fn set_app_handle(app: AppHandle) {
 pub fn run_mcp_server() -> Result<()> {
     // Bootstrap DB (same as CLI)
     crate::data_dir::ensure_directory_structure()?;
-    let db_path = crate::data_dir::db_path()?;
-    let conn = rusqlite::Connection::open(&db_path)?;
-    crate::schema_init(&conn);
-    drop(conn);
+    crate::models::db::ensure_ready()?;
 
     let stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();

@@ -1,10 +1,7 @@
 use anyhow::{bail, Context, Result};
-use rusqlite::OptionalExtension;
 
 use crate::{
-    models::{db, workspaces as workspace_models},
-    service, sessions,
-    workspace_kind::WorkspaceKind,
+    models::workspaces as workspace_models, service, sessions, workspace_kind::WorkspaceKind,
 };
 
 pub(super) struct ResolvedAssignee {
@@ -79,17 +76,28 @@ fn resolve_child_workspace_id(goal_workspace_id: &str, card_id: &str) -> Result<
         }
     }
 
-    let connection = db::read_conn()?;
-    let linked: Option<String> = connection
-        .query_row(
-            "SELECT child_workspace_id FROM goal_cards WHERE id = ?1 AND goal_workspace_id = ?2",
-            [card_id, goal_workspace_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .context("Failed to resolve goal card child workspace")?;
+    let goal_workspace_id = goal_workspace_id.to_string();
+    let card_id = card_id.to_string();
+    let card_id_for_error = card_id.clone();
+    let linked = super::block_on_goal_assignee_db(async move {
+        let connection = crate::models::db::libsql_conn_async().await?;
+        let mut rows = connection
+            .query(
+                "SELECT child_workspace_id FROM goal_cards WHERE id = ?1 AND goal_workspace_id = ?2",
+                libsql::params![card_id, goal_workspace_id],
+            )
+            .await
+            .context("Failed to resolve goal card child workspace")?;
+        match rows.next().await? {
+            Some(row) => row
+                .get::<String>(0)
+                .map(Some)
+                .context("Failed to read goal card child workspace"),
+            None => Ok(None),
+        }
+    })?;
 
     linked
         .filter(|value| !value.trim().is_empty())
-        .with_context(|| format!("Goal card {card_id} has no assigned child workspace"))
+        .with_context(|| format!("Goal card {card_id_for_error} has no assigned child workspace"))
 }

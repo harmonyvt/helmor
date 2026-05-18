@@ -1,4 +1,4 @@
-use std::{fmt, path::Path, str::FromStr};
+use std::{fmt, future::Future, path::Path, str::FromStr};
 
 use anyhow::{bail, Context, Result};
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
@@ -13,6 +13,13 @@ use crate::{
     workspace_pr_sync::PrSyncState,
     workspace_status::WorkspaceStatus,
 };
+
+fn block_on_libsql<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -587,7 +594,6 @@ fn persist_landing(
         return Ok(false);
     }
 
-    let connection = db::write_conn()?;
     let landed_at_sql = if state == LandingState::Landed && record.landed_at.is_none() {
         "datetime('now')"
     } else if state == LandingState::Landed {
@@ -595,6 +601,9 @@ fn persist_landing(
     } else {
         "NULL"
     };
+    let workspace_id = record.id.clone();
+    let state = state.as_str().to_string();
+    let source = source.map(|value| value.as_str().to_string());
     let sql = format!(
         r#"
         UPDATE workspaces
@@ -609,24 +618,28 @@ fn persist_landing(
         WHERE id = ?1
         "#
     );
-    let updated = connection
-        .execute(
-            &sql,
-            rusqlite::params![
-                record.id,
-                state,
-                source,
-                target_branch,
-                source_ref,
-                commit_sha,
-                last_known_head_sha,
-            ],
-        )
-        .context("Failed to persist workspace landing state")?;
+    let workspace_id_for_error = workspace_id.clone();
+    let updated = block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                &sql,
+                libsql::params![
+                    workspace_id,
+                    state,
+                    source,
+                    target_branch,
+                    source_ref,
+                    commit_sha,
+                    last_known_head_sha,
+                ],
+            )
+            .await
+            .context("Failed to persist workspace landing state")
+    }))?;
     if updated != 1 {
         bail!(
             "Workspace landing update affected {updated} rows for {}",
-            record.id
+            workspace_id_for_error
         );
     }
     Ok(true)

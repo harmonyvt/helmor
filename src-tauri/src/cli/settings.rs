@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
-use rusqlite::params;
 
 use crate::settings as settings_store;
 use crate::ui_sync::UiMutationEvent;
@@ -21,7 +20,7 @@ pub fn dispatch(action: &SettingsAction, cli: &Cli) -> Result<()> {
 }
 
 fn get(key: &str, cli: &Cli) -> Result<()> {
-    let value = settings_store::load_setting_value(key)?;
+    let value = tauri::async_runtime::block_on(settings_store::load_setting_value_async(key))?;
     output::print(cli, &value, |v| match v {
         Some(s) => s.clone(),
         None => String::new(),
@@ -29,7 +28,7 @@ fn get(key: &str, cli: &Cli) -> Result<()> {
 }
 
 fn set(key: &str, value: &str, cli: &Cli) -> Result<()> {
-    settings_store::upsert_setting_value(key, value)?;
+    tauri::async_runtime::block_on(settings_store::upsert_setting_value_async(key, value))?;
     notify_ui_event(UiMutationEvent::SettingsChanged {
         key: Some(key.to_string()),
     });
@@ -38,20 +37,10 @@ fn set(key: &str, value: &str, cli: &Cli) -> Result<()> {
 }
 
 fn list(all: bool, cli: &Cli) -> Result<()> {
-    let conn = crate::models::db::read_conn()?;
-    let mut stmt = if all {
-        conn.prepare("SELECT key, value FROM settings ORDER BY key ASC")?
-    } else {
-        conn.prepare(
-            "SELECT key, value FROM settings \
-             WHERE key LIKE 'app.%' OR key LIKE 'branch_prefix_%' \
-             ORDER BY key ASC",
-        )?
-    };
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    let map: BTreeMap<String, String> = rows.filter_map(|r| r.ok()).collect();
+    let map: BTreeMap<String, String> =
+        tauri::async_runtime::block_on(settings_store::list_settings_map_async(all))?
+            .into_iter()
+            .collect();
 
     output::print(cli, &map, |m| {
         m.iter()
@@ -62,8 +51,7 @@ fn list(all: bool, cli: &Cli) -> Result<()> {
 }
 
 fn delete(key: &str, cli: &Cli) -> Result<()> {
-    let conn = crate::models::db::write_conn()?;
-    let removed = conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+    let removed = tauri::async_runtime::block_on(settings_store::delete_setting_value_async(key))?;
     if removed == 0 {
         bail!("No setting with key '{key}'");
     }

@@ -1,4 +1,8 @@
+use std::future::Future;
+
 use anyhow::{Context, Result};
+#[cfg(test)]
+#[allow(unused_imports)]
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 use uuid::Uuid;
@@ -28,6 +32,14 @@ struct NotificationRecord {
     created_at: String,
 }
 
+fn block_on_goal_notification_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn maybe_deliver_assignee_report(
     conn: &rusqlite::Connection,
     assignee_session_id: &str,
@@ -63,23 +75,68 @@ pub(crate) fn maybe_deliver_assignee_report(
     ensure_delivered_report_notification(conn, &target, assignee_session_id, &marker)
 }
 
+pub(crate) async fn maybe_deliver_assignee_report_libsql(
+    conn: &libsql::Connection,
+    assignee_session_id: &str,
+    message_id: &str,
+    role: MessageRole,
+    content: &str,
+) -> Result<()> {
+    if role != MessageRole::Assistant {
+        return Ok(());
+    }
+    let Some(target) = resolve_notification_target_async(conn, assignee_session_id).await? else {
+        return Ok(());
+    };
+    let Some(marker) = report_marker_from_persisted_turn(
+        message_id,
+        role,
+        content,
+        message_created_at_async(conn, message_id).await?,
+    ) else {
+        return Ok(());
+    };
+
+    conn.execute(
+        "UPDATE sessions SET last_milestone_report_id = ?2 WHERE id = ?1",
+        libsql::params![assignee_session_id, message_id],
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "Failed to update milestone report marker for assignee session {assignee_session_id}"
+        )
+    })?;
+
+    ensure_delivered_report_notification_async(conn, &target, assignee_session_id, &marker).await
+}
+
 pub(crate) fn maybe_notify_missing_report_after_terminal(
     session_id: &str,
 ) -> Result<Option<String>> {
-    let conn = crate::models::db::write_conn()?;
-    let Some(target) = resolve_notification_target(&conn, session_id)? else {
-        return Ok(None);
-    };
-    if session_has_milestone_report(&conn, session_id)? {
-        return Ok(None);
-    }
-    notify_runtime_issue_on(
-        &conn,
-        &target,
-        session_id,
-        "missing_milestone_report",
-        "Provider completed, but no milestone report was persisted.",
-    )
+    block_on_goal_notification_db(maybe_notify_missing_report_after_terminal_async(session_id))
+}
+
+async fn maybe_notify_missing_report_after_terminal_async(
+    session_id: &str,
+) -> Result<Option<String>> {
+    crate::models::db::libsql_write_async(|connection| async move {
+        let Some(target) = resolve_notification_target_async(&connection, session_id).await? else {
+            return Ok(None);
+        };
+        if session_has_milestone_report_async(&connection, session_id).await? {
+            return Ok(None);
+        }
+        notify_runtime_issue_on_async(
+            &connection,
+            &target,
+            session_id,
+            "missing_milestone_report",
+            "Provider completed, but no milestone report was persisted.",
+        )
+        .await
+    })
+    .await
 }
 
 pub(crate) fn notify_runtime_issue_for_session(
@@ -87,11 +144,126 @@ pub(crate) fn notify_runtime_issue_for_session(
     issue_kind: &str,
     issue: &str,
 ) -> Result<Option<String>> {
-    let conn = crate::models::db::write_conn()?;
-    let Some(target) = resolve_notification_target(&conn, session_id)? else {
+    block_on_goal_notification_db(notify_runtime_issue_for_session_async(
+        session_id, issue_kind, issue,
+    ))
+}
+
+async fn notify_runtime_issue_for_session_async(
+    session_id: &str,
+    issue_kind: &str,
+    issue: &str,
+) -> Result<Option<String>> {
+    crate::models::db::libsql_write_async(|connection| async move {
+        let Some(target) = resolve_notification_target_async(&connection, session_id).await? else {
+            return Ok(None);
+        };
+        notify_runtime_issue_on_async(&connection, &target, session_id, issue_kind, issue).await
+    })
+    .await
+}
+
+async fn session_has_milestone_report_async(
+    conn: &libsql::Connection,
+    session_id: &str,
+) -> Result<bool> {
+    let mut rows = conn
+        .query(
+            "SELECT id, role, content, created_at
+             FROM session_messages
+             WHERE session_id = ?1 AND role = 'assistant'
+             ORDER BY sent_at, created_at",
+            [session_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to query report scan for session {session_id}"))?;
+
+    while let Some(row) = rows.next().await? {
+        let id: String = row.get(0).context("Failed to read report message id")?;
+        let role_raw: String = row.get(1).context("Failed to read report message role")?;
+        let role = role_raw
+            .parse::<MessageRole>()
+            .with_context(|| format!("Failed to parse report message role {role_raw}"))?;
+        let content: String = row
+            .get(2)
+            .context("Failed to read report message content")?;
+        let created_at: Option<String> = row.get(3).context("Failed to read report created_at")?;
+        if report_marker_from_persisted_turn(&id, role, &content, created_at).is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+async fn resolve_notification_target_async(
+    conn: &libsql::Connection,
+    assignee_session_id: &str,
+) -> Result<Option<AssigneeNotificationTarget>> {
+    if !table_exists_async(conn, "sessions").await?
+        || !table_exists_async(conn, "workspaces").await?
+        || !table_exists_async(conn, "goal_cards").await?
+    {
+        return Ok(None);
+    }
+
+    let mut rows = conn
+        .query(
+            r#"
+        SELECT
+          w.goal_workspace_id,
+          w.id,
+          COALESCE(NULLIF(gc.title, ''), NULLIF(s.title, ''), w.directory_name, w.id),
+          goal.active_session_id,
+          supervisor.model,
+          supervisor.permission_mode
+        FROM sessions s
+        JOIN workspaces w ON w.id = s.workspace_id
+        JOIN workspaces goal ON goal.id = w.goal_workspace_id
+        LEFT JOIN sessions supervisor ON supervisor.id = goal.active_session_id
+        LEFT JOIN goal_cards gc
+          ON gc.goal_workspace_id = w.goal_workspace_id
+         AND (gc.child_workspace_id = w.id OR gc.id = w.id)
+        WHERE s.id = ?1
+          AND w.goal_workspace_id IS NOT NULL
+          AND COALESCE(w.workspace_kind, 'code') = 'code'
+          AND (
+            w.active_session_id = s.id
+            OR COALESCE(s.thread_status, '') = 'active'
+            OR COALESCE(s.thread_role, '') = 'assignee'
+          )
+        LIMIT 1
+        "#,
+            [assignee_session_id.to_string()],
+        )
+        .await
+        .with_context(|| {
+            format!("Failed to resolve goal supervisor notification target for session {assignee_session_id}")
+        })?;
+
+    let Some(row) = rows.next().await? else {
         return Ok(None);
     };
-    notify_runtime_issue_on(&conn, &target, session_id, issue_kind, issue)
+    Ok(Some(AssigneeNotificationTarget {
+        goal_workspace_id: row.get(0).context("Failed to read goal workspace id")?,
+        card_workspace_id: row.get(1).context("Failed to read card workspace id")?,
+        card_title: row.get(2).context("Failed to read card title")?,
+        supervisor_session_id: row.get(3).context("Failed to read supervisor session id")?,
+        supervisor_model: row.get(4).context("Failed to read supervisor model")?,
+        supervisor_permission_mode: row
+            .get(5)
+            .context("Failed to read supervisor permission mode")?,
+    }))
+}
+
+async fn table_exists_async(conn: &libsql::Connection, table: &str) -> Result<bool> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to check whether table {table} exists"))?;
+    Ok(rows.next().await?.is_some())
 }
 
 fn report_marker_from_persisted_turn(
@@ -117,31 +289,7 @@ fn report_marker_from_persisted_turn(
         })
 }
 
-fn session_has_milestone_report(conn: &rusqlite::Connection, session_id: &str) -> Result<bool> {
-    let mut statement = conn
-        .prepare(
-            "SELECT id, role, content, created_at
-             FROM session_messages
-             WHERE session_id = ?1 AND role = 'assistant'
-             ORDER BY sent_at, created_at",
-        )
-        .with_context(|| format!("Failed to prepare report scan for session {session_id}"))?;
-    let rows = statement
-        .query_map([session_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, MessageRole>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(rows.into_iter().any(|(id, role, content, created_at)| {
-        report_marker_from_persisted_turn(&id, role, &content, created_at).is_some()
-    }))
-}
-
+#[cfg(test)]
 fn resolve_notification_target(
     conn: &rusqlite::Connection,
     assignee_session_id: &str,
@@ -197,12 +345,14 @@ fn resolve_notification_target(
     })
 }
 
+#[cfg(test)]
 fn table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool> {
     conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
         .and_then(|mut stmt| stmt.exists([table]))
         .with_context(|| format!("Failed to check whether table {table} exists"))
 }
 
+#[cfg(test)]
 fn ensure_delivered_report_notification(
     conn: &rusqlite::Connection,
     target: &AssigneeNotificationTarget,
@@ -273,8 +423,81 @@ fn ensure_delivered_report_notification(
     )
 }
 
-fn notify_runtime_issue_on(
-    conn: &rusqlite::Connection,
+async fn ensure_delivered_report_notification_async(
+    conn: &libsql::Connection,
+    target: &AssigneeNotificationTarget,
+    assignee_session_id: &str,
+    marker: &AssigneeReportMarker,
+) -> Result<()> {
+    let message_id = marker.message_id.as_deref().unwrap_or("unknown");
+    let notification = ensure_notification_async(
+        conn,
+        target,
+        assignee_session_id,
+        message_id,
+        &marker.report_type,
+        &marker.excerpt,
+    )
+    .await?;
+    if notification.delivered_to_session_id.is_some() {
+        return Ok(());
+    }
+    let Some(supervisor_session_id) = target.supervisor_session_id.as_deref() else {
+        return Ok(());
+    };
+
+    let reported_at = marker
+        .created_at
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(notification.created_at.as_str());
+    let recommended_action =
+        "Auto-resume is enabled by default: Helmor queued a supervisor follow-up turn to review this report, update the card lane if appropriate, and summarize any blockers or completion back to the user.";
+    let report_text = marker.full_text.trim();
+    let message = format!(
+        "## Assignee Report Received\n\nCard: {}\nCard workspace: {}\nAssignee thread: {}\nReport type: {}\nReported at: {}\nAuto-resume: enabled\n\nExcerpt:\n{}\n\nRecommended supervisor action:\n{}",
+        target.card_title,
+        target.card_workspace_id,
+        assignee_session_id,
+        marker.report_type,
+        reported_at,
+        report_text,
+        recommended_action
+    );
+    let payload = serde_json::json!({
+        "type": "goal_assignee_report",
+        "goalWorkspaceId": target.goal_workspace_id,
+        "cardWorkspaceId": target.card_workspace_id,
+        "assigneeSessionId": assignee_session_id,
+        "messageId": message_id,
+        "reportType": marker.report_type,
+        "title": "Assignee Report Received",
+        "excerpt": marker.excerpt,
+        "fullText": report_text,
+        "recommendedAction": recommended_action,
+        "message": message,
+    });
+    deliver_notification_message_async(
+        conn,
+        &notification.id,
+        &target.goal_workspace_id,
+        supervisor_session_id,
+        payload,
+    )
+    .await?;
+    queue_supervisor_auto_resume_async(
+        conn,
+        target,
+        supervisor_session_id,
+        assignee_session_id,
+        message_id,
+        &marker.report_type,
+    )
+    .await
+}
+
+async fn notify_runtime_issue_on_async(
+    conn: &libsql::Connection,
     target: &AssigneeNotificationTarget,
     assignee_session_id: &str,
     issue_kind: &str,
@@ -282,14 +505,15 @@ fn notify_runtime_issue_on(
 ) -> Result<Option<String>> {
     let message_id = format!("runtime_issue:{issue_kind}");
     let issue_excerpt = excerpt(issue);
-    let notification = ensure_notification(
+    let notification = ensure_notification_async(
         conn,
         target,
         assignee_session_id,
         &message_id,
         "runtime_issue",
         &issue_excerpt,
-    )?;
+    )
+    .await?;
     if notification.delivered_to_session_id.is_some() {
         return Ok(Some(notification.id));
     }
@@ -315,24 +539,27 @@ fn notify_runtime_issue_on(
         "recommendedAction": recommended_action,
         "message": message,
     });
-    deliver_notification_message(
+    deliver_notification_message_async(
         conn,
         &notification.id,
         &target.goal_workspace_id,
         supervisor_session_id,
         payload,
-    )?;
-    queue_supervisor_auto_resume(
+    )
+    .await?;
+    queue_supervisor_auto_resume_async(
         conn,
         target,
         supervisor_session_id,
         assignee_session_id,
         &message_id,
         "runtime_issue",
-    )?;
+    )
+    .await?;
     Ok(Some(notification.id))
 }
 
+#[cfg(test)]
 fn queue_supervisor_auto_resume(
     conn: &rusqlite::Connection,
     target: &AssigneeNotificationTarget,
@@ -373,6 +600,53 @@ fn queue_supervisor_auto_resume(
     Ok(())
 }
 
+async fn queue_supervisor_auto_resume_async(
+    conn: &libsql::Connection,
+    target: &AssigneeNotificationTarget,
+    supervisor_session_id: &str,
+    assignee_session_id: &str,
+    message_id: &str,
+    report_type: &str,
+) -> Result<()> {
+    let notification_kind = if report_type == "runtime_issue" {
+        "a runtime issue"
+    } else {
+        "an assignee report"
+    };
+    let prompt = format!(
+        "Auto-resume from Helmor Goals: {notification_kind} was delivered for card \"{}\".\n\nReview the latest Assignee Report Received or Assignee Runtime Issue system message in this supervisor thread. Report type: {report_type}. Assignee thread: {assignee_session_id}. Source message: {message_id}.\n\nUpdate the card lane if appropriate, inspect blockers or verification notes, and summarize the outcome back to the user.",
+        target.card_title
+    );
+    let pending_send_id = Uuid::new_v4().to_string();
+    conn.execute(
+        r#"INSERT INTO pending_cli_sends (id, workspace_id, session_id, prompt, model_id, permission_mode)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
+        libsql::params![
+            pending_send_id.clone(),
+            target.goal_workspace_id.clone(),
+            supervisor_session_id,
+            prompt.clone(),
+            target.supervisor_model.clone(),
+            target.supervisor_permission_mode.clone(),
+        ],
+    )
+    .await
+    .with_context(|| {
+        format!("Failed to queue supervisor auto-resume for assignee session {assignee_session_id}")
+    })?;
+
+    let _ = crate::ui_sync::notify_running_app(UiMutationEvent::PendingCliSendQueued {
+        pending_send_id,
+        workspace_id: target.goal_workspace_id.clone(),
+        session_id: supervisor_session_id.to_string(),
+        prompt,
+        model_id: target.supervisor_model.clone(),
+        permission_mode: target.supervisor_permission_mode.clone(),
+    });
+    Ok(())
+}
+
+#[cfg(test)]
 fn ensure_notification(
     conn: &rusqlite::Connection,
     target: &AssigneeNotificationTarget,
@@ -433,6 +707,77 @@ fn ensure_notification(
     })
 }
 
+async fn ensure_notification_async(
+    conn: &libsql::Connection,
+    target: &AssigneeNotificationTarget,
+    assignee_session_id: &str,
+    message_id: &str,
+    report_type: &str,
+    notification_excerpt: &str,
+) -> Result<NotificationRecord> {
+    let notification_id = Uuid::new_v4().to_string();
+    conn.execute(
+        r#"
+        INSERT OR IGNORE INTO goal_supervisor_notifications (
+          id, goal_workspace_id, card_workspace_id, assignee_session_id,
+          message_id, report_type, excerpt
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "#,
+        libsql::params![
+            notification_id,
+            target.goal_workspace_id.clone(),
+            target.card_workspace_id.clone(),
+            assignee_session_id,
+            message_id,
+            report_type,
+            notification_excerpt,
+        ],
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "Failed to persist supervisor notification for assignee session {assignee_session_id}"
+        )
+    })?;
+
+    let mut rows = conn
+        .query(
+            r#"
+        SELECT id, delivered_to_session_id, created_at
+        FROM goal_supervisor_notifications
+        WHERE goal_workspace_id = ?1
+          AND card_workspace_id = ?2
+          AND assignee_session_id = ?3
+          AND message_id = ?4
+        "#,
+            libsql::params![
+                target.goal_workspace_id.clone(),
+                target.card_workspace_id.clone(),
+                assignee_session_id,
+                message_id
+            ],
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to load supervisor notification for assignee session {assignee_session_id}"
+            )
+        })?;
+    let Some(row) = rows.next().await? else {
+        anyhow::bail!("Supervisor notification was not persisted");
+    };
+    Ok(NotificationRecord {
+        id: row.get(0).context("Failed to read notification id")?,
+        delivered_to_session_id: row
+            .get(1)
+            .context("Failed to read notification delivery target")?,
+        created_at: row
+            .get(2)
+            .context("Failed to read notification created_at")?,
+    })
+}
+
+#[cfg(test)]
 fn deliver_notification_message(
     conn: &rusqlite::Connection,
     notification_id: &str,
@@ -481,6 +826,57 @@ fn deliver_notification_message(
     Ok(())
 }
 
+async fn deliver_notification_message_async(
+    conn: &libsql::Connection,
+    notification_id: &str,
+    goal_workspace_id: &str,
+    supervisor_session_id: &str,
+    payload: Value,
+) -> Result<()> {
+    let now = crate::models::db::current_timestamp()?;
+    let supervisor_message_id = Uuid::new_v4().to_string();
+    conn.execute(
+        r#"
+        INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at)
+        VALUES (?1, ?2, 'system', ?3, ?4, ?4)
+        "#,
+        libsql::params![
+            supervisor_message_id,
+            supervisor_session_id,
+            payload.to_string(),
+            now.clone(),
+        ],
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "Failed to deliver assignee notification to supervisor session {supervisor_session_id}"
+        )
+    })?;
+    conn.execute(
+        r#"
+        UPDATE goal_supervisor_notifications
+        SET delivered_to_session_id = ?2, delivered_at = ?3
+        WHERE id = ?1
+        "#,
+        libsql::params![notification_id, supervisor_session_id, now],
+    )
+    .await
+    .with_context(|| {
+        format!("Failed to mark supervisor notification {notification_id} delivered")
+    })?;
+
+    let _ = crate::ui_sync::notify_running_app(UiMutationEvent::SessionMessagesChanged {
+        workspace_id: goal_workspace_id.to_string(),
+        session_id: supervisor_session_id.to_string(),
+    });
+    let _ = crate::ui_sync::notify_running_app(UiMutationEvent::WorkspaceChanged {
+        workspace_id: goal_workspace_id.to_string(),
+    });
+    Ok(())
+}
+
+#[cfg(test)]
 fn message_created_at(conn: &rusqlite::Connection, message_id: &str) -> Result<Option<String>> {
     conn.query_row(
         "SELECT created_at FROM session_messages WHERE id = ?1",
@@ -489,4 +885,21 @@ fn message_created_at(conn: &rusqlite::Connection, message_id: &str) -> Result<O
     )
     .optional()
     .with_context(|| format!("Failed to load created_at for message {message_id}"))
+}
+
+async fn message_created_at_async(
+    conn: &libsql::Connection,
+    message_id: &str,
+) -> Result<Option<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT created_at FROM session_messages WHERE id = ?1",
+            [message_id.to_string()],
+        )
+        .await
+        .with_context(|| format!("Failed to load created_at for message {message_id}"))?;
+    rows.next()
+        .await?
+        .map(|row| row.get(0).context("Failed to read message created_at"))
+        .transpose()
 }

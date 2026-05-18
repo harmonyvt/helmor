@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+#[cfg(test)]
 use rusqlite::Connection;
 
 use super::{
@@ -292,6 +293,7 @@ pub(super) fn parse_workspace_path(workspace_root: &Path) -> Option<(&str, &str)
     Some((repo_name, dir_name))
 }
 
+#[cfg(test)]
 pub(super) fn query_workspace_target(
     conn: &Connection,
     repo_name: &str,
@@ -317,8 +319,109 @@ pub(super) fn query_workspace_target(
 
 fn lookup_workspace_target(workspace_root: &Path) -> Option<(String, String)> {
     let (repo_name, dir_name) = parse_workspace_path(workspace_root)?;
-    let conn = db::read_conn().ok()?;
-    query_workspace_target(&conn, repo_name, dir_name)
+    let repo_name = repo_name.to_string();
+    let dir_name = dir_name.to_string();
+    match std::thread::spawn(move || {
+        if let Err(error) = db::init_libsql() {
+            tracing::warn!(
+                repo_name,
+                dir_name,
+                error = %error,
+                "Failed to initialise libSQL for workspace target lookup; falling back to default target refs",
+            );
+            return None;
+        }
+        tauri::async_runtime::block_on(async {
+            lookup_workspace_target_async(&repo_name, &dir_name).await
+        })
+    })
+    .join()
+    {
+        Ok(target) => target,
+        Err(_) => {
+            tracing::warn!(
+                "workspace target lookup worker panicked; falling back to default target refs",
+            );
+            None
+        }
+    }
+}
+
+async fn lookup_workspace_target_async(
+    repo_name: &str,
+    dir_name: &str,
+) -> Option<(String, String)> {
+    let sql = format!(
+        "SELECT r.remote, COALESCE(w.intended_target_branch, r.default_branch)
+		 FROM workspaces w
+		 JOIN repos r ON r.id = w.repository_id
+		 WHERE r.name = ?1 AND w.directory_name = ?2 AND w.state {}",
+        workspace_state::OPERATIONAL_FILTER,
+    );
+    let conn = match db::libsql_conn_async().await {
+        Ok(conn) => conn,
+        Err(error) => {
+            tracing::warn!(
+                repo_name,
+                dir_name,
+                error = %error,
+                "Failed to open libSQL DB for workspace target lookup; falling back to default target refs",
+            );
+            return None;
+        }
+    };
+    let mut rows = match conn
+        .query(&sql, [repo_name.to_string(), dir_name.to_string()])
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(
+                repo_name,
+                dir_name,
+                error = %error,
+                "workspace target query failed; falling back to default target refs",
+            );
+            return None;
+        }
+    };
+    let row = match rows.next().await {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::warn!(
+                repo_name,
+                dir_name,
+                error = %error,
+                "workspace target row iteration failed; falling back to default target refs",
+            );
+            return None;
+        }
+    }?;
+    let remote: Option<String> = match row.get(0) {
+        Ok(remote) => remote,
+        Err(error) => {
+            tracing::warn!(
+                repo_name,
+                dir_name,
+                error = %error,
+                "workspace target remote decode failed; falling back to default target refs",
+            );
+            return None;
+        }
+    };
+    let target: Option<String> = match row.get(1) {
+        Ok(target) => target,
+        Err(error) => {
+            tracing::warn!(
+                repo_name,
+                dir_name,
+                error = %error,
+                "workspace target branch decode failed; falling back to default target refs",
+            );
+            return None;
+        }
+    };
+    Some((remote.unwrap_or_else(|| "origin".into()), target?))
 }
 
 /// Resolve the target branch ref for diff comparison.

@@ -1,4 +1,7 @@
+use std::time::Instant;
+
 use anyhow::Context;
+use serde::Serialize;
 
 use crate::{
     agents::ActionKind, data_dir::DataDirPreference, db, rate_limits::throttle::Throttle, settings,
@@ -16,44 +19,95 @@ const RATE_LIMITS_THROTTLE_SECONDS: i64 = 30;
 static CLAUDE_RATE_LIMITS_THROTTLE: Throttle = Throttle::new(RATE_LIMITS_THROTTLE_SECONDS);
 static CODEX_RATE_LIMITS_THROTTLE: Throttle = Throttle::new(RATE_LIMITS_THROTTLE_SECONDS);
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibsqlExperimentResult {
+    pub ok: bool,
+    pub db_path: String,
+    pub journal_mode: String,
+    pub table_count: i64,
+    pub settings_count: i64,
+    pub elapsed_ms: u128,
+}
+
 #[tauri::command]
 pub async fn get_app_settings() -> CmdResult<std::collections::HashMap<String, String>> {
-    run_blocking(|| {
-        let conn = db::read_conn()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT key, value FROM settings WHERE key LIKE 'app.%' OR key LIKE 'branch_prefix_%'",
-            )
-            .context("Failed to query app settings")?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .context("Failed to iterate app settings")?;
-
-        let mut map = std::collections::HashMap::new();
-        for row in rows.flatten() {
-            map.insert(row.0, row.1);
-        }
-        Ok(map)
-    })
-    .await
+    Ok(settings::load_app_settings_map_async().await?)
 }
 
 #[tauri::command]
 pub async fn update_app_settings(
     settings_map: std::collections::HashMap<String, String>,
 ) -> CmdResult<()> {
-    run_blocking(move || {
-        for (key, value) in &settings_map {
-            if !key.starts_with("app.") && !key.starts_with("branch_prefix_") {
-                continue;
-            }
-            settings::upsert_setting_value(key, value)?;
+    for (key, value) in &settings_map {
+        if !key.starts_with("app.") && !key.starts_with("branch_prefix_") {
+            continue;
         }
-        Ok(())
-    })
-    .await
+        settings::upsert_setting_value_async(key, value).await?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn run_libsql_experiment() -> CmdResult<LibsqlExperimentResult> {
+    let started = Instant::now();
+    let conn = db::libsql_conn_async().await?;
+
+    let journal_mode = query_single_string(&conn, "PRAGMA journal_mode").await?;
+    let db_path = query_database_path(&conn).await?;
+    let table_count = query_single_i64(
+        &conn,
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+    )
+    .await?;
+    let settings_count = query_single_i64(&conn, "SELECT COUNT(*) FROM settings").await?;
+
+    let result = LibsqlExperimentResult {
+        ok: true,
+        db_path,
+        journal_mode,
+        table_count,
+        settings_count,
+        elapsed_ms: started.elapsed().as_millis(),
+    };
+    Ok(result)
+}
+
+async fn query_single_i64(conn: &libsql::Connection, sql: &str) -> anyhow::Result<i64> {
+    let mut rows = conn
+        .query(sql, ())
+        .await
+        .with_context(|| format!("Failed to run libSQL query: {sql}"))?;
+    let row = rows
+        .next()
+        .await?
+        .with_context(|| format!("libSQL query returned no rows: {sql}"))?;
+    row.get(0)
+        .with_context(|| format!("Failed to read integer result for: {sql}"))
+}
+
+async fn query_single_string(conn: &libsql::Connection, sql: &str) -> anyhow::Result<String> {
+    let mut rows = conn
+        .query(sql, ())
+        .await
+        .with_context(|| format!("Failed to run libSQL query: {sql}"))?;
+    let row = rows
+        .next()
+        .await?
+        .with_context(|| format!("libSQL query returned no rows: {sql}"))?;
+    row.get(0)
+        .with_context(|| format!("Failed to read string result for: {sql}"))
+}
+
+async fn query_database_path(conn: &libsql::Connection) -> anyhow::Result<String> {
+    let mut rows = conn.query("PRAGMA database_list", ()).await?;
+    while let Some(row) = rows.next().await? {
+        let name: String = row.get(1)?;
+        if name == "main" {
+            return row.get(2).context("Failed to read main database path");
+        }
+    }
+    anyhow::bail!("PRAGMA database_list did not include main database")
 }
 
 #[tauri::command]
@@ -75,26 +129,12 @@ pub async fn set_data_dir_preference(preference: DataDirPreference) -> CmdResult
 /// resolved and trigger an immediate refetch, looping into HTTP 429.
 #[tauri::command]
 pub async fn get_codex_rate_limits() -> CmdResult<Option<String>> {
-    run_blocking(|| {
-        let cached = settings::load_setting_value(settings::CODEX_RATE_LIMITS_KEY)?;
-        if !CODEX_RATE_LIMITS_THROTTLE.should_fetch() {
-            return Ok(cached);
-        }
-        // Record before the HTTP roundtrip so a 429 or network error
-        // also serves the throttle cooldown — we never want a failure
-        // to invite an immediate retry.
-        CODEX_RATE_LIMITS_THROTTLE.record_attempt();
-        match crate::rate_limits::codex::fetch_codex_rate_limits() {
-            Ok(body) => {
-                settings::upsert_setting_value(settings::CODEX_RATE_LIMITS_KEY, &body)?;
-                Ok(Some(body))
-            }
-            Err(error) => {
-                tracing::warn!("Failed to refresh Codex rate limits: {error}");
-                Ok(cached)
-            }
-        }
-    })
+    get_cached_rate_limits(
+        settings::CODEX_RATE_LIMITS_KEY,
+        &CODEX_RATE_LIMITS_THROTTLE,
+        "Codex",
+        crate::rate_limits::codex::fetch_codex_rate_limits,
+    )
     .await
 }
 
@@ -107,42 +147,57 @@ pub async fn get_codex_rate_limits() -> CmdResult<Option<String>> {
 /// `*RateLimitsChanged` UI-sync event.
 #[tauri::command]
 pub async fn get_claude_rate_limits() -> CmdResult<Option<String>> {
-    run_blocking(|| {
-        let cached = settings::load_setting_value(settings::CLAUDE_RATE_LIMITS_KEY)?;
-        if !CLAUDE_RATE_LIMITS_THROTTLE.should_fetch() {
-            return Ok(cached);
-        }
-        CLAUDE_RATE_LIMITS_THROTTLE.record_attempt();
-        match crate::rate_limits::claude::fetch_claude_rate_limits() {
-            Ok(body) => {
-                settings::upsert_setting_value(settings::CLAUDE_RATE_LIMITS_KEY, &body)?;
-                Ok(Some(body))
-            }
-            Err(error) => {
-                tracing::warn!("Failed to refresh Claude rate limits: {error}");
-                Ok(cached)
-            }
-        }
-    })
+    get_cached_rate_limits(
+        settings::CLAUDE_RATE_LIMITS_KEY,
+        &CLAUDE_RATE_LIMITS_THROTTLE,
+        "Claude",
+        crate::rate_limits::claude::fetch_claude_rate_limits,
+    )
     .await
+}
+
+async fn get_cached_rate_limits(
+    key: &'static str,
+    throttle: &'static Throttle,
+    provider: &'static str,
+    fetch: fn() -> anyhow::Result<String>,
+) -> CmdResult<Option<String>> {
+    let cached = settings::load_setting_value_async(key).await?;
+    if !throttle.should_fetch() {
+        return Ok(cached);
+    }
+    // Record before the HTTP roundtrip so a 429 or network error also serves
+    // the throttle cooldown; failures should not invite immediate retries.
+    throttle.record_attempt();
+
+    match run_blocking(fetch).await {
+        Ok(body) => {
+            settings::upsert_setting_value_async(key, &body).await?;
+            Ok(Some(body))
+        }
+        Err(error) => {
+            tracing::warn!(provider, error = ?error, "Failed to refresh rate limits");
+            Ok(cached)
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn load_auto_close_action_kinds() -> CmdResult<Vec<ActionKind>> {
-    run_blocking(settings::load_auto_close_action_kinds).await
+    Ok(settings::load_auto_close_action_kinds_async().await?)
 }
 
 #[tauri::command]
 pub async fn save_auto_close_action_kinds(kinds: Vec<ActionKind>) -> CmdResult<()> {
-    run_blocking(move || settings::save_auto_close_action_kinds(&kinds)).await
+    Ok(settings::save_auto_close_action_kinds_async(&kinds).await?)
 }
 
 #[tauri::command]
 pub async fn load_auto_close_opt_in_asked() -> CmdResult<Vec<ActionKind>> {
-    run_blocking(settings::load_auto_close_opt_in_asked).await
+    Ok(settings::load_auto_close_opt_in_asked_async().await?)
 }
 
 #[tauri::command]
 pub async fn save_auto_close_opt_in_asked(kinds: Vec<ActionKind>) -> CmdResult<()> {
-    run_blocking(move || settings::save_auto_close_opt_in_asked(&kinds)).await
+    Ok(settings::save_auto_close_opt_in_asked_async(&kinds).await?)
 }

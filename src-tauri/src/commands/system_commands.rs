@@ -1219,22 +1219,41 @@ pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResu
         tracing::warn!(dir = %data_dir.display(), "DEV RESET: wiping all data");
 
         // --- Database cleanup (single transaction) -----------------------
-        let mut conn = db::write_conn()?;
-        let tx = conn
-            .transaction()
-            .context("Failed to start dev-reset transaction")?;
+        let (messages_deleted, sessions_deleted, workspaces_deleted, repos_deleted) =
+            tauri::async_runtime::block_on(db::libsql_write_async(|connection| async move {
+                let tx = connection
+                    .transaction()
+                    .await
+                    .context("Failed to start dev-reset transaction")?;
 
-        let messages_deleted: usize = tx.execute("DELETE FROM session_messages", []).unwrap_or(0);
-        let sessions_deleted: usize = tx.execute("DELETE FROM sessions", []).unwrap_or(0);
-        let _pending: usize = tx.execute("DELETE FROM pending_cli_sends", []).unwrap_or(0);
-        let _browser_tabs: usize = tx
-            .execute("DELETE FROM workspace_browser_tabs", [])
-            .unwrap_or(0);
-        let workspaces_deleted: usize = tx.execute("DELETE FROM workspaces", []).unwrap_or(0);
-        let repos_deleted: usize = tx.execute("DELETE FROM repos", []).unwrap_or(0);
+                let messages_deleted = tx
+                    .execute("DELETE FROM session_messages", ())
+                    .await
+                    .unwrap_or(0) as usize;
+                let sessions_deleted =
+                    tx.execute("DELETE FROM sessions", ()).await.unwrap_or(0) as usize;
+                let _pending = tx
+                    .execute("DELETE FROM pending_cli_sends", ())
+                    .await
+                    .unwrap_or(0);
+                let _browser_tabs = tx
+                    .execute("DELETE FROM workspace_browser_tabs", ())
+                    .await
+                    .unwrap_or(0);
+                let workspaces_deleted =
+                    tx.execute("DELETE FROM workspaces", ()).await.unwrap_or(0) as usize;
+                let repos_deleted = tx.execute("DELETE FROM repos", ()).await.unwrap_or(0) as usize;
 
-        tx.commit()
-            .context("Failed to commit dev-reset transaction")?;
+                tx.commit()
+                    .await
+                    .context("Failed to commit dev-reset transaction")?;
+                Ok((
+                    messages_deleted,
+                    sessions_deleted,
+                    workspaces_deleted,
+                    repos_deleted,
+                ))
+            }))?;
 
         tracing::info!(
             repos_deleted,

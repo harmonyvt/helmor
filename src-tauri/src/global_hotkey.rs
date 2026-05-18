@@ -19,10 +19,10 @@ pub struct GlobalHotkeyState {
     current: Mutex<Option<String>>,
 }
 
-pub fn sync_from_settings(app: &AppHandle) -> Result<()> {
-    let raw = crate::settings::load_setting_value(SHORTCUTS_SETTING_KEY)?;
+pub async fn sync_from_settings(app: AppHandle) -> Result<()> {
+    let raw = crate::settings::load_setting_value_async(SHORTCUTS_SETTING_KEY).await?;
     let hotkey = raw.as_deref().and_then(global_hotkey_from_shortcuts_json);
-    sync_global_hotkey_inner(app, hotkey)
+    sync_global_hotkey_inner(&app, hotkey)
 }
 
 #[tauri::command]

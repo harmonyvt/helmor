@@ -1,5 +1,6 @@
+use std::{future::Future, str::FromStr};
+
 use anyhow::{bail, Context, Result};
-use rusqlite::Row;
 
 use crate::{
     repos,
@@ -11,6 +12,13 @@ use crate::{
 };
 
 use super::db;
+
+fn block_on_workspace_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
 
 #[derive(Debug)]
 pub struct WorkspaceRecord {
@@ -191,32 +199,53 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
 "#;
 
 pub fn load_workspace_records() -> Result<Vec<WorkspaceRecord>> {
-    let connection = db::read_conn()?;
+    block_on_workspace_db(load_workspace_records_async())
+}
+
+async fn load_workspace_records_async() -> Result<Vec<WorkspaceRecord>> {
+    let connection = db::libsql_conn_async().await?;
     let sql = format!(
         "{WORKSPACE_RECORD_SQL} ORDER BY datetime(w.created_at) DESC, datetime(w.updated_at) DESC, w.id DESC"
     );
-    let mut statement = connection.prepare(&sql)?;
+    let mut rows = connection
+        .query(&sql, ())
+        .await
+        .context("Failed to query workspace records")?;
 
-    let rows = statement.query_map([], workspace_record_from_row)?;
-
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    let mut records = Vec::new();
+    while let Some(row) = rows.next().await? {
+        records.push(workspace_record_from_libsql_row(&row)?);
+    }
+    Ok(records)
 }
 
 pub fn load_workspace_record_by_id(workspace_id: &str) -> Result<Option<WorkspaceRecord>> {
-    let connection = db::read_conn()?;
-    let mut statement =
-        connection.prepare(format!("{WORKSPACE_RECORD_SQL} WHERE w.id = ?1").as_str())?;
+    block_on_workspace_db(load_workspace_record_by_id_async(workspace_id))
+}
 
-    let mut rows = statement.query_map([workspace_id], workspace_record_from_row)?;
+async fn load_workspace_record_by_id_async(workspace_id: &str) -> Result<Option<WorkspaceRecord>> {
+    let connection = db::libsql_conn_async().await?;
+    let sql = format!("{WORKSPACE_RECORD_SQL} WHERE w.id = ?1");
+    let mut rows = connection
+        .query(&sql, [workspace_id.to_string()])
+        .await
+        .with_context(|| format!("Failed to query workspace {workspace_id}"))?;
 
-    match rows.next() {
-        Some(result) => Ok(result.map(Some)?),
+    match rows.next().await? {
+        Some(row) => workspace_record_from_libsql_row(&row)
+            .map(Some)
+            .with_context(|| format!("Failed to deserialize workspace {workspace_id}")),
         None => Ok(None),
     }
 }
 
 pub(crate) fn load_goal_workspace_record(goal_workspace_id: &str) -> Result<WorkspaceRecord> {
-    let record = load_workspace_record_by_id(goal_workspace_id)?
+    block_on_workspace_db(load_goal_workspace_record_async(goal_workspace_id))
+}
+
+async fn load_goal_workspace_record_async(goal_workspace_id: &str) -> Result<WorkspaceRecord> {
+    let record = load_workspace_record_by_id_async(goal_workspace_id)
+        .await?
         .with_context(|| format!("Goal workspace not found: {goal_workspace_id}"))?;
     if record.workspace_kind != WorkspaceKind::Goal {
         bail!("Workspace is not a Goal: {goal_workspace_id}");
@@ -227,8 +256,14 @@ pub(crate) fn load_goal_workspace_record(goal_workspace_id: &str) -> Result<Work
 /// Return all child workspaces linked to a goal workspace, sorted oldest-first
 /// so the Kanban board cards appear in a stable creation order.
 pub fn load_goal_child_workspace_records(goal_workspace_id: &str) -> Result<Vec<WorkspaceRecord>> {
-    let _goal = load_goal_workspace_record(goal_workspace_id)?;
-    let connection = db::read_conn()?;
+    block_on_workspace_db(load_goal_child_workspace_records_async(goal_workspace_id))
+}
+
+async fn load_goal_child_workspace_records_async(
+    goal_workspace_id: &str,
+) -> Result<Vec<WorkspaceRecord>> {
+    let _goal = load_goal_workspace_record_async(goal_workspace_id).await?;
+    let connection = db::libsql_conn_async().await?;
     let sql = format!(
         "{WORKSPACE_RECORD_SQL} \
          WHERE w.goal_workspace_id = ?1 \
@@ -236,30 +271,45 @@ pub fn load_goal_child_workspace_records(goal_workspace_id: &str) -> Result<Vec<
          AND w.state != ?2 \
          ORDER BY datetime(w.created_at) ASC, w.id ASC"
     );
-    let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map(
-        rusqlite::params![goal_workspace_id, WorkspaceState::Archived],
-        workspace_record_from_row,
-    )?;
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    let mut rows = connection
+        .query(
+            &sql,
+            libsql::params![goal_workspace_id, WorkspaceState::Archived.as_str()],
+        )
+        .await
+        .context("Failed to query goal child workspaces")?;
+
+    let mut records = Vec::new();
+    while let Some(row) = rows.next().await? {
+        records.push(workspace_record_from_libsql_row(&row)?);
+    }
+    Ok(records)
 }
 
 pub fn load_archived_workspace_records() -> Result<Vec<WorkspaceRecord>> {
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare(&format!(
-            // Archived list sorts by `updated_at DESC` so the most recently
-            // archived workspace shows at the top — `archive_workspace_impl`
-            // explicitly bumps `updated_at` to `now` when transitioning the
-            // state to 'archived', so this column doubles as "archived at"
-            // for ordering purposes (no separate column needed).
-            "{WORKSPACE_RECORD_SQL} WHERE w.state = ?1 ORDER BY w.updated_at DESC"
-        ))
-        .context("Failed to prepare archived workspaces query")?;
+    block_on_workspace_db(load_archived_workspace_records_async())
+}
 
-    let rows = statement.query_map([WorkspaceState::Archived], workspace_record_from_row)?;
+async fn load_archived_workspace_records_async() -> Result<Vec<WorkspaceRecord>> {
+    let connection = db::libsql_conn_async().await?;
+    let sql = format!(
+        // Archived list sorts by `updated_at DESC` so the most recently
+        // archived workspace shows at the top — `archive_workspace_impl`
+        // explicitly bumps `updated_at` to `now` when transitioning the
+        // state to 'archived', so this column doubles as "archived at"
+        // for ordering purposes (no separate column needed).
+        "{WORKSPACE_RECORD_SQL} WHERE w.state = ?1 ORDER BY w.updated_at DESC"
+    );
+    let mut rows = connection
+        .query(&sql, [WorkspaceState::Archived.as_str()])
+        .await
+        .context("Failed to query archived workspaces")?;
 
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    let mut records = Vec::new();
+    while let Some(row) = rows.next().await? {
+        records.push(workspace_record_from_libsql_row(&row)?);
+    }
+    Ok(records)
 }
 
 pub(crate) struct InitializingWorkspaceMetadata<'a> {
@@ -312,14 +362,30 @@ pub(crate) fn insert_initializing_workspace_and_session_with_metadata(
     branch: &str,
     metadata: InitializingWorkspaceMetadata<'_>,
 ) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start create-workspace transaction")?;
+    let repository_id = repository.id.clone();
+    let workspace_id = workspace_id.to_string();
+    let session_id = session_id.to_string();
+    let directory_name = directory_name.to_string();
+    let branch = branch.to_string();
+    let initialization_parent_branch = metadata.initialization_parent_branch.to_string();
+    let intended_target_branch = metadata.intended_target_branch.to_string();
+    let workspace_kind = metadata.workspace_kind;
+    let goal_workspace_id = metadata.goal_workspace_id.map(str::to_string);
+    let status = metadata.status;
+    let pr_title = metadata.pr_title.map(str::to_string);
+    let pr_sync_state = metadata.pr_sync_state;
+    let pr_url = metadata.pr_url.map(str::to_string);
+    let timestamp = metadata.timestamp.to_string();
 
-    transaction
-        .execute(
-            r#"
+    block_on_workspace_db(db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .context("Failed to start create-workspace transaction")?;
+
+        transaction
+            .execute(
+                r#"
             INSERT INTO workspaces (
               id,
               repository_id,
@@ -340,29 +406,30 @@ pub(crate) fn insert_initializing_workspace_and_session_with_metadata(
               updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?15)
             "#,
-            rusqlite::params![
-                workspace_id,
-                repository.id.as_str(),
-                directory_name,
-                session_id,
-                branch,
-                WorkspaceState::Initializing,
-                metadata.workspace_kind,
-                metadata.goal_workspace_id,
-                metadata.initialization_parent_branch,
-                metadata.intended_target_branch,
-                metadata.status,
-                metadata.pr_title,
-                metadata.pr_sync_state,
-                metadata.pr_url,
-                metadata.timestamp,
-            ],
-        )
-        .context("Failed to insert initializing workspace")?;
+                libsql::params![
+                    workspace_id.clone(),
+                    repository_id,
+                    directory_name,
+                    session_id.clone(),
+                    branch,
+                    WorkspaceState::Initializing.as_str(),
+                    workspace_kind.as_str(),
+                    goal_workspace_id,
+                    initialization_parent_branch,
+                    intended_target_branch,
+                    status.as_str(),
+                    pr_title,
+                    pr_sync_state.as_str(),
+                    pr_url,
+                    timestamp.clone(),
+                ],
+            )
+            .await
+            .context("Failed to insert initializing workspace")?;
 
-    transaction
-        .execute(
-            r#"
+        transaction
+            .execute(
+                r#"
             INSERT INTO sessions (
               id,
               workspace_id,
@@ -376,27 +443,34 @@ pub(crate) fn insert_initializing_workspace_and_session_with_metadata(
               is_hidden
             ) VALUES (?1, ?2, 'Untitled', 'idle', 'default', 0, 0, ?3, ?3, 0)
             "#,
-            (session_id, workspace_id, metadata.timestamp),
-        )
-        .context("Failed to insert initial session")?;
+                libsql::params![session_id, workspace_id, timestamp],
+            )
+            .await
+            .context("Failed to insert initial session")?;
 
-    transaction
-        .commit()
-        .context("Failed to commit create-workspace transaction")
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit create-workspace transaction")
+    }))
 }
 
 pub(crate) fn update_workspace_initial_head_sha(
     workspace_id: &str,
     initial_head_sha: Option<&str>,
 ) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
-        .execute(
-            "UPDATE workspaces SET initial_head_sha = ?2 WHERE id = ?1",
-            rusqlite::params![workspace_id, initial_head_sha],
-        )
-        .context("Failed to update workspace initial_head_sha")?;
-    Ok(())
+    let workspace_id = workspace_id.to_string();
+    let initial_head_sha = initial_head_sha.map(str::to_string);
+    block_on_workspace_db(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                "UPDATE workspaces SET initial_head_sha = ?2 WHERE id = ?1",
+                libsql::params![workspace_id, initial_head_sha],
+            )
+            .await
+            .context("Failed to update workspace initial_head_sha")?;
+        Ok(())
+    }))
 }
 
 pub(crate) fn update_workspace_state(
@@ -404,71 +478,87 @@ pub(crate) fn update_workspace_state(
     state: WorkspaceState,
     timestamp: &str,
 ) -> Result<()> {
-    let connection = db::write_conn()?;
-    let updated_rows = connection
-        .execute(
-            "UPDATE workspaces SET state = ?2, updated_at = ?3 WHERE id = ?1",
-            (workspace_id, state, timestamp),
-        )
-        .with_context(|| format!("Failed to update workspace state to {state}"))?;
+    let workspace_id = workspace_id.to_string();
+    let state = state.as_str().to_string();
+    let timestamp = timestamp.to_string();
+    block_on_workspace_db(db::libsql_write_async(|connection| async move {
+        let updated_rows = connection
+            .execute(
+                "UPDATE workspaces SET state = ?2, updated_at = ?3 WHERE id = ?1",
+                libsql::params![workspace_id.clone(), state.clone(), timestamp],
+            )
+            .await
+            .with_context(|| format!("Failed to update workspace state to {state}"))?;
 
-    if updated_rows != 1 {
-        bail!("Workspace state update affected {updated_rows} rows for {workspace_id}");
-    }
+        if updated_rows != 1 {
+            bail!("Workspace state update affected {updated_rows} rows for {workspace_id}");
+        }
 
-    Ok(())
+        Ok(())
+    }))
 }
 
 pub(crate) fn delete_workspace_and_session_rows(workspace_id: &str) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start create cleanup transaction")?;
+    let workspace_id = workspace_id.to_string();
+    block_on_workspace_db(db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .context("Failed to start create cleanup transaction")?;
 
-    transaction
-        .execute(
-            "DELETE FROM session_messages
+        transaction
+            .execute(
+                "DELETE FROM session_messages
              WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
-            [workspace_id],
-        )
-        .context("Failed to delete create-flow session messages")?;
-    transaction
-        .execute(
-            "DELETE FROM sessions WHERE workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to delete create-flow sessions")?;
-    transaction
-        .execute(
-            "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to delete create-flow browser tabs")?;
-    transaction
-        .execute(
-            "DELETE FROM goal_cards WHERE goal_workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to delete create-flow goal cards")?;
-    transaction
-        .execute(
-            "UPDATE goal_cards SET child_workspace_id = NULL, updated_at = datetime('now') WHERE child_workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to unlink create-flow goal card workspace")?;
-    transaction
-        .execute(
-            "UPDATE workspaces SET goal_workspace_id = NULL, updated_at = datetime('now') WHERE goal_workspace_id = ?1",
-            [workspace_id],
-        )
-        .context("Failed to unlink create-flow goal child workspaces")?;
-    transaction
-        .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
-        .context("Failed to delete create-flow workspace")?;
+                [workspace_id.clone()],
+            )
+            .await
+            .context("Failed to delete create-flow session messages")?;
+        transaction
+            .execute(
+                "DELETE FROM sessions WHERE workspace_id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .context("Failed to delete create-flow sessions")?;
+        transaction
+            .execute(
+                "DELETE FROM workspace_browser_tabs WHERE workspace_id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .context("Failed to delete create-flow browser tabs")?;
+        transaction
+            .execute(
+                "DELETE FROM goal_cards WHERE goal_workspace_id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .context("Failed to delete create-flow goal cards")?;
+        transaction
+            .execute(
+                "UPDATE goal_cards SET child_workspace_id = NULL, updated_at = datetime('now') WHERE child_workspace_id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .context("Failed to unlink create-flow goal card workspace")?;
+        transaction
+            .execute(
+                "UPDATE workspaces SET goal_workspace_id = NULL, updated_at = datetime('now') WHERE goal_workspace_id = ?1",
+                [workspace_id.clone()],
+            )
+            .await
+            .context("Failed to unlink create-flow goal child workspaces")?;
+        transaction
+            .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
+            .await
+            .context("Failed to delete create-flow workspace")?;
 
-    transaction
-        .commit()
-        .context("Failed to commit create cleanup transaction")
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit create cleanup transaction")
+    }))
 }
 
 /// Orphan lookup for the startup cleanup path: returns workspace rows
@@ -478,16 +568,26 @@ pub(crate) fn delete_workspace_and_session_rows(workspace_id: &str) -> Result<()
 pub(crate) fn list_initializing_workspaces_older_than(
     max_age_seconds: i64,
 ) -> Result<Vec<OrphanedInitializingWorkspace>> {
-    let connection = db::read_conn()?;
+    block_on_workspace_db(list_initializing_workspaces_older_than_async(
+        max_age_seconds,
+    ))
+}
+
+async fn list_initializing_workspaces_older_than_async(
+    max_age_seconds: i64,
+) -> Result<Vec<OrphanedInitializingWorkspace>> {
+    let connection = db::libsql_conn_async().await?;
     let cutoff = format!("datetime('now', '-{} seconds')", max_age_seconds.max(0));
     let sql = format!("{WORKSPACE_RECORD_SQL} WHERE w.state = ?1 AND w.created_at < {cutoff}",);
-    let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map(
-        [WorkspaceState::Initializing.as_str()],
-        workspace_record_from_row,
-    )?;
+    let mut rows = connection
+        .query(&sql, [WorkspaceState::Initializing.as_str()])
+        .await
+        .context("Failed to query initializing workspaces")?;
 
-    let records: Vec<WorkspaceRecord> = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut records = Vec::new();
+    while let Some(row) = rows.next().await? {
+        records.push(workspace_record_from_libsql_row(&row)?);
+    }
 
     Ok(records
         .into_iter()
@@ -503,130 +603,241 @@ pub(crate) fn update_archived_workspace_state(
     workspace_id: &str,
     archive_commit: &str,
 ) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start archive transaction")?;
+    let workspace_id = workspace_id.to_string();
+    let archive_commit = archive_commit.to_string();
+    block_on_workspace_db(db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .context("Failed to start archive transaction")?;
 
-    let updated_rows = transaction
-        .execute(
-            r#"
+        let updated_rows = transaction
+            .execute(
+                r#"
             UPDATE workspaces
             SET state = ?3,
                 archive_commit = ?2,
                 updated_at = datetime('now')
             WHERE id = ?1 AND state IN (?4, ?5)
             "#,
-            (
-                workspace_id,
-                archive_commit,
-                WorkspaceState::Archived,
-                WorkspaceState::Ready,
-                WorkspaceState::SetupPending,
-            ),
-        )
-        .context("Failed to update workspace archive state")?;
+                libsql::params![
+                    workspace_id.clone(),
+                    archive_commit,
+                    WorkspaceState::Archived.as_str(),
+                    WorkspaceState::Ready.as_str(),
+                    WorkspaceState::SetupPending.as_str(),
+                ],
+            )
+            .await
+            .context("Failed to update workspace archive state")?;
 
-    if updated_rows != 1 {
-        bail!("Archive state update affected {updated_rows} rows for workspace {workspace_id}");
-    }
+        if updated_rows != 1 {
+            bail!("Archive state update affected {updated_rows} rows for workspace {workspace_id}");
+        }
 
-    transaction
-        .commit()
-        .context("Failed to commit archive transaction")
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit archive transaction")
+    }))
 }
 
 pub(crate) fn update_restored_workspace_state(
     workspace_id: &str,
     target_branch_override: Option<&str>,
 ) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start restore transaction")?;
+    let workspace_id = workspace_id.to_string();
+    let target_branch_override = target_branch_override.map(str::to_string);
+    block_on_workspace_db(db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .context("Failed to start restore transaction")?;
 
-    let updated_rows = transaction
-        .execute(
-            r#"
+        let updated_rows = transaction
+            .execute(
+                r#"
             UPDATE workspaces
             SET state = ?2,
                 updated_at = datetime('now')
             WHERE id = ?1 AND state = ?3
             "#,
-            (
-                workspace_id,
-                WorkspaceState::Ready,
-                WorkspaceState::Archived,
-            ),
-        )
-        .context("Failed to update workspace restore state")?;
-
-    if updated_rows != 1 {
-        bail!("Restore state update affected {updated_rows} rows for workspace {workspace_id}");
-    }
-
-    if let Some(new_target) = target_branch_override {
-        transaction
-            .execute(
-                "UPDATE workspaces SET intended_target_branch = ?1 WHERE id = ?2",
-                [new_target, workspace_id],
+                libsql::params![
+                    workspace_id.clone(),
+                    WorkspaceState::Ready.as_str(),
+                    WorkspaceState::Archived.as_str(),
+                ],
             )
-            .context("Failed to update intended_target_branch during restore")?;
-    }
+            .await
+            .context("Failed to update workspace restore state")?;
 
-    transaction
-        .commit()
-        .context("Failed to commit restore transaction")
+        if updated_rows != 1 {
+            bail!("Restore state update affected {updated_rows} rows for workspace {workspace_id}");
+        }
+
+        if let Some(new_target) = target_branch_override {
+            transaction
+                .execute(
+                    "UPDATE workspaces SET intended_target_branch = ?1 WHERE id = ?2",
+                    libsql::params![new_target, workspace_id],
+                )
+                .await
+                .context("Failed to update intended_target_branch during restore")?;
+        }
+
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit restore transaction")
+    }))
 }
 
-fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord> {
+fn parse_required<T>(raw: String, column: &str) -> Result<T>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display + Send + Sync + 'static,
+{
+    raw.parse::<T>()
+        .map_err(|error| anyhow::anyhow!("Failed to parse {column} {raw:?}: {error}"))
+}
+
+fn parse_optional<T>(raw: Option<String>, column: &str) -> Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display + Send + Sync + 'static,
+{
+    raw.map(|value| parse_required(value, column)).transpose()
+}
+
+fn workspace_record_from_libsql_row(row: &libsql::Row) -> Result<WorkspaceRecord> {
+    let workspace_kind = parse_required(
+        row.get(7).context("Failed to read workspace kind")?,
+        "workspace_kind",
+    )?;
+    let state = parse_required(
+        row.get(9).context("Failed to read workspace state")?,
+        "state",
+    )?;
+    let status = parse_required(
+        row.get(13).context("Failed to read workspace status")?,
+        "status",
+    )?;
+    let pr_sync_state = parse_required(
+        row.get(26)
+            .context("Failed to read workspace PR sync state")?,
+        "pr_sync_state",
+    )?;
+    let landing_state = parse_required(
+        row.get(28)
+            .context("Failed to read workspace landing state")?,
+        "landing_state",
+    )?;
+    let landing_source = parse_optional(
+        row.get(29)
+            .context("Failed to read workspace landing source")?,
+        "landing_source",
+    )?;
+
     Ok(WorkspaceRecord {
-        id: row.get(0)?,
-        repo_id: row.get(1)?,
-        repo_name: row.get(2)?,
-        remote_url: row.get(3)?,
-        default_branch: row.get(4)?,
-        root_path: row.get(5)?,
-        directory_name: row.get(6)?,
-        workspace_kind: row.get(7)?,
-        goal_workspace_id: row.get(8)?,
-        state: row.get(9)?,
-        has_unread: row.get::<_, i64>(10)? != 0,
-        workspace_unread: row.get(11)?,
-        unread_session_count: row.get(12)?,
-        status: row.get(13)?,
-        branch: row.get(14)?,
-        initialization_parent_branch: row.get(15)?,
-        intended_target_branch: row.get(16)?,
-        pinned_at: row.get(17)?,
-        active_session_id: row.get(18)?,
-        active_session_title: row.get(19)?,
-        active_session_agent_type: row.get(20)?,
-        active_session_status: row.get(21)?,
-        primary_session_id: row.get(22)?,
-        primary_session_title: row.get(23)?,
-        primary_session_agent_type: row.get(24)?,
-        pr_title: row.get(25)?,
-        pr_sync_state: row.get(26)?,
-        pr_url: row.get(27)?,
-        landing_state: row.get(28)?,
-        landing_source: row.get(29)?,
-        landed_at: row.get(30)?,
-        landed_target_branch: row.get(31)?,
-        landed_source_ref: row.get(32)?,
-        landed_commit_sha: row.get(33)?,
-        initial_head_sha: row.get(34)?,
-        last_known_head_sha: row.get(35)?,
-        archive_commit: row.get(36)?,
-        session_count: row.get(37)?,
-        message_count: row.get(38)?,
-        remote: row.get(39)?,
-        forge_provider: row.get(40)?,
-        created_at: row.get(41)?,
-        updated_at: row.get(42)?,
-        last_user_message_at: row.get(43)?,
-        goal_title: row.get(44)?,
-        goal_description: row.get(45)?,
+        id: row.get(0).context("Failed to read workspace id")?,
+        repo_id: row.get(1).context("Failed to read workspace repo id")?,
+        repo_name: row.get(2).context("Failed to read workspace repo name")?,
+        remote_url: row.get(3).context("Failed to read workspace remote url")?,
+        default_branch: row
+            .get(4)
+            .context("Failed to read workspace default branch")?,
+        root_path: row.get(5).context("Failed to read workspace root path")?,
+        directory_name: row
+            .get(6)
+            .context("Failed to read workspace directory name")?,
+        workspace_kind,
+        goal_workspace_id: row
+            .get(8)
+            .context("Failed to read workspace goal workspace id")?,
+        state,
+        has_unread: row
+            .get::<i64>(10)
+            .context("Failed to read workspace unread")?
+            != 0,
+        workspace_unread: row
+            .get(11)
+            .context("Failed to read workspace unread count")?,
+        unread_session_count: row
+            .get(12)
+            .context("Failed to read workspace unread session count")?,
+        status,
+        branch: row.get(14).context("Failed to read workspace branch")?,
+        initialization_parent_branch: row
+            .get(15)
+            .context("Failed to read workspace initialization parent branch")?,
+        intended_target_branch: row
+            .get(16)
+            .context("Failed to read workspace intended target branch")?,
+        pinned_at: row.get(17).context("Failed to read workspace pinned_at")?,
+        active_session_id: row
+            .get(18)
+            .context("Failed to read workspace active session id")?,
+        active_session_title: row
+            .get(19)
+            .context("Failed to read workspace active session title")?,
+        active_session_agent_type: row
+            .get(20)
+            .context("Failed to read workspace active session agent type")?,
+        active_session_status: row
+            .get(21)
+            .context("Failed to read workspace active session status")?,
+        primary_session_id: row
+            .get(22)
+            .context("Failed to read workspace primary session id")?,
+        primary_session_title: row
+            .get(23)
+            .context("Failed to read workspace primary session title")?,
+        primary_session_agent_type: row
+            .get(24)
+            .context("Failed to read workspace primary session agent type")?,
+        pr_title: row.get(25).context("Failed to read workspace PR title")?,
+        pr_sync_state,
+        pr_url: row.get(27).context("Failed to read workspace PR URL")?,
+        landing_state,
+        landing_source,
+        landed_at: row.get(30).context("Failed to read workspace landed_at")?,
+        landed_target_branch: row
+            .get(31)
+            .context("Failed to read workspace landed target branch")?,
+        landed_source_ref: row
+            .get(32)
+            .context("Failed to read workspace landed source ref")?,
+        landed_commit_sha: row
+            .get(33)
+            .context("Failed to read workspace landed commit sha")?,
+        initial_head_sha: row
+            .get(34)
+            .context("Failed to read workspace initial head sha")?,
+        last_known_head_sha: row
+            .get(35)
+            .context("Failed to read workspace last known head sha")?,
+        archive_commit: row
+            .get(36)
+            .context("Failed to read workspace archive commit")?,
+        session_count: row
+            .get(37)
+            .context("Failed to read workspace session count")?,
+        message_count: row
+            .get(38)
+            .context("Failed to read workspace message count")?,
+        remote: row.get(39).context("Failed to read workspace remote")?,
+        forge_provider: row
+            .get(40)
+            .context("Failed to read workspace forge provider")?,
+        created_at: row.get(41).context("Failed to read workspace created_at")?,
+        updated_at: row.get(42).context("Failed to read workspace updated_at")?,
+        last_user_message_at: row
+            .get(43)
+            .context("Failed to read workspace last user message at")?,
+        goal_title: row.get(44).context("Failed to read workspace goal title")?,
+        goal_description: row
+            .get(45)
+            .context("Failed to read workspace goal description")?,
     })
 }
 
@@ -636,19 +847,27 @@ pub(crate) fn update_goal_workspace_meta(
     goal_title: Option<&str>,
     goal_description: Option<&str>,
 ) -> Result<()> {
-    let _goal = load_goal_workspace_record(workspace_id)?;
-    let ts = chrono::Utc::now().to_rfc3339();
-    let connection = db::write_conn()?;
-    let updated_rows = connection
-        .execute(
-            "UPDATE workspaces SET goal_title = ?2, goal_description = ?3, updated_at = ?4 WHERE id = ?1",
-            (workspace_id, goal_title, goal_description, &ts),
-        )
-        .context("Failed to update goal workspace meta")?;
-    if updated_rows == 0 {
-        anyhow::bail!("Goal workspace meta update affected 0 rows for {workspace_id}");
-    }
-    Ok(())
+    let workspace_id = workspace_id.to_string();
+    let goal_title = goal_title.map(str::to_string);
+    let goal_description = goal_description.map(str::to_string);
+    block_on_workspace_db(async move {
+        let _goal = load_goal_workspace_record_async(&workspace_id).await?;
+        let ts = chrono::Utc::now().to_rfc3339();
+        db::libsql_write_async(|connection| async move {
+            let updated_rows = connection
+                .execute(
+                    "UPDATE workspaces SET goal_title = ?2, goal_description = ?3, updated_at = ?4 WHERE id = ?1",
+                    libsql::params![workspace_id.clone(), goal_title, goal_description, ts],
+                )
+                .await
+                .context("Failed to update goal workspace meta")?;
+            if updated_rows == 0 {
+                anyhow::bail!("Goal workspace meta update affected 0 rows for {workspace_id}");
+            }
+            Ok(())
+        })
+        .await
+    })
 }
 
 pub(crate) fn set_goal_child_workspace_status(
@@ -656,30 +875,38 @@ pub(crate) fn set_goal_child_workspace_status(
     child_workspace_id: &str,
     status: WorkspaceStatus,
 ) -> Result<()> {
-    let _goal = load_goal_workspace_record(goal_workspace_id)?;
-    let child = load_workspace_record_by_id(child_workspace_id)?
-        .with_context(|| format!("Goal child workspace not found: {child_workspace_id}"))?;
-    if child.workspace_kind != WorkspaceKind::Code
-        || child.goal_workspace_id.as_deref() != Some(goal_workspace_id)
-    {
-        bail!(
-            "Workspace {child_workspace_id} is not a child of Goal workspace {goal_workspace_id}"
-        );
-    }
+    let goal_workspace_id = goal_workspace_id.to_string();
+    let child_workspace_id = child_workspace_id.to_string();
+    block_on_workspace_db(async move {
+        let _goal = load_goal_workspace_record_async(&goal_workspace_id).await?;
+        let child = load_workspace_record_by_id_async(&child_workspace_id)
+            .await?
+            .with_context(|| format!("Goal child workspace not found: {child_workspace_id}"))?;
+        if child.workspace_kind != WorkspaceKind::Code
+            || child.goal_workspace_id.as_deref() != Some(goal_workspace_id.as_str())
+        {
+            bail!(
+                "Workspace {child_workspace_id} is not a child of Goal workspace {goal_workspace_id}"
+            );
+        }
 
-    let connection = db::write_conn()?;
-    let updated_rows = connection
-        .execute(
-            "UPDATE workspaces SET status = ?3, updated_at = datetime('now') WHERE id = ?1 AND goal_workspace_id = ?2",
-            rusqlite::params![child_workspace_id, goal_workspace_id, status],
-        )
-        .context("Failed to set goal child workspace status")?;
-    if updated_rows != 1 {
-        bail!(
-            "Goal child status update affected {updated_rows} rows for workspace {child_workspace_id}"
-        );
-    }
-    Ok(())
+        db::libsql_write_async(|connection| async move {
+            let updated_rows = connection
+                .execute(
+                    "UPDATE workspaces SET status = ?3, updated_at = datetime('now') WHERE id = ?1 AND goal_workspace_id = ?2",
+                    libsql::params![child_workspace_id.clone(), goal_workspace_id, status.as_str()],
+                )
+                .await
+                .context("Failed to set goal child workspace status")?;
+            if updated_rows != 1 {
+                bail!(
+                    "Goal child status update affected {updated_rows} rows for workspace {child_workspace_id}"
+                );
+            }
+            Ok(())
+        })
+        .await
+    })
 }
 
 /// Assign any code workspace to a goal (or move it between goals) and set its
@@ -690,24 +917,32 @@ pub(crate) fn assign_workspace_to_goal(
     goal_workspace_id: &str,
     status: WorkspaceStatus,
 ) -> Result<()> {
-    let _goal = load_goal_workspace_record(goal_workspace_id)?;
-    let workspace = load_workspace_record_by_id(workspace_id)?
-        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-    if workspace.workspace_kind != WorkspaceKind::Code {
-        bail!("Cannot assign a goal workspace as a child of another goal");
-    }
+    let workspace_id = workspace_id.to_string();
+    let goal_workspace_id = goal_workspace_id.to_string();
+    block_on_workspace_db(async move {
+        let _goal = load_goal_workspace_record_async(&goal_workspace_id).await?;
+        let workspace = load_workspace_record_by_id_async(&workspace_id)
+            .await?
+            .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+        if workspace.workspace_kind != WorkspaceKind::Code {
+            bail!("Cannot assign a goal workspace as a child of another goal");
+        }
 
-    let connection = db::write_conn()?;
-    let updated_rows = connection
-        .execute(
-            "UPDATE workspaces SET goal_workspace_id = ?2, status = ?3, updated_at = datetime('now') WHERE id = ?1",
-            rusqlite::params![workspace_id, goal_workspace_id, status],
-        )
-        .context("Failed to assign workspace to goal")?;
-    if updated_rows != 1 {
-        bail!("assign_workspace_to_goal affected {updated_rows} rows for {workspace_id}");
-    }
-    Ok(())
+        db::libsql_write_async(|connection| async move {
+            let updated_rows = connection
+                .execute(
+                    "UPDATE workspaces SET goal_workspace_id = ?2, status = ?3, updated_at = datetime('now') WHERE id = ?1",
+                    libsql::params![workspace_id.clone(), goal_workspace_id, status.as_str()],
+                )
+                .await
+                .context("Failed to assign workspace to goal")?;
+            if updated_rows != 1 {
+                bail!("assign_workspace_to_goal affected {updated_rows} rows for {workspace_id}");
+            }
+            Ok(())
+        })
+        .await
+    })
 }
 
 #[cfg(test)]

@@ -223,8 +223,7 @@ pub async fn send_assignee_message(
     request: crate::goal_assignees::SendAssigneeMessageRequest,
 ) -> CmdResult<crate::goal_assignees::SendAssigneeMessageResult> {
     let goal_workspace_id = request.goal_workspace_id.clone();
-    let prepared =
-        run_blocking(move || crate::goal_assignees::prepare_assignee_message(request)).await?;
+    let prepared = crate::goal_assignees::prepare_assignee_message_async(request).await?;
     let mut result = prepared.result;
     let receipt = crate::background_agents::enqueue(app.clone(), prepared.send_params)?;
     result.started = receipt.started;
@@ -244,8 +243,7 @@ pub async fn send_thread_message(
     request: crate::goal_assignees::SendThreadMessageRequest,
 ) -> CmdResult<crate::goal_assignees::SendAssigneeMessageResult> {
     let goal_workspace_id = request.goal_workspace_id.clone();
-    let prepared =
-        run_blocking(move || crate::goal_assignees::prepare_thread_message(request)).await?;
+    let prepared = crate::goal_assignees::prepare_thread_message_async(request).await?;
     let mut result = prepared.result;
     let receipt = crate::background_agents::enqueue(app.clone(), prepared.send_params)?;
     result.started = receipt.started;
@@ -265,8 +263,7 @@ pub async fn set_card_assignee_thread(
     request: crate::goal_assignees::SetCardAssigneeThreadRequest,
 ) -> CmdResult<crate::goal_assignees::SetCardAssigneeThreadResult> {
     let goal_workspace_id = request.goal_workspace_id.clone();
-    let result =
-        run_blocking(move || crate::goal_assignees::set_card_assignee_thread(request)).await?;
+    let result = crate::goal_assignees::set_card_assignee_thread_async(request).await?;
     publish_goal_child_workspace_changes(
         &app,
         goal_workspace_id,
@@ -279,28 +276,36 @@ pub async fn set_card_assignee_thread(
 pub async fn read_assignee_thread(
     request: crate::goal_assignees::ReadAssigneeThreadRequest,
 ) -> CmdResult<crate::goal_assignees::AssigneeThreadResult> {
-    run_blocking(move || crate::goal_assignees::read_assignee_thread(request)).await
+    crate::goal_assignees::read_assignee_thread_async(request)
+        .await
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn get_thread_runtime_status(
     request: crate::goal_assignees::ThreadRuntimeStatusRequest,
 ) -> CmdResult<crate::goal_assignees::ThreadRuntimeStatus> {
-    run_blocking(move || crate::goal_assignees::get_thread_runtime_status(request)).await
+    crate::goal_assignees::get_thread_runtime_status_async(request)
+        .await
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn summarize_assignee_status(
     request: crate::goal_assignees::SummarizeAssigneeStatusRequest,
 ) -> CmdResult<crate::goal_assignees::AssigneeStatusSummary> {
-    run_blocking(move || crate::goal_assignees::summarize_assignee_status(request)).await
+    crate::goal_assignees::summarize_assignee_status_async(request)
+        .await
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn list_assignees(
     request: crate::goal_assignees::ListAssigneesRequest,
 ) -> CmdResult<Vec<crate::goal_assignees::AssigneeSummary>> {
-    run_blocking(move || crate::goal_assignees::list_assignees(request)).await
+    crate::goal_assignees::list_assignees_async(request)
+        .await
+        .map_err(Into::into)
 }
 
 #[tauri::command]

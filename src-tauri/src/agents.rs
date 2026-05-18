@@ -23,7 +23,9 @@ mod support;
 pub use self::action_kind::ActionKind;
 pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
 pub use self::delegation::{DelegateAgentRequest, DelegateAgentResponse};
+#[cfg(test)]
 pub(crate) use self::persistence::persist_collected_turn_message;
+pub(crate) use self::persistence::persist_collected_turn_message_libsql;
 pub use self::queries::{
     fetch_agent_model_sections, fetch_live_context_usage, GenerateSessionTitleRequest,
     GenerateSessionTitleResponse, GetLiveContextUsageRequest, ListSlashCommandsRequest,
@@ -38,10 +40,8 @@ pub use self::streaming::{
     ActiveStreams, BuildSendMessageParamsInput,
 };
 
-use self::persistence::{
-    finalize_session_metadata, persist_error_message, persist_exit_plan_message,
-    persist_result_and_finalize, persist_turn_message, persist_user_message,
-};
+#[cfg(test)]
+use self::persistence::{persist_result_and_finalize, persist_turn_message, persist_user_message};
 use self::streaming::stream_via_sidecar;
 use self::support::{resolve_resume_working_directory, resolve_working_directory};
 
@@ -239,6 +239,7 @@ pub struct AgentSendRequest {
 use crate::pipeline::types::{AgentUsage, CollectedTurn, MessageRole};
 
 /// Context shared across incremental persistence calls within a single exchange.
+#[derive(Clone)]
 struct ExchangeContext {
     helmor_session_id: String,
     model_id: String,
@@ -330,7 +331,7 @@ pub async fn send_agent_message_stream(
         .into());
     }
 
-    let working_directory = resolve_stream_working_directory(&request)?;
+    let working_directory = resolve_stream_working_directory(&request).await?;
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
     tracing::info!(
@@ -358,12 +359,12 @@ pub async fn send_agent_message_stream(
     )
 }
 
-fn resolve_stream_working_directory(
+async fn resolve_stream_working_directory(
     request: &AgentSendRequest,
 ) -> anyhow::Result<std::path::PathBuf> {
     if request.resume_only {
         if let Some(session_id) = request.helmor_session_id.as_deref() {
-            if let Some(workspace_dir) = resolve_resume_working_directory(session_id)? {
+            if let Some(workspace_dir) = resolve_resume_working_directory(session_id).await? {
                 if !workspace_dir.is_dir() {
                     // Tag as `WorkspaceBroken` so the frontend toast can
                     // offer "Permanently Delete" + default-keep-history,
@@ -1087,7 +1088,8 @@ mod tests {
             goal_description: None,
         };
 
-        let resolved = resolve_stream_working_directory(&request).unwrap();
+        let resolved =
+            tauri::async_runtime::block_on(resolve_stream_working_directory(&request)).unwrap();
         assert_eq!(resolved, workspace_dir);
 
         std::env::remove_var("HELMOR_DATA_DIR");
@@ -1128,7 +1130,8 @@ mod tests {
             goal_description: None,
         };
 
-        let error = resolve_stream_working_directory(&request).unwrap_err();
+        let error =
+            tauri::async_runtime::block_on(resolve_stream_working_directory(&request)).unwrap_err();
         assert!(error
             .to_string()
             .contains("Workspace directory is missing for resumed session"),);

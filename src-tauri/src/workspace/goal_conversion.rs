@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use std::future::Future;
 use std::path::Path;
 use std::process::Command;
 
@@ -10,6 +11,13 @@ use crate::{
     workspace_pr_sync::PrSyncState,
     workspace_status::WorkspaceStatus,
 };
+
+fn block_on_libsql<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -188,34 +196,44 @@ fn convert_workspace_record(
         .map(|pr| pr.title.as_str())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(title);
-    let connection = db::write_conn()?;
-    let updated = connection.execute(
-        r#"
-        UPDATE workspaces
-        SET workspace_kind = ?2,
-            goal_workspace_id = NULL,
-            goal_title = ?3,
-            goal_description = ?4,
-            pr_title = ?5,
-            pr_url = ?6,
-            pr_sync_state = ?7,
-            status = ?8,
-            updated_at = datetime('now')
-        WHERE id = ?1
-        "#,
-        (
-            workspace_id,
-            WorkspaceKind::Goal,
-            title,
-            description,
-            pr_title,
-            pr_url,
-            PrSyncState::Open,
-            WorkspaceStatus::Review,
-        ),
-    )?;
+    let workspace_id = workspace_id.to_string();
+    let title = title.to_string();
+    let description = description.to_string();
+    let pr_title = pr_title.to_string();
+    let pr_url = pr_url.map(str::to_string);
+    let workspace_id_for_error = workspace_id.clone();
+    let updated = block_on_libsql(db::libsql_write_async(|connection| async move {
+        connection
+            .execute(
+                r#"
+                UPDATE workspaces
+                SET workspace_kind = ?2,
+                    goal_workspace_id = NULL,
+                    goal_title = ?3,
+                    goal_description = ?4,
+                    pr_title = ?5,
+                    pr_url = ?6,
+                    pr_sync_state = ?7,
+                    status = ?8,
+                    updated_at = datetime('now')
+                WHERE id = ?1
+                "#,
+                libsql::params![
+                    workspace_id,
+                    WorkspaceKind::Goal.as_str(),
+                    title,
+                    description,
+                    pr_title,
+                    pr_url,
+                    PrSyncState::Open.as_str(),
+                    WorkspaceStatus::Review.as_str(),
+                ],
+            )
+            .await
+            .context("Failed to convert workspace to goal")
+    }))?;
     if updated != 1 {
-        bail!("Workspace not found: {workspace_id}");
+        bail!("Workspace not found: {workspace_id_for_error}");
     }
     Ok(())
 }

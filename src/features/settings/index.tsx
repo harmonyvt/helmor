@@ -62,6 +62,7 @@ import { ConductorImportPanel } from "./panels/conductor-import";
 import { DataSourceSettingsRow } from "./panels/data-source";
 import { DebugIngestNgrokPanel } from "./panels/debug-ingest-ngrok";
 import { DevToolsPanel } from "./panels/dev-tools";
+import { LibsqlExperimentPanel } from "./panels/libsql-experiment";
 import { LocalAppUpdatePanel } from "./panels/local-app-update";
 import { LogExportPanel } from "./panels/log-export";
 import {
@@ -648,6 +649,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 							{activeSection === "experimental" && (
 								<div className="flex flex-col gap-3">
+									<LibsqlExperimentPanel />
 									<SettingsGroup>
 										<SettingsRow
 											title="libghostty renderer"

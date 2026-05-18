@@ -1,8 +1,12 @@
 use anyhow::{Context, Result};
+#[cfg(test)]
+#[cfg(test)]
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 
 use crate::pipeline::types::{AgentUsage, CollectedTurn, MessageRole};
+use crate::sessions::mark_session_read_in_libsql_transaction;
+#[cfg(test)]
 use crate::sessions::mark_session_read_in_transaction;
 
 use super::ExchangeContext;
@@ -10,6 +14,7 @@ use super::ExchangeContext;
 /// Persist the user's prompt as the first message of the exchange.
 /// Wraps as `{"type":"user_prompt","text":"...","files":[...],"images":[...]}`.
 /// Empty arrays are omitted from the JSON.
+#[cfg(test)]
 pub(super) fn persist_user_message(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -58,6 +63,88 @@ pub(super) fn persist_user_message(
     Ok(())
 }
 
+pub(super) async fn persist_user_message_libsql(
+    conn: &libsql::Connection,
+    ctx: &ExchangeContext,
+    prompt: &str,
+    files: &[String],
+    images: &[String],
+) -> Result<()> {
+    let now = current_timestamp_string()?;
+    let user_message_id = ctx.user_message_id.clone();
+    let mut payload = serde_json::json!({
+        "type": "user_prompt",
+        "text": prompt,
+    });
+    if !files.is_empty() {
+        payload["files"] = serde_json::Value::Array(
+            files
+                .iter()
+                .map(|path| serde_json::Value::String(path.clone()))
+                .collect(),
+        );
+    }
+    if !images.is_empty() {
+        payload["images"] = serde_json::Value::Array(
+            images
+                .iter()
+                .map(|path| serde_json::Value::String(path.clone()))
+                .collect(),
+        );
+    }
+    let content = payload.to_string();
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "#,
+        libsql::params![
+            user_message_id,
+            ctx.helmor_session_id.clone(),
+            MessageRole::User.as_str(),
+            content,
+            now
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(super) async fn persist_stream_start_metadata_libsql(
+    conn: &libsql::Connection,
+    ctx: &ExchangeContext,
+    fast_mode: bool,
+    permission_mode: Option<&str>,
+    updated_at: Option<&str>,
+) -> Result<()> {
+    let fast_mode_value = if fast_mode { 1_i64 } else { 0_i64 };
+    conn.execute(
+        r#"
+        UPDATE sessions
+        SET fast_mode = ?1,
+            status = 'streaming',
+            model = ?3,
+            agent_type = ?4,
+            permission_mode = COALESCE(?5, permission_mode),
+            updated_at = COALESCE(?6, updated_at)
+        WHERE id = ?2
+        "#,
+        libsql::params![
+            fast_mode_value,
+            ctx.helmor_session_id.clone(),
+            ctx.model_id.clone(),
+            ctx.model_provider.clone(),
+            permission_mode,
+            updated_at
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
 /// Persist a single intermediate turn (assistant message or user tool
 /// result). Called each time the accumulator produces a complete turn
 /// during streaming. Returns the DB message ID.
@@ -68,6 +155,7 @@ pub(super) fn persist_user_message(
 /// its database position and upsert the completion into the same id. This
 /// preserves live start-order on historical reload while keeping final
 /// content current.
+#[cfg(test)]
 pub(super) fn persist_turn_message(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -79,6 +167,33 @@ pub(super) fn persist_turn_message(
     persist_collected_turn_message(conn, &ctx.helmor_session_id, turn)
 }
 
+pub(super) async fn persist_turn_message_libsql(
+    conn: &libsql::Connection,
+    ctx: &ExchangeContext,
+    turn: &CollectedTurn,
+    _resolved_model: &str,
+) -> Result<String> {
+    persist_collected_turn_message_libsql(conn, &ctx.helmor_session_id, turn).await
+}
+
+#[allow(dead_code)]
+pub(super) async fn persist_turn_messages_libsql(
+    conn: &libsql::Connection,
+    ctx: &ExchangeContext,
+    turns: &[CollectedTurn],
+    resolved_model: &str,
+) -> (usize, Option<anyhow::Error>) {
+    let mut persisted = 0;
+    for turn in turns {
+        if let Err(error) = persist_turn_message_libsql(conn, ctx, turn, resolved_model).await {
+            return (persisted, Some(error));
+        }
+        persisted += 1;
+    }
+    (persisted, None)
+}
+
+#[cfg(test)]
 pub(crate) fn persist_collected_turn_message(
     conn: &Connection,
     session_id: &str,
@@ -108,6 +223,44 @@ pub(crate) fn persist_collected_turn_message(
     Ok(msg_id)
 }
 
+pub(crate) async fn persist_collected_turn_message_libsql(
+    conn: &libsql::Connection,
+    session_id: &str,
+    turn: &CollectedTurn,
+) -> Result<String> {
+    let now = current_timestamp_string()?;
+    let msg_id = turn.id.clone();
+    let content =
+        crate::image_store::prepare_turn_content_for_persist(session_id, &turn.content_json)?;
+
+    // Preserve the original `sent_at` / rowid on duplicate ids so historical
+    // reload remains ordered by when the item started, not when it completed.
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            ON CONFLICT(id) DO UPDATE SET
+              role = excluded.role,
+              content = excluded.content
+        "#,
+        libsql::params![
+            msg_id.clone(),
+            session_id,
+            turn.role.to_string(),
+            content.clone(),
+            now
+        ],
+    )
+    .await?;
+    crate::goal_assignees::maybe_deliver_assignee_report_libsql(
+        conn, session_id, &msg_id, turn.role, &content,
+    )
+    .await?;
+    Ok(msg_id)
+}
+
+#[cfg(test)]
 pub(super) fn persist_error_message(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -140,6 +293,40 @@ pub(super) fn persist_error_message(
     Ok(msg_id)
 }
 
+pub(super) async fn persist_error_message_libsql(
+    conn: &libsql::Connection,
+    ctx: &ExchangeContext,
+    _resolved_model: &str,
+    message: &str,
+) -> Result<String> {
+    let now = current_timestamp_string()?;
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let payload = json!({
+        "type": "error",
+        "message": message,
+    })
+    .to_string();
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "#,
+        libsql::params![
+            msg_id.clone(),
+            ctx.helmor_session_id.clone(),
+            MessageRole::Error.as_str(),
+            payload,
+            now
+        ],
+    )
+    .await?;
+
+    Ok(msg_id)
+}
+
+#[cfg(test)]
 pub(super) fn persist_exit_plan_message(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -187,11 +374,61 @@ pub(super) fn persist_exit_plan_message(
     Ok((msg_id, now))
 }
 
+#[allow(dead_code)]
+pub(super) async fn persist_exit_plan_message_libsql(
+    conn: &libsql::Connection,
+    ctx: &ExchangeContext,
+    _resolved_model: &str,
+    tool_use_id: &str,
+    tool_name: &str,
+    tool_input: &Value,
+) -> Result<(String, String)> {
+    let now = current_timestamp_string()?;
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let mut payload = json!({
+        "type": "exit_plan_mode",
+        "toolUseId": tool_use_id,
+        "toolName": tool_name,
+    });
+
+    if let Some(plan) = tool_input.get("plan").and_then(Value::as_str) {
+        payload["plan"] = Value::String(plan.to_string());
+    }
+    if let Some(plan_file_path) = tool_input.get("planFilePath").and_then(Value::as_str) {
+        payload["planFilePath"] = Value::String(plan_file_path.to_string());
+    }
+    if let Some(allowed_prompts) = tool_input
+        .get("allowedPrompts")
+        .filter(|value| value.is_array())
+    {
+        payload["allowedPrompts"] = allowed_prompts.clone();
+    }
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "#,
+        libsql::params![
+            msg_id.clone(),
+            ctx.helmor_session_id.clone(),
+            MessageRole::Assistant.as_str(),
+            payload.to_string(),
+            now.clone()
+        ],
+    )
+    .await?;
+
+    Ok((msg_id, now))
+}
+
 /// Persist the session result row and finalize session metadata. The
 /// `preassigned_result_id` param, when present, is used as the DB row key
 /// — pass the accumulator's `take_result_id()` so the live-rendered id
 /// and the persisted id match.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn persist_result_and_finalize(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -253,28 +490,149 @@ pub(super) fn persist_result_and_finalize(
     Ok(result_message_id)
 }
 
-pub(super) fn finalize_session_metadata(
-    conn: &Connection,
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn persist_result_and_finalize_libsql(
+    conn: &libsql::Connection,
     ctx: &ExchangeContext,
-    status: &str,
+    _resolved_model: &str,
+    assistant_text: &str,
     effort_level: Option<&str>,
     permission_mode: Option<&str>,
-) -> Result<()> {
+    usage: &AgentUsage,
+    raw_result_json: Option<&str>,
+    status: &str,
+    preassigned_result_id: Option<String>,
+) -> Result<String> {
     let now = current_timestamp_string()?;
-    let transaction = conn.unchecked_transaction()?;
-    finalize_session_metadata_in_transaction(
+    let result_message_id =
+        preassigned_result_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let result_payload = raw_result_json.map(str::to_string).unwrap_or_else(|| {
+        serde_json::json!({
+            "type": "result",
+            "subtype": if status == "aborted" { "aborted" } else { "success" },
+            "result": assistant_text,
+            "usage": {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+            }
+        })
+        .to_string()
+    });
+
+    let transaction = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at
+            ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4)
+            "#,
+            libsql::params![
+                result_message_id.clone(),
+                ctx.helmor_session_id.clone(),
+                result_payload,
+                now.clone()
+            ],
+        )
+        .await?;
+
+    finalize_session_metadata_in_libsql_transaction(
         &transaction,
         ctx,
         &now,
         status,
         effort_level,
         permission_mode,
-    )?;
+    )
+    .await?;
+
     transaction
         .commit()
+        .await
+        .context("Failed to commit result and finalize transaction")?;
+
+    Ok(result_message_id)
+}
+
+pub(super) async fn finalize_session_metadata_libsql(
+    conn: &libsql::Connection,
+    ctx: &ExchangeContext,
+    status: &str,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<()> {
+    let now = current_timestamp_string()?;
+    let transaction = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
+    finalize_session_metadata_in_libsql_transaction(
+        &transaction,
+        ctx,
+        &now,
+        status,
+        effort_level,
+        permission_mode,
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
         .context("Failed to commit finalize_session_metadata transaction")
 }
 
+async fn finalize_session_metadata_in_libsql_transaction(
+    transaction: &libsql::Transaction,
+    ctx: &ExchangeContext,
+    now: &str,
+    status: &str,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<()> {
+    transaction
+        .execute(
+            r#"
+            UPDATE sessions
+            SET
+              status = ?5,
+              model = ?2,
+              agent_type = ?3,
+              last_user_message_at = ?4,
+              effort_level = COALESCE(?6, effort_level),
+              permission_mode = COALESCE(?7, permission_mode)
+            WHERE id = ?1
+            "#,
+            libsql::params![
+                ctx.helmor_session_id.clone(),
+                ctx.model_id.clone(),
+                ctx.model_provider.clone(),
+                now,
+                status,
+                effort_level,
+                permission_mode
+            ],
+        )
+        .await?;
+
+    transaction
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET
+              active_session_id = ?2
+            WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)
+            "#,
+            libsql::params![ctx.helmor_session_id.clone(), ctx.helmor_session_id.clone()],
+        )
+        .await?;
+
+    mark_session_read_in_libsql_transaction(transaction, &ctx.helmor_session_id).await
+}
+
+#[cfg(test)]
 fn finalize_session_metadata_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     ctx: &ExchangeContext,

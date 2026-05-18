@@ -128,8 +128,7 @@ pub async fn update_session_settings(
     effort_level: Option<String>,
     permission_mode: Option<String>,
 ) -> CmdResult<()> {
-    run_blocking(move || {
-        let connection = db::write_conn()?;
+    Ok(db::libsql_write_async(|connection| async move {
         connection
             .execute(
                 r#"
@@ -139,10 +138,11 @@ pub async fn update_session_settings(
                   permission_mode = COALESCE(?4, permission_mode)
                 WHERE id = ?1
                 "#,
-                rusqlite::params![session_id, model, effort_level, permission_mode],
+                libsql::params![session_id, model, effort_level, permission_mode],
             )
+            .await
             .context("Failed to update session settings")?;
         Ok(())
     })
-    .await
+    .await?)
 }

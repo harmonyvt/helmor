@@ -1197,6 +1197,19 @@ export async function loadDataInfo(): Promise<DataInfo | null> {
 	}
 }
 
+export type LibsqlExperimentResult = {
+	ok: boolean;
+	dbPath: string;
+	journalMode: string;
+	tableCount: number;
+	settingsCount: number;
+	elapsedMs: number;
+};
+
+export async function runLibsqlExperiment(): Promise<LibsqlExperimentResult> {
+	return invoke<LibsqlExperimentResult>("run_libsql_experiment");
+}
+
 export async function exportVerboseLogs(
 	frontendLogs: FrontendLogEntry[],
 ): Promise<LogExportResult> {

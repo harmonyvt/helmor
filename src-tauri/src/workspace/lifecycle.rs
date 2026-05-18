@@ -961,17 +961,19 @@ pub fn restore_workspace_impl(
     git_ops::create_worktree(&repo_root, &workspace_dir, &actual_branch)?;
 
     if actual_branch != branch {
-        let conn = db::write_conn().map_err(|error| {
+        let actual_branch_for_db = actual_branch.clone();
+        let workspace_id_for_db = workspace_id.to_string();
+        tauri::async_runtime::block_on(db::libsql_write_async(|conn| async move {
+            conn.execute(
+                "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+                [actual_branch_for_db, workspace_id_for_db],
+            )
+            .await
+            .context("Failed to persist restored branch name in DB")?;
+            Ok(())
+        }))
+        .inspect_err(|_| {
             cleanup_failed_restore(&repo_root, &workspace_dir, &actual_branch);
-            error.context("Failed to open DB to persist restored branch name")
-        })?;
-        conn.execute(
-            "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-            rusqlite::params![actual_branch, workspace_id],
-        )
-        .map_err(|error| {
-            cleanup_failed_restore(&repo_root, &workspace_dir, &actual_branch);
-            anyhow::anyhow!("Failed to persist restored branch name in DB: {error}")
         })?;
     }
 

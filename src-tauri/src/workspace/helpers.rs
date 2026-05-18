@@ -639,16 +639,33 @@ fn resolve_gitlab_login(
 }
 
 pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
-    let connection = crate::db::read_conn()?;
-    allocate_directory_name_with_conn(&connection, repo_id)
+    tauri::async_runtime::block_on(allocate_directory_name_for_repo_async(repo_id))
+}
+
+async fn allocate_directory_name_for_repo_async(repo_id: &str) -> Result<String> {
+    let connection = crate::db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT directory_name FROM workspaces WHERE repository_id = ?1 AND directory_name IS NOT NULL",
+            [repo_id.to_string()],
+        )
+        .await
+        .context("Failed to query existing workspace names")?;
+
+    let mut names = Vec::new();
+    while let Some(row) = rows.next().await? {
+        names.push(
+            row.get::<String>(0)
+                .context("Failed to read existing workspace name")?,
+        );
+    }
+    allocate_directory_name_from_existing(names)
 }
 
 pub fn allocate_directory_name_with_conn(
     connection: &rusqlite::Connection,
     repo_id: &str,
 ) -> Result<String> {
-    use rand::prelude::IndexedRandom;
-
     let mut statement = connection
         .prepare(
             "SELECT directory_name FROM workspaces WHERE repository_id = ?1 AND directory_name IS NOT NULL",
@@ -660,6 +677,11 @@ pub fn allocate_directory_name_with_conn(
         .context("Failed to query existing workspace names")?
         .collect::<std::result::Result<Vec<_>, _>>()
         .context("Failed to read existing workspace names")?;
+    allocate_directory_name_from_existing(names)
+}
+
+fn allocate_directory_name_from_existing(names: Vec<String>) -> Result<String> {
+    use rand::prelude::IndexedRandom;
 
     let used = names
         .into_iter()

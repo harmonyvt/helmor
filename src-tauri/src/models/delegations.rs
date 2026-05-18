@@ -1,5 +1,7 @@
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+#[cfg(test)]
+use rusqlite::Connection;
+use rusqlite::Transaction;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -69,34 +71,54 @@ pub struct CreatedDelegation {
 }
 
 pub fn create_delegation_anchor(input: CreateDelegationInput) -> Result<CreatedDelegation> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start delegation transaction")?;
-    let created = create_delegation_anchor_in_transaction(&transaction, input)?;
-    transaction
-        .commit()
-        .context("Failed to commit delegation creation")?;
-    Ok(created)
+    tauri::async_runtime::block_on(create_delegation_anchor_async(input))
 }
 
-pub fn create_delegation_anchor_in_transaction(
-    transaction: &Transaction<'_>,
+pub async fn create_delegation_anchor_async(
+    input: CreateDelegationInput,
+) -> Result<CreatedDelegation> {
+    db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .context("Failed to start delegation transaction")?;
+        let created = create_delegation_anchor_in_transaction(&transaction, input).await?;
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit delegation creation")?;
+        Ok(created)
+    })
+    .await
+}
+
+async fn create_delegation_anchor_in_transaction(
+    transaction: &libsql::Transaction,
     input: CreateDelegationInput,
 ) -> Result<CreatedDelegation> {
     let now = db::current_timestamp()?;
-    let (workspace_id, parent_provider): (String, Option<String>) = transaction
-        .query_row(
+    let mut rows = transaction
+        .query(
             "SELECT workspace_id, agent_type FROM sessions WHERE id = ?1",
-            [&input.parent_session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            [input.parent_session_id.clone()],
         )
+        .await
         .with_context(|| {
             format!(
                 "Failed to resolve parent session {}",
                 input.parent_session_id
             )
         })?;
+    let Some(row) = rows.next().await? else {
+        bail!(
+            "Failed to resolve parent session {}",
+            input.parent_session_id
+        );
+    };
+    let workspace_id: String = row.get(0).context("Failed to read parent workspace id")?;
+    let parent_provider: Option<String> = row
+        .get(1)
+        .context("Failed to read parent session provider")?;
 
     if parent_provider.as_deref() == Some(input.provider.as_str()) {
         bail!("delegate_agent cannot delegate to the same provider in this version");
@@ -119,14 +141,15 @@ pub fn create_delegation_anchor_in_transaction(
             INSERT INTO sessions (id, workspace_id, status, title, permission_mode, model, agent_type)
             VALUES (?1, ?2, 'running', ?3, 'default', ?4, ?5)
             "#,
-            params![
-                &child_session_id,
-                &workspace_id,
-                &title,
-                input.model_id.as_deref(),
-                &input.provider,
+            libsql::params![
+                child_session_id.clone(),
+                workspace_id.clone(),
+                title.clone(),
+                input.model_id.clone(),
+                input.provider.clone(),
             ],
         )
+        .await
         .context("Failed to create child delegation session")?;
 
     transaction
@@ -137,34 +160,36 @@ pub fn create_delegation_anchor_in_transaction(
                 provider, model_id, title, status, output_schema, created_at, started_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9, ?9)
             "#,
-            params![
-                &delegation_id,
-                &input.parent_session_id,
-                &child_session_id,
-                &parent_message_id,
-                &input.provider,
-                input.model_id.as_deref(),
-                &title,
+            libsql::params![
+                delegation_id.clone(),
+                input.parent_session_id.clone(),
+                child_session_id.clone(),
+                parent_message_id.clone(),
+                input.provider.clone(),
+                input.model_id.clone(),
+                title.clone(),
                 input.output_schema.to_string(),
-                &now,
+                now.clone(),
             ],
         )
+        .await
         .context("Failed to create delegation metadata")?;
 
-    let content = anchor_content_from_transaction(transaction, &delegation_id)?;
+    let content = anchor_content_from_transaction(transaction, &delegation_id).await?;
     transaction
         .execute(
             r#"
             INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at)
             VALUES (?1, ?2, 'assistant', ?3, ?4, ?4)
             "#,
-            params![
-                &parent_message_id,
-                &input.parent_session_id,
+            libsql::params![
+                parent_message_id.clone(),
+                input.parent_session_id.clone(),
                 serde_json::to_string(&content)?,
-                &now,
+                now.clone(),
             ],
         )
+        .await
         .context("Failed to insert delegation anchor message")?;
 
     Ok(CreatedDelegation {
@@ -183,60 +208,92 @@ pub fn update_delegation_status(
     structured_result: Option<&Value>,
     error: Option<&str>,
 ) -> Result<DelegationRecord> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start delegation update transaction")?;
+    tauri::async_runtime::block_on(update_delegation_status_async(
+        delegation_id,
+        status,
+        structured_result.cloned(),
+        error.map(str::to_string),
+    ))
+}
 
+pub async fn update_delegation_status_async(
+    delegation_id: &str,
+    status: &str,
+    structured_result: Option<Value>,
+    error: Option<String>,
+) -> Result<DelegationRecord> {
     let completed_at = if matches!(status, "succeeded" | "failed" | "timeout" | "cancelled") {
         Some(db::current_timestamp()?)
     } else {
         None
     };
-    transaction
-        .execute(
-            r#"
-                UPDATE session_delegations
-                SET status = ?2,
-                    structured_result = ?3,
-                    error = ?4,
-                    completed_at = COALESCE(?5, completed_at)
-                WHERE id = ?1
+    let delegation_id = delegation_id.to_string();
+    let status = status.to_string();
+    let structured_result = structured_result.map(|value| value.to_string());
+    db::libsql_write_async(|connection| async move {
+        let transaction = connection
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .context("Failed to start delegation update transaction")?;
+
+        transaction
+            .execute(
+                r#"
+                    UPDATE session_delegations
+                    SET status = ?2,
+                        structured_result = ?3,
+                        error = ?4,
+                        completed_at = COALESCE(?5, completed_at)
+                    WHERE id = ?1
                 "#,
-            params![
-                delegation_id,
-                status,
-                structured_result.map(Value::to_string),
-                error,
-                completed_at.as_deref(),
-            ],
-        )
-        .with_context(|| format!("Failed to update delegation {delegation_id}"))?;
+                libsql::params![
+                    delegation_id.clone(),
+                    status.clone(),
+                    structured_result.clone(),
+                    error.clone(),
+                    completed_at.clone(),
+                ],
+            )
+            .await
+            .with_context(|| format!("Failed to update delegation {delegation_id}"))?;
 
-    let content = anchor_content_from_transaction(&transaction, delegation_id)?;
-    let record = get_delegation_in_transaction(&transaction, delegation_id)?;
-    transaction
-        .execute(
-            "UPDATE session_messages SET content = ?2 WHERE id = ?1",
-            params![&record.parent_message_id, serde_json::to_string(&content)?],
-        )
-        .context("Failed to refresh delegation anchor content")?;
+        let content = anchor_content_from_transaction(&transaction, &delegation_id).await?;
+        let record = get_delegation_in_transaction(&transaction, &delegation_id).await?;
+        transaction
+            .execute(
+                "UPDATE session_messages SET content = ?2 WHERE id = ?1",
+                libsql::params![
+                    record.parent_message_id.clone(),
+                    serde_json::to_string(&content)?
+                ],
+            )
+            .await
+            .context("Failed to refresh delegation anchor content")?;
 
-    transaction
-        .commit()
-        .context("Failed to commit delegation update")?;
-    Ok(record)
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit delegation update")?;
+        Ok(record)
+    })
+    .await
 }
 
 pub fn get_delegation(delegation_id: &str) -> Result<DelegationRecord> {
-    let connection = db::read_conn()?;
-    get_delegation_with_connection(&connection, delegation_id)
+    tauri::async_runtime::block_on(get_delegation_async(delegation_id))
 }
 
 pub fn get_delegations_for_parent(parent_session_id: &str) -> Result<Vec<DelegationRecord>> {
-    let connection = db::read_conn()?;
-    let mut statement = connection.prepare(
-        r#"
+    tauri::async_runtime::block_on(get_delegations_for_parent_async(parent_session_id))
+}
+
+pub async fn get_delegations_for_parent_async(
+    parent_session_id: &str,
+) -> Result<Vec<DelegationRecord>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            r#"
         SELECT id, parent_session_id, child_session_id, parent_message_id,
                provider, model_id, title, status, output_schema,
                structured_result, error, created_at, started_at, completed_at
@@ -244,21 +301,62 @@ pub fn get_delegations_for_parent(parent_session_id: &str) -> Result<Vec<Delegat
         WHERE parent_session_id = ?1
         ORDER BY datetime(created_at) ASC
         "#,
-    )?;
-    let rows = statement.query_map([parent_session_id], record_from_row)?;
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            [parent_session_id.to_string()],
+        )
+        .await
+        .context("Failed to query parent delegations")?;
+    let mut records = Vec::new();
+    while let Some(row) = rows.next().await? {
+        records.push(record_from_libsql_row(&row)?);
+    }
+    Ok(records)
 }
 
 pub fn parent_for_child_session(child_session_id: &str) -> Result<Option<(String, String)>> {
-    let connection = db::read_conn()?;
-    connection
-        .query_row(
-            "SELECT parent_session_id, parent_message_id FROM session_delegations WHERE child_session_id = ?1",
-            [child_session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+    tauri::async_runtime::block_on(parent_for_child_session_async(child_session_id))
+}
+
+async fn get_delegation_async(delegation_id: &str) -> Result<DelegationRecord> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            r#"
+            SELECT id, parent_session_id, child_session_id, parent_message_id,
+                   provider, model_id, title, status, output_schema,
+                   structured_result, error, created_at, started_at, completed_at
+            FROM session_delegations
+            WHERE id = ?1
+            "#,
+            [delegation_id.to_string()],
         )
-        .optional()
-        .context("Failed to lookup child delegation parent")
+        .await
+        .with_context(|| format!("Failed to load delegation {delegation_id}"))?;
+    match rows.next().await? {
+        Some(row) => record_from_libsql_row(&row),
+        None => bail!("Failed to load delegation {delegation_id}"),
+    }
+}
+
+async fn parent_for_child_session_async(
+    child_session_id: &str,
+) -> Result<Option<(String, String)>> {
+    let connection = db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            "SELECT parent_session_id, parent_message_id FROM session_delegations WHERE child_session_id = ?1",
+            [child_session_id.to_string()],
+        )
+        .await
+        .context("Failed to lookup child delegation parent")?;
+    rows.next()
+        .await?
+        .map(|row| {
+            Ok((
+                row.get(0).context("Failed to read parent session id")?,
+                row.get(1).context("Failed to read parent message id")?,
+            ))
+        })
+        .transpose()
 }
 
 pub(crate) fn child_session_ids_for_parent(
@@ -271,11 +369,11 @@ pub(crate) fn child_session_ids_for_parent(
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-fn anchor_content_from_transaction(
-    transaction: &Transaction<'_>,
+async fn anchor_content_from_transaction(
+    transaction: &libsql::Transaction,
     delegation_id: &str,
 ) -> Result<DelegationAnchorContent> {
-    let record = get_delegation_in_transaction(transaction, delegation_id)?;
+    let record = get_delegation_in_transaction(transaction, delegation_id).await?;
     Ok(DelegationAnchorContent {
         content_type: "delegation_anchor".to_string(),
         delegation_id: record.id,
@@ -294,12 +392,12 @@ fn anchor_content_from_transaction(
     })
 }
 
-fn get_delegation_in_transaction(
-    transaction: &Transaction<'_>,
+async fn get_delegation_in_transaction(
+    transaction: &libsql::Transaction,
     delegation_id: &str,
 ) -> Result<DelegationRecord> {
-    transaction
-        .query_row(
+    let mut rows = transaction
+        .query(
             r#"
             SELECT id, parent_session_id, child_session_id, parent_message_id,
                    provider, model_id, title, status, output_schema,
@@ -307,49 +405,47 @@ fn get_delegation_in_transaction(
             FROM session_delegations
             WHERE id = ?1
             "#,
-            [delegation_id],
-            record_from_row,
+            [delegation_id.to_string()],
         )
-        .with_context(|| format!("Failed to load delegation {delegation_id}"))
+        .await
+        .with_context(|| format!("Failed to load delegation {delegation_id}"))?;
+    match rows.next().await? {
+        Some(row) => record_from_libsql_row(&row),
+        None => bail!("Failed to load delegation {delegation_id}"),
+    }
 }
 
-fn get_delegation_with_connection(
-    connection: &Connection,
-    delegation_id: &str,
-) -> Result<DelegationRecord> {
-    connection
-        .query_row(
-            r#"
-            SELECT id, parent_session_id, child_session_id, parent_message_id,
-                   provider, model_id, title, status, output_schema,
-                   structured_result, error, created_at, started_at, completed_at
-            FROM session_delegations
-            WHERE id = ?1
-            "#,
-            [delegation_id],
-            record_from_row,
-        )
-        .with_context(|| format!("Failed to load delegation {delegation_id}"))
-}
-
-fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DelegationRecord> {
-    let output_schema_raw: String = row.get(8)?;
-    let structured_result_raw: Option<String> = row.get(9)?;
+fn record_from_libsql_row(row: &libsql::Row) -> Result<DelegationRecord> {
+    let output_schema_raw: String = row.get(8).context("Failed to read delegation schema")?;
+    let structured_result_raw: Option<String> =
+        row.get(9).context("Failed to read delegation result")?;
     Ok(DelegationRecord {
-        id: row.get(0)?,
-        parent_session_id: row.get(1)?,
-        child_session_id: row.get(2)?,
-        parent_message_id: row.get(3)?,
-        provider: row.get(4)?,
-        model_id: row.get(5)?,
-        title: row.get(6)?,
-        status: row.get(7)?,
+        id: row.get(0).context("Failed to read delegation id")?,
+        parent_session_id: row
+            .get(1)
+            .context("Failed to read delegation parent session id")?,
+        child_session_id: row
+            .get(2)
+            .context("Failed to read delegation child session id")?,
+        parent_message_id: row
+            .get(3)
+            .context("Failed to read delegation parent message id")?,
+        provider: row.get(4).context("Failed to read delegation provider")?,
+        model_id: row.get(5).context("Failed to read delegation model")?,
+        title: row.get(6).context("Failed to read delegation title")?,
+        status: row.get(7).context("Failed to read delegation status")?,
         output_schema: serde_json::from_str(&output_schema_raw).unwrap_or_else(|_| json!({})),
         structured_result: structured_result_raw.and_then(|raw| serde_json::from_str(&raw).ok()),
-        error: row.get(10)?,
-        created_at: row.get(11)?,
-        started_at: row.get(12)?,
-        completed_at: row.get(13)?,
+        error: row.get(10).context("Failed to read delegation error")?,
+        created_at: row
+            .get(11)
+            .context("Failed to read delegation created_at")?,
+        started_at: row
+            .get(12)
+            .context("Failed to read delegation started_at")?,
+        completed_at: row
+            .get(13)
+            .context("Failed to read delegation completed_at")?,
     })
 }
 
@@ -381,7 +477,7 @@ mod tests {
     fn delegation_anchor_uses_chat_timestamp_format_for_ordering() {
         let _env = crate::testkit::TestEnv::new("delegation-anchor-order");
         {
-            let conn = db::write_conn().unwrap();
+            let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
             seed_parent_session(&conn);
             let now = db::current_timestamp().unwrap();
             conn.execute(
@@ -404,7 +500,7 @@ mod tests {
         .unwrap();
 
         {
-            let conn = db::read_conn().unwrap();
+            let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
             let rows = conn
                 .prepare(
                     "SELECT id, sent_at FROM session_messages WHERE session_id = 'parent-session' ORDER BY sent_at ASC, rowid ASC",

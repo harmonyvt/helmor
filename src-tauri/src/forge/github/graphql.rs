@@ -537,9 +537,11 @@ fn recent_create_pr_action_pull_request_urls(
     owner: &str,
     name: &str,
 ) -> Result<Vec<String>> {
-    let connection = db::read_conn()?;
-    let mut statement = connection.prepare(
-        r#"
+    tauri::async_runtime::block_on(async {
+        let connection = db::libsql_conn_async().await?;
+        let mut rows = connection
+            .query(
+                r#"
         SELECT sm.content
         FROM sessions s
         JOIN session_messages sm ON sm.session_id = s.id
@@ -548,14 +550,20 @@ fn recent_create_pr_action_pull_request_urls(
         ORDER BY datetime(sm.created_at) DESC, sm.rowid DESC
         LIMIT 80
         "#,
-    )?;
-    let rows = statement.query_map([workspace_id], |row| row.get::<_, String>(0))?;
+                [workspace_id.to_string()],
+            )
+            .await
+            .context("Failed to query recent create-pr action messages")?;
 
-    let mut urls = Vec::new();
-    for content in rows {
-        collect_github_pull_request_urls(&content?, owner, name, &mut urls);
-    }
-    Ok(urls)
+        let mut urls = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let content: String = row
+                .get(0)
+                .context("Failed to read create-pr action message")?;
+            collect_github_pull_request_urls(&content, owner, name, &mut urls);
+        }
+        Ok(urls)
+    })
 }
 
 fn collect_github_pull_request_urls(text: &str, owner: &str, name: &str, urls: &mut Vec<String>) {
