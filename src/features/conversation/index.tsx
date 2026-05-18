@@ -102,6 +102,7 @@ type WorkspaceConversationContainerProps = {
 	workspaceRootPath?: string | null;
 	onOpenFileReference?: (path: string, line?: number, column?: number) => void;
 	modelFilter?: (model: AgentModelOption) => boolean;
+	preferredDefaultModelId?: string | null;
 	buildSendRequestExtras?: (context: {
 		workspaceId: string | null;
 		sessionId: string;
@@ -158,6 +159,7 @@ export const WorkspaceConversationContainer = memo(
 		workspaceRootPath,
 		onOpenFileReference,
 		modelFilter,
+		preferredDefaultModelId,
 		buildSendRequestExtras,
 		debugModes: externalDebugModes,
 		onChangeDebugMode: onExternalChangeDebugMode,
@@ -558,6 +560,7 @@ export const WorkspaceConversationContainer = memo(
 								onSteerQueued={handleSteerQueued}
 								onRemoveQueued={handleRemoveQueued}
 								modelFilter={modelFilter}
+								preferredDefaultModelId={preferredDefaultModelId}
 								hideToolbar={compact}
 							/>
 						</div>

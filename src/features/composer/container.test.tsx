@@ -541,6 +541,77 @@ describe("WorkspaceComposerContainer", () => {
 		expect(composer).toHaveAttribute("data-agent-type", "pi");
 	});
 
+	it("uses a preferred default model before the global default", () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
+			...MODEL_SECTIONS.slice(0, 2),
+			{
+				id: "pi",
+				label: "Pi",
+				options: [
+					...MODEL_SECTIONS[2].options,
+					{
+						id: "pi-claude-sonnet",
+						provider: "pi",
+						label: "Pi · Claude Sonnet",
+						cliModel: "anthropic/claude-sonnet",
+						effortLevels: ["low", "medium", "high"],
+					},
+				],
+			},
+		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		render(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						defaultModelId: "pi-gpt-5.4",
+					},
+					isLoaded: true,
+					updateSettings: vi.fn(),
+				}}
+			>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposerContainer
+						displayedWorkspaceId="workspace-1"
+						displayedSessionId="session-1"
+						disabled={false}
+						sending={false}
+						sendError={null}
+						restoreDraft={null}
+						restoreImages={[]}
+						restoreFiles={[]}
+						restoreNonce={0}
+						modelSelections={{}}
+						effortLevels={{}}
+						permissionModes={{}}
+						fastModes={{}}
+						onSelectModel={vi.fn()}
+						onSelectEffort={vi.fn()}
+						onChangePermissionMode={vi.fn()}
+						onChangeFastMode={vi.fn()}
+						onSubmit={vi.fn()}
+						modelFilter={(model) => model.provider === "pi"}
+						preferredDefaultModelId="pi-claude-sonnet"
+					/>
+				</QueryClientProvider>
+			</SettingsContext.Provider>,
+		);
+
+		expect(screen.getByTestId("workspace-composer-mock")).toHaveTextContent(
+			"session:session-1:pi-claude-sonnet",
+		);
+	});
+
 	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
