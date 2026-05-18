@@ -171,17 +171,13 @@ describe("SetupTab", () => {
 		});
 	});
 
-	it("hides the floating Stop button until the panel is zoomed", async () => {
+	it("shows the floating Stop button at the resting panel size", async () => {
 		const user = userEvent.setup();
 		renderSetup();
 
 		await user.click(screen.getByRole("button", { name: /run setup/i }));
 
-		// Terminal should be mounted (script has run), but the corner Stop
-		// button stays out of the DOM while the panel is at its resting size.
 		expect(screen.getByTestId("terminal")).toBeInTheDocument();
-		expect(
-			screen.queryByRole("button", { name: /stop/i }),
-		).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /stop/i })).toBeInTheDocument();
 	});
 });

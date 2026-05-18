@@ -146,6 +146,13 @@ fn resolve_notification_target(
     conn: &rusqlite::Connection,
     assignee_session_id: &str,
 ) -> Result<Option<AssigneeNotificationTarget>> {
+    if !table_exists(conn, "sessions")?
+        || !table_exists(conn, "workspaces")?
+        || !table_exists(conn, "goal_cards")?
+    {
+        return Ok(None);
+    }
+
     conn.query_row(
         r#"
         SELECT
@@ -188,6 +195,12 @@ fn resolve_notification_target(
     .with_context(|| {
         format!("Failed to resolve goal supervisor notification target for session {assignee_session_id}")
     })
+}
+
+fn table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool> {
+    conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
+        .and_then(|mut stmt| stmt.exists([table]))
+        .with_context(|| format!("Failed to check whether table {table} exists"))
 }
 
 fn ensure_delivered_report_notification(

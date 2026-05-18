@@ -19,6 +19,12 @@ describe("createThreadTools", () => {
 			"delete_thread",
 			"send_thread_message",
 		]);
+		const sendThreadMessage = tools.find(
+			(tool) => tool.name === "send_thread_message",
+		);
+		expect(sendThreadMessage?.description).toContain(
+			"using that thread's configured assignee model",
+		);
 	});
 
 	test("does not expose or forward model overrides for thread sends", async () => {

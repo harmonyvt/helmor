@@ -279,6 +279,19 @@ vi.mock("@tauri-apps/api/core", () => ({
 	},
 }));
 
+if (typeof window !== "undefined") {
+	let tauriCallbackId = 0;
+	Object.defineProperty(window, "__TAURI_INTERNALS__", {
+		configurable: true,
+		value: {
+			transformCallback: vi.fn(() => ++tauriCallbackId),
+			unregisterCallback: vi.fn(),
+			invoke: vi.fn(async () => undefined),
+			convertFileSrc: vi.fn((path: string) => `asset://localhost${path}`),
+		},
+	});
+}
+
 // cmdk calls `scrollIntoView` which jsdom doesn't implement.
 if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
 	Element.prototype.scrollIntoView = () => {};

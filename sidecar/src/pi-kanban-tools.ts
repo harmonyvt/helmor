@@ -97,11 +97,35 @@ export function createKanbanTools(
 	requestId: string,
 	defaults?: {
 		assignedProvider?: string | null;
-		assignedModelId?: string | null;
 		assignedEffortLevel?: string | null;
 	},
 ) {
 	const goalWorkspaceId = workspaceId;
+	const listAssigneeModels = defineTool({
+		name: "list_assignee_models",
+		label: "List Assignee Models",
+		description:
+			"List the currently available Goal assignee models. Use this before starting child workspace assignees, show the choices to the user, and ask which model to use. The response includes Claude and Codex models visible to Helmor plus the Pi model ids accepted by create_kanban_card.",
+		promptSnippet:
+			"list_assignee_models() → { assigneeModels, claudeModels, codexModels, policy }",
+		promptGuidelines: [
+			"Call this before create_kanban_card when the card includes a prompt that starts an assignee.",
+			"Present the returned assigneeModels to the user and wait for their choice.",
+			"Pass the selected assignee model id as assigned_model_id to create_kanban_card.",
+		],
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+			const result = await callKanbanTool(
+				"list_assignee_models",
+				goalWorkspaceId,
+				{ workspaceId: goalWorkspaceId, goalWorkspaceId },
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
 	const listCards = defineTool({
 		name: "list_kanban_cards",
 		label: "List Goal Board Workspaces",
@@ -126,11 +150,12 @@ export function createKanbanTools(
 		name: "create_kanban_card",
 		label: "Create Goal Board Workspace",
 		description:
-			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. Do not use merged, Helmor derives that lane from whether the child workspace has landed in the goal branch. Child workspace prompts always use the same Pi provider/model as the current Goals supervisor. Include `prompt` when the child workspace should immediately start an agent thread in the background.",
+			"Create a new child workspace on the current goal board. The tool name says card for compatibility, but the result is a real workspace. `lane` is the desired workspace status and should be one of: backlog, in-progress, review, done, canceled. Do not use merged, Helmor derives that lane from whether the child workspace has landed in the goal branch. When including `prompt` to start an assignee, first call list_assignee_models, ask the user which returned assignee model to use, then pass that id as assigned_model_id.",
 		promptSnippet:
-			"create_kanban_card({ title, lane, description?, assigned_effort_level?, prompt? }) → new child workspace card and optional background-started thread using the current Goals Pi model",
+			"create_kanban_card({ title, lane, description?, assigned_model_id?, assigned_effort_level?, prompt? }) → new child workspace card and optional background-started thread using the selected assignee model",
 		promptGuidelines: [
 			"Use create_kanban_card when the user asks to add, create, or track a new goal task workspace.",
+			"If prompt is present, do not guess the model. Call list_assignee_models, show the returned choices, ask the user, and pass their selected id as assigned_model_id.",
 			"Default lane is 'backlog' when unspecified.",
 			"Treat the returned id/workspaceId as the child workspace id for future move, update, and thread tools.",
 		],
@@ -146,6 +171,12 @@ export function createKanbanTools(
 			assigned_effort_level: Type.Optional(
 				Type.String({
 					description: "Optional effort/thinking level for the first thread",
+				}),
+			),
+			assigned_model_id: Type.Optional(
+				Type.String({
+					description:
+						"Required when prompt is present. Model id selected by the user from list_assignee_models.",
 				}),
 			),
 			target_branch: Type.Optional(
@@ -178,7 +209,7 @@ export function createKanbanTools(
 					lane: params.lane || "backlog",
 					description: params.description,
 					assignedProvider: defaults?.assignedProvider ?? null,
-					assignedModelId: defaults?.assignedModelId ?? null,
+					assignedModelId: params.assigned_model_id ?? null,
 					assignedEffortLevel:
 						params.assigned_effort_level ??
 						defaults?.assignedEffortLevel ??
@@ -258,5 +289,5 @@ export function createKanbanTools(
 		},
 	});
 
-	return [listCards, createCard, moveCard, updateCard];
+	return [listAssigneeModels, listCards, createCard, moveCard, updateCard];
 }

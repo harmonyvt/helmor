@@ -122,7 +122,6 @@ export class PiSessionManager implements SessionManager {
 			const kanbanCustomTools = params.kanbanWorkspaceId
 				? createKanbanTools(params.kanbanWorkspaceId, emitter, requestId, {
 						assignedProvider: "pi",
-						assignedModelId: params.model ?? model?.id ?? null,
 						assignedEffortLevel: params.effortLevel ?? null,
 					})
 				: [];

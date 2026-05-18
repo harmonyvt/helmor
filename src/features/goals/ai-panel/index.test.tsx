@@ -17,6 +17,7 @@ const apiMockState = vi.hoisted(() => ({
 	reconcileWorkspaceLandingState: vi.fn(),
 	refreshWorkspaceChangeRequest: vi.fn(),
 	sendKanbanToolResult: vi.fn(),
+	sendThreadMessage: vi.fn(),
 	syncWorkspaceWithTargetBranch: vi.fn(),
 }));
 
@@ -59,6 +60,7 @@ vi.mock("@/lib/api", async () => {
 		reconcileWorkspaceLandingState: apiMockState.reconcileWorkspaceLandingState,
 		refreshWorkspaceChangeRequest: apiMockState.refreshWorkspaceChangeRequest,
 		sendKanbanToolResult: apiMockState.sendKanbanToolResult,
+		sendThreadMessage: apiMockState.sendThreadMessage,
 		syncWorkspaceWithTargetBranch: apiMockState.syncWorkspaceWithTargetBranch,
 	};
 });
@@ -88,6 +90,38 @@ const disallowedModel: AgentModelOption = {
 	supportsContextUsage: false,
 };
 
+function modelSectionsWithPi(options: AgentModelOption[]) {
+	return [
+		{
+			id: "claude",
+			label: "Claude Code",
+			options: [
+				{
+					id: "sonnet",
+					provider: "claude" as const,
+					label: "Sonnet",
+					cliModel: "sonnet",
+					supportsContextUsage: true,
+				},
+			],
+		},
+		{
+			id: "codex",
+			label: "Codex",
+			options: [
+				{
+					id: "gpt-5.5",
+					provider: "codex" as const,
+					label: "GPT-5.5",
+					cliModel: "gpt-5.5",
+					supportsContextUsage: true,
+				},
+			],
+		},
+		{ id: "pi", label: "Pi", options },
+	];
+}
+
 describe("GoalsAiPanel", () => {
 	beforeEach(() => {
 		apiMockState.createGoalChildWorkspaceAndStart.mockReset();
@@ -100,6 +134,7 @@ describe("GoalsAiPanel", () => {
 		apiMockState.reconcileWorkspaceLandingState.mockReset();
 		apiMockState.refreshWorkspaceChangeRequest.mockReset();
 		apiMockState.sendKanbanToolResult.mockReset();
+		apiMockState.sendThreadMessage.mockReset();
 		apiMockState.syncWorkspaceWithTargetBranch.mockReset();
 		conversationMockState.props = null;
 	});
@@ -136,7 +171,7 @@ describe("GoalsAiPanel", () => {
 		);
 	});
 
-	it("forces child card starts to use the active Pi supervisor model", async () => {
+	it("uses the assignee model selected by Pi from the user choice", async () => {
 		apiMockState.createGoalChildWorkspaceAndStart.mockResolvedValue({
 			workspaceId: "child-1",
 			sessionId: "session-1",
@@ -146,9 +181,10 @@ describe("GoalsAiPanel", () => {
 		]);
 
 		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
-			{ id: "pi", label: "Pi", options: [parentModel, otherModel] },
-		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([parentModel, otherModel]),
+		);
 
 		renderWithProviders(
 			<GoalsAiPanel
@@ -186,7 +222,7 @@ describe("GoalsAiPanel", () => {
 		expect(apiMockState.createGoalChildWorkspaceAndStart).toHaveBeenCalledWith(
 			expect.objectContaining({
 				assignedProvider: "pi",
-				assignedModelId: parentModel.id,
+				assignedModelId: otherModel.id,
 			}),
 		);
 		expect(apiMockState.sendKanbanToolResult).toHaveBeenCalledWith(
@@ -194,8 +230,53 @@ describe("GoalsAiPanel", () => {
 			expect.objectContaining({
 				handoffModel: expect.objectContaining({
 					requestedModelId: otherModel.id,
-					resolvedModelId: parentModel.id,
+					resolvedModelId: otherModel.id,
 				}),
+			}),
+		);
+	});
+
+	it("returns assignee model choices for Pi to show the user", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([otherModel, parentModel, disallowedModel]),
+		);
+
+		renderWithProviders(
+			<GoalsAiPanel
+				workspaceId="goal-1"
+				cards={[]}
+				kanbanSnapshot="[]"
+				onClose={() => {}}
+			/>,
+			{ queryClient },
+		);
+
+		await act(async () => {
+			conversationMockState.props?.onKanbanToolCall?.({
+				kind: "kanbanToolCall",
+				toolCallId: "models-tool",
+				tool: "list_assignee_models",
+				workspaceId: "goal-1",
+				args: {},
+			});
+		});
+
+		expect(apiMockState.sendKanbanToolResult).toHaveBeenCalledWith(
+			"models-tool",
+			expect.objectContaining({
+				policy: "available-claude-and-codex-backed-pi-models",
+				assigneeModels: [
+					expect.objectContaining({ id: parentModel.id }),
+					expect.objectContaining({ id: otherModel.id }),
+				],
+				claudeModels: expect.arrayContaining([
+					expect.objectContaining({ id: "sonnet" }),
+				]),
+				codexModels: expect.arrayContaining([
+					expect.objectContaining({ id: "gpt-5.5" }),
+				]),
 			}),
 		);
 	});
@@ -221,9 +302,10 @@ describe("GoalsAiPanel", () => {
 		]);
 
 		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
-			{ id: "pi", label: "Pi", options: [parentModel] },
-		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([parentModel]),
+		);
 
 		renderWithProviders(
 			<GoalsAiPanel
@@ -340,7 +422,7 @@ describe("GoalsAiPanel", () => {
 		);
 	});
 
-	it("falls back to an allowed assignee model when the active Pi supervisor model is disallowed", async () => {
+	it("rejects starting an assignee until Pi passes the user-selected model", async () => {
 		apiMockState.createGoalChildWorkspaceAndStart.mockResolvedValue({
 			workspaceId: "child-1",
 			sessionId: "session-1",
@@ -350,13 +432,10 @@ describe("GoalsAiPanel", () => {
 		]);
 
 		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
-			{
-				id: "pi",
-				label: "Pi",
-				options: [otherModel, parentModel, disallowedModel],
-			},
-		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([otherModel, parentModel, disallowedModel]),
+		);
 
 		renderWithProviders(
 			<GoalsAiPanel
@@ -367,13 +446,6 @@ describe("GoalsAiPanel", () => {
 			/>,
 			{ queryClient },
 		);
-
-		conversationMockState.props?.buildSendRequestExtras?.({
-			model: disallowedModel,
-			workspaceId: "goal-1",
-			sessionId: "parent-session",
-			prompt: "Plan this goal",
-		});
 
 		await act(async () => {
 			conversationMockState.props?.onKanbanToolCall?.({
@@ -389,22 +461,15 @@ describe("GoalsAiPanel", () => {
 			});
 		});
 
-		expect(apiMockState.createGoalChildWorkspaceAndStart).toHaveBeenCalledWith(
-			expect.objectContaining({
-				assignedProvider: "pi",
-				assignedModelId: otherModel.id,
-			}),
-		);
+		expect(
+			apiMockState.createGoalChildWorkspaceAndStart,
+		).not.toHaveBeenCalled();
 		expect(apiMockState.sendKanbanToolResult).toHaveBeenCalledWith(
 			"tool-1",
 			expect.objectContaining({
-				handoffModel: expect.objectContaining({
-					resolvedModelId: otherModel.id,
-					fallbackUsed: true,
-					policyApplied: true,
-					allowedModelIds: [otherModel.id, parentModel.id],
-				}),
+				message: expect.stringContaining("Choose an assignee model"),
 			}),
+			true,
 		);
 	});
 
@@ -418,13 +483,10 @@ describe("GoalsAiPanel", () => {
 		]);
 
 		const queryClient = createHelmorQueryClient();
-		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
-			{
-				id: "pi",
-				label: "Pi",
-				options: [parentModel, disallowedModel],
-			},
-		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([parentModel, disallowedModel]),
+		);
 
 		renderWithProviders(
 			<SettingsContext.Provider
@@ -463,6 +525,7 @@ describe("GoalsAiPanel", () => {
 				args: {
 					title: "Child",
 					lane: "backlog",
+					assignedModelId: disallowedModel.id,
 					prompt: "Do the work",
 				},
 			});
@@ -482,6 +545,66 @@ describe("GoalsAiPanel", () => {
 					fallbackUsed: false,
 					policyApplied: false,
 				}),
+			}),
+		);
+	});
+
+	it("keeps targeted thread sends on the thread's configured assignee model", async () => {
+		apiMockState.sendThreadMessage.mockResolvedValue({
+			queued: true,
+			started: true,
+			executionState: "spawned",
+			sessionId: "thread-1",
+			workspaceId: "child-1",
+			pendingSendId: "pending-1",
+			message: "Continue",
+			supervisorMessageId: null,
+		});
+
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			modelSectionsWithPi([parentModel, otherModel]),
+		);
+
+		renderWithProviders(
+			<GoalsAiPanel
+				workspaceId="goal-1"
+				cards={[]}
+				kanbanSnapshot="[]"
+				onClose={() => {}}
+			/>,
+			{ queryClient },
+		);
+
+		conversationMockState.props?.buildSendRequestExtras?.({
+			model: parentModel,
+			workspaceId: "goal-1",
+			sessionId: "parent-session",
+			prompt: "Plan this goal",
+		});
+
+		await act(async () => {
+			conversationMockState.props?.onKanbanToolCall?.({
+				kind: "kanbanToolCall",
+				toolCallId: "thread-tool",
+				tool: "send_thread_message",
+				workspaceId: "goal-1",
+				args: {
+					workspace_id: "child-1",
+					thread_id: "thread-1",
+					message: "Continue",
+				},
+			});
+		});
+
+		expect(apiMockState.sendThreadMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				goalWorkspaceId: "goal-1",
+				workspaceId: "child-1",
+				threadId: "thread-1",
+				message: "Continue",
+				modelId: null,
 			}),
 		);
 	});

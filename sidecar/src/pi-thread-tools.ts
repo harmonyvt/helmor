@@ -195,7 +195,7 @@ export function createThreadTools(
 		name: "send_thread_message",
 		label: "Send Thread Message",
 		description:
-			"Queue an async supervisor update into a specific thread in a Goal card child workspace using the current Goals Pi model. Use this for stale-thread recovery or when a card has multiple sessions and you must target an exact conversation.",
+			"Queue an async supervisor update into a specific thread in a Goal card child workspace using that thread's configured assignee model. Use this for stale-thread recovery or when a card has multiple sessions and you must target an exact conversation.",
 		promptSnippet:
 			"send_thread_message({ workspace_id, thread_id, message, priority?, permission_mode? }) → { queued, started, sessionId, workspaceId }",
 		promptGuidelines: [

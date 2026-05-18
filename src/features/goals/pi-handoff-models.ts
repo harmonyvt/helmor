@@ -1,4 +1,4 @@
-import type { AgentModelOption } from "@/lib/api";
+import type { AgentModelOption, AgentModelSection } from "@/lib/api";
 
 const LEGACY_OPENAI_CODEX_PREFIX = "openai-codex/";
 const AZURE_OPENAI_RESPONSES_PREFIX = "azure-openai-responses/";
@@ -18,6 +18,23 @@ export type PiHandoffModelPolicyResult = {
 	allowedModelIds: string[];
 	suggestedModelIds: string[];
 };
+
+export function listGoalAssigneePiModels({
+	modelSections,
+	piModels,
+	allowAllModels,
+}: {
+	modelSections: readonly AgentModelSection[];
+	piModels: readonly AgentModelOption[];
+	allowAllModels: boolean;
+}): AgentModelOption[] {
+	const eligibleModels = allowAllModels
+		? [...piModels]
+		: piModels.filter((model) =>
+				isDefaultGoalAssigneePiModelAllowed(model, modelSections),
+			);
+	return eligibleModels.sort(compareGoalAssigneePiModels);
+}
 
 export function canonicalPiModelId(
 	modelId: string,
@@ -46,33 +63,42 @@ export function canonicalPiModelId(
 
 export function isDefaultGoalAssigneePiModelAllowed(
 	model: Pick<AgentModelOption, "id" | "cliModel" | "providerKey">,
+	modelSections: readonly AgentModelSection[] = [],
 ): boolean {
-	return DEFAULT_ALLOWED_GOAL_ASSIGNEE_PI_PROVIDERS.has(
-		piModelProviderKey(model),
-	);
+	const providerKey = piModelProviderKey(model);
+	if (!DEFAULT_ALLOWED_GOAL_ASSIGNEE_PI_PROVIDERS.has(providerKey)) {
+		return false;
+	}
+	if (modelSections.length === 0) return true;
+	return isBackedByAvailableClaudeOrCodexModel(model, modelSections);
 }
 
 export function resolveGoalAssigneePiHandoffModel({
-	activeSupervisorModelId,
 	requestedModelId,
+	modelSections,
 	piModels,
 	allowAllModels,
 }: {
-	activeSupervisorModelId: string | null;
 	requestedModelId: string | null;
+	modelSections: readonly AgentModelSection[];
 	piModels: readonly AgentModelOption[];
 	allowAllModels: boolean;
 }): PiHandoffModelPolicyResult {
-	const allowedModelIds = piModels
-		.filter(isDefaultGoalAssigneePiModelAllowed)
-		.map((model) => model.id);
-	const candidateModelId = activeSupervisorModelId
-		? canonicalPiModelId(activeSupervisorModelId, piModels)
-		: requestedModelId
-			? canonicalPiModelId(requestedModelId, piModels)
-			: null;
+	const allowedModelIds = listGoalAssigneePiModels({
+		modelSections,
+		piModels,
+		allowAllModels: false,
+	}).map((model) => model.id);
+	const candidateModelId = requestedModelId
+		? canonicalPiModelId(requestedModelId, piModels)
+		: null;
 
-	if (allowAllModels || !candidateModelId) {
+	if (allowAllModels) {
+		const allModelIds = listGoalAssigneePiModels({
+			modelSections,
+			piModels,
+			allowAllModels: true,
+		}).map((model) => model.id);
 		return {
 			assignedProvider: "pi",
 			assignedModelId: candidateModelId,
@@ -80,10 +106,21 @@ export function resolveGoalAssigneePiHandoffModel({
 			resolvedModelId: candidateModelId,
 			fallbackUsed: false,
 			policyApplied: false,
-			allowedModelIds: allowAllModels
-				? piModels.map((model) => model.id)
-				: allowedModelIds,
+			allowedModelIds: allModelIds,
 			suggestedModelIds: candidateModelId ? [candidateModelId] : [],
+		};
+	}
+
+	if (!candidateModelId) {
+		return {
+			assignedProvider: "pi",
+			assignedModelId: null,
+			requestedModelId,
+			resolvedModelId: null,
+			fallbackUsed: false,
+			policyApplied: true,
+			allowedModelIds,
+			suggestedModelIds: allowedModelIds,
 		};
 	}
 
@@ -91,21 +128,19 @@ export function resolveGoalAssigneePiHandoffModel({
 		(model) => model.id === candidateModelId,
 	);
 	const candidateAllowed = candidateModel
-		? isDefaultGoalAssigneePiModelAllowed(candidateModel)
-		: isDefaultAllowedPiModelId(candidateModelId);
-	const resolvedModelId = candidateAllowed
-		? candidateModelId
-		: (allowedModelIds[0] ?? null);
+		? isDefaultGoalAssigneePiModelAllowed(candidateModel, modelSections)
+		: isDefaultAllowedPiModelId(candidateModelId, modelSections);
+	const resolvedModelId = candidateAllowed ? candidateModelId : null;
 
 	return {
 		assignedProvider: "pi",
 		assignedModelId: resolvedModelId,
 		requestedModelId,
 		resolvedModelId,
-		fallbackUsed: resolvedModelId !== candidateModelId,
+		fallbackUsed: false,
 		policyApplied: true,
 		allowedModelIds,
-		suggestedModelIds: resolvedModelId ? [resolvedModelId] : [],
+		suggestedModelIds: candidateAllowed ? [candidateModelId] : allowedModelIds,
 	};
 }
 
@@ -135,9 +170,133 @@ function piModelProviderKey(
 	).trim();
 }
 
-function isDefaultAllowedPiModelId(modelId: string): boolean {
+function isDefaultAllowedPiModelId(
+	modelId: string,
+	modelSections: readonly AgentModelSection[],
+): boolean {
 	const cliModel = stripPiPrefix(canonicalizeLegacyId(modelId));
-	if (cliModel.startsWith("gpt-")) return true;
 	const providerKey = cliModel.split("/", 1)[0] ?? "";
-	return DEFAULT_ALLOWED_GOAL_ASSIGNEE_PI_PROVIDERS.has(providerKey);
+	if (!DEFAULT_ALLOWED_GOAL_ASSIGNEE_PI_PROVIDERS.has(providerKey)) {
+		return false;
+	}
+	return isBackedByAvailableClaudeOrCodexModel(
+		{
+			id: modelId,
+			cliModel,
+			providerKey,
+		},
+		modelSections,
+	);
+}
+
+function isBackedByAvailableClaudeOrCodexModel(
+	model: Pick<AgentModelOption, "id" | "cliModel" | "providerKey">,
+	modelSections: readonly AgentModelSection[],
+): boolean {
+	const providerKey = piModelProviderKey(model);
+	const cliModel = stripPiPrefix(
+		canonicalizeLegacyId(model.cliModel || model.id),
+	);
+	const bareModelId = cliModel.split("/").at(-1) ?? cliModel;
+
+	if (
+		providerKey === AZURE_OPENAI_RESPONSES_PREFIX.slice(0, -1) ||
+		providerKey === LEGACY_OPENAI_CODEX_PREFIX.slice(0, -1) ||
+		bareModelId.startsWith("gpt-")
+	) {
+		return sectionHasModel(modelSections, "codex", bareModelId);
+	}
+
+	if (providerKey === "anthropic") {
+		return sectionHasModel(modelSections, "claude", bareModelId);
+	}
+
+	return false;
+}
+
+function sectionHasModel(
+	modelSections: readonly AgentModelSection[],
+	sectionId: "claude" | "codex",
+	targetModel: string,
+): boolean {
+	const section = modelSections.find((entry) => entry.id === sectionId);
+	if (!section) return false;
+	return section.options.some((option) =>
+		modelMatchesProviderOption(option, targetModel),
+	);
+}
+
+function modelMatchesProviderOption(
+	option: Pick<AgentModelOption, "id" | "cliModel" | "label">,
+	targetModel: string,
+): boolean {
+	const normalizedTarget = normalizeProviderModelId(targetModel);
+	if (normalizedTarget === "claude-opus-4-7") {
+		return (
+			option.id === "default" ||
+			option.cliModel === "default" ||
+			normalizeProviderModelId(option.label).includes("opus-4-7")
+		);
+	}
+	if (normalizedTarget.startsWith("claude-sonnet-")) {
+		return (
+			option.id === "sonnet" ||
+			option.cliModel === "sonnet" ||
+			normalizeProviderModelId(option.label).includes("sonnet")
+		);
+	}
+	return [option.id, option.cliModel, option.label].some(
+		(value) => normalizeProviderModelId(value) === normalizedTarget,
+	);
+}
+
+function normalizeProviderModelId(value: string): string {
+	return value
+		.toLowerCase()
+		.trim()
+		.replace(/^pi:/, "")
+		.split("/")
+		.at(-1)!
+		.replace(/\[.*?\]/g, "")
+		.replace(/[^a-z0-9.]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+}
+
+function compareGoalAssigneePiModels(
+	left: Pick<AgentModelOption, "id" | "cliModel" | "providerKey">,
+	right: Pick<AgentModelOption, "id" | "cliModel" | "providerKey">,
+): number {
+	return goalAssigneeModelRank(left) - goalAssigneeModelRank(right);
+}
+
+function goalAssigneeModelRank(
+	model: Pick<AgentModelOption, "id" | "cliModel" | "providerKey">,
+): number {
+	const cliModel = stripPiPrefix(
+		canonicalizeLegacyId(model.cliModel || model.id),
+	);
+	const bareModelId = cliModel.split("/").at(-1) ?? cliModel;
+	const providerKey = piModelProviderKey(model);
+
+	const codexRank = [
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.3-codex",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+		"gpt-5.2",
+	].indexOf(bareModelId);
+	if (codexRank >= 0) return codexRank;
+
+	const claudeRank = [
+		"claude-opus-4-7",
+		"claude-opus-4-6",
+		"claude-sonnet-4-6",
+		"sonnet",
+		"haiku",
+	].indexOf(bareModelId);
+	if (claudeRank >= 0) return 100 + claudeRank;
+
+	if (providerKey === "anthropic") return 150;
+	return 1_000;
 }
