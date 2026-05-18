@@ -153,6 +153,13 @@ export function GoalWorkspaceContainer({
 		startWidth: number;
 	} | null>(null);
 
+	// Reset local selection state when the workspace changes so stale card
+	// selections from a previously-viewed goal workspace don't persist.
+	useEffect(() => {
+		setSelectedId(null);
+		setShowAddPanel(false);
+	}, [workspaceId]);
+
 	const detailQuery = useQuery(workspaceDetailQueryOptions(workspaceId));
 	const childQuery = useQuery(goalChildWorkspacesQueryOptions(workspaceId));
 	const orchestratorQuery = useQuery(

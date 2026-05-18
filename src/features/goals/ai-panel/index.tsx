@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { History, ListTree, X } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import type {
@@ -139,6 +139,20 @@ export function GoalsAiPanel({
 	const [overlayMode, setOverlayMode] = useState<"history" | "threads" | null>(
 		null,
 	);
+
+	// Reset session state when the workspace changes so stale session IDs from a
+	// previously-viewed goal workspace don't bleed into the new one. Without this
+	// reset, GoalWorkspaceContainer reuses the same component instance across
+	// workspace switches (no key prop), which means selectedSessionId /
+	// displayedSessionId kept pointing at the old workspace's Pi session. The
+	// WorkspacePanelContainer then showed that stale session's messages (from
+	// cache) with hasSession=false instead of showing the "no thread selected"
+	// empty state or auto-resolving the new workspace's active session.
+	useEffect(() => {
+		setSelectedSessionId(null);
+		setDisplayedSessionId(null);
+		setOverlayMode(null);
+	}, [workspaceId]);
 	const kanbanMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
 
 	const handleSelectSession = useCallback((sessionId: string | null) => {
