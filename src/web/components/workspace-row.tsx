@@ -1,5 +1,11 @@
 import { Archive } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { humanizeBranch } from "@/features/navigation/shared";
 import type { WorkspaceRow as WorkspaceRowData } from "@/lib/api";
 import { parsePrUrl } from "@/lib/pr-url";
@@ -49,7 +55,7 @@ export function WorkspaceRow({
 	onArchive,
 }: WorkspaceRowProps) {
 	const [swipeX, setSwipeX] = useState(0);
-	const [swiping, setSwiping] = useState(false);
+	const swipingRef = useRef(false);
 	const startXRef = useRef(0);
 	const swipeXRef = useRef(0);
 	const rowRef = useRef<HTMLDivElement>(null);
@@ -85,52 +91,51 @@ export function WorkspaceRow({
 	const prNumber = parsedPr?.number ?? null;
 	const accent = prAccentColor(workspace.prSyncState);
 
+	// Swipe is touch/pen only — mouse users use right-click context menu instead.
 	function handlePointerDown(e: React.PointerEvent) {
+		if (e.pointerType === "mouse") return;
 		startXRef.current = e.clientX;
 		swipeXRef.current = swipeX;
-		setSwiping(true);
+		swipingRef.current = true;
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 	}
 
 	function handlePointerMove(e: React.PointerEvent) {
-		if (!swiping) return;
+		if (!swipingRef.current) return;
 		const delta = e.clientX - startXRef.current + swipeXRef.current;
-		const clamped = Math.max(-120, Math.min(0, delta));
-		setSwipeX(clamped);
+		setSwipeX(Math.max(-120, Math.min(0, delta)));
 	}
 
 	function handlePointerUp() {
-		if (!swiping) return;
-		setSwiping(false);
-		if (swipeX < -80) {
-			setSwipeX(-80);
-		} else {
-			setSwipeX(0);
-		}
+		if (!swipingRef.current) return;
+		swipingRef.current = false;
+		setSwipeX(swipeX < -80 ? -80 : 0);
 	}
 
 	function handlePointerCancel() {
-		setSwiping(false);
+		swipingRef.current = false;
 		setSwipeX(0);
 	}
 
-	return (
+	const rowBody = (
 		<div ref={rowRef} className="relative w-full overflow-hidden">
-			{/* Archive action behind the row */}
-			<button
-				type="button"
-				aria-label="Archive workspace"
-				className="absolute inset-y-0 right-0 flex w-20 cursor-pointer items-center justify-center bg-destructive"
-				onClick={() => onArchive?.(workspace.id)}
-			>
-				<Archive className="h-4 w-4 text-destructive-foreground" />
-			</button>
+			{/* Archive action — sits behind the row, revealed only by touch swipe */}
+			{onArchive && (
+				<button
+					type="button"
+					aria-label="Archive workspace"
+					className="absolute inset-y-0 right-0 flex w-20 cursor-pointer items-center justify-center bg-destructive"
+					onClick={() => onArchive(workspace.id)}
+				>
+					<Archive className="h-4 w-4 text-destructive-foreground" />
+				</button>
+			)}
 
 			{/* Row content */}
 			<div
 				className={cn(
 					"relative flex min-h-[52px] w-full cursor-pointer items-center gap-3 px-4",
-					"bg-sidebar hover:bg-accent/50",
+					"bg-sidebar hover:bg-accent",
 					selected && "bg-accent",
 				)}
 				style={{
@@ -190,5 +195,24 @@ export function WorkspaceRow({
 				</div>
 			</div>
 		</div>
+	);
+
+	if (!onArchive) {
+		return rowBody;
+	}
+
+	return (
+		<ContextMenu>
+			<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
+			<ContextMenuContent className="min-w-44">
+				<ContextMenuItem
+					className="text-destructive focus:text-destructive"
+					onClick={() => onArchive(workspace.id)}
+				>
+					<Archive className="h-4 w-4" />
+					Archive workspace
+				</ContextMenuItem>
+			</ContextMenuContent>
+		</ContextMenu>
 	);
 }
