@@ -233,34 +233,29 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 	useEffect(() => {
 		setSectionOpenState((current) => {
-			const next: Record<string, boolean> = {};
-			let changed = false;
+			// Only ADD missing keys — never drop existing ones.
+			// The old approach rebuilt `next` from scratch and returned it whenever
+			// the key-count differed, silently erasing goal/PR section expand state
+			// on every workspace data refresh (those extra keys triggered the
+			// Object.keys length mismatch). Starting from `current` and only patching
+			// in absent keys preserves all user-toggled sections.
+			let next = current;
 
 			for (const group of groups) {
-				const nextValue = current[group.id] ?? true;
-				next[group.id] = nextValue;
-				if (current[group.id] !== nextValue) {
-					changed = true;
+				if (!(group.id in current)) {
+					next = { ...next, [group.id]: true };
 				}
 			}
 
-			const archivedValue = current[ARCHIVED_SECTION_ID] ?? false;
-			next[ARCHIVED_SECTION_ID] = archivedValue;
-			if (current[ARCHIVED_SECTION_ID] !== archivedValue) {
-				changed = true;
+			if (!(ARCHIVED_SECTION_ID in next)) {
+				next = { ...next, [ARCHIVED_SECTION_ID]: false };
 			}
 
-			const archivedGoalsValue = current[GOAL_ARCHIVED_KEY] ?? false;
-			next[GOAL_ARCHIVED_KEY] = archivedGoalsValue;
-			if (current[GOAL_ARCHIVED_KEY] !== archivedGoalsValue) {
-				changed = true;
+			if (!(GOAL_ARCHIVED_KEY in next)) {
+				next = { ...next, [GOAL_ARCHIVED_KEY]: false };
 			}
 
-			if (Object.keys(current).length !== Object.keys(next).length) {
-				changed = true;
-			}
-
-			return changed ? next : current;
+			return next;
 		});
 	}, [archivedRows, groups]);
 
