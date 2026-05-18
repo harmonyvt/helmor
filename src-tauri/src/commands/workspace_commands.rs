@@ -188,8 +188,11 @@ pub async fn reconcile_workspace_landing_state(
     if response.changed {
         ui_sync::publish(
             &app,
-            UiMutationEvent::WorkspaceLandingChanged { workspace_id },
+            UiMutationEvent::WorkspaceLandingChanged {
+                workspace_id: workspace_id.clone(),
+            },
         );
+        crate::knowledge::index_workspace_knowledge_after_landing(app.clone(), workspace_id);
     }
     Ok(response)
 }
@@ -204,8 +207,11 @@ pub async fn mark_workspace_landed(
     if response.changed {
         ui_sync::publish(
             &app,
-            UiMutationEvent::WorkspaceLandingChanged { workspace_id },
+            UiMutationEvent::WorkspaceLandingChanged {
+                workspace_id: workspace_id.clone(),
+            },
         );
+        crate::knowledge::index_workspace_knowledge_after_landing(app.clone(), workspace_id);
     }
     Ok(response)
 }

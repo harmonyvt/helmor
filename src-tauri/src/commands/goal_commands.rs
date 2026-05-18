@@ -1,4 +1,4 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::{
     db, git_watcher,
@@ -59,6 +59,7 @@ pub async fn finalize_goal_workspace(
         )
     })
     .await?;
+    crate::knowledge::index_goal_in_background(app.clone(), result.workspace_id.clone());
     notify_workspace_changed_in_background(app);
     Ok(result)
 }
@@ -181,9 +182,10 @@ pub async fn create_goal_child_workspace(
     };
     publish_goal_child_workspace_changes(
         &app,
-        goal_workspace_id,
+        goal_workspace_id.clone(),
         Some(result.workspace_id.clone()),
     );
+    crate::knowledge::index_goal_in_background(app.clone(), goal_workspace_id);
     notify_workspace_changed_in_background(app);
     Ok(result)
 }
@@ -194,27 +196,87 @@ pub async fn create_goal_child_workspace_and_start(
     request: crate::goal_orchestration::GoalChildWorkspaceCreateParams,
 ) -> CmdResult<crate::goal_orchestration::GoalChildWorkspaceCreateResult> {
     let goal_workspace_ref = request.goal_workspace.clone();
+    let card_title = request.title.clone();
+    let card_description = request.description.clone();
     let prepared = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
         run_blocking(move || crate::goal_orchestration::prepare_goal_child_workspace_start(request))
             .await?
     };
     let mut result = prepared.result;
+    let goal_workspace_id =
+        crate::service::resolve_workspace_ref(&goal_workspace_ref).unwrap_or(goal_workspace_ref);
     if let Some(send_params) = prepared.send_params {
+        let send_params = enrich_assignee_prompt_with_knowledge(
+            app.clone(),
+            goal_workspace_id.clone(),
+            send_params,
+            &card_title,
+            card_description.as_deref(),
+        )
+        .await;
+        result.assignee_prompt = Some(send_params.prompt.clone());
         let receipt = crate::background_agents::enqueue(app.clone(), send_params)?;
         result.agent_started = receipt.started;
         result.prompt_queued = true;
         result.background_send_id = Some(receipt.task_id);
     }
-    let goal_workspace_id =
-        crate::service::resolve_workspace_ref(&goal_workspace_ref).unwrap_or(goal_workspace_ref);
     publish_goal_child_workspace_changes(
         &app,
-        goal_workspace_id,
+        goal_workspace_id.clone(),
         Some(result.workspace_id.clone()),
     );
+    crate::knowledge::index_goal_in_background(app.clone(), goal_workspace_id);
     notify_workspace_changed_in_background(app);
     Ok(result)
+}
+
+async fn enrich_assignee_prompt_with_knowledge(
+    app: AppHandle,
+    goal_workspace_id: String,
+    mut send_params: crate::service::SendMessageParams,
+    card_title: &str,
+    card_description: Option<&str>,
+) -> crate::service::SendMessageParams {
+    let mut query = String::new();
+    query.push_str(card_title);
+    if let Some(description) = card_description
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        query.push('\n');
+        query.push_str(description);
+    }
+    query.push('\n');
+    query.push_str(&send_params.prompt);
+
+    let context = tauri::async_runtime::spawn_blocking(move || {
+        let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+        manager.assignee_context_for_prompt(&goal_workspace_id, &query)
+    })
+    .await;
+
+    match context {
+        Ok(Ok(Some(context))) => {
+            send_params.prompt.push_str("\n\n");
+            send_params.prompt.push_str(&context);
+        }
+        Ok(Ok(None)) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "Failed to retrieve assignee knowledge context"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "Knowledge context enrichment task failed"
+            );
+        }
+    }
+
+    send_params
 }
 
 #[tauri::command]
@@ -326,7 +388,8 @@ pub async fn set_goal_child_workspace_status(
     let goal_workspace_id = request.goal_workspace_id.clone();
     let child_workspace_id = request.child_workspace_id.clone();
     run_blocking(move || workspaces::set_goal_child_workspace_status(request)).await?;
-    publish_goal_child_workspace_changes(&app, goal_workspace_id, Some(child_workspace_id));
+    publish_goal_child_workspace_changes(&app, goal_workspace_id.clone(), Some(child_workspace_id));
+    crate::knowledge::index_goal_in_background(app.clone(), goal_workspace_id);
     Ok(())
 }
 
@@ -338,6 +401,7 @@ pub async fn assign_workspace_to_goal(
     let goal_workspace_id = request.goal_workspace_id.clone();
     let workspace_id = request.workspace_id.clone();
     run_blocking(move || workspaces::assign_workspace_to_goal(request)).await?;
-    publish_goal_child_workspace_changes(&app, goal_workspace_id, Some(workspace_id));
+    publish_goal_child_workspace_changes(&app, goal_workspace_id.clone(), Some(workspace_id));
+    crate::knowledge::index_goal_in_background(app.clone(), goal_workspace_id);
     Ok(())
 }

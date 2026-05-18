@@ -1,0 +1,178 @@
+---
+source: tests/schema_migrations.rs
+expression: "serde_json::json!({\n    \"projects\": table_schema(&connection, \"knowledge_projects\"), \"goals\":\n    table_schema(&connection, \"knowledge_goals\"), \"runs\":\n    table_schema(&connection, \"knowledge_index_runs\"), \"audit\":\n    table_schema(&connection, \"knowledge_query_audit\"),\n})"
+---
+audit:
+  columns:
+    - default: ~
+      name: id
+      notNull: false
+      primaryKey: true
+      type: TEXT
+    - default: ~
+      name: repo_id
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: ~
+      name: goal_workspace_id
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: ~
+      name: query
+      notNull: true
+      primaryKey: false
+      type: TEXT
+    - default: "0"
+      name: match_count
+      notNull: true
+      primaryKey: false
+      type: INTEGER
+    - default: "datetime('now')"
+      name: created_at
+      notNull: true
+      primaryKey: false
+      type: TEXT
+  indexes:
+    - name: idx_knowledge_query_audit_goal
+      sql: "CREATE INDEX idx_knowledge_query_audit_goal ON knowledge_query_audit(goal_workspace_id, created_at)"
+    - name: sqlite_autoindex_knowledge_query_audit_1
+      sql: ~
+goals:
+  columns:
+    - default: ~
+      name: goal_workspace_id
+      notNull: false
+      primaryKey: true
+      type: TEXT
+    - default: ~
+      name: repo_id
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: "'idle'"
+      name: status
+      notNull: true
+      primaryKey: false
+      type: TEXT
+    - default: "0"
+      name: document_count
+      notNull: true
+      primaryKey: false
+      type: INTEGER
+    - default: ~
+      name: last_indexed_at
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: ~
+      name: last_error
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: "datetime('now')"
+      name: created_at
+      notNull: true
+      primaryKey: false
+      type: TEXT
+    - default: "datetime('now')"
+      name: updated_at
+      notNull: true
+      primaryKey: false
+      type: TEXT
+  indexes:
+    - name: sqlite_autoindex_knowledge_goals_1
+      sql: ~
+projects:
+  columns:
+    - default: ~
+      name: repo_id
+      notNull: false
+      primaryKey: true
+      type: TEXT
+    - default: "'idle'"
+      name: status
+      notNull: true
+      primaryKey: false
+      type: TEXT
+    - default: "0"
+      name: document_count
+      notNull: true
+      primaryKey: false
+      type: INTEGER
+    - default: ~
+      name: last_indexed_at
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: ~
+      name: last_error
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: "datetime('now')"
+      name: created_at
+      notNull: true
+      primaryKey: false
+      type: TEXT
+    - default: "datetime('now')"
+      name: updated_at
+      notNull: true
+      primaryKey: false
+      type: TEXT
+  indexes:
+    - name: sqlite_autoindex_knowledge_projects_1
+      sql: ~
+runs:
+  columns:
+    - default: ~
+      name: id
+      notNull: false
+      primaryKey: true
+      type: TEXT
+    - default: ~
+      name: scope
+      notNull: true
+      primaryKey: false
+      type: TEXT
+    - default: ~
+      name: repo_id
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: ~
+      name: goal_workspace_id
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: ~
+      name: status
+      notNull: true
+      primaryKey: false
+      type: TEXT
+    - default: "0"
+      name: document_count
+      notNull: true
+      primaryKey: false
+      type: INTEGER
+    - default: ~
+      name: error
+      notNull: false
+      primaryKey: false
+      type: TEXT
+    - default: "datetime('now')"
+      name: started_at
+      notNull: true
+      primaryKey: false
+      type: TEXT
+    - default: ~
+      name: completed_at
+      notNull: false
+      primaryKey: false
+      type: TEXT
+  indexes:
+    - name: idx_knowledge_index_runs_scope
+      sql: "CREATE INDEX idx_knowledge_index_runs_scope ON knowledge_index_runs(scope, repo_id, goal_workspace_id, started_at)"
+    - name: sqlite_autoindex_knowledge_index_runs_1
+      sql: ~

@@ -52,6 +52,14 @@ const BUILD_CACHE_ENTRIES: CacheEntry[] = [
 	},
 	{ label: "Rust/Tauri build cache", relativePath: "src-tauri/target" },
 	{ label: "Sidecar compiled binary", relativePath: "sidecar/dist" },
+	{
+		label: "Knowledge sidecar compiled binary",
+		relativePath: "knowledge-sidecar/dist",
+	},
+	{
+		label: "Knowledge sidecar build cache",
+		relativePath: "knowledge-sidecar/build",
+	},
 	{ label: "Sidecar bundled CLI cache", relativePath: "sidecar/.bundle-cache" },
 	{ label: "Sidecar coverage", relativePath: "sidecar/coverage" },
 	{

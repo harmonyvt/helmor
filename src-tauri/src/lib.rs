@@ -14,6 +14,7 @@ pub mod goal_orchestration;
 pub mod goal_orchestrator;
 pub mod image_store;
 mod import;
+pub mod knowledge;
 pub mod logging;
 pub mod mcp;
 pub mod models;
@@ -85,6 +86,7 @@ pub fn run() {
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(commands::app_install_commands::AppInstallManager::new())
         .manage(debug_ingest::DebugIngestManager::new())
+        .manage(knowledge::KnowledgeSidecarManager::new())
         .manage(ui_sync::UiSyncManager::new())
         .manage(web_daemon::WebDaemonManager::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
@@ -216,6 +218,11 @@ pub fn run() {
             commands::system_commands::export_verbose_logs,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
+            commands::knowledge_commands::get_knowledge_status,
+            commands::knowledge_commands::reindex_project_knowledge,
+            commands::knowledge_commands::reindex_goal_knowledge,
+            commands::knowledge_commands::query_knowledge,
+            commands::knowledge_commands::record_goal_knowledge_note,
             web_daemon::get_web_daemon_status,
             web_daemon::start_web_daemon,
             web_daemon::stop_web_daemon,

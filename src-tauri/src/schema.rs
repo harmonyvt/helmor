@@ -565,6 +565,9 @@ fn run_migrations(connection: &impl SchemaExecutor) -> Result<()> {
     connection
         .execute_batch(GOAL_ASSIGNEE_RUNS_SCHEMA)
         .context("Failed to ensure goal_assignee_runs schema")?;
+    connection
+        .execute_batch(KNOWLEDGE_SCHEMA)
+        .context("Failed to ensure knowledge schema")?;
 
     if has_table(connection, "pending_cli_sends") {
         for (column, definition) in [
@@ -690,6 +693,51 @@ CREATE INDEX IF NOT EXISTS idx_goal_assignee_runs_goal_status
     ON goal_assignee_runs(goal_workspace_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_goal_assignee_runs_session_status
     ON goal_assignee_runs(session_id, status, created_at);
+"#;
+
+const KNOWLEDGE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS knowledge_projects (
+    repo_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'idle',
+    document_count INTEGER NOT NULL DEFAULT 0,
+    last_indexed_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS knowledge_goals (
+    goal_workspace_id TEXT PRIMARY KEY,
+    repo_id TEXT,
+    status TEXT NOT NULL DEFAULT 'idle',
+    document_count INTEGER NOT NULL DEFAULT 0,
+    last_indexed_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS knowledge_index_runs (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    repo_id TEXT,
+    goal_workspace_id TEXT,
+    status TEXT NOT NULL,
+    document_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS knowledge_query_audit (
+    id TEXT PRIMARY KEY,
+    repo_id TEXT,
+    goal_workspace_id TEXT,
+    query TEXT NOT NULL,
+    match_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_index_runs_scope
+    ON knowledge_index_runs(scope, repo_id, goal_workspace_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_knowledge_query_audit_goal
+    ON knowledge_query_audit(goal_workspace_id, created_at);
 "#;
 
 const SCHEMA_SQL: &str = r#"
@@ -901,6 +949,48 @@ CREATE TABLE IF NOT EXISTS goal_assignee_runs (
     last_event_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_projects (
+    repo_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'idle',
+    document_count INTEGER NOT NULL DEFAULT 0,
+    last_indexed_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_goals (
+    goal_workspace_id TEXT PRIMARY KEY,
+    repo_id TEXT,
+    status TEXT NOT NULL DEFAULT 'idle',
+    document_count INTEGER NOT NULL DEFAULT 0,
+    last_indexed_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_index_runs (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    repo_id TEXT,
+    goal_workspace_id TEXT,
+    status TEXT NOT NULL,
+    document_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_query_audit (
+    id TEXT PRIMARY KEY,
+    repo_id TEXT,
+    goal_workspace_id TEXT,
+    query TEXT NOT NULL,
+    match_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
@@ -911,6 +1001,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_parent_message ON sess
 CREATE INDEX IF NOT EXISTS idx_goal_supervisor_notifications_goal ON goal_supervisor_notifications(goal_workspace_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_goal_assignee_runs_goal_status ON goal_assignee_runs(goal_workspace_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_goal_assignee_runs_session_status ON goal_assignee_runs(session_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_knowledge_index_runs_scope ON knowledge_index_runs(scope, repo_id, goal_workspace_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_knowledge_query_audit_goal ON knowledge_query_audit(goal_workspace_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_browser_tabs_workspace_order ON workspace_browser_tabs(workspace_id, display_order);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_browser_tabs_one_active ON workspace_browser_tabs(workspace_id) WHERE active = 1;

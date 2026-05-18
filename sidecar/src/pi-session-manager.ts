@@ -21,6 +21,7 @@ import {
 	createKanbanTools,
 	resolvePendingKanbanCall,
 } from "./pi-kanban-tools.js";
+import { createKnowledgeTools } from "./pi-knowledge-tools.js";
 import { createPiRuntimeResources } from "./pi-runtime.js";
 import { createThreadTools } from "./pi-thread-tools.js";
 import { createWorkspaceOperationTools } from "./pi-workspace-tools.js";
@@ -141,6 +142,10 @@ export class PiSessionManager implements SessionManager {
 					)
 				: [];
 
+			const knowledgeTools = params.kanbanWorkspaceId
+				? createKnowledgeTools(params.kanbanWorkspaceId, emitter, requestId)
+				: [];
+
 			const { session } = await createAgentSession({
 				cwd: params.cwd,
 				authStorage,
@@ -160,6 +165,7 @@ export class PiSessionManager implements SessionManager {
 					...threadCustomTools,
 					...assigneeCustomTools,
 					...workspaceOperationTools,
+					...knowledgeTools,
 				],
 			});
 

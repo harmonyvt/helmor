@@ -20,6 +20,9 @@
 			"!test-results",
 			"!workspaces",
 			"!**/.local-data",
+			"!**/.pytest_cache",
+			"!**/.venv",
+			"!**/__pycache__",
 			"!**/.bundle-cache",
 			"!src-tauri/gen",
 			"!src-tauri/target"

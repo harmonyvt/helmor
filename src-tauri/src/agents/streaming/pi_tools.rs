@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::future::Future;
 use std::str::FromStr;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::ui_sync::{notify_running_app, UiMutationEvent};
 use crate::workspace_status::WorkspaceStatus;
@@ -61,6 +61,12 @@ pub(super) fn execute_pi_tool_call(
         "read_assignee_thread" => handle_read_assignee_thread(goal_workspace_id, args),
         "summarize_assignee_status" => handle_summarize_assignee_status(goal_workspace_id, args),
         "list_assignees" => handle_list_assignees(goal_workspace_id, args),
+        // ── Knowledge base ───────────────────────────────────────────────────
+        "query_project_knowledge" => handle_query_project_knowledge(app, goal_workspace_id, args),
+        "query_goal_knowledge" => handle_query_goal_knowledge(app, goal_workspace_id, args),
+        "record_goal_knowledge_note" => {
+            handle_record_goal_knowledge_note(app, goal_workspace_id, args)
+        }
         // ── Merge / landing ───────────────────────────────────────────────────
         "inspect_workspace_merge_state" => handle_inspect_workspace_merge_state(args),
         "refresh_change_request" => handle_refresh_change_request(args),
@@ -210,6 +216,62 @@ fn handle_update_kanban_card(goal_workspace_id: &str, args: &Value) -> Result<Va
     publish_board_changed(goal_workspace_id, card_id);
 
     Ok(json!({ "success": true, "cardId": card_id, "changed": true }))
+}
+
+fn handle_query_project_knowledge(
+    app: AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
+    let goal = crate::models::workspaces::load_goal_workspace_record(goal_workspace_id)?;
+    let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+    let result = manager.query(crate::knowledge::KnowledgeQueryRequest {
+        query: req_str(args, "query")?.to_string(),
+        repo_id: Some(goal.repo_id),
+        goal_workspace_id: None,
+        limit: args.get("limit").and_then(Value::as_i64),
+    })?;
+    Ok(serde_json::to_value(result)?)
+}
+
+fn handle_query_goal_knowledge(
+    app: AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
+    let goal = crate::models::workspaces::load_goal_workspace_record(goal_workspace_id)?;
+    let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+    let result = manager.query(crate::knowledge::KnowledgeQueryRequest {
+        query: req_str(args, "query")?.to_string(),
+        repo_id: Some(goal.repo_id),
+        goal_workspace_id: Some(goal_workspace_id.to_string()),
+        limit: args.get("limit").and_then(Value::as_i64),
+    })?;
+    Ok(serde_json::to_value(result)?)
+}
+
+fn handle_record_goal_knowledge_note(
+    app: AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
+    let goal = crate::models::workspaces::load_goal_workspace_record(goal_workspace_id)?;
+    let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+    let result = manager.record_goal_note(crate::knowledge::RecordGoalKnowledgeNoteRequest {
+        goal_workspace_id: goal_workspace_id.to_string(),
+        repo_id: Some(goal.repo_id.clone()),
+        title: opt_str(args, "title"),
+        text: req_str(args, "text")?.to_string(),
+        metadata: args.get("metadata").cloned(),
+    })?;
+    crate::ui_sync::publish(
+        &app,
+        UiMutationEvent::KnowledgeChanged {
+            repo_id: Some(goal.repo_id),
+            goal_workspace_id: Some(goal_workspace_id.to_string()),
+        },
+    );
+    Ok(serde_json::to_value(result)?)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

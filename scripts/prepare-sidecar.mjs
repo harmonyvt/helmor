@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sidecarDir = resolve(repoRoot, "sidecar");
+const knowledgeSidecarDir = resolve(repoRoot, "knowledge-sidecar");
 const srcTauriDir = resolve(repoRoot, "src-tauri");
 const bundledBinDir = resolve(srcTauriDir, "target", "bundled");
 const entitlementsPlist = resolve(repoRoot, "src-tauri", "Entitlements.plist");
@@ -104,13 +105,24 @@ function main() {
 
 	// 2. Build the compiled sidecar + staged vendor tree.
 	run("bun run build", sidecarDir);
+	run("node scripts/build.mjs", knowledgeSidecarDir);
 
 	const triple = detectTargetTriple();
 	const sidecarSource = resolve(sidecarDir, "dist", "helmor-sidecar");
+	const knowledgeSidecarSource = resolve(
+		knowledgeSidecarDir,
+		"dist",
+		"helmor-knowledge-sidecar",
+	);
 	const sidecarDestination = resolve(
 		sidecarDir,
 		"dist",
 		`helmor-sidecar-${triple}`,
+	);
+	const knowledgeSidecarDestination = resolve(
+		knowledgeSidecarDir,
+		"dist",
+		`helmor-knowledge-sidecar-${triple}`,
 	);
 	const exeSuffix = process.platform === "win32" ? ".exe" : "";
 	const cliSource = resolve(
@@ -135,6 +147,11 @@ function main() {
 			`[prepare-sidecar] expected compiled sidecar at ${sidecarSource} but it does not exist`,
 		);
 	}
+	if (!existsSync(knowledgeSidecarSource)) {
+		throw new Error(
+			`[prepare-sidecar] expected compiled knowledge sidecar at ${knowledgeSidecarSource} but it does not exist`,
+		);
+	}
 
 	// Tauri validates every `externalBin` during `cargo build`, including the
 	// companion binaries that this same command is about to produce. Stage
@@ -142,6 +159,7 @@ function main() {
 	// without depending on stale artifacts; real binaries overwrite these below.
 	mkdirSync(bundledBinDir, { recursive: true });
 	copyFileSync(sidecarSource, sidecarDestination);
+	copyFileSync(knowledgeSidecarSource, knowledgeSidecarDestination);
 	stageExternalBinPlaceholder(cliDestination);
 	stageExternalBinPlaceholder(webDestination);
 
@@ -169,6 +187,9 @@ function main() {
 	signSidecarWithEntitlements(sidecarDestination);
 
 	console.log(`[prepare-sidecar] staged sidecar → ${sidecarDestination}`);
+	console.log(
+		`[prepare-sidecar] staged knowledge sidecar → ${knowledgeSidecarDestination}`,
+	);
 	console.log(`[prepare-sidecar] staged CLI → ${cliDestination}`);
 	console.log(`[prepare-sidecar] staged web daemon → ${webDestination}`);
 }

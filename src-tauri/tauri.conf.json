@@ -47,6 +47,7 @@
 		"targets": "all",
 		"externalBin": [
 			"../sidecar/dist/helmor-sidecar",
+			"../knowledge-sidecar/dist/helmor-knowledge-sidecar",
 			"./target/bundled/helmor-cli",
 			"./target/bundled/helmor-web"
 		],
