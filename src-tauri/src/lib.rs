@@ -78,6 +78,7 @@ pub fn run() {
 
     let app = builder
         .manage(sidecar::ManagedSidecar::new())
+        .manage(sidecar::BackgroundSidecar::new())
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())

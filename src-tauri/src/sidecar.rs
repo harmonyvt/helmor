@@ -330,9 +330,35 @@ pub struct ManagedSidecar {
     reader_running: Arc<Mutex<bool>>,
 }
 
+pub struct BackgroundSidecar {
+    inner: ManagedSidecar,
+}
+
 impl Default for ManagedSidecar {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Default for BackgroundSidecar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BackgroundSidecar {
+    pub fn new() -> Self {
+        Self {
+            inner: ManagedSidecar::new(),
+        }
+    }
+
+    pub fn managed(&self) -> &ManagedSidecar {
+        &self.inner
+    }
+
+    pub fn shutdown(&self, cooperative: Duration, escalation: Duration) {
+        self.inner.shutdown(cooperative, escalation);
     }
 }
 
@@ -761,6 +787,22 @@ mod tests {
         sidecar.unsubscribe("req-1");
         let map = sidecar.listeners.lock().unwrap();
         assert!(!map.contains_key("req-1"));
+    }
+
+    #[test]
+    fn background_sidecar_has_independent_listener_state() {
+        let foreground = ManagedSidecar::new();
+        let background = BackgroundSidecar::new();
+
+        let _rx = background.managed().subscribe("req-bg");
+
+        assert!(background
+            .managed()
+            .listeners
+            .lock()
+            .unwrap()
+            .contains_key("req-bg"));
+        assert!(!foreground.listeners.lock().unwrap().contains_key("req-bg"));
     }
 
     #[test]

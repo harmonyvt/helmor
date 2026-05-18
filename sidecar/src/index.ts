@@ -54,6 +54,18 @@ const managers: Record<Provider, SessionManager> = {
 const writeStdoutEvent = createStdoutProtocolWriter(process.stdout, logger);
 const emitter = createSidecarEmitter(writeStdoutEvent);
 
+function exitOnBrokenPipe(reason: unknown, source: string): boolean {
+	if (!isBrokenPipeError(reason)) return false;
+	try {
+		process.stderr.write(
+			`[helmor-sidecar] stdout pipe closed from ${source}; exiting\n`,
+		);
+	} catch {
+		// stderr may be unavailable during teardown.
+	}
+	process.exit(0);
+}
+
 // ---------------------------------------------------------------------------
 // Heartbeat — emit a lightweight keepalive every 15s for every in-flight
 // stream request. Rust's streaming loop uses its absence (no event for
@@ -89,13 +101,7 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 
 process.on("uncaughtException", (err) => {
-	if (isBrokenPipeError(err)) {
-		logger.error(
-			"stdout pipe closed from uncaughtException; sidecar exiting",
-			errorDetails(err),
-		);
-		process.exit(0);
-	}
+	if (exitOnBrokenPipe(err, "uncaughtException")) return;
 	logger.error("uncaughtException", errorDetails(err));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
@@ -105,13 +111,7 @@ process.on("uncaughtException", (err) => {
 });
 
 process.on("unhandledRejection", (reason) => {
-	if (isBrokenPipeError(reason)) {
-		logger.error(
-			"stdout pipe closed from unhandledRejection; sidecar exiting",
-			errorDetails(reason),
-		);
-		process.exit(0);
-	}
+	if (exitOnBrokenPipe(reason, "unhandledRejection")) return;
 	logger.error("unhandledRejection", errorDetails(reason));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
