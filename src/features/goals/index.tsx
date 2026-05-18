@@ -201,6 +201,20 @@ export function GoalWorkspaceContainer({
 		return reports;
 	}, [assigneesQuery.data]);
 
+	const assigneeSummaryByWorkspaceId = useMemo(() => {
+		const map = new Map<
+			string,
+			{ activeRunStatus?: string | null; lastRunError?: string | null }
+		>();
+		for (const assignee of assigneesQuery.data ?? []) {
+			map.set(assignee.workspaceId, {
+				activeRunStatus: assignee.activeRunStatus,
+				lastRunError: assignee.lastRunError,
+			});
+		}
+		return map;
+	}, [assigneesQuery.data]);
+
 	// Compute unresolved PR comment count for the Comments tab badge.
 	// Only query workspaces (and the goal itself) that already have an open PR
 	// so we don't fire extra requests for every card on every render.
@@ -742,6 +756,7 @@ export function GoalWorkspaceContainer({
 							onSelectAssignee={handleSelectAssignee}
 							reportByWorkspaceId={reportByWorkspaceId}
 							orchestratorStatusByWorkspaceId={orchestratorStatusByWorkspaceId}
+							assigneeSummaryByWorkspaceId={assigneeSummaryByWorkspaceId}
 							onMoveWorkspace={handleMoveWorkspace}
 							onMergeWorkspace={handleMergeWorkspace}
 							onCheckLanding={handleCheckLanding}

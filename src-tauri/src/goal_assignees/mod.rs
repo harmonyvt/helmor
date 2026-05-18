@@ -71,7 +71,8 @@ pub struct SendAssigneeMessageResult {
     pub execution_state: String,
     pub session_id: String,
     pub workspace_id: String,
-    pub pending_send_id: String,
+    /// Durable run ID from `goal_assignee_runs`. Supersedes the legacy `pendingSendId` name.
+    pub run_id: String,
     pub message: String,
     pub supervisor_message_id: Option<String>,
 }
@@ -201,6 +202,12 @@ pub struct AssigneeSummary {
     pub assignee_name: String,
     pub session_status: String,
     pub latest_report: Option<AssigneeReportMarker>,
+    /// Status of the most-recently created run (`queued`, `running`, `completed`, `failed`).
+    pub active_run_status: Option<String>,
+    /// Error from the last failed run, if any.
+    pub last_run_error: Option<String>,
+    /// Number of runs in `queued` state for this assignee session.
+    pub pending_run_count: i64,
 }
 
 pub fn send_assignee_message(
@@ -226,7 +233,7 @@ pub fn send_assignee_message(
         execution_state: if started { "spawned" } else { "queued" }.to_string(),
         session_id: assignee.session.id,
         workspace_id: assignee.workspace_id,
-        pending_send_id: queued.pending_send_id,
+        run_id: queued.pending_send_id,
         message,
         supervisor_message_id: Some(queued.supervisor_message_id),
     })
@@ -250,7 +257,7 @@ pub(crate) fn prepare_assignee_message(
         execution_state: "queued".to_string(),
         session_id: assignee.session.id.clone(),
         workspace_id: assignee.workspace_id.clone(),
-        pending_send_id: persisted.run_id.clone(),
+        run_id: persisted.run_id.clone(),
         message: message.clone(),
         supervisor_message_id: Some(persisted.supervisor_message_id),
     };
@@ -304,7 +311,7 @@ pub(crate) fn prepare_thread_message(
         execution_state: "queued".to_string(),
         session_id: assignee.session.id.clone(),
         workspace_id: assignee.workspace_id.clone(),
-        pending_send_id: persisted.run_id.clone(),
+        run_id: persisted.run_id.clone(),
         message: message.clone(),
         supervisor_message_id: Some(persisted.supervisor_message_id),
     };
@@ -650,6 +657,11 @@ pub async fn list_assignees_async(request: ListAssigneesRequest) -> Result<Vec<A
             }
         }
 
+        let (active_run_status, last_run_error, pending_run_count) =
+            latest_run_summary_async(&assignee.session.id)
+                .await
+                .unwrap_or((None, None, 0));
+
         out.push(AssigneeSummary {
             card_id: workspace.id.clone(),
             workspace_id: assignee.workspace_id,
@@ -658,6 +670,9 @@ pub async fn list_assignees_async(request: ListAssigneesRequest) -> Result<Vec<A
             assignee_name: assignee_name(&assignee.session),
             session_status: assignee.session.status,
             latest_report,
+            active_run_status,
+            last_run_error,
+            pending_run_count,
         });
     }
 
@@ -960,6 +975,55 @@ fn detect_stale_reason(
         return Some("session failed".to_string());
     }
     None
+}
+
+/// Returns `(active_run_status, last_run_error, pending_run_count)` for a session.
+///
+/// `active_run_status` is the status of the most-recently created run. `last_run_error`
+/// is populated only when that run has `status = 'failed'`. `pending_run_count` is the
+/// number of runs still in `queued` state.
+async fn latest_run_summary_async(
+    session_id: &str,
+) -> Result<(Option<String>, Option<String>, i64)> {
+    let connection = crate::models::db::libsql_conn_async().await?;
+    // Latest run by creation time
+    let mut rows = connection
+        .query(
+            r#"
+            SELECT status, error
+            FROM goal_assignee_runs
+            WHERE session_id = ?1
+            ORDER BY datetime(created_at) DESC, created_at DESC
+            LIMIT 1
+            "#,
+            [session_id.to_string()],
+        )
+        .await?;
+    let (active_run_status, last_run_error) = match rows.next().await? {
+        Some(row) => {
+            let status: Option<String> = row.get(0).ok();
+            let error: Option<String> = row.get(1).ok().flatten();
+            let err = if status.as_deref() == Some("failed") {
+                error
+            } else {
+                None
+            };
+            (status, err)
+        }
+        None => (None, None),
+    };
+    // Count queued runs
+    let mut count_rows = connection
+        .query(
+            "SELECT COUNT(*) FROM goal_assignee_runs WHERE session_id = ?1 AND status = 'queued'",
+            [session_id.to_string()],
+        )
+        .await?;
+    let pending_run_count: i64 = match count_rows.next().await? {
+        Some(row) => row.get(0).unwrap_or(0),
+        None => 0,
+    };
+    Ok((active_run_status, last_run_error, pending_run_count))
 }
 
 fn assignee_name(session: &sessions::WorkspaceSessionSummary) -> String {

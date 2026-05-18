@@ -53,6 +53,8 @@ export function ThreadManagerView({
 	const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
 	const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
 	const [draftTitle, setDraftTitle] = useState("");
+	const [isCreatingThread, setIsCreatingThread] = useState(false);
+	const [newThreadTitle, setNewThreadTitle] = useState("");
 	const [deleteTarget, setDeleteTarget] =
 		useState<WorkspaceSessionSummary | null>(null);
 
@@ -90,17 +92,26 @@ export function ThreadManagerView({
 		]);
 	};
 
-	const createActiveThread = async () => {
+	const startCreateThread = () => {
 		if (!selectedCard) return;
-		const title = window.prompt(
-			"Assignee thread title",
+		setNewThreadTitle(
 			`Retry — ${selectedCard.title ?? selectedCard.directoryName ?? "Card"}`,
 		);
-		if (title === null) return;
+		setIsCreatingThread(true);
+	};
+
+	const cancelCreateThread = () => {
+		setIsCreatingThread(false);
+		setNewThreadTitle("");
+	};
+
+	const confirmCreateThread = async () => {
+		if (!selectedCard) return;
+		setIsCreatingThread(false);
 		setBusyThreadId("new");
 		try {
 			const { sessionId } = await createSession(selectedCard.id);
-			const trimmedTitle = title.trim();
+			const trimmedTitle = newThreadTitle.trim();
 			if (trimmedTitle) {
 				await renameSession(sessionId, trimmedTitle);
 			}
@@ -114,6 +125,7 @@ export function ThreadManagerView({
 			await invalidateSelectedCard();
 		} finally {
 			setBusyThreadId(null);
+			setNewThreadTitle("");
 		}
 	};
 
@@ -200,21 +212,59 @@ export function ThreadManagerView({
 						</span>
 					) : null}
 				</div>
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					className="h-7 w-full cursor-pointer justify-start text-[12px]"
-					onClick={createActiveThread}
-					disabled={!selectedCard || busyThreadId !== null}
-				>
-					{busyThreadId === "new" ? (
-						<Loader2 className="mr-1.5 size-3 animate-spin" />
-					) : (
-						<Plus className="mr-1.5 size-3" />
-					)}
-					New active assignee
-				</Button>
+				{isCreatingThread ? (
+					<form
+						className="flex gap-1"
+						onSubmit={(e) => {
+							e.preventDefault();
+							void confirmCreateThread();
+						}}
+					>
+						<Input
+							value={newThreadTitle}
+							onChange={(e) => setNewThreadTitle(e.target.value)}
+							className="h-7 flex-1 text-[12px]"
+							placeholder="Thread title"
+							autoFocus
+							onKeyDown={(e) => {
+								if (e.key === "Escape") cancelCreateThread();
+							}}
+						/>
+						<Button
+							type="submit"
+							variant="outline"
+							size="sm"
+							className="h-7 cursor-pointer px-2 text-[11px]"
+						>
+							Create
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							className="h-7 cursor-pointer px-2 text-[11px]"
+							onClick={cancelCreateThread}
+						>
+							Cancel
+						</Button>
+					</form>
+				) : (
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="h-7 w-full cursor-pointer justify-start text-[12px]"
+						onClick={startCreateThread}
+						disabled={!selectedCard || busyThreadId !== null}
+					>
+						{busyThreadId === "new" ? (
+							<Loader2 className="mr-1.5 size-3 animate-spin" />
+						) : (
+							<Plus className="mr-1.5 size-3" />
+						)}
+						New active assignee
+					</Button>
+				)}
 			</div>
 			<div className="grid min-h-0 flex-1 grid-cols-[minmax(110px,0.42fr)_minmax(0,1fr)]">
 				<div className="min-h-0 overflow-y-auto border-r py-1">
@@ -285,6 +335,13 @@ export function ThreadManagerView({
 				onConfirm={confirmDelete}
 			/>
 		</div>
+	);
+}
+
+/** Error-class stale reasons need destructive styling; informational ones are muted. */
+function isStaleReasonError(reason: string): boolean {
+	return /auth|failed|denied|startup|permission|model.*(not found|access)|provider/i.test(
+		reason,
 	);
 }
 
@@ -385,7 +442,14 @@ function ThreadRow({
 							<span className="truncate">{status}</span>
 						</div>
 						{session.staleReason && (
-							<div className="mt-1 truncate text-[10px] text-destructive/80">
+							<div
+								className={cn(
+									"mt-1 truncate text-[10px]",
+									isStaleReasonError(session.staleReason)
+										? "text-destructive/80"
+										: "text-muted-foreground/55",
+								)}
+							>
 								{session.staleReason}
 							</div>
 						)}

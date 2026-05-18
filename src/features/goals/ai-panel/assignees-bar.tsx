@@ -5,12 +5,19 @@ import {
 	ChevronDown,
 	ChevronUp,
 	Loader2,
+	XCircle,
 } from "lucide-react";
 import { useState } from "react";
 import type { AssigneeSummary, WorkspaceDetail } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-type AssigneeTone = "running" | "blocked" | "done" | "idle";
+type AssigneeTone =
+	| "running"
+	| "queued"
+	| "blocked"
+	| "done"
+	| "failed"
+	| "idle";
 
 function assigneeStatusInfo(a: AssigneeSummary): {
 	label: string;
@@ -20,8 +27,12 @@ function assigneeStatusInfo(a: AssigneeSummary): {
 		return { label: "blocked", tone: "blocked" };
 	if (a.latestReport?.reportType === "completed")
 		return { label: "done", tone: "done" };
-	if (a.sessionStatus === "streaming")
+	if (a.activeRunStatus === "failed" && !a.sessionStatus?.includes("streaming"))
+		return { label: "failed", tone: "failed" };
+	if (a.sessionStatus === "streaming" || a.activeRunStatus === "running")
 		return { label: "running", tone: "running" };
+	if ((a.pendingRunCount ?? 0) > 0 || a.activeRunStatus === "queued")
+		return { label: "queued", tone: "queued" };
 	return { label: "idle", tone: "idle" };
 }
 
@@ -39,8 +50,12 @@ function StatusIcon({
 				className={cn(cls, "shrink-0 animate-spin text-foreground/70")}
 			/>
 		);
+	if (tone === "queued")
+		return <Loader2 className={cn(cls, "shrink-0 text-muted-foreground/50")} />;
 	if (tone === "blocked")
 		return <AlertTriangle className={cn(cls, "shrink-0 text-destructive")} />;
+	if (tone === "failed")
+		return <XCircle className={cn(cls, "shrink-0 text-destructive/70")} />;
 	if (tone === "done")
 		return (
 			<CheckCircle2
@@ -73,18 +88,24 @@ function AssigneeChip({
 				}
 			: undefined;
 
+	const chipTitle =
+		tone === "failed" && assignee.lastRunError
+			? `${assignee.title} — ${assignee.lastRunError}`
+			: assignee.title;
+
 	return (
 		<div
 			role={handleClick ? "button" : undefined}
-			title={assignee.title}
+			title={chipTitle}
 			onClick={handleClick}
 			className={cn(
 				"relative flex size-[18px] shrink-0 items-center justify-center rounded-full",
 				tone === "blocked" && "bg-destructive/15",
+				tone === "failed" && "bg-destructive/10",
 				tone === "done" &&
 					"bg-[color:var(--workspace-sidebar-status-progress)]/15",
 				tone === "running" && "bg-foreground/10",
-				tone === "idle" && "bg-muted/40",
+				(tone === "queued" || tone === "idle") && "bg-muted/40",
 				handleClick && "cursor-pointer transition-opacity hover:opacity-70",
 			)}
 		>
@@ -104,21 +125,44 @@ function AssigneeRow({
 	assignee: AssigneeSummary;
 	onSelect?: () => void;
 }) {
-	const { tone } = assigneeStatusInfo(assignee);
+	const { tone, label } = assigneeStatusInfo(assignee);
+	const pendingCount = assignee.pendingRunCount ?? 0;
 	return (
 		<button
 			type="button"
 			onClick={onSelect}
 			disabled={!onSelect}
 			className={cn(
-				"group flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors",
+				"group flex w-full flex-col gap-0.5 px-3 py-1.5 text-left transition-colors",
 				onSelect ? "cursor-pointer hover:bg-accent/50" : "cursor-default",
 			)}
 		>
-			<StatusIcon tone={tone} />
-			<span className="min-w-0 flex-1 truncate text-[12px] text-foreground/80">
-				{assignee.title}
-			</span>
+			<div className="flex w-full items-center gap-2">
+				<StatusIcon tone={tone} />
+				<span className="min-w-0 flex-1 truncate text-[12px] text-foreground/80">
+					{assignee.title}
+				</span>
+				{pendingCount > 1 && tone !== "failed" && (
+					<span className="shrink-0 rounded bg-muted/70 px-1 py-px text-[9px] tabular-nums text-muted-foreground/60">
+						+{pendingCount - 1}
+					</span>
+				)}
+				{tone === "failed" && (
+					<span className="shrink-0 rounded bg-destructive/10 px-1 py-px text-[9px] font-medium text-destructive/80">
+						{label}
+					</span>
+				)}
+				{tone === "queued" && (
+					<span className="shrink-0 rounded bg-muted/70 px-1 py-px text-[9px] text-muted-foreground/60">
+						queued
+					</span>
+				)}
+			</div>
+			{tone === "failed" && assignee.lastRunError && (
+				<p className="truncate pl-5 text-[10px] text-destructive/70">
+					{assignee.lastRunError}
+				</p>
+			)}
 		</button>
 	);
 }
@@ -134,7 +178,7 @@ export function AssigneesBar({
 	cards,
 	onSelectAssignee,
 }: AssigneesBarProps) {
-	const [isCollapsed, setIsCollapsed] = useState(false);
+	const [isCollapsed, setIsCollapsed] = useState(true);
 
 	if (!assignees.length) return null;
 

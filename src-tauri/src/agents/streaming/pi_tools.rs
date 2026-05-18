@@ -356,7 +356,7 @@ fn handle_send_thread_message(
         prepared.run_id,
     )?;
     prepared.result.started = receipt.started;
-    prepared.result.pending_send_id = receipt.task_id;
+    prepared.result.run_id = receipt.task_id;
     prepared.result.execution_state = receipt.execution_state.to_string();
     let result_value = serde_json::to_value(&prepared.result)?;
 
@@ -401,7 +401,7 @@ fn handle_send_assignee_message(
         prepared.run_id,
     )?;
     prepared.result.started = receipt.started;
-    prepared.result.pending_send_id = receipt.task_id;
+    prepared.result.run_id = receipt.task_id;
     prepared.result.execution_state = receipt.execution_state.to_string();
     let result_value = serde_json::to_value(&prepared.result)?;
 

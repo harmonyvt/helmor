@@ -1,5 +1,9 @@
 import type React from "react";
-import type { AssigneeReportMarker, WorkspaceDetail } from "@/lib/api";
+import type {
+	AssigneeReportMarker,
+	AssigneeSummary,
+	WorkspaceDetail,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
 	type GoalLaneDefinition,
@@ -20,6 +24,10 @@ type GoalLaneProps = {
 	onAssigneeClick?: (workspace: WorkspaceDetail) => void;
 	reportByWorkspaceId?: Map<string, AssigneeReportMarker>;
 	orchestratorStatusByWorkspaceId?: Map<string, string>;
+	assigneeSummaryByWorkspaceId?: Map<
+		string,
+		Pick<AssigneeSummary, "activeRunStatus" | "lastRunError">
+	>;
 	onDragStart: (id: string, lane: GoalLaneDefinition["id"]) => void;
 	onDragEnd: () => void;
 	onDragOver: (event: React.DragEvent) => void;
@@ -38,6 +46,7 @@ export function GoalLane({
 	onAssigneeClick,
 	reportByWorkspaceId,
 	orchestratorStatusByWorkspaceId,
+	assigneeSummaryByWorkspaceId,
 	onDragStart,
 	onDragEnd,
 	onDragOver,
@@ -97,6 +106,9 @@ export function GoalLane({
 							latestReport={reportByWorkspaceId?.get(workspace.id) ?? null}
 							orchestratorStatus={
 								orchestratorStatusByWorkspaceId?.get(workspace.id) ?? null
+							}
+							assigneeSummary={
+								assigneeSummaryByWorkspaceId?.get(workspace.id) ?? null
 							}
 							onDragStart={() => onDragStart(workspace.id, lane.id)}
 							onDragEnd={onDragEnd}

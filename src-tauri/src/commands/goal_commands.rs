@@ -232,7 +232,7 @@ pub async fn send_assignee_message(
         prepared.run_id,
     )?;
     result.started = receipt.started;
-    result.pending_send_id = receipt.task_id;
+    result.run_id = receipt.task_id;
     result.execution_state = receipt.execution_state.to_string();
     publish_goal_child_workspace_changes(
         &app,
@@ -257,7 +257,7 @@ pub async fn send_thread_message(
         prepared.run_id,
     )?;
     result.started = receipt.started;
-    result.pending_send_id = receipt.task_id;
+    result.run_id = receipt.task_id;
     result.execution_state = receipt.execution_state.to_string();
     publish_goal_child_workspace_changes(
         &app,

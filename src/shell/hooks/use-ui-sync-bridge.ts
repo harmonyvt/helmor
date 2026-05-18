@@ -356,6 +356,12 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.goalAssignees(event.goalWorkspaceId),
 			});
 			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.goalAssigneeRuns(
+					event.goalWorkspaceId,
+					event.workspaceId,
+				),
+			});
+			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
 			});
 			void queryClient.invalidateQueries({

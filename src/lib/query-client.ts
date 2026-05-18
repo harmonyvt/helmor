@@ -114,6 +114,10 @@ export const helmorQueryKeys = {
 		["goalChildWorkspaces", goalWorkspaceId] as const,
 	goalAssignees: (goalWorkspaceId: string) =>
 		["goalAssignees", goalWorkspaceId] as const,
+	goalAssigneeRuns: (goalWorkspaceId: string, workspaceId?: string) =>
+		workspaceId
+			? (["goalAssigneeRuns", goalWorkspaceId, workspaceId] as const)
+			: (["goalAssigneeRuns", goalWorkspaceId] as const),
 	workspaceSessions: (workspaceId: string) =>
 		["workspaceSessions", workspaceId] as const,
 	sessionContextUsage: (sessionId: string) =>
