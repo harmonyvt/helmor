@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::panic::Location;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -84,6 +85,23 @@ fn libsql_slot() -> &'static RwLock<Option<LibsqlBundle>> {
 const READ_POOL_SIZE: u32 = 8;
 const WRITE_POOL_SIZE: u32 = 1;
 const POOL_GET_TIMEOUT: Duration = Duration::from_secs(30);
+const LIBSQL_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+const SLOW_LIBSQL_WRITE_WARN_MS: u128 = 100;
+
+type BoxedDbFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+
+#[derive(Debug, Clone, Copy)]
+pub enum WalCheckpointMode {
+    Passive,
+    Truncate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalCheckpointStats {
+    pub busy: i64,
+    pub log_frames: i64,
+    pub checkpointed_frames: i64,
+}
 
 /// Unified per-connection initialization. Applied by both pools and by any
 /// ad-hoc `Connection::open` sites (schema init, tests, import).
@@ -177,6 +195,11 @@ async fn build_libsql_bundle_async(path: PathBuf) -> Result<LibsqlBundle> {
 /// Unified per-libSQL-connection initialization. This mirrors
 /// [`init_connection`] for the new local DB facade.
 async fn init_libsql_connection_async(conn: &libsql::Connection, writable: bool) -> Result<()> {
+    if writable {
+        conn.busy_timeout(LIBSQL_BUSY_TIMEOUT)
+            .context("Failed to set libSQL busy timeout")?;
+    }
+
     let mut sql = String::from(
         r#"
         PRAGMA temp_store = MEMORY;
@@ -187,9 +210,15 @@ async fn init_libsql_connection_async(conn: &libsql::Connection, writable: bool)
     if writable {
         sql.push_str(
             r#"
+            PRAGMA query_only = OFF;
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
-            PRAGMA busy_timeout = 3000;
+            "#,
+        );
+    } else {
+        sql.push_str(
+            r#"
+            PRAGMA query_only = ON;
             "#,
         );
     }
@@ -326,6 +355,44 @@ pub async fn libsql_conn_async() -> Result<libsql::Connection> {
     Ok(conn)
 }
 
+/// Open a libSQL connection intended for read-only work.
+///
+/// Local libSQL connections do not have an OS-level read-only open flag, so
+/// callers that need enforcement should use [`libsql_read_transaction_async`].
+pub async fn libsql_read_conn_async() -> Result<libsql::Connection> {
+    let (database, _) = libsql_async_parts().await?;
+    let conn = database
+        .connect()
+        .context("Failed to connect to local libSQL database")?;
+    init_libsql_connection_async(&conn, false).await?;
+    Ok(conn)
+}
+
+/// Run a read closure inside a libSQL `READONLY` transaction.
+pub async fn libsql_read_transaction_async<F, T>(f: F) -> Result<T>
+where
+    F: for<'tx> FnOnce(&'tx libsql::Transaction) -> BoxedDbFuture<'tx, T>,
+{
+    let conn = libsql_read_conn_async().await?;
+    let tx = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::ReadOnly)
+        .await
+        .context("Failed to start libSQL read-only transaction")?;
+    let result = f(&tx).await;
+    match result {
+        Ok(value) => {
+            tx.commit()
+                .await
+                .context("Failed to commit libSQL read-only transaction")?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = tx.rollback().await;
+            Err(error)
+        }
+    }
+}
+
 /// Run a closure with a libSQL connection under the single-writer lock.
 ///
 /// This is the target write path for migrated call sites. The legacy
@@ -336,15 +403,37 @@ pub async fn libsql_write<F, T>(f: F) -> Result<T>
 where
     F: FnOnce(&libsql::Connection) -> Result<T>,
 {
+    let caller = Location::caller();
     let (database, write_lock) = with_libsql_bundle(|bundle| {
         Ok((Arc::clone(&bundle.database), Arc::clone(&bundle.write_lock)))
     })?;
+    let wait_start = std::time::Instant::now();
     let _guard = write_lock.lock().await;
+    let wait_ms = wait_start.elapsed().as_millis();
+    if wait_ms >= SLOW_LIBSQL_WRITE_WARN_MS {
+        tracing::warn!(
+            elapsed_ms = wait_ms,
+            caller_file = caller.file(),
+            caller_line = caller.line(),
+            "db: slow libSQL write lock wait"
+        );
+    }
+    let held_start = std::time::Instant::now();
     let conn = database
         .connect()
         .context("Failed to connect to local libSQL database")?;
     init_libsql_connection_async(&conn, true).await?;
-    f(&conn)
+    let result = f(&conn);
+    let held_ms = held_start.elapsed().as_millis();
+    if held_ms >= SLOW_LIBSQL_WRITE_WARN_MS {
+        tracing::warn!(
+            elapsed_ms = held_ms,
+            caller_file = caller.file(),
+            caller_line = caller.line(),
+            "db: slow libSQL write lock hold"
+        );
+    }
+    result
 }
 
 /// Run an async closure with a libSQL connection under the single-writer lock.
@@ -354,13 +443,99 @@ where
     F: FnOnce(libsql::Connection) -> Fut,
     Fut: Future<Output = Result<T>>,
 {
+    let caller = Location::caller();
     let (database, write_lock) = libsql_async_parts().await?;
+    let wait_start = std::time::Instant::now();
     let _guard = write_lock.lock().await;
+    let wait_ms = wait_start.elapsed().as_millis();
+    if wait_ms >= SLOW_LIBSQL_WRITE_WARN_MS {
+        tracing::warn!(
+            elapsed_ms = wait_ms,
+            caller_file = caller.file(),
+            caller_line = caller.line(),
+            "db: slow libSQL write lock wait"
+        );
+    }
+    let held_start = std::time::Instant::now();
     let conn = database
         .connect()
         .context("Failed to connect to local libSQL database")?;
     init_libsql_connection_async(&conn, true).await?;
-    f(conn).await
+    let result = f(conn).await;
+    let held_ms = held_start.elapsed().as_millis();
+    if held_ms >= SLOW_LIBSQL_WRITE_WARN_MS {
+        tracing::warn!(
+            elapsed_ms = held_ms,
+            caller_file = caller.file(),
+            caller_line = caller.line(),
+            "db: slow libSQL write lock hold"
+        );
+    }
+    result
+}
+
+/// Run a write closure inside a libSQL `IMMEDIATE` transaction.
+///
+/// This claims the single writer up front, avoiding deferred transaction
+/// upgrade surprises while still preserving Helmor's app-level writer queue.
+#[allow(dead_code)]
+pub async fn libsql_write_transaction_async<F, T>(f: F) -> Result<T>
+where
+    F: for<'tx> FnOnce(&'tx libsql::Transaction) -> BoxedDbFuture<'tx, T>,
+{
+    let caller = Location::caller();
+    libsql_write_async(|conn| async move {
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .context("Failed to start libSQL immediate write transaction")?;
+        let result = f(&tx).await;
+        match result {
+            Ok(value) => {
+                tx.commit()
+                    .await
+                    .context("Failed to commit libSQL write transaction")?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = tx.rollback().await;
+                Err(error)
+            }
+        }
+    })
+    .await
+    .with_context(|| {
+        format!(
+            "libSQL write transaction failed at {}:{}",
+            caller.file(),
+            caller.line()
+        )
+    })
+}
+
+#[allow(dead_code)]
+pub async fn checkpoint_wal_async(mode: WalCheckpointMode) -> Result<WalCheckpointStats> {
+    let sql = match mode {
+        WalCheckpointMode::Passive => "PRAGMA wal_checkpoint(PASSIVE)",
+        WalCheckpointMode::Truncate => "PRAGMA wal_checkpoint(TRUNCATE)",
+    };
+    libsql_write_async(|conn| async move {
+        let mut rows = conn
+            .query(sql, ())
+            .await
+            .context("Failed to run WAL checkpoint")?;
+        let Some(row) = rows.next().await? else {
+            return Err(anyhow!("WAL checkpoint returned no rows"));
+        };
+        Ok(WalCheckpointStats {
+            busy: row.get(0).context("Failed to read checkpoint busy flag")?,
+            log_frames: row.get(1).context("Failed to read checkpoint log frames")?,
+            checkpointed_frames: row
+                .get(2)
+                .context("Failed to read checkpointed WAL frames")?,
+        })
+    })
+    .await
 }
 
 /// Ensure the local database file, libSQL handle, schema, and compatibility
@@ -643,6 +818,92 @@ mod tests {
             msg.contains("read-only") || msg.contains("readonly"),
             "expected read-only rejection, got: {msg}",
         );
+    }
+
+    #[test]
+    fn libsql_read_transaction_rejects_writes() {
+        let _env = test_env();
+        ensure_ready().unwrap();
+        tauri::async_runtime::block_on(libsql_write_async(|conn| async move {
+            conn.execute("CREATE TABLE readonly_probe (id INTEGER PRIMARY KEY)", ())
+                .await?;
+            Ok(())
+        }))
+        .unwrap();
+
+        let err = tauri::async_runtime::block_on(libsql_read_transaction_async(|tx| {
+            Box::pin(async move {
+                tx.execute("INSERT INTO readonly_probe (id) VALUES (1)", ())
+                    .await?;
+                Ok(())
+            })
+        }))
+        .unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("readonly") || msg.contains("read-only") || msg.contains("write"),
+            "expected read-only rejection, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn libsql_immediate_write_transaction_commits() {
+        let _env = test_env();
+        ensure_ready().unwrap();
+        tauri::async_runtime::block_on(libsql_write_async(|conn| async move {
+            conn.execute(
+                "CREATE TABLE write_tx_probe (id INTEGER PRIMARY KEY, v TEXT)",
+                (),
+            )
+            .await?;
+            Ok(())
+        }))
+        .unwrap();
+
+        tauri::async_runtime::block_on(libsql_write_transaction_async(|tx| {
+            Box::pin(async move {
+                tx.execute(
+                    "INSERT INTO write_tx_probe (id, v) VALUES (1, 'committed')",
+                    (),
+                )
+                .await?;
+                Ok(())
+            })
+        }))
+        .unwrap();
+
+        let value: String = tauri::async_runtime::block_on(libsql_read_transaction_async(|tx| {
+            Box::pin(async move {
+                let mut rows = tx
+                    .query("SELECT v FROM write_tx_probe WHERE id = 1", ())
+                    .await?;
+                let row = rows.next().await?.expect("inserted row");
+                row.get(0).map_err(Into::into)
+            })
+        }))
+        .unwrap();
+        assert_eq!(value, "committed");
+    }
+
+    #[test]
+    fn libsql_wal_checkpoint_reports_stats() {
+        let _env = test_env();
+        ensure_ready().unwrap();
+        tauri::async_runtime::block_on(libsql_write_async(|conn| async move {
+            conn.execute("CREATE TABLE checkpoint_probe (id INTEGER PRIMARY KEY)", ())
+                .await?;
+            conn.execute("INSERT INTO checkpoint_probe (id) VALUES (1)", ())
+                .await?;
+            Ok(())
+        }))
+        .unwrap();
+
+        let stats =
+            tauri::async_runtime::block_on(checkpoint_wal_async(WalCheckpointMode::Passive))
+                .unwrap();
+        assert!(stats.busy >= 0);
+        assert!(stats.log_frames >= 0);
+        assert!(stats.checkpointed_frames >= 0);
     }
 
     #[test]

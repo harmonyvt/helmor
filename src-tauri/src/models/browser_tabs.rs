@@ -6,6 +6,8 @@ use uuid::Uuid;
 
 use crate::models::db;
 
+mod libsql;
+
 pub const DEFAULT_BROWSER_URL: &str = "https://www.google.com";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,44 +74,42 @@ pub fn get_browser_tab(tab_id: &str) -> Result<Option<BrowserTabRecord>> {
 }
 
 async fn list_workspace_browser_tabs_async(workspace_id: &str) -> Result<Vec<BrowserTabRecord>> {
-    let connection = db::libsql_conn_async().await?;
-    let mut rows = connection
-        .query(
-            r#"
-        SELECT id, workspace_id, url, title, display_order, active, created_at, updated_at
-        FROM workspace_browser_tabs
-        WHERE workspace_id = ?1
-        ORDER BY display_order ASC, datetime(created_at) ASC, id ASC
-        "#,
-            [workspace_id.to_string()],
-        )
-        .await
-        .context("Failed to query workspace browser tabs")?;
+    let workspace_id = workspace_id.to_string();
+    db::libsql_read_transaction_async(|connection| {
+        Box::pin(async move {
+            let mut rows = connection
+                .query(
+                    r#"
+                    SELECT id, workspace_id, url, title, display_order, active, created_at, updated_at
+                    FROM workspace_browser_tabs
+                    WHERE workspace_id = ?1
+                    ORDER BY display_order ASC, datetime(created_at) ASC, id ASC
+                    "#,
+                    [workspace_id],
+                )
+                .await
+                .context("Failed to query workspace browser tabs")?;
 
-    let mut tabs = Vec::new();
-    while let Some(row) = rows.next().await? {
-        tabs.push(record_from_libsql_row(&row)?);
-    }
-    Ok(tabs)
+            let mut tabs = Vec::new();
+            while let Some(row) = rows.next().await? {
+                tabs.push(libsql::record_from_row(&row)?);
+            }
+            Ok(tabs)
+        })
+    })
+    .await
 }
 
 async fn get_browser_tab_async(tab_id: &str) -> Result<Option<BrowserTabRecord>> {
-    let connection = db::libsql_conn_async().await?;
-    let mut rows = connection
-        .query(
-            r#"
-            SELECT id, workspace_id, url, title, display_order, active, created_at, updated_at
-            FROM workspace_browser_tabs
-            WHERE id = ?1
-            "#,
-            [tab_id.to_string()],
-        )
-        .await
-        .context("Failed to query browser tab")?;
-    rows.next()
-        .await?
-        .map(|row| record_from_libsql_row(&row))
-        .transpose()
+    let tab_id = tab_id.to_string();
+    db::libsql_read_transaction_async(|connection| {
+        Box::pin(async move {
+            libsql::load_browser_tab(connection, &tab_id)
+                .await
+                .context("Failed to query browser tab")
+        })
+    })
+    .await
 }
 
 pub fn list_workspace_browser_tabs_on(
@@ -133,7 +133,10 @@ pub fn create_browser_tab(
     initial_url: Option<&str>,
 ) -> Result<BrowserTabRecord> {
     let url = normalize_browser_url(initial_url)?;
-    db::write_transaction(|tx| create_browser_tab_on(tx, workspace_id, &url))
+    let workspace_id = workspace_id.to_string();
+    tauri::async_runtime::block_on(db::libsql_write_transaction_async(|tx| {
+        Box::pin(async move { libsql::create_browser_tab_on(tx, &workspace_id, &url).await })
+    }))
 }
 
 pub fn create_browser_tab_on(
@@ -160,7 +163,10 @@ pub fn create_browser_tab_on(
 }
 
 pub fn select_browser_tab(tab_id: &str) -> Result<BrowserTabRecord> {
-    db::write_transaction(|tx| select_browser_tab_on(tx, tab_id))
+    let tab_id = tab_id.to_string();
+    tauri::async_runtime::block_on(db::libsql_write_transaction_async(|tx| {
+        Box::pin(async move { libsql::select_browser_tab_on(tx, &tab_id).await })
+    }))
 }
 
 pub fn select_browser_tab_on(tx: &Transaction<'_>, tab_id: &str) -> Result<BrowserTabRecord> {
@@ -176,7 +182,10 @@ pub fn select_browser_tab_on(tx: &Transaction<'_>, tab_id: &str) -> Result<Brows
 
 pub fn navigate_browser_tab(tab_id: &str, url: &str) -> Result<BrowserTabRecord> {
     let url = normalize_browser_url(Some(url))?;
-    db::write_transaction(|tx| navigate_browser_tab_on(tx, tab_id, &url))
+    let tab_id = tab_id.to_string();
+    tauri::async_runtime::block_on(db::libsql_write_transaction_async(|tx| {
+        Box::pin(async move { libsql::navigate_browser_tab_on(tx, &tab_id, &url).await })
+    }))
 }
 
 pub fn navigate_browser_tab_on(
@@ -198,16 +207,21 @@ pub fn update_browser_tab_title(
     tab_id: &str,
     title: Option<&str>,
 ) -> Result<Option<BrowserTabRecord>> {
-    db::write_transaction(|tx| {
-        let Some(_) = load_browser_tab_on(tx, tab_id)? else {
-            return Ok(None);
-        };
-        tx.execute(
-            "UPDATE workspace_browser_tabs SET title = ?1 WHERE id = ?2",
-            params![title, tab_id],
-        )?;
-        load_browser_tab_on(tx, tab_id)
-    })
+    let tab_id = tab_id.to_string();
+    let title = title.map(str::to_string);
+    tauri::async_runtime::block_on(db::libsql_write_transaction_async(|tx| {
+        Box::pin(async move {
+            let Some(_) = libsql::load_browser_tab(tx, &tab_id).await? else {
+                return Ok(None);
+            };
+            tx.execute(
+                "UPDATE workspace_browser_tabs SET title = ?1 WHERE id = ?2",
+                ::libsql::params![title, tab_id.clone()],
+            )
+            .await?;
+            libsql::load_browser_tab(tx, &tab_id).await
+        })
+    }))
 }
 
 pub fn close_browser_tab(tab_id: &str) -> Result<Option<BrowserTabRecord>> {
@@ -215,7 +229,10 @@ pub fn close_browser_tab(tab_id: &str) -> Result<Option<BrowserTabRecord>> {
 }
 
 pub fn close_browser_tab_with_workspace(tab_id: &str) -> Result<Option<ClosedBrowserTabResult>> {
-    db::write_transaction(|tx| close_browser_tab_with_workspace_on(tx, tab_id))
+    let tab_id = tab_id.to_string();
+    tauri::async_runtime::block_on(db::libsql_write_transaction_async(|tx| {
+        Box::pin(async move { libsql::close_browser_tab_with_workspace_on(tx, &tab_id).await })
+    }))
 }
 
 pub fn close_browser_tab_with_workspace_on(
@@ -306,30 +323,6 @@ fn load_browser_tab_on(connection: &Connection, tab_id: &str) -> Result<Option<B
         .map_err(Into::into)
 }
 
-fn record_from_libsql_row(row: &libsql::Row) -> Result<BrowserTabRecord> {
-    let active: i64 = row
-        .get(5)
-        .context("Failed to read browser tab active flag")?;
-    Ok(BrowserTabRecord {
-        id: row.get(0).context("Failed to read browser tab id")?,
-        workspace_id: row
-            .get(1)
-            .context("Failed to read browser tab workspace id")?,
-        url: row.get(2).context("Failed to read browser tab url")?,
-        title: row.get(3).context("Failed to read browser tab title")?,
-        display_order: row
-            .get(4)
-            .context("Failed to read browser tab display order")?,
-        active: active != 0,
-        created_at: row
-            .get(6)
-            .context("Failed to read browser tab created_at")?,
-        updated_at: row
-            .get(7)
-            .context("Failed to read browser tab updated_at")?,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,6 +354,24 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap()
+    }
+
+    fn setup_libsql_env() -> crate::testkit::TestEnv {
+        let env = crate::testkit::TestEnv::new("browser-tabs-libsql");
+        let connection = env.db_connection();
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, root_path) VALUES ('repo-1', 'repo', '/tmp/repo')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('ws-1', 'repo-1', 'work')",
+                [],
+            )
+            .unwrap();
+        env
     }
 
     #[test]
@@ -395,6 +406,30 @@ mod tests {
         assert!(fallback.active);
         assert_eq!(active_count(&tx, "ws-1"), 1);
         tx.commit().unwrap();
+    }
+
+    #[test]
+    fn top_level_browser_tab_api_uses_libsql_path() {
+        let _env = setup_libsql_env();
+
+        let first = create_browser_tab("ws-1", Some("example.com")).unwrap();
+        let second = create_browser_tab("ws-1", Some("example.org")).unwrap();
+        assert_eq!(list_workspace_browser_tabs("ws-1").unwrap().len(), 2);
+        assert!(!get_browser_tab(&first.id).unwrap().unwrap().active);
+        assert!(second.active);
+
+        let first = select_browser_tab(&first.id).unwrap();
+        assert!(first.active);
+        let first = navigate_browser_tab(&first.id, "example.net").unwrap();
+        assert_eq!(first.url, "https://example.net/");
+        let titled = update_browser_tab_title(&first.id, Some("Example"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(titled.title.as_deref(), Some("Example"));
+
+        let fallback = close_browser_tab(&first.id).unwrap().unwrap();
+        assert_eq!(fallback.id, second.id);
+        assert!(fallback.active);
     }
 
     #[test]

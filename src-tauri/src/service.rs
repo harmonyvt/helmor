@@ -222,7 +222,7 @@ pub fn send_message(
         let pending_send_id =
             block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
                 let tx = conn
-                    .transaction()
+                    .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
                     .await
                     .context("Failed to start pending CLI send transaction")?;
                 persist_send_start_on_libsql_tx(
@@ -1124,7 +1124,7 @@ fn pending_cli_send_from_libsql_row(row: &libsql::Row) -> Result<PendingCliSend>
 pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
     block_on_service_db(crate::models::db::libsql_write_async(|conn| async move {
         let tx = conn
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start pending send drain")?;
 

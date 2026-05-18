@@ -156,7 +156,7 @@ async fn finalize_session_metadata_libsql(
 ) -> Result<()> {
     let now = crate::models::db::current_timestamp()?;
     let transaction = conn
-        .transaction()
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
         .await
         .context("Failed to start finalize_session_metadata transaction")?;
 

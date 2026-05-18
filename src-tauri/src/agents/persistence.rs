@@ -520,7 +520,9 @@ pub(super) async fn persist_result_and_finalize_libsql(
         .to_string()
     });
 
-    let transaction = conn.transaction().await?;
+    let transaction = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
 
     transaction
         .execute(
@@ -564,7 +566,9 @@ pub(super) async fn finalize_session_metadata_libsql(
     permission_mode: Option<&str>,
 ) -> Result<()> {
     let now = current_timestamp_string()?;
-    let transaction = conn.transaction().await?;
+    let transaction = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
     finalize_session_metadata_in_libsql_transaction(
         &transaction,
         ctx,

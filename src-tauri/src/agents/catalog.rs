@@ -281,42 +281,31 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         return model;
     }
 
+    if let Some(option) = builtin_model_option(model_id) {
+        return resolved_from_option(option);
+    }
+
+    if model_id.starts_with("claude-custom|") {
+        if let Some(model) = super::custom_providers::resolve(model_id) {
+            return ResolvedModel {
+                id: model.id,
+                provider: "claude".to_string(),
+                cli_model: model.cli_model,
+                supports_effort: true,
+                claude_base_url: Some(model.base_url),
+                claude_auth_token: Some(model.api_key),
+                codex_profile: None,
+                codex_model_provider: None,
+            };
+        }
+    }
+
     if let Some(model) = dynamic_pi_model(model_id) {
         return model;
     }
 
     if let Some(model) = codex_profile_model(model_id) {
         return model;
-    }
-
-    if let Some(model) = super::custom_providers::resolve(model_id) {
-        return ResolvedModel {
-            id: model.id,
-            provider: "claude".to_string(),
-            cli_model: model.cli_model,
-            supports_effort: true,
-            claude_base_url: Some(model.base_url),
-            claude_auth_token: Some(model.api_key),
-            codex_profile: None,
-            codex_model_provider: None,
-        };
-    }
-
-    if let Some(option) = static_model_sections()
-        .into_iter()
-        .flat_map(|section| section.options)
-        .find(|option| option.id == model_id)
-    {
-        return ResolvedModel {
-            id: option.id,
-            provider: option.provider,
-            cli_model: option.cli_model,
-            supports_effort: !option.effort_levels.is_empty(),
-            claude_base_url: None,
-            claude_auth_token: None,
-            codex_profile: option.codex_profile,
-            codex_model_provider: None,
-        };
     }
 
     let provider = if model_id.starts_with("gpt-") {
@@ -332,6 +321,28 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         claude_base_url: None,
         claude_auth_token: None,
         codex_profile: None,
+        codex_model_provider: None,
+    }
+}
+
+fn builtin_model_option(model_id: &str) -> Option<AgentModelOption> {
+    official_claude_section()
+        .options
+        .into_iter()
+        .chain(codex_section(Vec::new()).options)
+        .chain(pi_section().options)
+        .find(|option| option.id == model_id)
+}
+
+fn resolved_from_option(option: AgentModelOption) -> ResolvedModel {
+    ResolvedModel {
+        id: option.id,
+        provider: option.provider,
+        cli_model: option.cli_model,
+        supports_effort: !option.effort_levels.is_empty(),
+        claude_base_url: None,
+        claude_auth_token: None,
+        codex_profile: option.codex_profile,
         codex_model_provider: None,
     }
 }

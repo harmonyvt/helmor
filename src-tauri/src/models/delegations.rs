@@ -79,7 +79,7 @@ pub async fn create_delegation_anchor_async(
 ) -> Result<CreatedDelegation> {
     db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start delegation transaction")?;
         let created = create_delegation_anchor_in_transaction(&transaction, input).await?;
@@ -232,7 +232,7 @@ pub async fn update_delegation_status_async(
     let structured_result = structured_result.map(|value| value.to_string());
     db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start delegation update transaction")?;
 

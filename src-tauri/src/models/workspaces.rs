@@ -379,7 +379,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_metadata(
 
     block_on_workspace_db(db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start create-workspace transaction")?;
 
@@ -502,7 +502,7 @@ pub(crate) fn delete_workspace_and_session_rows(workspace_id: &str) -> Result<()
     let workspace_id = workspace_id.to_string();
     block_on_workspace_db(db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start create cleanup transaction")?;
 
@@ -607,7 +607,7 @@ pub(crate) fn update_archived_workspace_state(
     let archive_commit = archive_commit.to_string();
     block_on_workspace_db(db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start archive transaction")?;
 
@@ -650,7 +650,7 @@ pub(crate) fn update_restored_workspace_state(
     let target_branch_override = target_branch_override.map(str::to_string);
     block_on_workspace_db(db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start restore transaction")?;
 

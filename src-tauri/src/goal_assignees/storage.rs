@@ -29,7 +29,9 @@ pub(super) fn queue_assignee_prompt(
     let message = message.to_string();
 
     block_on_assignee_storage_db(db::libsql_write_async(|connection| async move {
-        let tx = connection.transaction().await?;
+        let tx = connection
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await?;
         let supervisor_message_id =
             persist_supervisor_message_libsql_tx(&tx, &session_id, &message)
                 .await

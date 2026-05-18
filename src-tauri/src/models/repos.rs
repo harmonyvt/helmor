@@ -970,7 +970,7 @@ pub async fn delete_repository_cascade_async(repo_id: &str) -> Result<()> {
     let repo_id = repo_id.to_string();
     db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start delete repository transaction")?;
 

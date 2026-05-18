@@ -680,7 +680,7 @@ pub async fn mark_session_read_async(session_id: &str) -> Result<()> {
     let session_id = session_id.to_string();
     db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start mark-read transaction")?;
 
@@ -702,7 +702,7 @@ pub async fn mark_session_unread_async(session_id: &str) -> Result<()> {
     let session_id = session_id.to_string();
     db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start mark-unread transaction")?;
 
@@ -1154,7 +1154,7 @@ async fn create_session_with_options_async(
 
     db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start create-session transaction")?;
 
@@ -1414,7 +1414,7 @@ pub async fn hide_session_async(session_id: &str) -> Result<()> {
     let session_id = session_id.to_string();
     db::libsql_write_async(|connection| async move {
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .context("Failed to start hide-session transaction")?;
 
@@ -1505,7 +1505,9 @@ pub fn delete_session(session_id: &str) -> Result<()> {
 pub async fn delete_session_async(session_id: &str) -> Result<()> {
     let session_id = session_id.to_string();
     db::libsql_write_async(|connection| async move {
-        let transaction = connection.transaction().await?;
+        let transaction = connection
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await?;
 
         let mut workspace_rows = transaction
             .query(

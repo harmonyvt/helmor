@@ -41,34 +41,35 @@ fn can_replace_session_title(current_title: &str, title_seed: Option<&str>) -> b
 async fn load_session_title_action_kind(
     session_id: &str,
 ) -> anyhow::Result<(String, Option<super::ActionKind>)> {
-    let connection = crate::models::db::libsql_conn_async()
-        .await
-        .context("Failed to open DB")?;
-    let mut rows = connection
-        .query(
-            "SELECT title, action_kind FROM sessions WHERE id = ?1",
-            [session_id.to_string()],
-        )
-        .await
-        .with_context(|| format!("Failed to query session {session_id}"))?;
-    let Some(row) = rows.next().await? else {
-        bail!("Session not found");
-    };
+    let session_id = session_id.to_string();
+    crate::models::db::libsql_read_transaction_async(|connection| {
+        Box::pin(async move {
+            let mut rows = connection
+                .query(
+                    "SELECT title, action_kind FROM sessions WHERE id = ?1",
+                    [session_id.clone()],
+                )
+                .await
+                .with_context(|| format!("Failed to query session {session_id}"))?;
+            let Some(row) = rows.next().await? else {
+                bail!("Session not found");
+            };
 
-    let title = row.get(0).context("Failed to read session title")?;
-    let action_kind = row
-        .get::<Option<String>>(1)
-        .context("Failed to read session action kind")?
-        .map(|kind| super::ActionKind::from_str(&kind))
-        .transpose()
-        .context("Failed to parse session action kind")?;
-    Ok((title, action_kind))
+            let title = row.get(0).context("Failed to read session title")?;
+            let action_kind = row
+                .get::<Option<String>>(1)
+                .context("Failed to read session action kind")?
+                .map(|kind| super::ActionKind::from_str(&kind))
+                .transpose()
+                .context("Failed to parse session action kind")?;
+            Ok((title, action_kind))
+        })
+    })
+    .await
 }
 
 async fn load_title_workspace_info(session_id: &str) -> anyhow::Result<Option<WorkspaceInfo>> {
-    let connection = crate::models::db::libsql_conn_async()
-        .await
-        .context("Failed to open DB")?;
+    let session_id = session_id.to_string();
     let sql = format!(
         r#"SELECT w.id, r.id, r.root_path, w.directory_name, w.branch
            FROM workspaces w
@@ -77,55 +78,66 @@ async fn load_title_workspace_info(session_id: &str) -> anyhow::Result<Option<Wo
            WHERE s.id = ?1 AND w.state {}"#,
         workspace_state::OPERATIONAL_FILTER,
     );
-    let mut rows = connection
-        .query(&sql, [session_id.to_string()])
-        .await
-        .with_context(|| format!("Failed to query workspace for session {session_id}"))?;
-    let Some(row) = rows.next().await? else {
-        return Ok(None);
-    };
-    Ok(Some((
-        row.get(0).context("Failed to read workspace id")?,
-        row.get(1).context("Failed to read repository id")?,
-        row.get(2).context("Failed to read repository root path")?,
-        row.get(3)
-            .context("Failed to read workspace directory name")?,
-        row.get(4).context("Failed to read workspace branch")?,
-    )))
+    crate::models::db::libsql_read_transaction_async(|connection| {
+        Box::pin(async move {
+            let mut rows = connection
+                .query(&sql, [session_id.clone()])
+                .await
+                .with_context(|| format!("Failed to query workspace for session {session_id}"))?;
+            let Some(row) = rows.next().await? else {
+                return Ok(None);
+            };
+            Ok(Some((
+                row.get(0).context("Failed to read workspace id")?,
+                row.get(1).context("Failed to read repository id")?,
+                row.get(2).context("Failed to read repository root path")?,
+                row.get(3)
+                    .context("Failed to read workspace directory name")?,
+                row.get(4).context("Failed to read workspace branch")?,
+            )))
+        })
+    })
+    .await
 }
 
 async fn load_latest_session_title(session_id: &str) -> anyhow::Result<Option<String>> {
-    let connection = crate::models::db::libsql_conn_async()
-        .await
-        .context("Failed to open DB")?;
-    let mut rows = connection
-        .query(
-            "SELECT title FROM sessions WHERE id = ?1",
-            [session_id.to_string()],
-        )
-        .await
-        .with_context(|| format!("Failed to query session title for {session_id}"))?;
-    match rows.next().await? {
-        Some(row) => row.get(0).map(Some).context("Failed to read session title"),
-        None => Ok(None),
-    }
+    let session_id = session_id.to_string();
+    crate::models::db::libsql_read_transaction_async(|connection| {
+        Box::pin(async move {
+            let mut rows = connection
+                .query(
+                    "SELECT title FROM sessions WHERE id = ?1",
+                    [session_id.clone()],
+                )
+                .await
+                .with_context(|| format!("Failed to query session title for {session_id}"))?;
+            match rows.next().await? {
+                Some(row) => row.get(0).map(Some).context("Failed to read session title"),
+                None => Ok(None),
+            }
+        })
+    })
+    .await
 }
 
 async fn load_workspace_branch(workspace_id: &str) -> anyhow::Result<Option<String>> {
-    let connection = crate::models::db::libsql_conn_async()
-        .await
-        .context("Failed to open DB")?;
-    let mut rows = connection
-        .query(
-            "SELECT branch FROM workspaces WHERE id = ?1",
-            [workspace_id.to_string()],
-        )
-        .await
-        .with_context(|| format!("Failed to query workspace branch for {workspace_id}"))?;
-    match rows.next().await? {
-        Some(row) => row.get(0).context("Failed to read workspace branch"),
-        None => Ok(None),
-    }
+    let workspace_id = workspace_id.to_string();
+    crate::models::db::libsql_read_transaction_async(|connection| {
+        Box::pin(async move {
+            let mut rows = connection
+                .query(
+                    "SELECT branch FROM workspaces WHERE id = ?1",
+                    [workspace_id.clone()],
+                )
+                .await
+                .with_context(|| format!("Failed to query workspace branch for {workspace_id}"))?;
+            match rows.next().await? {
+                Some(row) => row.get(0).context("Failed to read workspace branch"),
+                None => Ok(None),
+            }
+        })
+    })
+    .await
 }
 
 async fn update_workspace_branch(workspace_id: &str, branch: &str) -> anyhow::Result<()> {

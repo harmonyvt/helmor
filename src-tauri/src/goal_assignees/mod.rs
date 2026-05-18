@@ -462,7 +462,9 @@ pub async fn set_card_assignee_thread_async(
     let superseded_thread_id_for_write = superseded_thread_id.clone();
     let reason = request.reason.clone();
     crate::models::db::libsql_write_async(|connection| async move {
-        let tx = connection.transaction().await?;
+        let tx = connection
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await?;
         tx.execute(
             "UPDATE workspaces SET active_session_id = ?2 WHERE id = ?1",
             libsql::params![workspace_id.clone(), session_id.clone()],
