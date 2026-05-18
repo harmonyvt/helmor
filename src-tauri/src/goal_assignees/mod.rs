@@ -194,6 +194,21 @@ pub struct SetCardAssigneeThreadResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AssigneeRunSummary {
+    pub run_id: String,
+    pub status: String,
+    pub prompt: String,
+    pub model_id: Option<String>,
+    pub permission_mode: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub last_event_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssigneeSummary {
     pub card_id: String,
     pub workspace_id: String,
@@ -208,6 +223,8 @@ pub struct AssigneeSummary {
     pub last_run_error: Option<String>,
     /// Number of runs in `queued` state for this assignee session.
     pub pending_run_count: i64,
+    /// Most-recent durable scheduler/background run for this assignee session.
+    pub latest_run: Option<AssigneeRunSummary>,
 }
 
 pub fn send_assignee_message(
@@ -657,10 +674,9 @@ pub async fn list_assignees_async(request: ListAssigneesRequest) -> Result<Vec<A
             }
         }
 
-        let (active_run_status, last_run_error, pending_run_count) =
-            latest_run_summary_async(&assignee.session.id)
-                .await
-                .unwrap_or((None, None, 0));
+        let run_summary = latest_run_summary_async(&assignee.session.id)
+            .await
+            .unwrap_or_else(|_| LatestRunSummary::default());
 
         out.push(AssigneeSummary {
             card_id: workspace.id.clone(),
@@ -670,9 +686,17 @@ pub async fn list_assignees_async(request: ListAssigneesRequest) -> Result<Vec<A
             assignee_name: assignee_name(&assignee.session),
             session_status: assignee.session.status,
             latest_report,
-            active_run_status,
-            last_run_error,
-            pending_run_count,
+            active_run_status: run_summary
+                .latest_run
+                .as_ref()
+                .map(|run| run.status.clone()),
+            last_run_error: run_summary.latest_run.as_ref().and_then(|run| {
+                (run.status == "failed")
+                    .then(|| run.error.clone())
+                    .flatten()
+            }),
+            pending_run_count: run_summary.pending_run_count,
+            latest_run: run_summary.latest_run,
         });
     }
 
@@ -977,20 +1001,19 @@ fn detect_stale_reason(
     None
 }
 
-/// Returns `(active_run_status, last_run_error, pending_run_count)` for a session.
-///
-/// `active_run_status` is the status of the most-recently created run. `last_run_error`
-/// is populated only when that run has `status = 'failed'`. `pending_run_count` is the
-/// number of runs still in `queued` state.
-async fn latest_run_summary_async(
-    session_id: &str,
-) -> Result<(Option<String>, Option<String>, i64)> {
+#[derive(Default)]
+struct LatestRunSummary {
+    latest_run: Option<AssigneeRunSummary>,
+    pending_run_count: i64,
+}
+
+async fn latest_run_summary_async(session_id: &str) -> Result<LatestRunSummary> {
     let connection = crate::models::db::libsql_conn_async().await?;
-    // Latest run by creation time
     let mut rows = connection
         .query(
             r#"
-            SELECT status, error
+            SELECT id, status, prompt, model_id, permission_mode, error,
+                   created_at, started_at, completed_at, last_event_at
             FROM goal_assignee_runs
             WHERE session_id = ?1
             ORDER BY datetime(created_at) DESC, created_at DESC
@@ -999,20 +1022,23 @@ async fn latest_run_summary_async(
             [session_id.to_string()],
         )
         .await?;
-    let (active_run_status, last_run_error) = match rows.next().await? {
-        Some(row) => {
-            let status: Option<String> = row.get(0).ok();
-            let error: Option<String> = row.get(1).ok().flatten();
-            let err = if status.as_deref() == Some("failed") {
-                error
-            } else {
-                None
-            };
-            (status, err)
-        }
-        None => (None, None),
+    let latest_run = match rows.next().await? {
+        Some(row) => Some(AssigneeRunSummary {
+            run_id: row.get(0).context("Failed to read assignee run id")?,
+            status: row.get(1).context("Failed to read assignee run status")?,
+            prompt: row.get(2).context("Failed to read assignee run prompt")?,
+            model_id: row.get(3).ok().flatten(),
+            permission_mode: row.get(4).ok().flatten(),
+            error: row.get(5).ok().flatten(),
+            created_at: row
+                .get(6)
+                .context("Failed to read assignee run created_at")?,
+            started_at: row.get(7).ok().flatten(),
+            completed_at: row.get(8).ok().flatten(),
+            last_event_at: row.get(9).ok().flatten(),
+        }),
+        None => None,
     };
-    // Count queued runs
     let mut count_rows = connection
         .query(
             "SELECT COUNT(*) FROM goal_assignee_runs WHERE session_id = ?1 AND status = 'queued'",
@@ -1023,7 +1049,10 @@ async fn latest_run_summary_async(
         Some(row) => row.get(0).unwrap_or(0),
         None => 0,
     };
-    Ok((active_run_status, last_run_error, pending_run_count))
+    Ok(LatestRunSummary {
+        latest_run,
+        pending_run_count,
+    })
 }
 
 fn assignee_name(session: &sessions::WorkspaceSessionSummary) -> String {

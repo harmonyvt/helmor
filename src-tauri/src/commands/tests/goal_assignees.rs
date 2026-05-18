@@ -1,5 +1,5 @@
 use super::support::*;
-use crate::goal_assignees::{self, SendAssigneeMessageRequest};
+use crate::goal_assignees::{self, ListAssigneesRequest, SendAssigneeMessageRequest};
 use crate::pipeline::types::{CollectedTurn, MessageRole};
 use serde_json::json;
 
@@ -146,7 +146,7 @@ fn prepared_assignee_message_persists_run_before_background_send() {
     assert!(prepared.result.queued);
     assert!(!prepared.result.started);
     assert_eq!(prepared.result.execution_state, "queued");
-    assert_eq!(prepared.run_id, prepared.result.pending_send_id);
+    assert_eq!(prepared.run_id, prepared.result.run_id);
     assert!(prepared.result.supervisor_message_id.is_some());
 
     let (status, prompt, supervisor_message_id): (String, String, String) = connection
@@ -171,6 +171,67 @@ fn prepared_assignee_message_persists_run_before_background_send() {
         )
         .unwrap();
     assert_eq!(pending_count, 0, "durable assignee runs replace CLI sends");
+}
+
+#[test]
+fn list_assignees_includes_latest_durable_run_details() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let connection = Connection::open(harness.db_path()).unwrap();
+    insert_goal_with_child(&connection, &harness.repo_id);
+    connection
+        .execute(
+            r#"
+            INSERT INTO goal_assignee_runs (
+                id, goal_workspace_id, workspace_id, session_id,
+                supervisor_message_id, status, prompt, model_id, permission_mode,
+                error, created_at, started_at, completed_at, last_event_at
+            ) VALUES (
+                'run-old', '00000000-0000-0000-0000-000000000001',
+                '00000000-0000-0000-0000-000000000002', 'session-assignee',
+                'supervisor-old', 'completed', 'Old prompt', 'gpt-5.4', 'default',
+                NULL, '2026-05-18 11:00:00', '2026-05-18 11:01:00',
+                '2026-05-18 11:05:00', '2026-05-18 11:05:00'
+            )
+            "#,
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            r#"
+            INSERT INTO goal_assignee_runs (
+                id, goal_workspace_id, workspace_id, session_id,
+                supervisor_message_id, status, prompt, model_id, permission_mode,
+                error, created_at
+            ) VALUES (
+                'run-latest', '00000000-0000-0000-0000-000000000001',
+                '00000000-0000-0000-0000-000000000002', 'session-assignee',
+                'supervisor-latest', 'queued', 'Use the durable scheduler.',
+                'claude-sonnet-4-6', 'default', NULL, '2026-05-18 12:00:00'
+            )
+            "#,
+            [],
+        )
+        .unwrap();
+
+    let assignees = goal_assignees::list_assignees(ListAssigneesRequest {
+        goal_workspace_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        status: None,
+    })
+    .unwrap();
+
+    assert_eq!(assignees.len(), 1);
+    let assignee = &assignees[0];
+    assert_eq!(assignee.active_run_status.as_deref(), Some("queued"));
+    assert_eq!(assignee.pending_run_count, 1);
+    let latest_run = assignee.latest_run.as_ref().expect("latest run");
+    assert_eq!(latest_run.run_id, "run-latest");
+    assert_eq!(latest_run.prompt, "Use the durable scheduler.");
+    assert_eq!(latest_run.model_id.as_deref(), Some("claude-sonnet-4-6"));
+    assert_eq!(latest_run.created_at, "2026-05-18 12:00:00");
 }
 
 #[test]
