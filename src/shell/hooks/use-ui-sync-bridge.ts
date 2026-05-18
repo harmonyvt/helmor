@@ -5,6 +5,7 @@ import {
 	type ThreadMessageLike,
 	type UiMutationEvent,
 } from "@/lib/api";
+import { postDebugEvidence } from "@/lib/debug-evidence";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
 	mergeStreamingDelta,
@@ -24,6 +25,30 @@ type StreamCacheGuard = {
 	activeStreamingSessions: Set<string>;
 	deferredMessageInvalidations: Map<string, string>;
 };
+
+const DEBUG_INGEST_URL =
+	"http://127.0.0.1:62813/ingest?token=6b9abcf2-2463-435f-aa0d-febc5272908b";
+const uiSyncProbeCounts = new Map<string, number>();
+
+function postUiSyncProbe(
+	message: string,
+	details: Record<string, unknown>,
+	options?: { sampleKey?: string; sampleEvery?: number },
+) {
+	const sampleKey = options?.sampleKey;
+	if (sampleKey) {
+		const next = (uiSyncProbeCounts.get(sampleKey) ?? 0) + 1;
+		uiSyncProbeCounts.set(sampleKey, next);
+		const sampleEvery = options.sampleEvery ?? 25;
+		if (next > 5 && next % sampleEvery !== 0) return;
+		details.count = next;
+	}
+	postDebugEvidence(DEBUG_INGEST_URL, {
+		source: "ui-sync-bridge",
+		message,
+		details,
+	});
+}
 
 function hasStreamingMessage(
 	messages: ThreadMessageLike[] | undefined,
@@ -87,6 +112,24 @@ function handleUiMutation(
 			});
 			return;
 		case "sessionMessagesChanged":
+			postUiSyncProbe("sessionMessagesChanged invalidations", {
+				sessionId: event.sessionId,
+				workspaceId: event.workspaceId,
+				activeStreaming: options.streamCacheGuard.activeStreamingSessions.has(
+					event.sessionId,
+				),
+				hasLiveStreamingMessage: hasStreamingMessage(
+					queryClient.getQueryData<ThreadMessageLike[]>(
+						sessionThreadCacheKey(event.sessionId),
+					),
+				),
+				workspaceGroupQueries: queryClient
+					.getQueryCache()
+					.findAll({ queryKey: helmorQueryKeys.workspaceGroups }).length,
+				goalChildQueries: queryClient.getQueryCache().findAll({
+					predicate: (query) => query.queryKey[0] === "goalChildWorkspaces",
+				}).length,
+			});
 			invalidateWorkspaceLists(queryClient);
 			{
 				const cacheKey = sessionThreadCacheKey(event.sessionId);
@@ -114,9 +157,29 @@ function handleUiMutation(
 			});
 			return;
 		case "sessionStreamEvent":
-			invalidateWorkspaceLists(queryClient);
 			{
 				const streamEvent = event.event;
+				postUiSyncProbe(
+					"sessionStreamEvent invalidations",
+					{
+						sessionId: event.sessionId,
+						workspaceId: event.workspaceId,
+						kind:
+							typeof streamEvent === "object" &&
+							streamEvent !== null &&
+							"kind" in streamEvent
+								? streamEvent.kind
+								: null,
+						workspaceGroupQueries: queryClient
+							.getQueryCache()
+							.findAll({ queryKey: helmorQueryKeys.workspaceGroups }).length,
+						goalChildQueries: queryClient.getQueryCache().findAll({
+							predicate: (query) => query.queryKey[0] === "goalChildWorkspaces",
+						}).length,
+					},
+					{ sampleKey: `stream:${event.sessionId}`, sampleEvery: 25 },
+				);
+				invalidateWorkspaceLists(queryClient);
 				let shouldInvalidateWorkspaceSessions = true;
 				if (streamEvent.kind === "update") {
 					queryClient.setQueryData<ThreadMessageLike[]>(

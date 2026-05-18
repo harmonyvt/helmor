@@ -149,6 +149,7 @@ async function main(extraTauriArgs: string[]): Promise<void> {
 	};
 
 	mkdirSync(identity.dataDir, { recursive: true });
+	ensurePreviewResourceDirs(worktreeRoot);
 
 	printPreviewSummary(identity, vitePort);
 
@@ -165,6 +166,10 @@ async function main(extraTauriArgs: string[]): Promise<void> {
 		],
 		{ env },
 	);
+}
+
+export function ensurePreviewResourceDirs(worktreeRoot: string): void {
+	mkdirSync(path.join(worktreeRoot, "dist-web"), { recursive: true });
 }
 
 function hashToInt(hash: string): number {
