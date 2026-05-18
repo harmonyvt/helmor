@@ -254,7 +254,7 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
 			expect.objectContaining({
 				promptPrefix: expect.stringContaining(
-					"POST JSON evidence to http://127.0.0.1:4321/ingest",
+					"Endpoint: http://127.0.0.1:4321/ingest",
 				),
 			}),
 			expect.any(Function),
@@ -262,7 +262,7 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
 			expect.objectContaining({
 				promptPrefix: expect.stringContaining(
-					"add focused temporary instrumentation around the suspected hot path",
+					"Add focused temporary probes at exactly those points",
 				),
 			}),
 			expect.any(Function),
@@ -270,7 +270,7 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
 			expect.objectContaining({
 				promptPrefix: expect.stringContaining(
-					"GET http://127.0.0.1:4321/ingest before making claims",
+					"GET http://127.0.0.1:4321/ingest to read the captured telemetry",
 				),
 			}),
 			expect.any(Function),
@@ -278,7 +278,7 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
 			expect.objectContaining({
 				promptPrefix: expect.stringContaining(
-					'importing postDebugEvidence from "@/lib/debug-evidence"',
+					'import postDebugEvidence from "@/lib/debug-evidence"',
 				),
 			}),
 			expect.any(Function),
@@ -286,7 +286,7 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
 			expect.objectContaining({
 				promptPrefix: expect.stringContaining(
-					"After adding probes, give the user concrete testing instructions and stop",
+					"Give the user concrete instructions",
 				),
 			}),
 			expect.any(Function),
@@ -294,7 +294,7 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
 			expect.objectContaining({
 				promptPrefix: expect.stringContaining(
-					"the user will prompt again after they have run the dev app",
+					"STOP. Wait for their next message",
 				),
 			}),
 			expect.any(Function),
@@ -318,7 +318,7 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
 			expect.objectContaining({
 				promptPrefix: expect.stringContaining(
-					"Remove temporary instrumentation before finishing",
+					"Remove all temporary probes before finishing",
 				),
 			}),
 			expect.any(Function),

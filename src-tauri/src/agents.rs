@@ -21,7 +21,9 @@ mod streaming;
 mod support;
 
 pub use self::action_kind::ActionKind;
-pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
+pub use self::catalog::{
+    resolve_model, AgentModelOption, AgentModelSection, AgentModelSectionStatus, ResolvedModel,
+};
 pub use self::delegation::{DelegateAgentRequest, DelegateAgentResponse};
 #[cfg(test)]
 pub(crate) use self::persistence::persist_collected_turn_message;

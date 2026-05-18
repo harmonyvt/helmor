@@ -52,9 +52,12 @@ describe("App", () => {
 		const inspectorResizeHandle = screen.getByRole("separator", {
 			name: "Resize inspector sidebar",
 		});
-		const doneGroup = screen.getByRole("button", { name: "Done" });
-		const progressGroup = screen.getByRole("button", {
-			name: /^In progress/,
+		const branchesGroup = screen.getByRole("button", { name: /^Branches/ });
+		const doneWorkspaceRow = screen.getByRole("button", {
+			name: "Done workspace",
+		});
+		const progressWorkspaceRow = screen.getByRole("button", {
+			name: "Progress workspace",
 		});
 		const addRepositoryButton = screen.getByRole("button", {
 			name: "Add repository",
@@ -111,8 +114,9 @@ describe("App", () => {
 		expect(groupsScrollRegion).toHaveClass("overflow-y-auto");
 		expect(groupsScrollRegion).toHaveClass("flex-1");
 		expect(screen.getByText("Workspaces")).toBeInTheDocument();
-		expect(doneGroup).toBeInTheDocument();
-		expect(progressGroup).toBeInTheDocument();
+		expect(branchesGroup).toBeInTheDocument();
+		expect(doneWorkspaceRow).toBeInTheDocument();
+		expect(progressWorkspaceRow).toBeInTheDocument();
 
 		expect(addRepositoryButton).toBeInTheDocument();
 		expect(newWorkspaceButton).toBeInTheDocument();

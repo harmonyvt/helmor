@@ -17,6 +17,7 @@ mod bridges;
 mod cleanup;
 mod context_usage;
 mod params;
+mod pi_assignee_models;
 mod pi_tools;
 mod session_id;
 mod state;

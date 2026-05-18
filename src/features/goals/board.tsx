@@ -27,6 +27,10 @@ type GoalBoardProps = {
 	onSelectAssignee?: (workspace: WorkspaceDetail) => void;
 	reportByWorkspaceId?: Map<string, AssigneeReportMarker>;
 	orchestratorStatusByWorkspaceId?: Map<string, string>;
+	assigneeSummaryByWorkspaceId?: Map<
+		string,
+		{ activeRunStatus?: string | null; lastRunError?: string | null }
+	>;
 	onMoveWorkspace: (
 		workspace: WorkspaceDetail,
 		status: WorkspaceStatus,
@@ -49,6 +53,7 @@ export function GoalBoard({
 	onSelectAssignee,
 	reportByWorkspaceId,
 	orchestratorStatusByWorkspaceId,
+	assigneeSummaryByWorkspaceId,
 	onMoveWorkspace,
 	onMergeWorkspace,
 	onCheckLanding,
@@ -140,6 +145,7 @@ export function GoalBoard({
 							onAssigneeClick={onSelectAssignee}
 							reportByWorkspaceId={reportByWorkspaceId}
 							orchestratorStatusByWorkspaceId={orchestratorStatusByWorkspaceId}
+							assigneeSummaryByWorkspaceId={assigneeSummaryByWorkspaceId}
 							onDragStart={onDragStart}
 							onDragEnd={onDragEnd}
 							onDragOver={(event) => handleDragOver(lane.id, event)}

@@ -18,6 +18,7 @@ const apiMockState = vi.hoisted(() => ({
 
 const composerMockState = vi.hoisted(() => ({
 	lastPlanReview: null as PlanReviewPart | null,
+	lastDisplayedSessionId: null as string | null,
 	lastOnImplementPlanInCleanThread: null as
 		| ((plan: PlanReviewPart, modelId?: string | null) => void | Promise<void>)
 		| null,
@@ -25,6 +26,7 @@ const composerMockState = vi.hoisted(() => ({
 
 const streamingMockState = vi.hoisted(() => ({
 	lastArgs: null as {
+		displayedSessionId?: string | null;
 		onPiUiRequest?: (event: {
 			kind: "piUiRequest";
 			interactionId: string;
@@ -96,12 +98,14 @@ vi.mock("@/features/panel/message-components/file-link-context", () => ({
 
 vi.mock("@/features/composer/container", () => ({
 	WorkspaceComposerContainer: (props: {
+		displayedSessionId?: string | null;
 		planReview?: PlanReviewPart | null;
 		onImplementPlanInCleanThread?: (
 			plan: PlanReviewPart,
 			modelId?: string | null,
 		) => void | Promise<void>;
 	}) => {
+		composerMockState.lastDisplayedSessionId = props.displayedSessionId ?? null;
 		composerMockState.lastPlanReview = props.planReview ?? null;
 		composerMockState.lastOnImplementPlanInCleanThread =
 			props.onImplementPlanInCleanThread ?? null;
@@ -139,6 +143,7 @@ describe("WorkspaceConversationContainer", () => {
 		apiMockState.respondToPiUi.mockReset();
 		apiMockState.respondToPiUi.mockResolvedValue(undefined);
 		composerMockState.lastPlanReview = null;
+		composerMockState.lastDisplayedSessionId = null;
 		composerMockState.lastOnImplementPlanInCleanThread = null;
 		streamingMockState.lastArgs = null;
 	});
@@ -263,5 +268,62 @@ describe("WorkspaceConversationContainer", () => {
 			expect(composerMockState.lastPlanReview?.plan).toBe("1. Update the UI");
 		});
 		expect(composerMockState.lastOnImplementPlanInCleanThread).toBeNull();
+	});
+
+	it("resolves the active workspace session before wiring streaming and composer props", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			{
+				id: "session-active",
+				workspaceId: "workspace-1",
+				title: "Pi thread",
+				agentType: "pi",
+				status: "idle",
+				model: "pi:azure-openai-responses/gpt-5.5",
+				permissionMode: "bypassPermissions",
+				providerSessionId: null,
+				effortLevel: "high",
+				unreadCount: 0,
+				fastMode: false,
+				createdAt: "2026-05-18T00:00:00.000Z",
+				updatedAt: "2026-05-18T00:00:00.000Z",
+				lastUserMessageAt: null,
+				isHidden: false,
+				actionKind: null,
+				surfaceKind: "chat",
+				surfaceMode: "thread",
+				controlOwner: "user",
+				inputPolicy: "writable",
+				createdBy: "user",
+				terminalRuntime: null,
+				terminalCwd: null,
+				terminalStartedAt: null,
+				terminalStoppedAt: null,
+				terminalExitCode: null,
+				active: true,
+			},
+		]);
+		const onResolveDisplayedSession = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceConversationContainer
+					selectedWorkspaceId="workspace-1"
+					displayedWorkspaceId="workspace-1"
+					selectedSessionId={null}
+					displayedSessionId={null}
+					onSelectSession={vi.fn()}
+					onResolveDisplayedSession={onResolveDisplayedSession}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => {
+			expect(streamingMockState.lastArgs?.displayedSessionId).toBe(
+				"session-active",
+			);
+		});
+		expect(composerMockState.lastDisplayedSessionId).toBe("session-active");
+		expect(onResolveDisplayedSession).toHaveBeenCalledWith("session-active");
 	});
 });

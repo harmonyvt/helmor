@@ -47,6 +47,7 @@ pub(super) fn execute_pi_tool_call(
         "create_kanban_card" => handle_create_kanban_card(app, goal_workspace_id, args),
         "move_kanban_card" => handle_move_kanban_card(goal_workspace_id, args),
         "update_kanban_card" => handle_update_kanban_card(goal_workspace_id, args),
+        "list_assignee_models" => super::pi_assignee_models::handle_list_assignee_models(),
         // ── Thread management ─────────────────────────────────────────────────
         "list_threads" => handle_list_threads(args),
         "create_thread" => handle_create_thread(args),
@@ -348,9 +349,17 @@ fn handle_send_thread_message(
             .map(str::to_string),
     };
 
-    let prepared = crate::goal_assignees::prepare_thread_message(request)?;
+    let mut prepared = crate::goal_assignees::prepare_thread_message(request)?;
+    let receipt = crate::background_agents::enqueue_assignee(
+        app,
+        prepared.send_params,
+        prepared.goal_workspace_id.clone(),
+        prepared.run_id,
+    )?;
+    prepared.result.started = receipt.started;
+    prepared.result.run_id = receipt.task_id;
+    prepared.result.execution_state = receipt.execution_state.to_string();
     let result_value = serde_json::to_value(&prepared.result)?;
-    crate::background_agents::enqueue(app, prepared.send_params)?;
 
     let _ = notify_running_app(UiMutationEvent::GoalOrchestratorStateChanged {
         goal_workspace_id: goal_workspace_id.to_string(),
@@ -385,9 +394,17 @@ fn handle_send_assignee_message(
             .map(str::to_string),
     };
 
-    let prepared = crate::goal_assignees::prepare_assignee_message(request)?;
+    let mut prepared = crate::goal_assignees::prepare_assignee_message(request)?;
+    let receipt = crate::background_agents::enqueue_assignee(
+        app,
+        prepared.send_params,
+        prepared.goal_workspace_id.clone(),
+        prepared.run_id,
+    )?;
+    prepared.result.started = receipt.started;
+    prepared.result.run_id = receipt.task_id;
+    prepared.result.execution_state = receipt.execution_state.to_string();
     let result_value = serde_json::to_value(&prepared.result)?;
-    crate::background_agents::enqueue(app, prepared.send_params)?;
 
     let _ = notify_running_app(UiMutationEvent::GoalOrchestratorStateChanged {
         goal_workspace_id: goal_workspace_id.to_string(),

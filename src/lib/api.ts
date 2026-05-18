@@ -884,7 +884,8 @@ export type SendAssigneeMessageResult = {
 		| string;
 	sessionId: string;
 	workspaceId: string;
-	pendingSendId: string;
+	/** Durable run ID from goal_assignee_runs. */
+	runId: string;
 	message?: string | null;
 	supervisorMessageId?: string | null;
 };
@@ -969,6 +970,27 @@ export type AssigneeSummary = {
 	assigneeName: string;
 	sessionStatus: string;
 	latestReport?: AssigneeReportMarker | null;
+	/** Status of the most-recently created run: queued | running | completed | failed */
+	activeRunStatus?: string | null;
+	/** Error message from the last failed run, if any. */
+	lastRunError?: string | null;
+	/** Number of runs currently in queued state for this assignee. */
+	pendingRunCount?: number | null;
+	/** Most-recent durable scheduler/background run for this assignee session. */
+	latestRun?: AssigneeRunSummary | null;
+};
+
+export type AssigneeRunSummary = {
+	runId: string;
+	status: string;
+	prompt: string;
+	modelId?: string | null;
+	permissionMode?: string | null;
+	error?: string | null;
+	createdAt: string;
+	startedAt?: string | null;
+	completedAt?: string | null;
+	lastEventAt?: string | null;
 };
 
 export type WorkspaceCreationSource =
@@ -1924,6 +1946,13 @@ export type UiMutationEvent =
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
 	| { type: "goalOrchestratorStateChanged"; goalWorkspaceId: string }
+	| {
+			type: "goalAssigneeRunChanged";
+			goalWorkspaceId: string;
+			workspaceId: string;
+			sessionId: string;
+			runId: string;
+	  }
 	| {
 			type: "pendingCliSendQueued";
 			pendingSendId: string;

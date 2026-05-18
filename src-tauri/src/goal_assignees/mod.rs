@@ -2,7 +2,6 @@ use std::future::Future;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 mod notifications;
 mod prompt;
@@ -21,7 +20,7 @@ pub use prompt::{assignee_bootstrap_prompt, AssigneeBootstrapPromptInput};
 pub use report::AssigneeReportMarker;
 use report::{latest_report_marker, message_text};
 use resolver::{resolve_assignee, resolve_thread_assignee};
-use storage::queue_assignee_prompt;
+use storage::{persist_assignee_run_prompt, queue_assignee_prompt};
 
 use crate::{pipeline, service, sessions, ui_sync::UiMutationEvent};
 
@@ -72,7 +71,8 @@ pub struct SendAssigneeMessageResult {
     pub execution_state: String,
     pub session_id: String,
     pub workspace_id: String,
-    pub pending_send_id: String,
+    /// Durable run ID from `goal_assignee_runs`. Supersedes the legacy `pendingSendId` name.
+    pub run_id: String,
     pub message: String,
     pub supervisor_message_id: Option<String>,
 }
@@ -80,6 +80,8 @@ pub struct SendAssigneeMessageResult {
 pub(crate) struct PreparedAssigneeMessage {
     pub result: SendAssigneeMessageResult,
     pub send_params: service::SendMessageParams,
+    pub goal_workspace_id: String,
+    pub run_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -192,6 +194,21 @@ pub struct SetCardAssigneeThreadResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AssigneeRunSummary {
+    pub run_id: String,
+    pub status: String,
+    pub prompt: String,
+    pub model_id: Option<String>,
+    pub permission_mode: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub last_event_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssigneeSummary {
     pub card_id: String,
     pub workspace_id: String,
@@ -200,6 +217,14 @@ pub struct AssigneeSummary {
     pub assignee_name: String,
     pub session_status: String,
     pub latest_report: Option<AssigneeReportMarker>,
+    /// Status of the most-recently created run (`queued`, `running`, `completed`, `failed`).
+    pub active_run_status: Option<String>,
+    /// Error from the last failed run, if any.
+    pub last_run_error: Option<String>,
+    /// Number of runs in `queued` state for this assignee session.
+    pub pending_run_count: i64,
+    /// Most-recent durable scheduler/background run for this assignee session.
+    pub latest_run: Option<AssigneeRunSummary>,
 }
 
 pub fn send_assignee_message(
@@ -225,7 +250,7 @@ pub fn send_assignee_message(
         execution_state: if started { "spawned" } else { "queued" }.to_string(),
         session_id: assignee.session.id,
         workspace_id: assignee.workspace_id,
-        pending_send_id: queued.pending_send_id,
+        run_id: queued.pending_send_id,
         message,
         supervisor_message_id: Some(queued.supervisor_message_id),
     })
@@ -236,21 +261,22 @@ pub(crate) fn prepare_assignee_message(
 ) -> Result<PreparedAssigneeMessage> {
     let assignee = resolve_assignee_for_send(&request)?;
     let message = format_supervisor_update(&request.message, request.priority.as_deref())?;
-    let task_id = Uuid::new_v4().to_string();
+    let persisted = persist_assignee_run_prompt(
+        &request.goal_workspace_id,
+        &assignee,
+        &message,
+        assignee.session.model.as_deref(),
+        Some(assignee.session.permission_mode.as_str()),
+    )?;
     let result = SendAssigneeMessageResult {
         queued: true,
-        started: assignee.session.status != "streaming",
-        execution_state: if assignee.session.status == "streaming" {
-            "queued"
-        } else {
-            "spawned"
-        }
-        .to_string(),
+        started: false,
+        execution_state: "queued".to_string(),
         session_id: assignee.session.id.clone(),
         workspace_id: assignee.workspace_id.clone(),
-        pending_send_id: task_id,
+        run_id: persisted.run_id.clone(),
         message: message.clone(),
-        supervisor_message_id: None,
+        supervisor_message_id: Some(persisted.supervisor_message_id),
     };
     let send_params = service::SendMessageParams {
         workspace_ref: assignee.workspace_id,
@@ -265,6 +291,8 @@ pub(crate) fn prepare_assignee_message(
     Ok(PreparedAssigneeMessage {
         result,
         send_params,
+        goal_workspace_id: request.goal_workspace_id,
+        run_id: persisted.run_id,
     })
 }
 
@@ -283,30 +311,33 @@ pub(crate) fn prepare_thread_message(
         &request.thread_id,
     )?;
     let message = format_supervisor_update(&request.message, request.priority.as_deref())?;
-    let task_id = Uuid::new_v4().to_string();
+    let model = request.model_id.or(assignee.session.model.clone());
+    let permission_mode = request
+        .permission_mode
+        .or(Some(assignee.session.permission_mode.clone()));
+    let persisted = persist_assignee_run_prompt(
+        &request.goal_workspace_id,
+        &assignee,
+        &message,
+        model.as_deref(),
+        permission_mode.as_deref(),
+    )?;
     let result = SendAssigneeMessageResult {
         queued: true,
-        started: assignee.session.status != "streaming",
-        execution_state: if assignee.session.status == "streaming" {
-            "queued"
-        } else {
-            "spawned"
-        }
-        .to_string(),
+        started: false,
+        execution_state: "queued".to_string(),
         session_id: assignee.session.id.clone(),
         workspace_id: assignee.workspace_id.clone(),
-        pending_send_id: task_id,
+        run_id: persisted.run_id.clone(),
         message: message.clone(),
-        supervisor_message_id: None,
+        supervisor_message_id: Some(persisted.supervisor_message_id),
     };
     let send_params = service::SendMessageParams {
         workspace_ref: assignee.workspace_id,
         session_id: Some(assignee.session.id),
         prompt: message,
-        model: request.model_id.or(assignee.session.model),
-        permission_mode: request
-            .permission_mode
-            .or(Some(assignee.session.permission_mode)),
+        model,
+        permission_mode,
         linked_directories: Vec::new(),
         delegate_to_running_app: false,
     };
@@ -314,6 +345,8 @@ pub(crate) fn prepare_thread_message(
     Ok(PreparedAssigneeMessage {
         result,
         send_params,
+        goal_workspace_id: request.goal_workspace_id,
+        run_id: persisted.run_id,
     })
 }
 
@@ -617,15 +650,18 @@ pub async fn list_assignees_async(request: ListAssigneesRequest) -> Result<Vec<A
         else {
             continue;
         };
-        let messages = load_assignee_messages_async(&assignee.session.id, None)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to load assignee messages for session {}",
-                    assignee.session.id
-                )
-            })?;
-        let latest_report = latest_report_marker(&messages);
+        let latest_report = latest_report_marker_from_notifications_async(
+            &request.goal_workspace_id,
+            &assignee.workspace_id,
+            &assignee.session.id,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to load latest assignee report for session {}",
+                assignee.session.id
+            )
+        })?;
         let effective_status = latest_report
             .as_ref()
             .map(|report| report.report_type.as_str())
@@ -638,6 +674,10 @@ pub async fn list_assignees_async(request: ListAssigneesRequest) -> Result<Vec<A
             }
         }
 
+        let run_summary = latest_run_summary_async(&assignee.session.id)
+            .await
+            .unwrap_or_else(|_| LatestRunSummary::default());
+
         out.push(AssigneeSummary {
             card_id: workspace.id.clone(),
             workspace_id: assignee.workspace_id,
@@ -646,10 +686,153 @@ pub async fn list_assignees_async(request: ListAssigneesRequest) -> Result<Vec<A
             assignee_name: assignee_name(&assignee.session),
             session_status: assignee.session.status,
             latest_report,
+            active_run_status: run_summary
+                .latest_run
+                .as_ref()
+                .map(|run| run.status.clone()),
+            last_run_error: run_summary.latest_run.as_ref().and_then(|run| {
+                (run.status == "failed")
+                    .then(|| run.error.clone())
+                    .flatten()
+            }),
+            pending_run_count: run_summary.pending_run_count,
+            latest_run: run_summary.latest_run,
         });
     }
 
     Ok(out)
+}
+
+async fn latest_report_marker_from_notifications_async(
+    goal_workspace_id: &str,
+    workspace_id: &str,
+    session_id: &str,
+) -> Result<Option<AssigneeReportMarker>> {
+    let connection = crate::models::db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            r#"
+            SELECT message_id, report_type, excerpt, created_at
+            FROM goal_supervisor_notifications
+            WHERE goal_workspace_id = ?1
+              AND card_workspace_id = ?2
+              AND assignee_session_id = ?3
+            ORDER BY datetime(created_at) DESC, created_at DESC
+            LIMIT 1
+            "#,
+            libsql::params![
+                goal_workspace_id.to_string(),
+                workspace_id.to_string(),
+                session_id.to_string(),
+            ],
+        )
+        .await?;
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+    let message_id: String = row.get(0).context("Failed to read report message id")?;
+    let report_type: String = row.get(1).context("Failed to read report type")?;
+    let excerpt: String = row.get(2).context("Failed to read report excerpt")?;
+    let created_at: Option<String> = row.get(3).context("Failed to read report timestamp")?;
+    Ok(Some(AssigneeReportMarker {
+        report_type,
+        message_id: Some(message_id),
+        created_at,
+        full_text: excerpt.clone(),
+        excerpt,
+    }))
+}
+
+pub(crate) fn mark_assignee_run_started(
+    app: &tauri::AppHandle,
+    goal_workspace_id: &str,
+    workspace_id: &str,
+    session_id: &str,
+    run_id: &str,
+) {
+    let goal_workspace_id = goal_workspace_id.to_string();
+    let workspace_id = workspace_id.to_string();
+    let session_id = session_id.to_string();
+    let run_id = run_id.to_string();
+    let _ = block_on_goal_assignee_db(crate::models::db::libsql_write_async(|connection| {
+        let run_id = run_id.clone();
+        async move {
+            connection
+                .execute(
+                    r#"
+                        UPDATE goal_assignee_runs
+                        SET status = 'running',
+                            started_at = COALESCE(started_at, datetime('now')),
+                            last_event_at = datetime('now'),
+                            error = NULL
+                        WHERE id = ?1
+                        "#,
+                    [run_id],
+                )
+                .await?;
+            Ok(())
+        }
+    }));
+    crate::ui_sync::publish(
+        app,
+        UiMutationEvent::GoalAssigneeRunChanged {
+            goal_workspace_id,
+            workspace_id,
+            session_id,
+            run_id,
+        },
+    );
+}
+
+pub(crate) fn mark_assignee_run_finished(
+    app: &tauri::AppHandle,
+    goal_workspace_id: &str,
+    workspace_id: &str,
+    session_id: &str,
+    run_id: &str,
+    error: Option<&str>,
+) {
+    let goal_workspace_id = goal_workspace_id.to_string();
+    let workspace_id = workspace_id.to_string();
+    let session_id = session_id.to_string();
+    let run_id = run_id.to_string();
+    let status = if error.is_some() {
+        "failed"
+    } else {
+        "completed"
+    }
+    .to_string();
+    let error = error.map(str::to_string);
+    let _ = block_on_goal_assignee_db(crate::models::db::libsql_write_async(|connection| {
+        let run_id = run_id.clone();
+        let status = status.clone();
+        let error = error.clone();
+        async move {
+            connection
+                .execute(
+                    r#"
+                        UPDATE goal_assignee_runs
+                        SET status = ?2,
+                            completed_at = datetime('now'),
+                            last_event_at = datetime('now'),
+                            error = ?3
+                        WHERE id = ?1
+                        "#,
+                    libsql::params![run_id, status, error],
+                )
+                .await?;
+            Ok(())
+        }
+    }));
+    crate::ui_sync::publish(
+        app,
+        UiMutationEvent::GoalAssigneeRunChanged {
+            goal_workspace_id,
+            workspace_id,
+            session_id,
+            run_id,
+        },
+    );
 }
 
 async fn load_assignee_messages_async(
@@ -816,6 +999,60 @@ fn detect_stale_reason(
         return Some("session failed".to_string());
     }
     None
+}
+
+#[derive(Default)]
+struct LatestRunSummary {
+    latest_run: Option<AssigneeRunSummary>,
+    pending_run_count: i64,
+}
+
+async fn latest_run_summary_async(session_id: &str) -> Result<LatestRunSummary> {
+    let connection = crate::models::db::libsql_conn_async().await?;
+    let mut rows = connection
+        .query(
+            r#"
+            SELECT id, status, prompt, model_id, permission_mode, error,
+                   created_at, started_at, completed_at, last_event_at
+            FROM goal_assignee_runs
+            WHERE session_id = ?1
+            ORDER BY datetime(created_at) DESC, created_at DESC
+            LIMIT 1
+            "#,
+            [session_id.to_string()],
+        )
+        .await?;
+    let latest_run = match rows.next().await? {
+        Some(row) => Some(AssigneeRunSummary {
+            run_id: row.get(0).context("Failed to read assignee run id")?,
+            status: row.get(1).context("Failed to read assignee run status")?,
+            prompt: row.get(2).context("Failed to read assignee run prompt")?,
+            model_id: row.get(3).ok().flatten(),
+            permission_mode: row.get(4).ok().flatten(),
+            error: row.get(5).ok().flatten(),
+            created_at: row
+                .get(6)
+                .context("Failed to read assignee run created_at")?,
+            started_at: row.get(7).ok().flatten(),
+            completed_at: row.get(8).ok().flatten(),
+            last_event_at: row.get(9).ok().flatten(),
+        }),
+        None => None,
+    };
+    let mut count_rows = connection
+        .query(
+            "SELECT COUNT(*) FROM goal_assignee_runs WHERE session_id = ?1 AND status = 'queued'",
+            [session_id.to_string()],
+        )
+        .await?;
+    let pending_run_count: i64 = match count_rows.next().await? {
+        Some(row) => row.get(0).unwrap_or(0),
+        None => 0,
+    };
+    Ok(LatestRunSummary {
+        latest_run,
+        pending_run_count,
+    })
 }
 
 fn assignee_name(session: &sessions::WorkspaceSessionSummary) -> String {
