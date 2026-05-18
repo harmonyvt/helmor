@@ -102,6 +102,9 @@ export function goalLaneForWorkspace(
 export type GoalKanbanSnapshotItem = {
 	id: string;
 	title: string;
+	/** Card description. Populated from prTitle when the PR title differs from
+	 *  the workspace title, giving Pi extra context about the work scope. */
+	description?: string | null;
 	lane: GoalLaneId;
 	branch?: string | null;
 	prUrl?: string | null;
@@ -112,7 +115,6 @@ export type GoalKanbanSnapshotItem = {
 	activeSessionId?: string | null;
 	activeSessionStatus?: string | null;
 	activeSessionAgentType?: string | null;
-	assigneeName?: string | null;
 };
 
 export function groupGoalChildWorkspacesByLane(
@@ -130,23 +132,32 @@ export function groupGoalChildWorkspacesByLane(
 export function createGoalKanbanSnapshot(
 	workspaces: WorkspaceDetail[],
 ): string {
-	const snapshot: GoalKanbanSnapshotItem[] = workspaces.map((workspace) => ({
-		id: workspace.id,
-		title: workspace.title,
-		lane: goalLaneForWorkspace(workspace),
-		branch: workspace.branch,
-		prUrl: workspace.prUrl,
-		landingState: workspace.landingState ?? "unlanded",
-		landingSource: workspace.landingSource,
-		...(workspace.prSyncState && workspace.prSyncState !== "none"
-			? { prSyncState: workspace.prSyncState }
-			: {}),
-		sessionCount: workspace.sessionCount,
-		activeSessionId: workspace.activeSessionId,
-		activeSessionStatus: workspace.activeSessionStatus,
-		activeSessionAgentType: workspace.activeSessionAgentType,
-		assigneeName: workspace.activeSessionAgentType,
-	}));
+	const snapshot: GoalKanbanSnapshotItem[] = workspaces.map((workspace) => {
+		// Use prTitle as a description proxy when it differs from the workspace
+		// title — it often carries more detail about the scope of the work.
+		const description =
+			workspace.prTitle && workspace.prTitle !== workspace.title
+				? workspace.prTitle
+				: null;
+
+		return {
+			id: workspace.id,
+			title: workspace.title,
+			...(description ? { description } : {}),
+			lane: goalLaneForWorkspace(workspace),
+			branch: workspace.branch,
+			prUrl: workspace.prUrl,
+			landingState: workspace.landingState ?? "unlanded",
+			landingSource: workspace.landingSource,
+			...(workspace.prSyncState && workspace.prSyncState !== "none"
+				? { prSyncState: workspace.prSyncState }
+				: {}),
+			sessionCount: workspace.sessionCount,
+			activeSessionId: workspace.activeSessionId,
+			activeSessionStatus: workspace.activeSessionStatus,
+			activeSessionAgentType: workspace.activeSessionAgentType,
+		};
+	});
 
 	return JSON.stringify(snapshot);
 }
