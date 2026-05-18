@@ -146,7 +146,7 @@ fn prepared_assignee_message_persists_run_before_background_send() {
     assert!(prepared.result.queued);
     assert!(!prepared.result.started);
     assert_eq!(prepared.result.execution_state, "queued");
-    assert_eq!(prepared.run_id, prepared.result.pending_send_id);
+    assert_eq!(prepared.run_id, prepared.result.run_id);
     assert!(prepared.result.supervisor_message_id.is_some());
 
     let (status, prompt, supervisor_message_id): (String, String, String) = connection

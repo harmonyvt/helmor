@@ -105,11 +105,11 @@ export function createKanbanTools(
 		name: "list_assignee_models",
 		label: "List Assignee Models",
 		description:
-			"List the currently available Goal assignee models. Use this before starting child workspace assignees, show the choices to the user, and ask which model to use. The response includes Claude and Codex models visible to Helmor plus the Pi model ids accepted by create_kanban_card.",
+			"List the latest currently available Goal assignee models. Use this before starting child workspace assignees, show the choices to the user, and ask which model to use. The response includes Claude and Codex models visible to Helmor plus the Pi model ids accepted by create_kanban_card.",
 		promptSnippet:
 			"list_assignee_models() → { assigneeModels, claudeModels, codexModels, policy }",
 		promptGuidelines: [
-			"Call this before create_kanban_card when the card includes a prompt that starts an assignee.",
+			"Call this immediately before create_kanban_card when the card includes a prompt that starts an assignee so the user chooses from the latest returned list.",
 			"Present the returned assigneeModels to the user and wait for their choice.",
 			"Pass the selected assignee model id as assigned_model_id to create_kanban_card.",
 		],
