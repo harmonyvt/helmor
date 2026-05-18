@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type {
+	GithubRepositoryVisibility,
 	RepositoryCreateOption,
 	WorkspaceCreationSource,
 	WorkspaceGroup,
@@ -35,6 +36,7 @@ import type {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
+import { CreateGithubProjectDialog } from "./create-github-project-dialog";
 import {
 	buildGoalViewVirtualItems,
 	GOAL_ARCHIVED_KEY,
@@ -116,10 +118,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	isPolling,
 	onAddRepository,
 	onOpenCloneDialog,
+	onOpenCreateGithubProjectDialog,
 	isCloneDialogOpen,
+	isCreateGithubProjectDialogOpen,
 	onCloneDialogOpenChange,
+	onCreateGithubProjectDialogOpenChange,
 	cloneDefaultDirectory,
 	onSubmitClone,
+	onSubmitCreateGithubProject,
 	onSelectWorkspace,
 	onPrefetchWorkspace,
 	onCreateWorkspace,
@@ -157,12 +163,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	isPolling?: boolean;
 	onAddRepository?: () => void;
 	onOpenCloneDialog?: () => void;
+	onOpenCreateGithubProjectDialog?: () => void;
 	isCloneDialogOpen?: boolean;
+	isCreateGithubProjectDialogOpen?: boolean;
 	onCloneDialogOpenChange?: (open: boolean) => void;
+	onCreateGithubProjectDialogOpenChange?: (open: boolean) => void;
 	cloneDefaultDirectory?: string | null;
 	onSubmitClone?: (args: {
 		gitUrl: string;
 		cloneDirectory: string;
+	}) => Promise<void>;
+	onSubmitCreateGithubProject?: (args: {
+		projectName: string;
+		parentDirectory: string;
+		visibility: GithubRepositoryVisibility;
 	}) => Promise<void>;
 	onSelectWorkspace?: (workspaceId: string) => void;
 	onPrefetchWorkspace?: (workspaceId: string) => void;
@@ -219,34 +233,29 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 	useEffect(() => {
 		setSectionOpenState((current) => {
-			const next: Record<string, boolean> = {};
-			let changed = false;
+			// Only ADD missing keys — never drop existing ones.
+			// The old approach rebuilt `next` from scratch and returned it whenever
+			// the key-count differed, silently erasing goal/PR section expand state
+			// on every workspace data refresh (those extra keys triggered the
+			// Object.keys length mismatch). Starting from `current` and only patching
+			// in absent keys preserves all user-toggled sections.
+			let next = current;
 
 			for (const group of groups) {
-				const nextValue = current[group.id] ?? true;
-				next[group.id] = nextValue;
-				if (current[group.id] !== nextValue) {
-					changed = true;
+				if (!(group.id in current)) {
+					next = { ...next, [group.id]: true };
 				}
 			}
 
-			const archivedValue = current[ARCHIVED_SECTION_ID] ?? false;
-			next[ARCHIVED_SECTION_ID] = archivedValue;
-			if (current[ARCHIVED_SECTION_ID] !== archivedValue) {
-				changed = true;
+			if (!(ARCHIVED_SECTION_ID in next)) {
+				next = { ...next, [ARCHIVED_SECTION_ID]: false };
 			}
 
-			const archivedGoalsValue = current[GOAL_ARCHIVED_KEY] ?? false;
-			next[GOAL_ARCHIVED_KEY] = archivedGoalsValue;
-			if (current[GOAL_ARCHIVED_KEY] !== archivedGoalsValue) {
-				changed = true;
+			if (!(GOAL_ARCHIVED_KEY in next)) {
+				next = { ...next, [GOAL_ARCHIVED_KEY]: false };
 			}
 
-			if (Object.keys(current).length !== Object.keys(next).length) {
-				changed = true;
-			}
-
-			return changed ? next : current;
+			return next;
 		});
 	}, [archivedRows, groups]);
 
@@ -711,6 +720,19 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					await onSubmitClone(args);
 				}}
 			/>
+			<CreateGithubProjectDialog
+				open={isCreateGithubProjectDialogOpen ?? false}
+				onOpenChange={(nextOpen) =>
+					onCreateGithubProjectDialogOpenChange?.(nextOpen)
+				}
+				defaultParentDirectory={cloneDefaultDirectory ?? null}
+				onSubmit={async (args) => {
+					if (!onSubmitCreateGithubProject) {
+						return;
+					}
+					await onSubmitCreateGithubProject(args);
+				}}
+			/>
 			<div
 				data-slot="window-safe-top"
 				className="flex h-9 shrink-0 items-center pr-3"
@@ -829,6 +851,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							</TooltipContent>
 						</Tooltip>
 						<DropdownMenuContent align="end" className="min-w-40">
+							<DropdownMenuItem
+								onSelect={() => {
+									setIsCreateDialogOpen(false);
+									onOpenCreateGithubProjectDialog?.();
+								}}
+							>
+								<Globe strokeWidth={2} />
+								<span>New GitHub project</span>
+							</DropdownMenuItem>
 							<DropdownMenuItem
 								onSelect={() => {
 									setIsCreateDialogOpen(false);

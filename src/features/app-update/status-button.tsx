@@ -16,7 +16,17 @@ import { restartApp } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 
-export function LocalAppUpdateStatusButton() {
+export function LocalAppUpdateStatusButton({
+	inline = false,
+}: {
+	/**
+	 * When true, renders the button in normal document flow (no fixed
+	 * positioning). Use this when embedding the button inside a header that
+	 * already handles its own layout, e.g. when the workspace sidebar is
+	 * collapsed and the button must sit alongside the expand-sidebar icon.
+	 */
+	inline?: boolean;
+}) {
 	const state = useSyncExternalStore(
 		subscribeLocalAppInstall,
 		getLocalAppInstallSnapshot,
@@ -70,43 +80,51 @@ export function LocalAppUpdateStatusButton() {
 				: "Install Helmor update";
 	const Icon = installing ? Loader2 : restartRequired ? RefreshCw : Download;
 
+	const button = (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					aria-label={label}
+					variant={restartRequired ? "default" : "outline"}
+					size="icon-xs"
+					disabled={installing}
+					onClick={handleClick}
+					className={cn(
+						"border-app-warning/45 bg-app-warning/10 text-app-warning shadow-sm hover:bg-app-warning/15 hover:text-app-warning",
+						restartRequired &&
+							"border-app-success/40 bg-app-success text-app-success-foreground hover:bg-app-success/90 hover:text-app-success-foreground",
+						installing && "opacity-100",
+					)}
+				>
+					<Icon
+						className={cn("size-3.5", installing && "animate-spin")}
+						strokeWidth={2}
+					/>
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent
+				side="bottom"
+				sideOffset={5}
+				className="max-w-[260px] rounded-md px-2 py-1.5 text-[12px] leading-snug"
+			>
+				{tooltipLabel({
+					installing,
+					restartRequired: Boolean(restartRequired),
+					behindCount: state.updateStatus?.behindCount ?? 0,
+					upstream: state.updateStatus?.upstream ?? null,
+				})}
+			</TooltipContent>
+		</Tooltip>
+	);
+
+	if (inline) {
+		return button;
+	}
+
 	return (
 		<div className="fixed left-[96px] top-[6px] z-50 hidden lg:block">
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Button
-						type="button"
-						aria-label={label}
-						variant={restartRequired ? "default" : "outline"}
-						size="icon-xs"
-						disabled={installing}
-						onClick={handleClick}
-						className={cn(
-							"border-app-warning/45 bg-app-warning/10 text-app-warning shadow-sm hover:bg-app-warning/15 hover:text-app-warning",
-							restartRequired &&
-								"border-app-success/40 bg-app-success text-app-success-foreground hover:bg-app-success/90 hover:text-app-success-foreground",
-							installing && "opacity-100",
-						)}
-					>
-						<Icon
-							className={cn("size-3.5", installing && "animate-spin")}
-							strokeWidth={2}
-						/>
-					</Button>
-				</TooltipTrigger>
-				<TooltipContent
-					side="bottom"
-					sideOffset={5}
-					className="max-w-[260px] rounded-md px-2 py-1.5 text-[12px] leading-snug"
-				>
-					{tooltipLabel({
-						installing,
-						restartRequired: Boolean(restartRequired),
-						behindCount: state.updateStatus?.behindCount ?? 0,
-						upstream: state.updateStatus?.upstream ?? null,
-					})}
-				</TooltipContent>
-			</Tooltip>
+			{button}
 		</div>
 	);
 }

@@ -28,6 +28,13 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 	list_archived_workspaces: () => [],
 	list_agent_model_sections: () => [],
 	get_add_repository_defaults: () => ({ lastCloneDirectory: null }),
+	create_github_project_repository: () => ({
+		repositoryId: "repo-created",
+		createdRepository: true,
+		selectedWorkspaceId: "workspace-created",
+		createdWorkspaceId: "workspace-created",
+		createdWorkspaceState: "ready",
+	}),
 	get_data_info: () => null,
 	get_cli_status: () => ({
 		installed: false,

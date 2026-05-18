@@ -240,6 +240,7 @@ type WorkspaceComposerContainerProps = {
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
 	modelFilter?: (model: AgentModelOption) => boolean;
+	preferredDefaultModelId?: string | null;
 	/** When true hides the full toolbar and shows only send/stop. */
 	hideToolbar?: boolean;
 };
@@ -290,6 +291,7 @@ export const WorkspaceComposerContainer = memo(
 		onSteerQueued,
 		onRemoveQueued,
 		modelFilter,
+		preferredDefaultModelId = null,
 		hideToolbar = false,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
@@ -460,7 +462,8 @@ export const WorkspaceComposerContainer = memo(
 			session: currentSession,
 			modelSelections,
 			modelSections,
-			settingsDefaultModelId: settings.defaultModelId,
+			settingsDefaultModelId:
+				preferredDefaultModelId ?? settings.defaultModelId,
 		});
 		const selectedModel = useMemo(
 			() => findModelOption(modelSections, selectedModelId),

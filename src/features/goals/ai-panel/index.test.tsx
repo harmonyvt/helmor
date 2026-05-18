@@ -23,6 +23,7 @@ const apiMockState = vi.hoisted(() => ({
 
 const conversationMockState = vi.hoisted(() => ({
 	props: null as {
+		preferredDefaultModelId?: string | null;
 		buildSendRequestExtras?: (context: {
 			model: AgentModelOption;
 			workspaceId: string | null;
@@ -136,6 +137,38 @@ describe("GoalsAiPanel", () => {
 		apiMockState.sendThreadMessage.mockReset();
 		apiMockState.syncWorkspaceWithTargetBranch.mockReset();
 		conversationMockState.props = null;
+	});
+
+	it("prefers the favourited Pi model as the default panel model", () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
+			{ id: "pi", label: "Pi", options: [parentModel, otherModel] },
+		]);
+
+		renderWithProviders(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						favoriteModelIds: [otherModel.id],
+					},
+					isLoaded: true,
+					updateSettings: vi.fn(),
+				}}
+			>
+				<GoalsAiPanel
+					workspaceId="goal-1"
+					cards={[]}
+					kanbanSnapshot="[]"
+					onClose={() => {}}
+				/>
+			</SettingsContext.Provider>,
+			{ queryClient },
+		);
+
+		expect(conversationMockState.props?.preferredDefaultModelId).toBe(
+			otherModel.id,
+		);
 	});
 
 	it("uses the assignee model selected by Pi from the user choice", async () => {

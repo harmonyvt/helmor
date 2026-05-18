@@ -72,6 +72,15 @@ type GoalsAiPanelProps = {
 
 const piOnlyModelFilter = (model: AgentModelOption) => model.provider === "pi";
 
+function resolveFavouritePiModelId(
+	piModels: readonly AgentModelOption[],
+	favouriteModelIds: readonly string[],
+): string | null {
+	if (favouriteModelIds.length === 0) return null;
+	const favouriteSet = new Set(favouriteModelIds);
+	return piModels.find((model) => favouriteSet.has(model.id))?.id ?? null;
+}
+
 function buildKanbanToolError(
 	event: Extract<AgentStreamEvent, { kind: "kanbanToolCall" }>,
 	error: unknown,
@@ -116,6 +125,10 @@ export function GoalsAiPanel({
 	const piModels = useMemo(
 		() => modelSections.find((section) => section.id === "pi")?.options ?? [],
 		[modelSections],
+	);
+	const favouritePiModelId = useMemo(
+		() => resolveFavouritePiModelId(piModels, settings.favoriteModelIds),
+		[piModels, settings.favoriteModelIds],
 	);
 	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
 		null,
@@ -532,6 +545,7 @@ export function GoalsAiPanel({
 				onResolveDisplayedSession={handleResolveDisplayedSession}
 				onSendingWorkspacesChange={onSendingWorkspacesChange}
 				modelFilter={piOnlyModelFilter}
+				preferredDefaultModelId={favouritePiModelId}
 				buildSendRequestExtras={() => {
 					return {
 						kanbanWorkspaceId: workspaceId,

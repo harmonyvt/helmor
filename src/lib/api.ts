@@ -385,6 +385,8 @@ export type GithubRepositorySummary = {
 	pushedAt?: string | null;
 };
 
+export type GithubRepositoryVisibility = "private" | "public";
+
 export type GithubPullRequestSummary = {
 	number: number;
 	title: string;
@@ -2888,6 +2890,17 @@ export async function cloneRepositoryFromUrl(args: {
 	cloneDirectory: string;
 }): Promise<AddRepositoryResponse> {
 	return invoke<AddRepositoryResponse>("clone_repository_from_url", args);
+}
+
+export async function createGithubProjectRepository(args: {
+	projectName: string;
+	parentDirectory: string;
+	visibility: GithubRepositoryVisibility;
+}): Promise<AddRepositoryResponse> {
+	return invoke<AddRepositoryResponse>(
+		"create_github_project_repository",
+		args,
+	);
 }
 
 export async function markSessionRead(
