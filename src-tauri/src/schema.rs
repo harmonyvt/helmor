@@ -562,6 +562,9 @@ fn run_migrations(connection: &impl SchemaExecutor) -> Result<()> {
     connection
         .execute_batch(GOAL_SUPERVISOR_NOTIFICATIONS_SCHEMA)
         .context("Failed to ensure goal_supervisor_notifications schema")?;
+    connection
+        .execute_batch(GOAL_ASSIGNEE_RUNS_SCHEMA)
+        .context("Failed to ensure goal_assignee_runs schema")?;
 
     if has_table(connection, "pending_cli_sends") {
         for (column, definition) in [
@@ -664,6 +667,29 @@ CREATE TABLE IF NOT EXISTS goal_supervisor_notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_goal_supervisor_notifications_goal
     ON goal_supervisor_notifications(goal_workspace_id, created_at);
+"#;
+
+const GOAL_ASSIGNEE_RUNS_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS goal_assignee_runs (
+    id TEXT PRIMARY KEY,
+    goal_workspace_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    supervisor_message_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    prompt TEXT NOT NULL,
+    model_id TEXT,
+    permission_mode TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT,
+    last_event_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_goal_assignee_runs_goal_status
+    ON goal_assignee_runs(goal_workspace_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_goal_assignee_runs_session_status
+    ON goal_assignee_runs(session_id, status, created_at);
 "#;
 
 const SCHEMA_SQL: &str = r#"
@@ -858,6 +884,23 @@ CREATE TABLE IF NOT EXISTS goal_supervisor_notifications (
     UNIQUE(goal_workspace_id, card_workspace_id, assignee_session_id, message_id)
 );
 
+CREATE TABLE IF NOT EXISTS goal_assignee_runs (
+    id TEXT PRIMARY KEY,
+    goal_workspace_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    supervisor_message_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    prompt TEXT NOT NULL,
+    model_id TEXT,
+    permission_mode TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT,
+    last_event_at TEXT
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
@@ -866,6 +909,8 @@ CREATE INDEX IF NOT EXISTS idx_session_delegations_parent ON session_delegations
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_child ON session_delegations(child_session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_delegations_parent_message ON session_delegations(parent_message_id);
 CREATE INDEX IF NOT EXISTS idx_goal_supervisor_notifications_goal ON goal_supervisor_notifications(goal_workspace_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_goal_assignee_runs_goal_status ON goal_assignee_runs(goal_workspace_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_goal_assignee_runs_session_status ON goal_assignee_runs(session_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_browser_tabs_workspace_order ON workspace_browser_tabs(workspace_id, display_order);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_browser_tabs_one_active ON workspace_browser_tabs(workspace_id) WHERE active = 1;

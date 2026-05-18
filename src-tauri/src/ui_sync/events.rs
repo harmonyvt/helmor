@@ -58,6 +58,12 @@ pub enum UiMutationEvent {
     GoalOrchestratorStateChanged {
         goal_workspace_id: String,
     },
+    GoalAssigneeRunChanged {
+        goal_workspace_id: String,
+        workspace_id: String,
+        session_id: String,
+        run_id: String,
+    },
     PendingCliSendQueued {
         pending_send_id: String,
         workspace_id: String,
@@ -146,6 +152,12 @@ mod tests {
             UiMutationEvent::SettingsChanged { key: None },
             UiMutationEvent::GoalOrchestratorStateChanged {
                 goal_workspace_id: "goal".into(),
+            },
+            UiMutationEvent::GoalAssigneeRunChanged {
+                goal_workspace_id: "goal".into(),
+                workspace_id: "w".into(),
+                session_id: "s".into(),
+                run_id: "run".into(),
             },
             UiMutationEvent::PendingCliSendQueued {
                 pending_send_id: "p1".into(),

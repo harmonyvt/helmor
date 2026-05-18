@@ -1898,6 +1898,13 @@ export type UiMutationEvent =
 	| { type: "settingsChanged"; key: string | null }
 	| { type: "goalOrchestratorStateChanged"; goalWorkspaceId: string }
 	| {
+			type: "goalAssigneeRunChanged";
+			goalWorkspaceId: string;
+			workspaceId: string;
+			sessionId: string;
+			runId: string;
+	  }
+	| {
 			type: "pendingCliSendQueued";
 			pendingSendId: string;
 			workspaceId: string;

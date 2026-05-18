@@ -166,10 +166,7 @@ export function GoalWorkspaceContainer({
 		goalOrchestratorStateQueryOptions(workspaceId),
 	);
 	const assigneesQuery = useQuery({
-		queryKey: [
-			...helmorQueryKeys.goalChildWorkspaces(workspaceId),
-			"assignees",
-		],
+		queryKey: helmorQueryKeys.goalAssignees(workspaceId),
 		queryFn: () => listAssignees(workspaceId),
 		enabled: childQuery.isSuccess,
 		staleTime: 5_000,

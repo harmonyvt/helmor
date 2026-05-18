@@ -347,6 +347,20 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.goalChildWorkspaces(event.goalWorkspaceId),
 			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.goalAssignees(event.goalWorkspaceId),
+			});
+			return;
+		case "goalAssigneeRunChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.goalAssignees(event.goalWorkspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: sessionThreadCacheKey(event.sessionId),
+			});
 			return;
 		case "pendingCliSendQueued":
 			void options.processPendingCliSends();

@@ -16,6 +16,7 @@ static SESSION_QUEUES: OnceLock<Mutex<HashMap<String, VecDeque<QueuedSend>>>> = 
 static SESSION_RUNNING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static SESSION_WAITING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static SESSION_RUNTIME: OnceLock<Mutex<HashMap<String, RuntimeTelemetry>>> = OnceLock::new();
+static GOAL_ASSIGNEE_RUNNING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 mod progress;
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,13 @@ struct QueuedSend {
     workspace_id: String,
     session_id: String,
     params: SendMessageParams,
+    assignee: Option<AssigneeRunMetadata>,
+}
+
+#[derive(Debug, Clone)]
+struct AssigneeRunMetadata {
+    goal_workspace_id: String,
+    run_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +64,32 @@ struct RuntimeTelemetry {
 }
 
 pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSendReceipt> {
+    enqueue_inner(app, params, None, None)
+}
+
+pub fn enqueue_assignee(
+    app: AppHandle,
+    params: SendMessageParams,
+    goal_workspace_id: String,
+    run_id: String,
+) -> Result<BackgroundSendReceipt> {
+    enqueue_inner(
+        app,
+        params,
+        Some(run_id.clone()),
+        Some(AssigneeRunMetadata {
+            goal_workspace_id,
+            run_id,
+        }),
+    )
+}
+
+fn enqueue_inner(
+    app: AppHandle,
+    params: SendMessageParams,
+    task_id: Option<String>,
+    assignee: Option<AssigneeRunMetadata>,
+) -> Result<BackgroundSendReceipt> {
     let workspace_id = service::resolve_workspace_ref(&params.workspace_ref)?;
     let session_id = params
         .session_id
@@ -64,7 +98,7 @@ pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSe
     let streaming = session_is_streaming(&session_id).unwrap_or(false);
     let send_model_id = params.model.clone();
     let send_permission_mode = params.permission_mode.clone();
-    let task_id = Uuid::new_v4().to_string();
+    let task_id = task_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let queued = QueuedSend {
         task_id: task_id.clone(),
         workspace_id,
@@ -73,22 +107,34 @@ pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSe
             delegate_to_running_app: false,
             ..params
         },
+        assignee: assignee.clone(),
     };
 
     let should_start = {
         let queues = SESSION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()));
         let running = SESSION_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
+        let goal_running = GOAL_ASSIGNEE_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
         let mut running = running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut goal_running = goal_running
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut queues = queues
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let queue = queues.entry(session_id.clone()).or_default();
-        let should_start = queue.is_empty() && !running.contains(&session_id) && !streaming;
+        let goal_available = assignee
+            .as_ref()
+            .is_none_or(|meta| !goal_running.contains(&meta.goal_workspace_id));
+        let should_start =
+            queue.is_empty() && !running.contains(&session_id) && !streaming && goal_available;
         queue.push_back(queued);
         if should_start {
             running.insert(session_id.clone());
+            if let Some(meta) = assignee.as_ref() {
+                goal_running.insert(meta.goal_workspace_id.clone());
+            }
         }
         should_start
     };
@@ -108,6 +154,9 @@ pub fn enqueue(app: AppHandle, params: SendMessageParams) -> Result<BackgroundSe
             send_permission_mode.as_deref(),
         ) {
             remove_queued_send(&session_id, &task_id);
+            if let Some(meta) = assignee.as_ref() {
+                release_assignee_goal(&meta.goal_workspace_id);
+            }
             return Err(error);
         }
     }
@@ -162,21 +211,39 @@ fn spawn_when_idle(app: AppHandle, session_id: String) {
             let next_task_id = {
                 let queues = SESSION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()));
                 let running = SESSION_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
+                let goal_running = GOAL_ASSIGNEE_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
                 let mut running = running
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 if running.contains(&session_id) {
                     continue;
                 }
+                let mut goal_running = goal_running
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 let queues = queues
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let next = queues
+                let next_send = queues
                     .get(&session_id)
                     .and_then(|queue| queue.front())
-                    .map(|send| send.task_id.clone());
+                    .cloned();
+                let next = next_send.as_ref().and_then(|send| {
+                    if send
+                        .assignee
+                        .as_ref()
+                        .is_some_and(|meta| goal_running.contains(&meta.goal_workspace_id))
+                    {
+                        None
+                    } else {
+                        Some(send.task_id.clone())
+                    }
+                });
                 if next.is_some() {
                     running.insert(session_id.clone());
+                    if let Some(meta) = next_send.as_ref().and_then(|send| send.assignee.as_ref()) {
+                        goal_running.insert(meta.goal_workspace_id.clone());
+                    }
                 }
                 next
             };
@@ -200,6 +267,16 @@ fn spawn_next(app: AppHandle, expected_task_id: String) {
         let Some(send) = pop_expected(&expected_task_id) else {
             return;
         };
+        reserve_assignee_goal(&send);
+        if let Some(meta) = send.assignee.as_ref() {
+            crate::goal_assignees::mark_assignee_run_started(
+                &app,
+                &meta.goal_workspace_id,
+                &send.workspace_id,
+                &send.session_id,
+                &meta.run_id,
+            );
+        }
 
         remember_runtime(
             &send.session_id,
@@ -222,9 +299,13 @@ fn spawn_next(app: AppHandle, expected_task_id: String) {
             publish_event(&app, &workspace_id, &session_id, event);
         };
 
+        let mut send_error: Option<String> = None;
         match service::send_message(send.params, &mut on_event) {
             Ok(result) => {
                 if !result.persisted {
+                    send_error = Some(
+                        "Provider completed, but one or more Helmor DB writes failed.".to_string(),
+                    );
                     let _ = crate::goal_assignees::notify_runtime_issue_for_session(
                         &session_id,
                         "persist_failed",
@@ -237,6 +318,7 @@ fn spawn_next(app: AppHandle, expected_task_id: String) {
                 }
             }
             Err(error) => {
+                send_error = Some(error.to_string());
                 remember_runtime_error(&session_id, &error.to_string());
                 let _ = crate::goal_assignees::notify_runtime_issue_for_session(
                     &session_id,
@@ -254,7 +336,21 @@ fn spawn_next(app: AppHandle, expected_task_id: String) {
             }
         }
 
-        maybe_spawn_followup(app, session_id);
+        if let Some(meta) = send.assignee.as_ref() {
+            release_assignee_goal(&meta.goal_workspace_id);
+            crate::goal_assignees::mark_assignee_run_finished(
+                &app,
+                &meta.goal_workspace_id,
+                &workspace_id,
+                &session_id,
+                &meta.run_id,
+                send_error.as_deref(),
+            );
+        }
+        maybe_spawn_followup(app.clone(), session_id);
+        if let Some(meta) = send.assignee.as_ref() {
+            maybe_spawn_goal_assignee_followup(app, &meta.goal_workspace_id);
+        }
     });
 }
 
@@ -295,15 +391,35 @@ fn remove_queued_send(session_id: &str, task_id: &str) {
 fn maybe_spawn_followup(app: AppHandle, session_id: String) {
     let next_task_id = {
         let queues = SESSION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()));
+        let goal_running = GOAL_ASSIGNEE_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
+        let mut goal_running = goal_running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut queues = queues
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(queue) = queues.get_mut(&session_id) else {
             return;
         };
-        let next = queue.front().map(|send| send.task_id.clone());
+        let next_send = queue.front().cloned();
+        let next = next_send.as_ref().and_then(|send| {
+            if send
+                .assignee
+                .as_ref()
+                .is_some_and(|meta| goal_running.contains(&meta.goal_workspace_id))
+            {
+                None
+            } else {
+                Some(send.task_id.clone())
+            }
+        });
         if queue.is_empty() {
             queues.remove(&session_id);
+        }
+        if next.is_some() {
+            if let Some(meta) = next_send.as_ref().and_then(|send| send.assignee.as_ref()) {
+                goal_running.insert(meta.goal_workspace_id.clone());
+            }
         }
         next
     };
@@ -317,6 +433,64 @@ fn maybe_spawn_followup(app: AppHandle, session_id: String) {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         running.remove(&session_id);
         settle_runtime_after_send(&session_id);
+    }
+}
+
+fn reserve_assignee_goal(send: &QueuedSend) {
+    if let Some(meta) = send.assignee.as_ref() {
+        let goal_running = GOAL_ASSIGNEE_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
+        goal_running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(meta.goal_workspace_id.clone());
+    }
+}
+
+fn release_assignee_goal(goal_workspace_id: &str) {
+    let goal_running = GOAL_ASSIGNEE_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
+    goal_running
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(goal_workspace_id);
+}
+
+fn maybe_spawn_goal_assignee_followup(app: AppHandle, goal_workspace_id: &str) {
+    let next = {
+        let queues = SESSION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()));
+        let running = SESSION_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
+        let goal_running = GOAL_ASSIGNEE_RUNNING.get_or_init(|| Mutex::new(HashSet::new()));
+        let mut running = running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut goal_running = goal_running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let queues = queues
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if goal_running.contains(goal_workspace_id) {
+            None
+        } else {
+            let candidate = queues.iter().find_map(|(session_id, queue)| {
+                if running.contains(session_id) {
+                    return None;
+                }
+                let send = queue.front()?;
+                let meta = send.assignee.as_ref()?;
+                (meta.goal_workspace_id == goal_workspace_id)
+                    .then(|| (session_id.clone(), send.task_id.clone()))
+            });
+            if let Some((session_id, task_id)) = candidate {
+                running.insert(session_id);
+                goal_running.insert(goal_workspace_id.to_string());
+                Some(task_id)
+            } else {
+                None
+            }
+        }
+    };
+    if let Some(task_id) = next {
+        spawn_next(app, task_id);
     }
 }
 
