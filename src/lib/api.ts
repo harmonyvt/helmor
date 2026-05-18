@@ -975,6 +975,21 @@ export type AssigneeSummary = {
 	lastRunError?: string | null;
 	/** Number of runs currently in queued state for this assignee. */
 	pendingRunCount?: number | null;
+	/** Most-recent durable scheduler/background run for this assignee session. */
+	latestRun?: AssigneeRunSummary | null;
+};
+
+export type AssigneeRunSummary = {
+	runId: string;
+	status: string;
+	prompt: string;
+	modelId?: string | null;
+	permissionMode?: string | null;
+	error?: string | null;
+	createdAt: string;
+	startedAt?: string | null;
+	completedAt?: string | null;
+	lastEventAt?: string | null;
 };
 
 export type WorkspaceCreationSource =
