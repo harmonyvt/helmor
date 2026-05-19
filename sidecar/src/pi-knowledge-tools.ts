@@ -15,6 +15,84 @@ export function createKnowledgeTools(
 	emitter: SidecarEmitter,
 	requestId: string,
 ) {
+	const searchKnowledge = defineTool({
+		name: "search_knowledge",
+		label: "Search Knowledge",
+		description:
+			"Search Helmor knowledge with an explicit scope. Use scope='all' for the current project plus this goal overlay, scope='project' for repository/project knowledge only, and scope='goal' for the current goal's lifecycle knowledge only.",
+		promptSnippet:
+			"search_knowledge({ query, scope?, limit? }) → scoped project/goal knowledge snippets",
+		parameters: Type.Object({
+			query: Type.String({ description: "Natural-language search query" }),
+			scope: Type.Optional(
+				Type.String({
+					description: "Search scope: all | project | goal. Defaults to all.",
+				}),
+			),
+			limit: Type.Optional(Type.Number({ description: "Maximum matches" })),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const result = await callPiTool(
+				"search_knowledge",
+				goalWorkspaceId,
+				{
+					goalWorkspaceId,
+					query: params.query,
+					scope: params.scope ?? "all",
+					limit: params.limit,
+				},
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
+	const getKnowledgeStatus = defineTool({
+		name: "get_knowledge_status",
+		label: "Get Knowledge Status",
+		description:
+			"Inspect whether Helmor's knowledge sidecar is available and how many knowledge documents are indexed. Use before reindexing or when search returns no useful results.",
+		promptSnippet: "get_knowledge_status() → sidecar/index status",
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+			const result = await callPiTool(
+				"get_knowledge_status",
+				goalWorkspaceId,
+				{ goalWorkspaceId },
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
+	const reindexKnowledge = defineTool({
+		name: "reindex_knowledge",
+		label: "Reindex Knowledge",
+		description:
+			"Refresh Helmor knowledge for the current project, current goal, or both. Use when indexed knowledge is missing, stale, or after major workspace changes; this may take a little time on large repositories.",
+		promptSnippet:
+			"reindex_knowledge({ scope? }) → indexed project/goal document counts",
+		parameters: Type.Object({
+			scope: Type.Optional(
+				Type.String({
+					description: "Index scope: all | project | goal. Defaults to all.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const result = await callPiTool(
+				"reindex_knowledge",
+				goalWorkspaceId,
+				{ goalWorkspaceId, scope: params.scope ?? "all" },
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
 	const queryProjectKnowledge = defineTool({
 		name: "query_project_knowledge",
 		label: "Query Project Knowledge",
@@ -94,5 +172,12 @@ export function createKnowledgeTools(
 		},
 	});
 
-	return [queryProjectKnowledge, queryGoalKnowledge, recordGoalKnowledgeNote];
+	return [
+		searchKnowledge,
+		getKnowledgeStatus,
+		reindexKnowledge,
+		queryProjectKnowledge,
+		queryGoalKnowledge,
+		recordGoalKnowledgeNote,
+	];
 }

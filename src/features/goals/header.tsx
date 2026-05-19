@@ -48,6 +48,7 @@ type GoalHeaderProps = {
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onOpenChangeRequest?: () => void;
 	onRefreshPrStatus?: () => Promise<void>;
+	kbBadge?: React.ReactNode;
 	onEditGoal: () => void;
 };
 
@@ -162,6 +163,7 @@ export function GoalHeader({
 	workspaceId = null,
 	hasGitChanges = false,
 	forgeIsRefreshing = false,
+	kbBadge,
 	onCommitAction,
 	onOpenChangeRequest,
 	onRefreshPrStatus,
@@ -199,11 +201,12 @@ export function GoalHeader({
 					</div>
 				</div>
 
-				{setup ? (
-					<div className="flex shrink-0 items-center">
-						<GoalSetupBadge status={setup} />
-					</div>
-				) : null}
+				<div className="flex shrink-0 items-center gap-2">
+					{kbBadge ? (
+						<div className="flex shrink-0 items-center">{kbBadge}</div>
+					) : null}
+					{setup ? <GoalSetupBadge status={setup} /> : null}
+				</div>
 			</header>
 
 			{/* Git status banner — full-width action strip below the title row */}

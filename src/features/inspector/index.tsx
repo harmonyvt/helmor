@@ -4,8 +4,10 @@ import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
+import { AgentToolsSection } from "@/features/inspector/sections/agent-tools";
 import { ArchiveTab } from "@/features/inspector/sections/archive";
 import { CommentsTab } from "@/features/inspector/sections/comments";
+import { KnowledgeSection } from "@/features/inspector/sections/knowledge";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import {
 	type ShortcutHandler,
@@ -441,6 +443,8 @@ export function WorkspaceInspectorSidebar({
 	useEffect(() => {
 		if (activeTab === "setup" || activeTab === "run" || activeTab === "archive")
 			return;
+		// Permanent tabs — never reset.
+		if (activeTab === "knowledge" || activeTab === "tools") return;
 		if (activeTab === "ingest") {
 			if (showIngestTab) return;
 			setActiveTab("setup");
@@ -485,11 +489,13 @@ export function WorkspaceInspectorSidebar({
 			? showCommentsTab
 			: activeTab === "ingest"
 				? false
-				: isTerminalTabActive
-					? true
-					: scriptTabState === "running" ||
-						scriptTabState === "success" ||
-						scriptTabState === "failure";
+				: activeTab === "knowledge" || activeTab === "tools"
+					? false
+					: isTerminalTabActive
+						? true
+						: scriptTabState === "running" ||
+							scriptTabState === "success" ||
+							scriptTabState === "failure";
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 
@@ -603,6 +609,12 @@ export function WorkspaceInspectorSidebar({
 					isActive={activeTab === "comments"}
 					onReviewAllComments={handleReviewAllComments}
 				/>
+				<KnowledgeSection
+					workspaceId={workspaceId ?? null}
+					repoId={repoId ?? null}
+					isActive={activeTab === "knowledge"}
+				/>
+				<AgentToolsSection isActive={activeTab === "tools"} />
 				{terminalInstances.map((instance) => (
 					<TerminalInstancePanel
 						key={instance.id}

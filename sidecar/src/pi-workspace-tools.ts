@@ -22,6 +22,35 @@ export function createWorkspaceOperationTools(
 	emitter: SidecarEmitter,
 	requestId: string,
 ) {
+	const listProjectWorkspaces = defineTool({
+		name: "list_project_workspaces",
+		label: "List Project Workspaces",
+		description:
+			"List every non-archived Helmor workspace in the current goal's project/repository, including the goal workspace, child workspaces, and standalone Claude/Codex/Pi workspaces. Use this before deciding which workspace or thread to inspect.",
+		promptSnippet:
+			"list_project_workspaces({ include_archived? }) → project workspace inventory with active/primary agent info",
+		parameters: Type.Object({
+			include_archived: Type.Optional(
+				Type.Boolean({
+					description: "Include archived workspaces. Defaults to false.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const result = await callPiTool(
+				"list_project_workspaces",
+				goalWorkspaceId,
+				{
+					goalWorkspaceId,
+					includeArchived: params.include_archived ?? false,
+				},
+				emitter,
+				requestId,
+			);
+			return toResult(result);
+		},
+	});
+
 	const inspectWorkspace = defineTool({
 		name: "inspect_workspace_merge_state",
 		label: "Inspect Workspace Merge State",
@@ -181,6 +210,7 @@ export function createWorkspaceOperationTools(
 	});
 
 	return [
+		listProjectWorkspaces,
 		inspectWorkspace,
 		refreshChangeRequest,
 		syncTargetBranch,

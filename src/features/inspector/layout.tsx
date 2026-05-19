@@ -714,6 +714,53 @@ export function InspectorTabsSection({
 									</button>
 								)}
 
+								<button
+									type="button"
+									role="tab"
+									id="inspector-tab-knowledge"
+									aria-controls="inspector-panel-knowledge"
+									aria-selected={activeTab === "knowledge"}
+									tabIndex={activeTab === "knowledge" ? 0 : -1}
+									className={cn(
+										INSPECTOR_TAB_BUTTON_CLASS,
+										"shrink-0",
+										activeTab === "knowledge" && "text-foreground",
+									)}
+									onClick={() => handleTabClick("knowledge")}
+								>
+									Knowledge
+									<span
+										aria-hidden="true"
+										className={cn(
+											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+											activeTab === "knowledge" && "opacity-100",
+										)}
+									/>
+								</button>
+								<button
+									type="button"
+									role="tab"
+									id="inspector-tab-tools"
+									aria-controls="inspector-panel-tools"
+									aria-selected={activeTab === "tools"}
+									tabIndex={activeTab === "tools" ? 0 : -1}
+									className={cn(
+										INSPECTOR_TAB_BUTTON_CLASS,
+										"shrink-0",
+										activeTab === "tools" && "text-foreground",
+									)}
+									onClick={() => handleTabClick("tools")}
+								>
+									Tools
+									<span
+										aria-hidden="true"
+										className={cn(
+											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+											activeTab === "tools" && "opacity-100",
+										)}
+									/>
+								</button>
+
 								{terminalInstances.length === 0 ? (
 									// Placeholder tab so the Terminal entry point is always
 									// discoverable, even on a fresh workspace with no live

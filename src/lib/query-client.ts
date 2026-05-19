@@ -16,6 +16,7 @@ import {
 	getCodexRateLimits,
 	getForgeCliStatus,
 	getGoalOrchestratorState,
+	getKnowledgeStatus,
 	getLiveContextUsage,
 	getSessionContextUsage,
 	getWorkspaceForge,
@@ -42,6 +43,7 @@ import {
 	loadWorkspaceSessions,
 	type PrCommentData,
 	type PrSyncState,
+	queryKnowledge,
 	refreshWorkspaceChangeRequest,
 } from "./api";
 import { postDebugEvidence } from "./debug-evidence";
@@ -791,5 +793,32 @@ export function workspaceFilesQueryOptions(workspaceRootPath: string) {
 		staleTime: 60_000,
 		gcTime: DEFAULT_GC_TIME,
 		retry: 0,
+	});
+}
+
+export function knowledgeStatusQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.knowledgeStatus,
+		queryFn: getKnowledgeStatus,
+		staleTime: 30_000,
+		refetchOnWindowFocus: true,
+	});
+}
+
+export function knowledgeQueryOptions(request: {
+	query: string;
+	repoId: string | null;
+	goalWorkspaceId: string | null;
+	limit?: number | null;
+}) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.knowledgeQuery(
+			request.query,
+			request.repoId,
+			request.goalWorkspaceId,
+		),
+		queryFn: () => queryKnowledge(request),
+		staleTime: 60_000,
+		enabled: request.query.length > 0,
 	});
 }

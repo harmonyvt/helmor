@@ -3,7 +3,7 @@ import { resolvePendingKanbanCall } from "./pi-kanban-tools.js";
 import { createWorkspaceOperationTools } from "./pi-workspace-tools.js";
 
 describe("createWorkspaceOperationTools", () => {
-	test("emits merge and landing operations through the goal bridge", async () => {
+	test("emits project workspace inventory, merge, and landing operations through the goal bridge", async () => {
 		const calls: Array<{
 			toolCallId: string;
 			toolName: string;
@@ -32,12 +32,23 @@ describe("createWorkspaceOperationTools", () => {
 		const mergeTool = tools.find(
 			(tool) => tool.name === "merge_change_request",
 		);
+		const listProjectWorkspacesTool = tools.find(
+			(tool) => tool.name === "list_project_workspaces",
+		);
 		const markLandedTool = tools.find(
 			(tool) => tool.name === "mark_workspace_landed",
 		);
+		expect(listProjectWorkspacesTool).toBeDefined();
 		expect(mergeTool).toBeDefined();
 		expect(markLandedTool).toBeDefined();
 
+		await listProjectWorkspacesTool?.execute(
+			"sdk-tool-call-0",
+			{ include_archived: true } as never,
+			new AbortController().signal,
+			() => {},
+			{} as never,
+		);
 		await mergeTool?.execute(
 			"sdk-tool-call-1",
 			{ card_id: "child-workspace-1" } as never,
@@ -54,6 +65,14 @@ describe("createWorkspaceOperationTools", () => {
 		);
 
 		expect(calls).toEqual([
+			expect.objectContaining({
+				toolName: "list_project_workspaces",
+				workspaceId: "goal-workspace-1",
+				args: {
+					goalWorkspaceId: "goal-workspace-1",
+					includeArchived: true,
+				},
+			}),
 			expect.objectContaining({
 				toolName: "merge_change_request",
 				workspaceId: "goal-workspace-1",
