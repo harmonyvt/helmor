@@ -21,6 +21,7 @@ import { measureSync } from "@/lib/perf-marks";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { useSettings } from "@/lib/settings";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
+import { useCompactThread } from "./compact-thread-context";
 import { EmptyState, MemoConversationMessage } from "./message-components";
 
 export type PresentedSessionPane = {
@@ -175,8 +176,9 @@ function ChatThread({
 }) {
 	const threadMessages = messages;
 	const { settings } = useSettings();
+	const compact = useCompactThread();
 	const usePlainThread =
-		threadMessages.length <= NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT;
+		compact || threadMessages.length <= NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT;
 	const hasStreamingMessage = threadMessages.some(
 		(message) => message.streaming === true,
 	);

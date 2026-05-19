@@ -103,6 +103,49 @@ describe("stabilizeStreamingMessages", () => {
 		expect(part.summary).toBe("Running 3 read-only commands...");
 	});
 
+	it("dedupes repeated tool ids when a base snapshot and pending partial overlap", () => {
+		const messages = stabilizeStreamingMessages([
+			assistant(
+				"a1",
+				[
+					{
+						type: "collapsed-group",
+						id: "group:cmd1",
+						category: "shell",
+						active: true,
+						summary: "Running 2 read-only commands...",
+						tools: [
+							toolCall("cmd1", "cat src/App.tsx"),
+							toolCall("cmd2", "sed -n '1,40p' src/lib/api.ts"),
+						],
+					},
+				],
+				true,
+			),
+			assistant(
+				"a2",
+				[
+					toolCall("cmd2", "sed -n '1,80p' src/lib/api.ts", "done"),
+					toolCall("cmd3", "nl -ba src/App.tsx"),
+				],
+				true,
+			),
+		]);
+
+		expect(messages).toHaveLength(1);
+		const [part] = messages[0]?.content ?? [];
+		expect(part?.type).toBe("collapsed-group");
+		if (part?.type !== "collapsed-group") {
+			throw new Error("expected collapsed-group");
+		}
+		expect(part.tools.map((tool) => tool.toolCallId)).toEqual([
+			"cmd1",
+			"cmd2",
+			"cmd3",
+		]);
+		expect(part.tools[1]?.streamingStatus).toBe("done");
+	});
+
 	it("does not collapse across a text boundary", () => {
 		const messages = stabilizeStreamingMessages([
 			assistant("a1", [toolCall("cmd1", "cat src/App.tsx")], true),

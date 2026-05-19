@@ -292,6 +292,18 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			return;
 		}
 
+		// Pre-seed the thread cache with [] so messagesQuery.data is never
+		// undefined on the first render tick. Without this, the compact Goals
+		// panel shows a brief blank state while React Query fires its first
+		// fetch (data === undefined → sessionPanes = [] → loading indicator).
+		const cacheKey = [
+			...helmorQueryKeys.sessionMessages(threadSessionId),
+			"thread",
+		] as const;
+		if (queryClient.getQueryData(cacheKey) === undefined) {
+			queryClient.setQueryData(cacheKey, []);
+		}
+
 		void queryClient.prefetchQuery(
 			sessionThreadMessagesQueryOptions(threadSessionId),
 		);

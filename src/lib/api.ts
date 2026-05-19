@@ -3479,8 +3479,20 @@ export type AgentStreamEvent =
 	| {
 			kind: "piUiRequest";
 			interactionId: string;
-			uiKind: "select" | "confirm" | "input";
-			payload: Record<string, unknown>;
+			uiKind: "select";
+			payload: { title?: string; options: string[] };
+	  }
+	| {
+			kind: "piUiRequest";
+			interactionId: string;
+			uiKind: "confirm";
+			payload: { title?: string; message?: string };
+	  }
+	| {
+			kind: "piUiRequest";
+			interactionId: string;
+			uiKind: "input";
+			payload: { title?: string; placeholder?: string };
 	  }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 

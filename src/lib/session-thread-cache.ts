@@ -132,11 +132,17 @@ export function replaceStreamingTail(
 	const cacheKey = sessionThreadCacheKey(sessionId);
 	queryClient.setQueryData<ThreadMessageLike[]>(cacheKey, (prev) => {
 		const prior = prev ?? [];
+		const turnIds = messageIdSet(turn);
 		const boundary = prior.findIndex((m) => m.id === userMessageId);
-		const stable = boundary >= 0 ? prior.slice(0, boundary) : prior;
+		const fallbackBoundary =
+			boundary >= 0 ? boundary : firstMatchingMessageIndex(prior, turnIds);
+		const stable =
+			fallbackBoundary >= 0
+				? prior.slice(0, fallbackBoundary)
+				: prior.filter((message) => !messageIdInSet(message, turnIds));
 		const externalTail =
-			boundary >= 0
-				? collectExternalTailMessages(prior.slice(boundary), turn)
+			fallbackBoundary >= 0
+				? collectExternalTailMessages(prior.slice(fallbackBoundary), turn)
 				: [];
 		// `turn` already begins with the user message — the stream
 		// pipeline rebuilds it from the optimistic seed plus assistant
@@ -149,11 +155,18 @@ export function replaceStreamingTail(
 	});
 }
 
+function firstMatchingMessageIndex(
+	messages: ThreadMessageLike[],
+	ids: Set<string>,
+): number {
+	return messages.findIndex((message) => messageIdInSet(message, ids));
+}
+
 function collectExternalTailMessages(
 	priorTail: ThreadMessageLike[],
 	turn: ThreadMessageLike[],
 ): ThreadMessageLike[] {
-	const turnIds = new Set(turn.map((message) => message.id).filter(Boolean));
+	const turnIds = messageIdSet(turn);
 	return priorTail.filter(
 		(message) =>
 			message.role === "system" &&
@@ -161,6 +174,18 @@ function collectExternalTailMessages(
 			message.id != null &&
 			!turnIds.has(message.id),
 	);
+}
+
+function messageIdSet(messages: ThreadMessageLike[]): Set<string> {
+	return new Set(
+		messages
+			.map((message) => message.id)
+			.filter((id): id is string => typeof id === "string" && id.length > 0),
+	);
+}
+
+function messageIdInSet(message: ThreadMessageLike, ids: Set<string>): boolean {
+	return typeof message.id === "string" && ids.has(message.id);
 }
 
 function mergeTurnWithExternalMessages(

@@ -270,7 +270,10 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		vi.clearAllMocks();
 	});
 
-	it("shows a cold session loader for the first open of an uncached session", async () => {
+	it("seeds an empty thread immediately for uncached sessions to avoid blank flash", async () => {
+		// Previously this showed a cold-session loader (loadingSession=true).
+		// The fix pre-seeds the thread cache with [] on first mount so the panel
+		// renders immediately with an empty pane instead of a loading indicator.
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
 			helmorQueryKeys.workspaceDetail("workspace-1"),
@@ -300,8 +303,10 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			{ queryClient },
 		);
 
+		// With the pre-seed fix, data is [] (not undefined), so loadingSession
+		// is false immediately — the Goals AI compact panel avoids the blank flash.
 		expect(getLatestPanelProps().loadingWorkspace).toBe(false);
-		expect(getLatestPanelProps().loadingSession).toBe(true);
+		expect(getLatestPanelProps().loadingSession).toBe(false);
 		expect(getLatestPanelProps().refreshingSession).toBe(false);
 
 		deferredMessages.resolve(createMessages("session-2"));

@@ -122,6 +122,30 @@ describe("session-thread-cache", () => {
 		}
 	});
 
+	it("replaceStreamingTail does not duplicate a turn when the optimistic user boundary is missing", () => {
+		const client = makeClient();
+		const history = makeMessage("history-1", "assistant", "old reply");
+		const userMsg = makeMessage("u1", "user", "new turn");
+		const assistant = {
+			...makeMessage("a1", "assistant", "streaming reply"),
+			streaming: true,
+		};
+		client.setQueryData(sessionThreadCacheKey("session-1"), [
+			history,
+			assistant,
+		]);
+
+		replaceStreamingTail(client, "session-1", "u1", [userMsg, assistant]);
+
+		const cached = readSessionThread(client, "session-1");
+		expect(cached?.map((message) => message.id)).toEqual([
+			"history-1",
+			"u1",
+			"a1",
+		]);
+		expect(cached?.filter((message) => message.id === "a1")).toHaveLength(1);
+	});
+
 	it("replaceStreamingTail preserves external system notifications inserted during a stream", () => {
 		const client = makeClient();
 		const prior = [makeMessage("history-1", "assistant", "old reply")];

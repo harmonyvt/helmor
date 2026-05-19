@@ -734,9 +734,9 @@ export function CollapsedToolGroup({
 			</summary>
 			{open ? (
 				<div className="ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3 pt-1">
-					{group.tools.map((tool) => (
+					{group.tools.map((tool, index) => (
 						<AssistantToolCall
-							key={tool.toolCallId}
+							key={`${tool.toolCallId ?? "tool"}:${index}`}
 							toolName={tool.toolName}
 							args={tool.args}
 							result={tool.result}

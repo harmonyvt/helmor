@@ -175,6 +175,18 @@ class PiExtensionHost {
 	// -------------------------------------------------------------------------
 
 	private awaitUiInteraction(
+		kind: "select",
+		payload: { title?: string; options: string[] },
+	): Promise<unknown>;
+	private awaitUiInteraction(
+		kind: "confirm",
+		payload: { title?: string; message?: string },
+	): Promise<unknown>;
+	private awaitUiInteraction(
+		kind: "input",
+		payload: { title?: string; placeholder?: string },
+	): Promise<unknown>;
+	private awaitUiInteraction(
 		kind: "select" | "confirm" | "input",
 		payload: Record<string, unknown>,
 	): Promise<unknown> {
@@ -182,7 +194,17 @@ class PiExtensionHost {
 		const promise = new Promise<unknown>((resolve, reject) => {
 			pendingUiInteractions.set(interactionId, { resolve, reject });
 		});
-		this.emitter.piUiRequest(this.requestId, interactionId, kind, payload);
+		// Cast through `never` to satisfy the discriminated overloads — the three
+		// caller overloads above ensure each kind/payload pair is valid at call
+		// sites; the internal union dispatch is intentionally broader.
+		(
+			this.emitter.piUiRequest as (
+				r: string,
+				i: string,
+				k: "select" | "confirm" | "input",
+				p: Record<string, unknown>,
+			) => void
+		)(this.requestId, interactionId, kind, payload);
 		return promise;
 	}
 
