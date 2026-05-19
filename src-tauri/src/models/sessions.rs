@@ -12,6 +12,9 @@ use crate::pipeline::types::{HistoricalRecord, MessageRole};
 
 use super::{db, settings};
 
+const STALE_STREAMING_RESTART_MESSAGE: &str =
+    "Helmor was restarted while this agent response was still running. The previous stream was stopped; retry the request if needed.";
+
 fn block_on_session_db<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
@@ -1334,6 +1337,70 @@ pub async fn record_session_send_start_metadata_async(
     .await
 }
 
+/// Finalize sessions left in `streaming` by a previous app/sidecar exit.
+///
+/// Startup has no live stream tasks yet, so any persisted `streaming` row was
+/// inherited from an earlier process and would otherwise keep the UI loading
+/// forever.
+pub fn cleanup_stale_streaming_sessions_on_startup() -> Result<usize> {
+    let timestamp = db::current_timestamp()?;
+    db::write_transaction(|tx| {
+        cleanup_stale_streaming_sessions_with_tx(tx, &timestamp, STALE_STREAMING_RESTART_MESSAGE)
+    })
+}
+
+fn cleanup_stale_streaming_sessions_with_tx(
+    tx: &Transaction<'_>,
+    timestamp: &str,
+    message: &str,
+) -> Result<usize> {
+    let session_ids = {
+        let mut stmt = tx
+            .prepare("SELECT id FROM sessions WHERE status = 'streaming'")
+            .context("Failed to query stale streaming sessions")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .context("Failed to read stale streaming sessions")?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("Failed to collect stale streaming sessions")?
+    };
+
+    if session_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let payload = serde_json::json!({
+        "type": "error",
+        "message": message,
+    })
+    .to_string();
+    for session_id in &session_ids {
+        tx.execute(
+            r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "#,
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                session_id,
+                MessageRole::Error.as_str(),
+                payload,
+                timestamp,
+            ],
+        )
+        .with_context(|| format!("Failed to persist stale-stream error for {session_id}"))?;
+    }
+
+    let updated = tx
+        .execute(
+            "UPDATE sessions SET status = 'idle', updated_at = ?1 WHERE status = 'streaming'",
+            [timestamp],
+        )
+        .context("Failed to finalize stale streaming sessions")?;
+    Ok(updated)
+}
+
 /// Read the opaque `context_usage_meta` JSON for the composer's
 /// context-usage ring. Returns `Ok(None)` for missing rows OR empty meta —
 /// the ring renders a placeholder either way and the frontend RPC contract
@@ -1851,6 +1918,45 @@ mod tests {
             })
             .unwrap();
         assert_eq!(title, "Test Session");
+    }
+
+    #[test]
+    fn stale_streaming_cleanup_finalizes_session_and_persists_error() {
+        let (mut conn, _dir) = test_db();
+        seed(&conn);
+        conn.execute(
+            "UPDATE sessions SET status = 'streaming' WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
+
+        let tx = conn.transaction().unwrap();
+        let count = cleanup_stale_streaming_sessions_with_tx(
+            &tx,
+            "2026-05-19T00:00:00.000Z",
+            "restart cleanup",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(count, 1);
+        let status: String = conn
+            .query_row("SELECT status FROM sessions WHERE id = 's1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(status, "idle");
+        let error_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_messages
+                 WHERE session_id = 's1'
+                   AND role = 'error'
+                   AND json_extract(content, '$.message') = 'restart cleanup'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(error_count, 1);
     }
 
     #[test]

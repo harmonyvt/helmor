@@ -59,6 +59,21 @@ impl ActiveStreams {
         })
     }
 
+    pub(crate) fn handles_by_sidecar_session_id(
+        &self,
+        sidecar_session_id: &str,
+    ) -> Vec<ActiveStreamHandle> {
+        self.inner
+            .lock()
+            .map(|map| {
+                map.values()
+                    .filter(|handle| handle.sidecar_session_id == sidecar_session_id)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.inner.lock().map(|map| map.len()).unwrap_or(0)
     }

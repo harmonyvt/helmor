@@ -17,7 +17,7 @@ use std::future::Future;
 use std::str::FromStr;
 use tauri::{AppHandle, Manager};
 
-use crate::ui_sync::{self, UiMutationEvent};
+use crate::ui_sync::{self, notify_running_app, UiMutationEvent};
 use crate::workspace_status::WorkspaceStatus;
 
 // ─────────────────────────────────────────────────────────────────────────────

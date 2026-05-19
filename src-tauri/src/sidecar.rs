@@ -391,6 +391,24 @@ impl ManagedSidecar {
         }
     }
 
+    pub fn inject_terminal_error(&self, request_id: &str, message: &str) -> bool {
+        let Ok(map) = self.listeners.lock() else {
+            return false;
+        };
+        let Some(tx) = map.get(request_id) else {
+            return false;
+        };
+        let event = SidecarEvent {
+            raw: serde_json::json!({
+                "id": request_id,
+                "type": "error",
+                "message": message,
+                "internal": true,
+            }),
+        };
+        tx.send(event).is_ok()
+    }
+
     /// Ensure sidecar is running and send a request.
     pub fn send(&self, request: &SidecarRequest) -> Result<()> {
         let mut guard = self
@@ -886,6 +904,29 @@ mod tests {
         let e2 = rx2.recv().unwrap();
         assert_eq!(e2.id(), Some("req-2"));
         assert_eq!(e2.event_type(), "error");
+    }
+
+    #[test]
+    fn inject_terminal_error_targets_one_listener() {
+        let sidecar = ManagedSidecar::new();
+        let rx1 = sidecar.subscribe("req-1");
+        let rx2 = sidecar.subscribe("req-2");
+
+        assert!(sidecar.inject_terminal_error("req-1", "forced stop"));
+        assert!(!sidecar.inject_terminal_error("missing", "forced stop"));
+
+        let event = rx1.recv().unwrap();
+        assert_eq!(event.id(), Some("req-1"));
+        assert_eq!(event.event_type(), "error");
+        assert_eq!(
+            event.raw.get("message").and_then(Value::as_str),
+            Some("forced stop")
+        );
+        assert_eq!(
+            event.raw.get("internal").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(rx2.try_recv().is_err());
     }
 
     #[test]

@@ -10,12 +10,13 @@ type SidecarLogger = {
 };
 
 export function isBrokenPipeError(error: unknown): boolean {
-	return (
-		typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		(error as { code?: unknown }).code === "EPIPE"
-	);
+	if (typeof error !== "object" || error === null) return false;
+	if ("code" in error && (error as { code?: unknown }).code === "EPIPE") {
+		return true;
+	}
+	const message =
+		"message" in error ? String((error as { message?: unknown }).message) : "";
+	return message.includes("EPIPE") && message.includes("broken pipe");
 }
 
 export function createStdoutProtocolWriter(
