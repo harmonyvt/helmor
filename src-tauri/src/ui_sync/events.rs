@@ -64,6 +64,10 @@ pub enum UiMutationEvent {
         session_id: String,
         run_id: String,
     },
+    KnowledgeChanged {
+        repo_id: Option<String>,
+        goal_workspace_id: Option<String>,
+    },
     PendingCliSendQueued {
         pending_send_id: String,
         workspace_id: String,
@@ -158,6 +162,10 @@ mod tests {
                 workspace_id: "w".into(),
                 session_id: "s".into(),
                 run_id: "run".into(),
+            },
+            UiMutationEvent::KnowledgeChanged {
+                repo_id: Some("repo".into()),
+                goal_workspace_id: Some("goal".into()),
             },
             UiMutationEvent::PendingCliSendQueued {
                 pending_send_id: "p1".into(),

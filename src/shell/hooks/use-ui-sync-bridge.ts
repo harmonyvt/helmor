@@ -368,6 +368,14 @@ function handleUiMutation(
 				queryKey: sessionThreadCacheKey(event.sessionId),
 			});
 			return;
+		case "knowledgeChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.knowledgeStatus,
+			});
+			void queryClient.invalidateQueries({
+				predicate: (query) => query.queryKey[0] === "knowledgeQuery",
+			});
+			return;
 		case "pendingCliSendQueued":
 			void options.processPendingCliSends();
 			return;

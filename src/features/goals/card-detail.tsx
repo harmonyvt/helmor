@@ -23,6 +23,7 @@ import {
 	isMovableGoalLaneId,
 } from "./board-model";
 import { ActionsTab, ChangesTab, ThreadTab } from "./card-detail-tabs";
+import { KbContributedIndicator } from "./knowledge/kb-contributed-indicator";
 import { GoalTerminalView } from "./terminal-view";
 import { useGoalCardCommitLifecycle } from "./use-card-commit-lifecycle";
 
@@ -95,6 +96,7 @@ type GoalCardDetailProps = {
 	activeEditorPath?: string | null;
 	onOpenEditorFile?: (path: string, options?: DiffOpenOptions) => void;
 	onOpenSettings?: () => void;
+	isKbContributed?: boolean;
 };
 
 type CardDetailTab = "thread" | "changes" | "actions" | "comments" | "terminal";
@@ -107,6 +109,7 @@ export function GoalCardDetailPanel({
 	activeEditorPath,
 	onOpenEditorFile,
 	onOpenSettings,
+	isKbContributed,
 }: GoalCardDetailProps) {
 	const [activeTab, setActiveTab] = useState<CardDetailTab>("thread");
 	const commit = useGoalCardCommitLifecycle(ws);
@@ -201,6 +204,7 @@ export function GoalCardDetailPanel({
 							</button>
 						))
 					)}
+					<KbContributedIndicator isContributed={isKbContributed ?? false} />
 				</div>
 			</div>
 

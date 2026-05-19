@@ -32,6 +32,7 @@ import {
 	goalChildWorkspacesQueryOptions,
 	goalOrchestratorStateQueryOptions,
 	helmorQueryKeys,
+	knowledgeStatusQueryOptions,
 	workspaceDetailQueryOptions,
 	workspacePrCommentsQueryOptions,
 } from "@/lib/query-client";
@@ -43,6 +44,8 @@ import { GoalChangesView } from "./changes-view";
 import { GoalCommentsView } from "./comments-view";
 import { GoalTabBar } from "./goal-tab-bar";
 import { GoalHeader } from "./header";
+import { KbHeaderBadge } from "./knowledge/kb-header-badge";
+import { KnowledgeView as GoalKnowledgeView } from "./knowledge/knowledge-view";
 import { GoalMetaSheet } from "./metadata-sheet";
 import { AddWorkspacePanel } from "./panels";
 import { GoalSidebar } from "./sidebar";
@@ -171,6 +174,7 @@ export function GoalWorkspaceContainer({
 		enabled: childQuery.isSuccess,
 		staleTime: 5_000,
 	});
+	const knowledgeStatusQuery = useQuery(knowledgeStatusQueryOptions());
 
 	const workspace = detailQuery.data;
 	const childWorkspaces = childQuery.data ?? [];
@@ -723,6 +727,7 @@ export function GoalWorkspaceContainer({
 					onOpenChangeRequest={onOpenChangeRequest}
 					onRefreshPrStatus={onRefreshPrStatus}
 					onEditGoal={() => setShowGoalSheet(true)}
+					kbBadge={<KbHeaderBadge goalWorkspaceId={workspaceId} />}
 				/>
 
 				{/* Tab bar */}
@@ -836,6 +841,11 @@ export function GoalWorkspaceContainer({
 									activeEditorPath={activeEditorPath}
 									onOpenEditorFile={onOpenEditorFile}
 									onOpenSettings={onOpenSettings}
+									isKbContributed={
+										(knowledgeStatusQuery.data?.documentCount ?? 0) > 0 &&
+										reportByWorkspaceId.get(selectedWorkspace?.id ?? "")
+											?.reportType === "completed"
+									}
 								/>
 							</aside>
 						)}
@@ -912,6 +922,14 @@ export function GoalWorkspaceContainer({
 							setActiveTab("board");
 							handleSelectChildWorkspace(ws);
 						}}
+					/>
+				)}
+
+				{/* Knowledge tab */}
+				{activeTab === "knowledge" && (
+					<GoalKnowledgeView
+						goalWorkspaceId={workspaceId}
+						repoId={workspace?.repoId ?? null}
 					/>
 				)}
 			</div>

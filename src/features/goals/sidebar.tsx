@@ -1,5 +1,6 @@
 import type { AssigneeSummary, WorkspaceDetail } from "@/lib/api";
 import { GoalsAiPanel } from "./ai-panel";
+import { KbActivePill } from "./knowledge/kb-active-pill";
 
 type GoalSidebarProps = {
 	workspaceId: string;
@@ -57,6 +58,11 @@ export function GoalSidebar({
 					width: `${hitArea}px`,
 				}}
 			/>
+
+			{/* KB indicator */}
+			<div className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-1.5">
+				<KbActivePill goalWorkspaceId={workspaceId} />
+			</div>
 
 			{/* Pi conversation — takes all remaining height */}
 			<div className="flex min-h-0 flex-1 flex-col overflow-hidden">

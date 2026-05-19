@@ -106,6 +106,15 @@ pub fn generated_images_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Returns the project/goal knowledge-base runtime directory inside the data dir.
+pub fn knowledge_dir() -> Result<PathBuf> {
+    let dir = data_dir()?.join("knowledge");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).context("Failed to create knowledge directory")?;
+    }
+    Ok(dir)
+}
+
 /// Returns the Conductor source database path for import.
 /// This is the real Conductor database on the local machine.
 pub fn conductor_source_db_path() -> Option<PathBuf> {
@@ -240,6 +249,7 @@ pub fn ensure_directory_structure() -> Result<()> {
     run_dir()?;
     browser_profiles_dir()?;
     generated_images_dir()?;
+    knowledge_dir()?;
     Ok(())
 }
 

@@ -21,7 +21,8 @@ export type GoalTabView =
 	| "team"
 	| "timeline"
 	| "terminal"
-	| "branch-tree";
+	| "branch-tree"
+	| "knowledge";
 
 export type GoalAiSurfaceContext = {
 	workspaceId: string;

@@ -1,0 +1,21 @@
+[project]
+name = "helmor-knowledge-sidecar"
+version = "0.1.0"
+description = "Helmor-owned project and goal knowledge indexing sidecar."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+	"cocoindex>=1.0.0,<2",
+]
+
+[project.scripts]
+helmor-knowledge-sidecar = "helmor_knowledge_sidecar.main:main"
+
+[dependency-groups]
+dev = [
+	"pyinstaller>=6.10,<7",
+	"pytest>=8,<9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

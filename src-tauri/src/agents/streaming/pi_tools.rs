@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::future::Future;
 use std::str::FromStr;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::ui_sync::{self, UiMutationEvent};
 use crate::workspace_status::WorkspaceStatus;
@@ -63,7 +63,17 @@ pub(super) fn execute_pi_tool_call(
         "read_assignee_thread" => handle_read_assignee_thread(goal_workspace_id, args),
         "summarize_assignee_status" => handle_summarize_assignee_status(goal_workspace_id, args),
         "list_assignees" => handle_list_assignees(goal_workspace_id, args),
+        // ── Knowledge base ───────────────────────────────────────────────────
+        "search_knowledge" => handle_search_knowledge(app, goal_workspace_id, args),
+        "get_knowledge_status" => handle_get_knowledge_status(app),
+        "reindex_knowledge" => handle_reindex_knowledge(app, goal_workspace_id, args),
+        "query_project_knowledge" => handle_query_project_knowledge(app, goal_workspace_id, args),
+        "query_goal_knowledge" => handle_query_goal_knowledge(app, goal_workspace_id, args),
+        "record_goal_knowledge_note" => {
+            handle_record_goal_knowledge_note(app, goal_workspace_id, args)
+        }
         // ── Merge / landing ───────────────────────────────────────────────────
+        "list_project_workspaces" => handle_list_project_workspaces(goal_workspace_id, args),
         "inspect_workspace_merge_state" => handle_inspect_workspace_merge_state(args),
         "refresh_change_request" => handle_refresh_change_request(&app, args),
         "sync_workspace_target_branch" => handle_sync_workspace_target_branch(&app, args),
@@ -220,6 +230,142 @@ fn handle_update_kanban_card(
     publish_board_changed(app, goal_workspace_id, card_id);
 
     Ok(json!({ "success": true, "cardId": card_id, "changed": true }))
+}
+
+fn handle_search_knowledge(app: AppHandle, goal_workspace_id: &str, args: &Value) -> Result<Value> {
+    let scope = args.get("scope").and_then(Value::as_str).unwrap_or("all");
+    let goal = crate::models::workspaces::load_goal_workspace_record(goal_workspace_id)?;
+    let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+    let mut result = manager.query(crate::knowledge::KnowledgeQueryRequest {
+        query: req_str(args, "query")?.to_string(),
+        repo_id: Some(goal.repo_id),
+        goal_workspace_id: match scope {
+            "all" | "goal" => Some(goal_workspace_id.to_string()),
+            "project" => None,
+            other => anyhow::bail!("Invalid knowledge scope: {other}. Use all, project, or goal."),
+        },
+        limit: args.get("limit").and_then(Value::as_i64),
+    })?;
+
+    match scope {
+        "project" => result
+            .matches
+            .retain(|knowledge_match| knowledge_match.namespace == "project"),
+        "goal" => result
+            .matches
+            .retain(|knowledge_match| knowledge_match.namespace == "goal"),
+        _ => {}
+    }
+
+    Ok(serde_json::to_value(result)?)
+}
+
+fn handle_get_knowledge_status(app: AppHandle) -> Result<Value> {
+    let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+    Ok(serde_json::to_value(manager.status()?)?)
+}
+
+fn handle_reindex_knowledge(
+    app: AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
+    let scope = args.get("scope").and_then(Value::as_str).unwrap_or("all");
+    let goal = crate::models::workspaces::load_goal_workspace_record(goal_workspace_id)?;
+    let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+
+    let project = if matches!(scope, "all" | "project") {
+        let result = manager.index_project(&goal.repo_id)?;
+        let _ = notify_running_app(UiMutationEvent::KnowledgeChanged {
+            repo_id: Some(goal.repo_id.clone()),
+            goal_workspace_id: None,
+        });
+        Some(result)
+    } else {
+        None
+    };
+    let goal_result = if matches!(scope, "all" | "goal") {
+        let result = manager.index_goal(goal_workspace_id)?;
+        let _ = notify_running_app(UiMutationEvent::KnowledgeChanged {
+            repo_id: Some(goal.repo_id.clone()),
+            goal_workspace_id: Some(goal_workspace_id.to_string()),
+        });
+        Some(result)
+    } else {
+        None
+    };
+
+    if !matches!(scope, "all" | "project" | "goal") {
+        anyhow::bail!("Invalid knowledge scope: {scope}. Use all, project, or goal.");
+    }
+
+    Ok(json!({
+        "scope": scope,
+        "project": project,
+        "goal": goal_result,
+    }))
+}
+
+fn handle_query_project_knowledge(
+    app: AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
+    let goal = crate::models::workspaces::load_goal_workspace_record(goal_workspace_id)?;
+    let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+    let mut result = manager.query(crate::knowledge::KnowledgeQueryRequest {
+        query: req_str(args, "query")?.to_string(),
+        repo_id: Some(goal.repo_id),
+        goal_workspace_id: None,
+        limit: args.get("limit").and_then(Value::as_i64),
+    })?;
+    result
+        .matches
+        .retain(|knowledge_match| knowledge_match.namespace == "project");
+    Ok(serde_json::to_value(result)?)
+}
+
+fn handle_query_goal_knowledge(
+    app: AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
+    let goal = crate::models::workspaces::load_goal_workspace_record(goal_workspace_id)?;
+    let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+    let mut result = manager.query(crate::knowledge::KnowledgeQueryRequest {
+        query: req_str(args, "query")?.to_string(),
+        repo_id: Some(goal.repo_id),
+        goal_workspace_id: Some(goal_workspace_id.to_string()),
+        limit: args.get("limit").and_then(Value::as_i64),
+    })?;
+    result
+        .matches
+        .retain(|knowledge_match| knowledge_match.namespace == "goal");
+    Ok(serde_json::to_value(result)?)
+}
+
+fn handle_record_goal_knowledge_note(
+    app: AppHandle,
+    goal_workspace_id: &str,
+    args: &Value,
+) -> Result<Value> {
+    let goal = crate::models::workspaces::load_goal_workspace_record(goal_workspace_id)?;
+    let manager = app.state::<crate::knowledge::KnowledgeSidecarManager>();
+    let result = manager.record_goal_note(crate::knowledge::RecordGoalKnowledgeNoteRequest {
+        goal_workspace_id: goal_workspace_id.to_string(),
+        repo_id: Some(goal.repo_id.clone()),
+        title: opt_str(args, "title"),
+        text: req_str(args, "text")?.to_string(),
+        metadata: args.get("metadata").cloned(),
+    })?;
+    crate::ui_sync::publish(
+        &app,
+        UiMutationEvent::KnowledgeChanged {
+            repo_id: Some(goal.repo_id),
+            goal_workspace_id: Some(goal_workspace_id.to_string()),
+        },
+    );
+    Ok(serde_json::to_value(result)?)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -509,6 +655,74 @@ fn handle_list_assignees(goal_workspace_id: &str, args: &Value) -> Result<Value>
 // ─────────────────────────────────────────────────────────────────────────────
 // Merge / landing tools
 // ─────────────────────────────────────────────────────────────────────────────
+
+fn handle_list_project_workspaces(goal_workspace_id: &str, args: &Value) -> Result<Value> {
+    let include_archived = args
+        .get("includeArchived")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let goal = crate::models::workspaces::load_goal_workspace_record(goal_workspace_id)?;
+    let mut workspaces = crate::models::workspaces::load_workspace_records()?;
+    workspaces.retain(|workspace| {
+        workspace.repo_id == goal.repo_id
+            && (include_archived || workspace.state.as_str() != "archived")
+    });
+
+    let items = workspaces
+        .iter()
+        .map(|workspace| {
+            let relation = if workspace.id == goal_workspace_id {
+                "current_goal"
+            } else if workspace.goal_workspace_id.as_deref() == Some(goal_workspace_id) {
+                "current_goal_child"
+            } else if workspace.workspace_kind.as_str() == "goal" {
+                "other_goal"
+            } else if workspace.goal_workspace_id.is_some() {
+                "other_goal_child"
+            } else {
+                "standalone"
+            };
+            json!({
+                "id": &workspace.id,
+                "title": crate::workspace::helpers::display_title(workspace),
+                "relation": relation,
+                "repoId": &workspace.repo_id,
+                "repoName": &workspace.repo_name,
+                "workspaceKind": workspace.workspace_kind.as_str(),
+                "goalWorkspaceId": &workspace.goal_workspace_id,
+                "state": workspace.state.as_str(),
+                "status": workspace.status.as_str(),
+                "branch": &workspace.branch,
+                "intendedTargetBranch": &workspace.intended_target_branch,
+                "prTitle": &workspace.pr_title,
+                "prUrl": &workspace.pr_url,
+                "prSyncState": workspace.pr_sync_state.as_str(),
+                "landingState": workspace.landing_state.as_str(),
+                "landingSource": workspace.landing_source.as_ref().map(|source| format!("{source:?}").to_lowercase()),
+                "sessionCount": workspace.session_count,
+                "messageCount": workspace.message_count,
+                "hasUnread": workspace.has_unread,
+                "activeSessionId": &workspace.active_session_id,
+                "activeSessionTitle": &workspace.active_session_title,
+                "activeSessionAgentType": &workspace.active_session_agent_type,
+                "activeSessionStatus": &workspace.active_session_status,
+                "primarySessionId": &workspace.primary_session_id,
+                "primarySessionTitle": &workspace.primary_session_title,
+                "primarySessionAgentType": &workspace.primary_session_agent_type,
+                "lastUserMessageAt": &workspace.last_user_message_at,
+                "createdAt": &workspace.created_at,
+                "updatedAt": &workspace.updated_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "goalWorkspaceId": goal_workspace_id,
+        "repoId": goal.repo_id,
+        "includeArchived": include_archived,
+        "workspaces": items,
+    }))
+}
 
 fn handle_inspect_workspace_merge_state(args: &Value) -> Result<Value> {
     let card_id = req_str(args, "cardId")?;

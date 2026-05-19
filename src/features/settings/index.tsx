@@ -62,6 +62,7 @@ import { ConductorImportPanel } from "./panels/conductor-import";
 import { DataSourceSettingsRow } from "./panels/data-source";
 import { DebugIngestNgrokPanel } from "./panels/debug-ingest-ngrok";
 import { DevToolsPanel } from "./panels/dev-tools";
+import { KnowledgeSettingsPanel } from "./panels/knowledge";
 import { LibsqlExperimentPanel } from "./panels/libsql-experiment";
 import { LocalAppUpdatePanel } from "./panels/local-app-update";
 import { LogExportPanel } from "./panels/log-export";
@@ -85,6 +86,7 @@ export type SettingsSection =
 	| "git"
 	| "experimental"
 	| "web"
+	| "knowledge"
 	| "import"
 	| "developer"
 	| "account"
@@ -196,6 +198,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"git",
 		"experimental",
 		"web",
+		"knowledge",
 		...(conductorEnabled ? (["import"] as const) : []),
 		...(isDev ? (["developer"] as const) : []),
 		"account",
@@ -668,6 +671,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 							)}
 
 							{activeSection === "web" && <WebDaemonPanel />}
+
+							{activeSection === "knowledge" && <KnowledgeSettingsPanel />}
 
 							{activeSection === "import" && <ConductorImportPanel />}
 

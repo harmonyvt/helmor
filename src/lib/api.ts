@@ -205,6 +205,52 @@ export type DebugIngestOverview = {
 	instances: DebugIngestStatus[];
 };
 
+export type KnowledgeStatus = {
+	state: string;
+	pid?: number | null;
+	dataDir: string;
+	dbPath: string;
+	documentCount: number;
+	cocoIndexAvailable: boolean;
+	lastRun?: Record<string, unknown> | null;
+};
+
+export type KnowledgeIndexResult = {
+	indexed: number;
+};
+
+export type KnowledgeQueryRequest = {
+	query: string;
+	repoId?: string | null;
+	goalWorkspaceId?: string | null;
+	limit?: number | null;
+};
+
+export type KnowledgeMatch = {
+	namespace: string;
+	repoId?: string | null;
+	goalWorkspaceId?: string | null;
+	sourceType: string;
+	sourceId: string;
+	title: string;
+	excerpt: string;
+	score: number;
+	metadata: Record<string, unknown>;
+	updatedAt?: string | null;
+};
+
+export type KnowledgeQueryResult = {
+	matches: KnowledgeMatch[];
+};
+
+export type RecordGoalKnowledgeNoteRequest = {
+	goalWorkspaceId: string;
+	repoId?: string | null;
+	title?: string | null;
+	text: string;
+	metadata?: Record<string, unknown> | null;
+};
+
 export type DebugIngestEntry = {
 	id: string;
 	workspaceId: string;
@@ -1232,6 +1278,38 @@ export async function runLibsqlExperiment(): Promise<LibsqlExperimentResult> {
 	return invoke<LibsqlExperimentResult>("run_libsql_experiment");
 }
 
+export async function getKnowledgeStatus(): Promise<KnowledgeStatus> {
+	return invoke<KnowledgeStatus>("get_knowledge_status");
+}
+
+export async function reindexProjectKnowledge(
+	repoId: string,
+): Promise<KnowledgeIndexResult> {
+	return invoke<KnowledgeIndexResult>("reindex_project_knowledge", { repoId });
+}
+
+export async function reindexGoalKnowledge(
+	goalWorkspaceId: string,
+): Promise<KnowledgeIndexResult> {
+	return invoke<KnowledgeIndexResult>("reindex_goal_knowledge", {
+		goalWorkspaceId,
+	});
+}
+
+export async function queryKnowledge(
+	request: KnowledgeQueryRequest,
+): Promise<KnowledgeQueryResult> {
+	return invoke<KnowledgeQueryResult>("query_knowledge", { request });
+}
+
+export async function recordGoalKnowledgeNote(
+	request: RecordGoalKnowledgeNoteRequest,
+): Promise<KnowledgeIndexResult> {
+	return invoke<KnowledgeIndexResult>("record_goal_knowledge_note", {
+		request,
+	});
+}
+
 export async function exportVerboseLogs(
 	frontendLogs: FrontendLogEntry[],
 ): Promise<LogExportResult> {
@@ -1925,6 +2003,11 @@ export type UiMutationEvent =
 			workspaceId: string;
 			sessionId: string;
 			runId: string;
+	  }
+	| {
+			type: "knowledgeChanged";
+			repoId?: string | null;
+			goalWorkspaceId?: string | null;
 	  }
 	| {
 			type: "pendingCliSendQueued";

@@ -183,8 +183,13 @@ pub async fn refresh_workspace_change_request(
     if workspace_status_changed {
         ui_sync::publish(
             &app,
-            UiMutationEvent::WorkspaceChangeRequestChanged { workspace_id },
+            UiMutationEvent::WorkspaceChangeRequestChanged {
+                workspace_id: workspace_id.clone(),
+            },
         );
+    }
+    if result.as_ref().is_some_and(|change| change.is_merged) {
+        crate::knowledge::index_workspace_knowledge_after_landing(app.clone(), workspace_id);
     }
     Ok(result)
 }

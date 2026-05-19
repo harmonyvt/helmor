@@ -1,5 +1,6 @@
 import {
 	Activity,
+	Database,
 	GitBranch,
 	GitFork,
 	LayoutGrid,
@@ -26,6 +27,7 @@ const GOAL_TABS: TabDef[] = [
 	{ id: "team", label: "Team", icon: Users },
 	{ id: "timeline", label: "Timeline", icon: Activity },
 	{ id: "terminal", label: "Terminal", icon: Terminal },
+	{ id: "knowledge" as GoalTabView, label: "Knowledge", icon: Database },
 ];
 
 type GoalTabBarProps = {
