@@ -17,7 +17,7 @@ import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
 import { startParentWatchdog } from "./parent-watchdog.js";
 import { resolvePiUiInteraction } from "./pi-extension-host.js";
-import { PiSessionManager } from "./pi-session-manager.js";
+import { PiRoutingSessionManager } from "./pi-routing-session-manager.js";
 import {
 	errorMessage,
 	optionalString,
@@ -44,7 +44,7 @@ import {
 
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
-const piManager = new PiSessionManager();
+const piManager = new PiRoutingSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
