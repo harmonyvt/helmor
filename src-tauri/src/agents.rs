@@ -431,6 +431,18 @@ pub async fn stop_agent_stream(
             timeout_ms = STOP_AGENT_STREAM_DRAIN_TIMEOUT.as_millis() as u64,
             "stopSession did not drain active stream; restarting sidecar"
         );
+        let forced_message =
+            "Agent stop forced the sidecar to restart. The request was stopped; retry if needed.";
+        for handle in active_streams.handles_by_sidecar_session_id(&session_id) {
+            let injected = sidecar.inject_terminal_error(&handle.request_id, forced_message);
+            tracing::warn!(
+                request_id = %handle.request_id,
+                session_id = %session_id,
+                provider = %handle.provider,
+                injected,
+                "Injected terminal error for stream after unresponsive stopSession"
+            );
+        }
         sidecar.restart_after_unresponsive_stop("manual stop_agent_stream did not drain");
     }
     Ok(())

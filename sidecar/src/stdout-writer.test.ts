@@ -47,6 +47,9 @@ describe("stdout protocol writer", () => {
 
 	it("recognizes only EPIPE as a broken parent pipe", () => {
 		expect(isBrokenPipeError({ code: "EPIPE" })).toBe(true);
+		expect(isBrokenPipeError(new Error("EPIPE: broken pipe, write"))).toBe(
+			true,
+		);
 		expect(isBrokenPipeError({ code: "ECONNRESET" })).toBe(false);
 		expect(isBrokenPipeError(new Error("EPIPE"))).toBe(false);
 	});

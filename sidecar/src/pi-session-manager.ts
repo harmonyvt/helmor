@@ -49,6 +49,10 @@ const PI_EFFORT_LEVELS_WITH_XHIGH = [
 	"high",
 	"xhigh",
 ] as const;
+const DEFAULT_PI_NO_PROGRESS_TIMEOUT_MS = 90_000;
+const PI_NO_PROGRESS_TIMEOUT_ENV = "HELMOR_PI_NO_PROGRESS_TIMEOUT_MS";
+const DEFAULT_PI_ABORT_TIMEOUT_MS = 1_500;
+const PI_ABORT_TIMEOUT_ENV = "HELMOR_PI_ABORT_TIMEOUT_MS";
 
 type PiModel = {
 	readonly id: string;
@@ -76,6 +80,7 @@ export class PiSessionManager implements SessionManager {
 		emitter: SidecarEmitter,
 	): Promise<void> {
 		let live: LivePiSession | undefined;
+		let progressWatchdog: PiProgressWatchdog | undefined;
 		try {
 			const promptWithContext = prependLinkedDirectoriesContext(
 				params.prompt,
@@ -177,15 +182,28 @@ export class PiSessionManager implements SessionManager {
 				unsubscribe: null,
 				active: true,
 			};
+			const existing = this.sessions.get(params.sessionId);
+			if (existing) {
+				existing.active = false;
+				existing.unsubscribe?.();
+				this.sessions.delete(params.sessionId);
+				existing.emitter.aborted(existing.requestId, "replaced_by_new_turn");
+				void abortAndDisposePiSession(
+					existing.session,
+					"Pi replacement abort failed",
+				);
+			}
 			this.sessions.set(params.sessionId, live);
-			await bindPiExtensionsForHelmor(session, emitter, requestId, () =>
-				trace.recordVisibleActivity("extension_card"),
-			);
+			await bindPiExtensionsForHelmor(session, emitter, requestId, () => {
+				trace.recordVisibleActivity("extension_card");
+				progressWatchdog?.markProgress();
+			});
 
 			const state = createPiEventState(requestId, {
 				capturePlanReview: params.permissionMode === "plan",
 			});
 			live.unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+				progressWatchdog?.markProgress();
 				trace.record(event);
 				for (const normalized of normalizePiEvent(event, state)) {
 					trace.recordPipelineEvent(normalized);
@@ -203,10 +221,21 @@ export class PiSessionManager implements SessionManager {
 			});
 
 			const images = await buildPiImages(imagePaths);
-			await session.prompt(text || promptForMode, {
-				images,
-				source: "interactive",
-			});
+			const noProgressTimeoutMs = resolvePiNoProgressTimeoutMs();
+			progressWatchdog = new PiProgressWatchdog(
+				noProgressTimeoutMs,
+				`Pi did not produce any stream events for ${formatDuration(
+					noProgressTimeoutMs,
+				)}. The request was stopped; retry it if needed.`,
+			);
+			progressWatchdog.start();
+			await Promise.race([
+				session.prompt(text || promptForMode, {
+					images,
+					source: "interactive",
+				}),
+				progressWatchdog.promise,
+			]);
 			if (!live.active) return;
 			trace.finish(session.agent.state.errorMessage);
 			if (trace.shouldEmitEmptyTurnNotice()) {
@@ -220,6 +249,29 @@ export class PiSessionManager implements SessionManager {
 			emitter.end(requestId);
 		} catch (err) {
 			if (live && !live.active) return;
+			if (err instanceof PiNoProgressTimeoutError) {
+				if (live) {
+					live.active = false;
+					void live.session
+						.abort()
+						.catch((abortErr) => {
+							logger.debug(
+								"Pi no-progress timeout abort failed",
+								errorDetails(abortErr),
+							);
+						})
+						.finally(() => {
+							live?.session.dispose();
+						});
+				}
+				emitter.error(requestId, err.message, true);
+				logger.error("Pi prompt timed out without stream progress", {
+					requestId,
+					model: params.model,
+					timeoutMs: progressWatchdog?.timeoutMs,
+				});
+				return;
+			}
 			const reason = err instanceof Error ? err.message : String(err);
 			if (reason.toLowerCase().includes("abort")) {
 				emitter.aborted(requestId, reason);
@@ -228,6 +280,7 @@ export class PiSessionManager implements SessionManager {
 			}
 			logger.error("Pi sendMessage failed", errorDetails(err));
 		} finally {
+			progressWatchdog?.stop();
 			if (live) {
 				live.active = false;
 				live.unsubscribe?.();
@@ -347,11 +400,7 @@ export class PiSessionManager implements SessionManager {
 		this.sessions.delete(sessionId);
 		live.unsubscribe?.();
 		live.emitter.aborted(live.requestId, "user_requested");
-		try {
-			await live.session.abort();
-		} finally {
-			live.session.dispose();
-		}
+		await abortAndDisposePiSession(live.session, "Pi stopSession abort failed");
 	}
 
 	async steer(
@@ -400,6 +449,94 @@ export class PiSessionManager implements SessionManager {
 		isError: boolean,
 	): void {
 		resolvePendingKanbanCall(toolCallId, result, isError);
+	}
+}
+
+export class PiNoProgressTimeoutError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PiNoProgressTimeoutError";
+	}
+}
+
+export class PiProgressWatchdog {
+	readonly promise: Promise<never>;
+	private reject!: (err: PiNoProgressTimeoutError) => void;
+	private timer: ReturnType<typeof setTimeout> | undefined;
+	private stopped = false;
+
+	constructor(
+		readonly timeoutMs: number,
+		private readonly message: string,
+	) {
+		this.promise = new Promise<never>((_, reject) => {
+			this.reject = reject;
+		});
+	}
+
+	start(): void {
+		this.markProgress();
+	}
+
+	markProgress(): void {
+		if (this.stopped) return;
+		if (this.timer) clearTimeout(this.timer);
+		this.timer = setTimeout(() => {
+			this.stopped = true;
+			this.reject(new PiNoProgressTimeoutError(this.message));
+		}, this.timeoutMs);
+	}
+
+	stop(): void {
+		this.stopped = true;
+		if (this.timer) clearTimeout(this.timer);
+		this.timer = undefined;
+	}
+}
+
+export function resolvePiNoProgressTimeoutMs(
+	raw = process.env[PI_NO_PROGRESS_TIMEOUT_ENV],
+): number {
+	if (!raw) return DEFAULT_PI_NO_PROGRESS_TIMEOUT_MS;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return DEFAULT_PI_NO_PROGRESS_TIMEOUT_MS;
+	}
+	return Math.floor(parsed);
+}
+
+export function resolvePiAbortTimeoutMs(
+	raw = process.env[PI_ABORT_TIMEOUT_ENV],
+): number {
+	if (!raw) return DEFAULT_PI_ABORT_TIMEOUT_MS;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return DEFAULT_PI_ABORT_TIMEOUT_MS;
+	}
+	return Math.floor(parsed);
+}
+
+function formatDuration(ms: number): string {
+	if (ms % 1000 === 0) return `${ms / 1000}s`;
+	return `${ms}ms`;
+}
+
+async function abortAndDisposePiSession(
+	session: AgentSession,
+	logMessage: string,
+): Promise<void> {
+	try {
+		await withTimeout(
+			session.abort(),
+			resolvePiAbortTimeoutMs(),
+			`Pi abort did not finish within ${formatDuration(
+				resolvePiAbortTimeoutMs(),
+			)}`,
+		);
+	} catch (err) {
+		logger.debug(logMessage, errorDetails(err));
+	} finally {
+		session.dispose();
 	}
 }
 
@@ -731,16 +868,14 @@ function extToMediaType(filePath: string): ImageMediaType {
 async function withTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,
+	message = "Pi title generation timed out",
 ): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		return await Promise.race([
 			promise,
 			new Promise<T>((_, reject) => {
-				timer = setTimeout(
-					() => reject(new Error("Pi title generation timed out")),
-					timeoutMs,
-				);
+				timer = setTimeout(() => reject(new Error(message)), timeoutMs);
 			}),
 		]);
 	} finally {

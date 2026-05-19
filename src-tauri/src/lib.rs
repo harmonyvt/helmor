@@ -140,6 +140,15 @@ pub fn run() {
                 Err(e) => tracing::warn!("Failed to clean up initializing orphans: {e:#}"),
             }
 
+            match sessions::cleanup_stale_streaming_sessions_on_startup() {
+                Ok(0) => {}
+                Ok(n) => tracing::warn!(
+                    count = n,
+                    "Finalized stale streaming sessions from previous app run"
+                ),
+                Err(e) => tracing::warn!("Failed to finalize stale streaming sessions: {e:#}"),
+            }
+
             // On macOS, GUI-launched apps only see the minimal system PATH.
             // Capture the user's login-shell PATH (Homebrew, nvm, bun, cargo,
             // etc.) so every child process — sidecar, git, workspace scripts —
