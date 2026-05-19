@@ -283,8 +283,20 @@ export interface SidecarEmitter {
 	piUiRequest(
 		requestId: string,
 		interactionId: string,
-		kind: "select" | "confirm" | "input",
-		payload: Record<string, unknown>,
+		kind: "select",
+		payload: { title?: string; options: string[] },
+	): void;
+	piUiRequest(
+		requestId: string,
+		interactionId: string,
+		kind: "confirm",
+		payload: { title?: string; message?: string },
+	): void;
+	piUiRequest(
+		requestId: string,
+		interactionId: string,
+		kind: "input",
+		payload: { title?: string; placeholder?: string },
 	): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK

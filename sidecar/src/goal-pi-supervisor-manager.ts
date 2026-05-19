@@ -58,6 +58,7 @@ export class GoalPiSupervisorManager {
 			const state = createPiEventState(requestId, {
 				capturePlanReview: params.permissionMode === "plan",
 			});
+			const createStartedAt = Date.now();
 			const turn = await createGoalSupervisorTurn({
 				requestId,
 				params: {
@@ -101,6 +102,11 @@ export class GoalPiSupervisorManager {
 					}
 				},
 				logger,
+			});
+			logger.debug("Goal Pi supervisor turn created", {
+				requestId,
+				providerSessionId: turn.providerSessionId,
+				elapsedMs: Date.now() - createStartedAt,
 			});
 
 			live = { turn, requestId, emitter, active: true };

@@ -78,7 +78,9 @@ export class PiRoutingSessionManager implements SessionManager {
 		result: unknown,
 		isError: boolean,
 	): void {
-		if (this.goals.resolveKanbanToolCall(toolCallId, result, isError)) return;
+		if (this.goals.resolveKanbanToolCall(toolCallId, result, isError)) {
+			return;
+		}
 		this.regular.resolveKanbanToolCall(toolCallId, result, isError);
 	}
 }

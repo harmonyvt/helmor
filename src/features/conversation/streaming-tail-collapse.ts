@@ -197,12 +197,14 @@ function collapseAssistantParts(
 		if (currentGroup.length === 0) {
 			return;
 		}
-		if (currentGroup.length >= 2) {
-			result.push(buildCollapsedGroup(currentGroup.splice(0), active));
+		const tools = dedupeToolCalls(currentGroup.splice(0));
+		if (tools.length >= 2) {
+			result.push(buildCollapsedGroup(tools, active));
 			return;
 		}
-		result.push(currentGroup[0]!);
-		currentGroup.length = 0;
+		if (tools.length === 1) {
+			result.push(tools[0]!);
+		}
 	};
 
 	for (const part of parts) {
@@ -227,6 +229,30 @@ function collapseAssistantParts(
 
 	flushGroup();
 	return result;
+}
+
+function dedupeToolCalls(tools: ToolCallPart[]): ToolCallPart[] {
+	const indexesById = new Map<string, number>();
+	const deduped: ToolCallPart[] = [];
+
+	for (const tool of tools) {
+		const id = tool.toolCallId;
+		if (!id) {
+			deduped.push(tool);
+			continue;
+		}
+
+		const existingIndex = indexesById.get(id);
+		if (existingIndex !== undefined) {
+			deduped[existingIndex] = tool;
+			continue;
+		}
+
+		indexesById.set(id, deduped.length);
+		deduped.push(tool);
+	}
+
+	return deduped;
 }
 
 function buildCollapsedGroup(

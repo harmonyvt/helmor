@@ -145,14 +145,12 @@ export function GoalsAiPanel({
 				onSendingWorkspacesChange={onSendingWorkspacesChange}
 				modelFilter={piOnlyModelFilter}
 				preferredDefaultModelId={favouritePiModelId}
-				buildSendRequestExtras={() => {
-					return {
-						kanbanWorkspaceId: workspaceId,
-						kanbanSnapshot,
-						goalTitle: goalTitle ?? null,
-						goalDescription: goalDescription ?? null,
-					};
-				}}
+				buildSendRequestExtras={() => ({
+					kanbanWorkspaceId: workspaceId,
+					kanbanSnapshot,
+					goalTitle: goalTitle ?? null,
+					goalDescription: goalDescription ?? null,
+				})}
 				composerAccessory={
 					assignees && assignees.length > 0 ? (
 						<AssigneesBar

@@ -69,6 +69,7 @@ export async function listGoalSupervisorModels(): Promise<
 async function createGoalSupervisorTurnUnsafe(
 	options: CreateGoalSupervisorTurnOptions,
 ): Promise<GoalSupervisorTurn> {
+	const startedAt = Date.now();
 	const cwd = options.params.cwd || process.cwd();
 	await writeGoalSupervisorContext(cwd, options.params.kanbanSnapshot, {
 		title: options.params.goalTitle,
@@ -82,6 +83,7 @@ async function createGoalSupervisorTurnUnsafe(
 		cwd,
 		agentDir: getAgentDir(),
 	});
+	const resourceStartedAt = Date.now();
 	await resourceLoader.reload();
 	options.logger?.info?.("Goal Pi supervisor runtime loaded", {
 		requestId: options.requestId,
@@ -89,6 +91,8 @@ async function createGoalSupervisorTurnUnsafe(
 		agentDir: getAgentDir(),
 		authAnthropic: authBootstrap.anthropic,
 		authOpenAICodex: authBootstrap.openaiCodex,
+		resourceLoadMs: Date.now() - resourceStartedAt,
+		totalElapsedMs: Date.now() - startedAt,
 	});
 
 	const sessionManager = buildSessionManager(options.params.resume, cwd);
@@ -105,6 +109,7 @@ async function createGoalSupervisorTurnUnsafe(
 		},
 	);
 
+	const sessionStartedAt = Date.now();
 	const { session } = await createAgentSession({
 		cwd,
 		authStorage,
@@ -121,6 +126,14 @@ async function createGoalSupervisorTurnUnsafe(
 		customTools,
 	});
 	const unsubscribe = session.subscribe(options.onEvent);
+	options.logger?.debug?.("Goal Pi supervisor session created", {
+		requestId: options.requestId,
+		providerSessionId,
+		elapsedMs: Date.now() - sessionStartedAt,
+		totalElapsedMs: Date.now() - startedAt,
+		toolMode: tools ? "readonly" : "default",
+		customToolCount: customTools.length,
+	});
 
 	return {
 		providerSessionId,

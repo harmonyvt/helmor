@@ -32,15 +32,12 @@ export function usePiUiInteraction() {
 	const [inputAnswer, setInputAnswer] = useState("");
 
 	const handlePiUiRequest = useCallback((event: PiUiRequestEvent) => {
-		const payload = event.payload;
 		if (event.uiKind === "select") {
 			setPiUiState({
 				type: "select",
 				interactionId: event.interactionId,
-				title: String(payload.title ?? "Select an option"),
-				options: Array.isArray(payload.options)
-					? payload.options.map(String)
-					: [],
+				title: event.payload.title ?? "Select an option",
+				options: event.payload.options,
 			});
 			return;
 		}
@@ -49,8 +46,8 @@ export function usePiUiInteraction() {
 			setPiUiState({
 				type: "confirm",
 				interactionId: event.interactionId,
-				title: String(payload.title ?? "Confirm"),
-				message: String(payload.message ?? ""),
+				title: event.payload.title ?? "Confirm",
+				message: event.payload.message ?? "",
 			});
 			return;
 		}
@@ -60,8 +57,8 @@ export function usePiUiInteraction() {
 			setPiUiState({
 				type: "input",
 				interactionId: event.interactionId,
-				title: String(payload.title ?? "Enter text"),
-				placeholder: String(payload.placeholder ?? ""),
+				title: event.payload.title ?? "Enter text",
+				placeholder: event.payload.placeholder ?? "",
 			});
 		}
 	}, []);
