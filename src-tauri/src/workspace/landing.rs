@@ -386,7 +386,7 @@ fn detect_landing_by_branch_ancestry(record: &WorkspaceRecord) -> LandingDetecti
         };
     };
 
-    if record.status == WorkspaceStatus::InProgress {
+    if record.status != WorkspaceStatus::Done {
         return unlanded_detection(
             record,
             target_branch,

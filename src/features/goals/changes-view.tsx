@@ -13,6 +13,8 @@ import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { GOAL_LANES, goalLaneForWorkspace } from "./board-model";
+import { TargetBranchPicker } from "./target-branch-picker";
+import { WorkspaceBranchRename } from "./workspace-branch-rename";
 
 const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	M: "text-yellow-500",
@@ -273,7 +275,6 @@ function ChangeGroup({
 	onSelectWorkspace?: () => void;
 }) {
 	const lane = GOAL_LANES.find((entry) => entry.id === workspace.status);
-	const targetRef = getTargetRef(workspace);
 
 	return (
 		<section className="border-b border-border/50">
@@ -308,12 +309,15 @@ function ChangeGroup({
 							) : null}
 							<PrStateBadge state={workspace.prSyncState ?? null} />
 						</div>
-						<div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10.5px]">
+						<div className="mt-0.5 flex min-w-0 items-center gap-1 text-[10.5px]">
 							<GitBranch className="size-2.5 shrink-0" />
-							<span className="truncate">
-								{workspace.branch ?? "No branch"}
-								{targetRef ? ` -> ${targetRef}` : ""}
-							</span>
+							<WorkspaceBranchRename workspace={workspace} />
+							{(workspace.intendedTargetBranch ?? workspace.defaultBranch) ? (
+								<>
+									<span className="shrink-0 text-muted-foreground/80">→</span>
+									<TargetBranchPicker workspace={workspace} />
+								</>
+							) : null}
 						</div>
 					</div>
 				</button>
