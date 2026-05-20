@@ -2,10 +2,12 @@ import "./lib/crypto-polyfill";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { initDevLongFrames } from "./lib/dev-long-frames";
 import { initDevReactScan } from "./lib/dev-react-scan";
 import { installFrontendLogCapture } from "./lib/frontend-logs";
 
 installFrontendLogCapture();
+initDevLongFrames();
 initDevReactScan();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

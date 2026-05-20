@@ -842,12 +842,14 @@ pub fn get_data_info() -> CmdResult<DataInfo> {
 #[tauri::command]
 pub async fn export_verbose_logs(
     frontend_logs: Vec<FrontendLogEntry>,
+    frontend_diagnostics: Option<serde_json::Value>,
 ) -> CmdResult<LogExportResult> {
-    run_blocking(move || export_verbose_logs_impl(frontend_logs)).await
+    run_blocking(move || export_verbose_logs_impl(frontend_logs, frontend_diagnostics)).await
 }
 
 fn export_verbose_logs_impl(
     frontend_logs: Vec<FrontendLogEntry>,
+    frontend_diagnostics: Option<serde_json::Value>,
 ) -> anyhow::Result<LogExportResult> {
     let data_dir = crate::data_dir::data_dir()?;
     let logs_dir = crate::data_dir::logs_dir()?;
@@ -886,6 +888,17 @@ fn export_verbose_logs_impl(
     let frontend_path = export_dir.join("frontend.jsonl");
     write_frontend_logs(&frontend_path, &frontend_logs)?;
     files.push(frontend_path.display().to_string());
+
+    let frontend_diagnostics_path = export_dir.join("frontend-diagnostics.json");
+    write_json_pretty(
+        &frontend_diagnostics_path,
+        &frontend_diagnostics.unwrap_or_else(|| serde_json::json!({})),
+    )?;
+    files.push(frontend_diagnostics_path.display().to_string());
+
+    let backend_diagnostics_path = export_dir.join("backend-diagnostics.json");
+    write_json_pretty(&backend_diagnostics_path, &db::runtime_diagnostics())?;
+    files.push(backend_diagnostics_path.display().to_string());
 
     let manifest_path = export_dir.join("manifest.json");
     let manifest = serde_json::json!({
@@ -962,6 +975,11 @@ fn write_frontend_logs(path: &Path, logs: &[FrontendLogEntry]) -> anyhow::Result
         file.write_all(b"\n")?;
     }
     Ok(())
+}
+
+fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
+    fs::write(path, serde_json::to_vec_pretty(value)?)
+        .with_context(|| format!("Failed to write JSON export {}", path.display()))
 }
 
 #[tauri::command]

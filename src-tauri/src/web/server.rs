@@ -214,7 +214,14 @@ async fn dispatch_invoke(command: &str, args: Value) -> Result<Value> {
         "export_verbose_logs" => {
             let frontend_logs: Vec<crate::commands::system_commands::FrontendLogEntry> =
                 arg(&args, "frontendLogs")?;
-            json_cmd(crate::commands::system_commands::export_verbose_logs(frontend_logs).await)
+            let frontend_diagnostics: Option<Value> = opt_arg(&args, "frontendDiagnostics")?;
+            json_cmd(
+                crate::commands::system_commands::export_verbose_logs(
+                    frontend_logs,
+                    frontend_diagnostics,
+                )
+                .await,
+            )
         }
         "get_cli_status" => json_cmd(crate::commands::system_commands::get_cli_status()),
         "get_agent_login_status" => {

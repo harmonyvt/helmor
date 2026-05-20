@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { exportVerboseLogs } from "@/lib/api";
 import { getFrontendLogs } from "@/lib/frontend-logs";
+import { collectLogExportDiagnostics } from "@/lib/log-export-diagnostics";
 import { SettingsNotice, SettingsRow } from "../components/settings-row";
 
 export function LogExportPanel() {
@@ -16,7 +17,10 @@ export function LogExportPanel() {
 		setExporting(true);
 		setError(null);
 		try {
-			const result = await exportVerboseLogs(getFrontendLogs());
+			const result = await exportVerboseLogs(
+				getFrontendLogs(),
+				collectLogExportDiagnostics(),
+			);
 			setExportDir(result.exportDir);
 			setFileCount(result.files.length);
 			await openPath(result.exportDir);
@@ -41,8 +45,8 @@ export function LogExportPanel() {
 			}
 			description={
 				<>
-					Export backend, sidecar, workspace, and current frontend console logs
-					to a timestamped folder.
+					Export backend, sidecar, workspace, frontend console, performance, and
+					lock diagnostics to a timestamped folder.
 					{exportDir ? (
 						<SettingsNotice tone="ok">
 							Exported {fileCount} files to{" "}
