@@ -53,6 +53,8 @@ pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
 pub use workspace::workspaces;
 
+use std::backtrace::Backtrace;
+
 use tauri::{Emitter, Manager};
 
 /// Initialise the database schema (call once at startup).
@@ -63,6 +65,8 @@ pub fn schema_init(conn: &rusqlite::Connection) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_runtime_telemetry();
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -101,6 +105,7 @@ pub fn run() {
             // the size-ring appender bounds disk use without a cleanup pass.
             let logs_dir = data_dir::logs_dir()?;
             logging::init(&logs_dir)?;
+            log_runtime_telemetry();
 
             // Initialize database schema through the libSQL local DB facade,
             // then build the rusqlite compatibility pools for unmigrated
@@ -463,6 +468,55 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+fn install_runtime_telemetry() {
+    default_env("RUST_BACKTRACE", "full");
+    default_env("RUST_LIB_BACKTRACE", "1");
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("non-string panic payload");
+        let location = info
+            .location()
+            .map(|location| {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let backtrace = Backtrace::force_capture();
+        tracing::error!(
+            panic.message = payload,
+            panic.location = location,
+            panic.backtrace = %backtrace,
+            "Rust panic captured"
+        );
+        default_hook(info);
+    }));
+}
+
+fn default_env(key: &str, value: &str) {
+    if std::env::var_os(key).is_none() {
+        std::env::set_var(key, value);
+    }
+}
+
+fn log_runtime_telemetry() {
+    tracing::info!(
+        rust_backtrace = %std::env::var("RUST_BACKTRACE").unwrap_or_else(|_| "<unset>".to_string()),
+        rust_lib_backtrace = %std::env::var("RUST_LIB_BACKTRACE").unwrap_or_else(|_| "<unset>".to_string()),
+        build_mode = data_dir::build_mode_label(),
+        data_mode = data_dir::data_mode_label(),
+        "Runtime crash telemetry configured"
+    );
 }
 
 #[cfg(debug_assertions)]

@@ -324,22 +324,53 @@ fn with_libsql_bundle<T>(f: impl FnOnce(&LibsqlBundle) -> Result<T>) -> Result<T
 /// `HELMOR_DATA_DIR`.
 pub fn init_libsql() -> Result<()> {
     let path = crate::data_dir::db_path()?;
+    {
+        let guard = libsql_slot()
+            .read()
+            .map_err(|_| anyhow!("libSQL bundle lock poisoned"))?;
+        if guard.as_ref().is_some_and(|bundle| bundle.path == path) {
+            tracing::debug!(path = %path.display(), "db: libSQL local database already initialised");
+            return Ok(());
+        }
+    }
+
+    let mut guard = libsql_slot()
+        .write()
+        .map_err(|_| anyhow!("libSQL bundle lock poisoned"))?;
+    if guard.as_ref().is_some_and(|bundle| bundle.path == path) {
+        tracing::debug!(path = %path.display(), "db: libSQL local database already initialised");
+        return Ok(());
+    }
+
     tracing::info!(path = %path.display(), "db: initialising libSQL local database");
     let bundle = build_libsql_bundle(path)?;
-    *libsql_slot()
-        .write()
-        .map_err(|_| anyhow!("libSQL bundle lock poisoned"))? = Some(bundle);
+    *guard = Some(bundle);
     Ok(())
 }
 
 /// Async variant of [`init_libsql`] for code already running on Tokio.
 pub async fn init_libsql_async() -> Result<()> {
     let path = crate::data_dir::db_path()?;
+    {
+        let guard = libsql_slot()
+            .read()
+            .map_err(|_| anyhow!("libSQL bundle lock poisoned"))?;
+        if guard.as_ref().is_some_and(|bundle| bundle.path == path) {
+            tracing::debug!(path = %path.display(), "db: libSQL local database already initialised");
+            return Ok(());
+        }
+    }
+
     tracing::info!(path = %path.display(), "db: initialising libSQL local database");
-    let bundle = build_libsql_bundle_async(path).await?;
-    *libsql_slot()
+    let bundle = build_libsql_bundle_async(path.clone()).await?;
+    let mut guard = libsql_slot()
         .write()
-        .map_err(|_| anyhow!("libSQL bundle lock poisoned"))? = Some(bundle);
+        .map_err(|_| anyhow!("libSQL bundle lock poisoned"))?;
+    if guard.as_ref().is_some_and(|current| current.path == path) {
+        tracing::debug!(path = %path.display(), "db: libSQL local database already initialised");
+        return Ok(());
+    }
+    *guard = Some(bundle);
     Ok(())
 }
 

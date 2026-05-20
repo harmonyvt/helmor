@@ -322,15 +322,6 @@ fn lookup_workspace_target(workspace_root: &Path) -> Option<(String, String)> {
     let repo_name = repo_name.to_string();
     let dir_name = dir_name.to_string();
     match std::thread::spawn(move || {
-        if let Err(error) = db::init_libsql() {
-            tracing::warn!(
-                repo_name,
-                dir_name,
-                error = %error,
-                "Failed to initialise libSQL for workspace target lookup; falling back to default target refs",
-            );
-            return None;
-        }
         tauri::async_runtime::block_on(async {
             lookup_workspace_target_async(&repo_name, &dir_name).await
         })

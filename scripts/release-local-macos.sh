@@ -26,6 +26,9 @@ for raw_line in env_path.read_text().splitlines():
 PY
 )"
 
+export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
+export RUST_LIB_BACKTRACE="${RUST_LIB_BACKTRACE:-1}"
+
 required_vars=(
   HELMOR_UPDATER_ENDPOINTS
   HELMOR_UPDATER_PUBKEY
