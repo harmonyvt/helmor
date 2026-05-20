@@ -295,9 +295,12 @@ export class CursorSessionManager implements SessionManager {
 	async stopSession(sessionId: string): Promise<void> {
 		const session = this.sessions.get(sessionId);
 		if (!session) return;
-		await session.run.cancel();
-		session.agent.close();
-		this.sessions.delete(sessionId);
+		try {
+			await session.run.cancel();
+		} finally {
+			session.agent.close();
+			this.sessions.delete(sessionId);
+		}
 	}
 
 	steer(
