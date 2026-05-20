@@ -5,6 +5,7 @@ import {
 	ArrowLeft,
 	ArrowRight,
 	Bot,
+	Box,
 	Braces,
 	Check,
 	ChevronDown,
@@ -1121,6 +1122,9 @@ function SessionProviderIcon({
 	}
 	if (agentType === "codex") {
 		return <OpenAIIcon className="size-3 shrink-0 text-muted-foreground" />;
+	}
+	if (agentType === "cursor" || agentType === "pi") {
+		return <Box className="size-3 shrink-0 text-muted-foreground" />;
 	}
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }

@@ -22,7 +22,7 @@ import {
 import { LimitRow } from "../context-usage-ring/popover-parts";
 
 type Props = {
-	agentType: "claude" | "codex" | "pi" | null;
+	agentType: "claude" | "codex" | "cursor" | "pi" | null;
 	disabled?: boolean;
 	className?: string;
 };

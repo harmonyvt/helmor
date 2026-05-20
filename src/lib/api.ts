@@ -262,7 +262,7 @@ export type DebugIngestEvent =
 	| { type: "entry"; entry: DebugIngestEntry }
 	| { type: "cleared" };
 
-export type AgentProvider = "claude" | "codex" | "pi";
+export type AgentProvider = "claude" | "codex" | "cursor" | "pi";
 
 export type AgentModelOption = {
 	id: string;

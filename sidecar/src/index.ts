@@ -13,6 +13,7 @@ import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError } from "./abort.js";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
+import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
 import { startParentWatchdog } from "./parent-watchdog.js";
@@ -44,10 +45,12 @@ import {
 
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
+const cursorManager = new CursorSessionManager();
 const piManager = new PiRoutingSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
+	cursor: cursorManager,
 	pi: piManager,
 };
 

@@ -52,6 +52,7 @@ fn model_sections_for_custom(
         .extend(custom_provider_options(custom));
     let mut sections = vec![claude_section];
     sections.push(codex_section(codex_profiles));
+    sections.push(cursor_section());
     sections.push(pi_section());
 
     sections
@@ -96,6 +97,22 @@ fn codex_section(profiles: Vec<super::codex_profiles::CodexProfileModel>) -> Age
         label: "Codex".to_string(),
         status: AgentModelSectionStatus::Ready,
         options,
+    }
+}
+
+fn cursor_section() -> AgentModelSection {
+    AgentModelSection {
+        id: "cursor".to_string(),
+        label: "Cursor".to_string(),
+        status: AgentModelSectionStatus::Ready,
+        options: vec![
+            cursor_model("cursor:composer-2.5", "Composer 2.5", "composer-2.5"),
+            cursor_model(
+                "cursor:composer-latest",
+                "Composer Latest",
+                "composer-latest",
+            ),
+        ],
     }
 }
 
@@ -228,6 +245,23 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
     }
 }
 
+fn cursor_model(id: &str, label: &str, cli_model: &str) -> AgentModelOption {
+    AgentModelOption {
+        id: id.to_string(),
+        provider: "cursor".to_string(),
+        label: label.to_string(),
+        cli_model: cli_model.to_string(),
+        provider_key: None,
+        effort_levels: ["low", "medium", "high"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        supports_fast_mode: false,
+        supports_context_usage: false,
+        codex_profile: None,
+    }
+}
+
 fn pi_model(id: &str, label: &str, cli_model: &str, effort_levels: &[&str]) -> AgentModelOption {
     AgentModelOption {
         id: id.to_string(),
@@ -304,6 +338,10 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         return model;
     }
 
+    if let Some(model) = dynamic_cursor_model(model_id) {
+        return model;
+    }
+
     if let Some(model) = codex_profile_model(model_id) {
         return model;
     }
@@ -330,6 +368,7 @@ fn builtin_model_option(model_id: &str) -> Option<AgentModelOption> {
         .options
         .into_iter()
         .chain(codex_section(Vec::new()).options)
+        .chain(cursor_section().options)
         .chain(pi_section().options)
         .find(|option| option.id == model_id)
 }
@@ -352,6 +391,20 @@ fn dynamic_pi_model(model_id: &str) -> Option<ResolvedModel> {
     cli_model.contains('/').then(|| ResolvedModel {
         id: model_id.to_string(),
         provider: "pi".to_string(),
+        cli_model: cli_model.to_string(),
+        supports_effort: true,
+        claude_base_url: None,
+        claude_auth_token: None,
+        codex_profile: None,
+        codex_model_provider: None,
+    })
+}
+
+fn dynamic_cursor_model(model_id: &str) -> Option<ResolvedModel> {
+    let cli_model = model_id.strip_prefix("cursor:")?;
+    (!cli_model.trim().is_empty()).then(|| ResolvedModel {
+        id: model_id.to_string(),
+        provider: "cursor".to_string(),
         cli_model: cli_model.to_string(),
         supports_effort: true,
         claude_base_url: None,
@@ -406,7 +459,7 @@ mod tests {
     fn static_model_sections_returns_hardcoded_catalog() {
         let sections = model_sections_for_custom(Vec::new(), Vec::new());
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -444,14 +497,25 @@ mod tests {
             .iter()
             .all(|model| model.supports_fast_mode));
 
-        assert_eq!(sections[2].id, "pi");
+        assert_eq!(sections[2].id, "cursor");
         assert_eq!(sections[2].status, AgentModelSectionStatus::Ready);
-        assert!(sections[2]
+        assert_eq!(
+            sections[2]
+                .options
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cursor:composer-2.5", "cursor:composer-latest"]
+        );
+
+        assert_eq!(sections[3].id, "pi");
+        assert_eq!(sections[3].status, AgentModelSectionStatus::Ready);
+        assert!(sections[3]
             .options
             .iter()
             .all(|model| !model.supports_fast_mode));
         assert_eq!(
-            sections[2]
+            sections[3]
                 .options
                 .iter()
                 .map(|model| model.id.as_str())
@@ -466,11 +530,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            sections[2].options[1].effort_levels,
+            sections[3].options[1].effort_levels,
             vec!["minimal", "low", "medium", "high"]
         );
         assert_eq!(
-            sections[2].options[2].effort_levels,
+            sections[3].options[2].effort_levels,
             vec!["minimal", "low", "medium", "high", "xhigh"]
         );
     }
@@ -489,7 +553,7 @@ mod tests {
             Vec::new(),
         );
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].label, "Claude Code");
         assert_eq!(
@@ -516,7 +580,8 @@ mod tests {
         );
         assert!(!sections[0].options[4].supports_context_usage);
         assert_eq!(sections[1].id, "codex");
-        assert_eq!(sections[2].id, "pi");
+        assert_eq!(sections[2].id, "cursor");
+        assert_eq!(sections[3].id, "pi");
     }
 
     #[test]
@@ -592,6 +657,14 @@ mod tests {
         assert_eq!(m.provider, "pi");
         assert_eq!(m.cli_model, "azure-openai-responses/gpt-5.4");
         assert_eq!(m.id, "pi:azure-openai-responses/gpt-5.4");
+    }
+
+    #[test]
+    fn resolve_cursor_model_routes_to_cursor() {
+        let m = resolve_model("cursor:composer-2.5");
+        assert_eq!(m.provider, "cursor");
+        assert_eq!(m.cli_model, "composer-2.5");
+        assert_eq!(m.id, "cursor:composer-2.5");
     }
 
     #[test]

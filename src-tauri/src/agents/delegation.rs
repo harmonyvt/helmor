@@ -607,6 +607,7 @@ fn default_model_id_for_provider(provider: &str) -> String {
     match provider {
         "claude" => "default".to_string(),
         "codex" => "gpt-5.4".to_string(),
+        "cursor" => "cursor:composer-2.5".to_string(),
         "pi" => "pi:azure-openai-responses/gpt-5.4-mini".to_string(),
         other => other.to_string(),
     }

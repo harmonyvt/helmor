@@ -20,6 +20,8 @@ function providerLabel(model: AgentModelOption): string {
 			return "Claude";
 		case "codex":
 			return "Codex";
+		case "cursor":
+			return "Cursor";
 		case "pi":
 			return model.providerKey ? `Pi · ${model.providerKey}` : "Pi";
 		default:

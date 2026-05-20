@@ -20,6 +20,8 @@ export function ModelIcon({
 }) {
 	if (model?.provider === "codex")
 		return <OpenAIColorIcon className={className} />;
+	if (model?.provider === "cursor")
+		return <Box className={className} strokeWidth={1.8} />;
 	if (model?.provider === "pi")
 		return <Box className={className} strokeWidth={1.8} />;
 	if (model?.providerKey === "custom")
