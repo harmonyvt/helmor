@@ -175,8 +175,9 @@ type WorkspaceComposerProps = {
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
-	/** When true hides the model picker / effort / plan toolbar and shows only
-	 *  the send/stop button — suited for narrow embedded panels. */
+	/** When true hides plan/fast-mode controls and uses a compact toolbar with
+	 *  model picker, effort (when supported), and send/stop — for narrow panels
+	 *  such as the Goals Pi surface. */
 	hideToolbar?: boolean;
 };
 
@@ -774,34 +775,45 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					) : null}
 
 					{hideToolbar ? (
-						/* Compact toolbar: model picker + send/stop — no effort/plan/fast mode */
+						/* Compact toolbar: model + effort (when supported) + send/stop */
 						<div className="mt-1.5 flex items-center justify-between gap-2">
-							<div className="min-w-0 flex-1">
+							<div className="flex min-w-0 flex-1 items-center gap-1">
 								{modelsLoading ? (
 									<ShimmerText className="px-1 py-0.5 text-[13px] text-muted-foreground">
 										Loading…
 									</ShimmerText>
 								) : (
-									<ModelPicker
-										open={modelPickerOpen}
-										onOpenChange={setModelPickerOpen}
-										disabled={toolbarDisabled}
-										selectedModel={selectedModel}
-										selectedModelId={selectedModelId}
-										modelSections={modelSections}
-										hasConfiguredClaudeProviderModels={
-											hasConfiguredClaudeProviderModels
-										}
-										favoriteModelIds={favoriteModelIds}
-										onSelectModel={onSelectModel}
-										onToggleFavorite={onToggleFavorite ?? (() => {})}
-										onOpenModelSettings={handleOpenModelSettings}
-										triggerClassName={cn(
-											`flex items-center gap-1.5 text-muted-foreground ${composerToolbarTriggerClassName}`,
-											toolbarDisabled &&
-												"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
-										)}
-									/>
+									<>
+										<ModelPicker
+											open={modelPickerOpen}
+											onOpenChange={setModelPickerOpen}
+											disabled={toolbarDisabled}
+											selectedModel={selectedModel}
+											selectedModelId={selectedModelId}
+											modelSections={modelSections}
+											hasConfiguredClaudeProviderModels={
+												hasConfiguredClaudeProviderModels
+											}
+											favoriteModelIds={favoriteModelIds}
+											onSelectModel={onSelectModel}
+											onToggleFavorite={onToggleFavorite ?? (() => {})}
+											onOpenModelSettings={handleOpenModelSettings}
+											triggerClassName={cn(
+												`flex min-w-0 items-center gap-1.5 text-muted-foreground ${composerToolbarTriggerClassName}`,
+												toolbarDisabled &&
+													"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
+											)}
+										/>
+										{supportsEffort ? (
+											<EffortLevelPicker
+												effectiveEffort={effectiveEffort}
+												availableEffortLevels={availableEffortLevels}
+												toolbarDisabled={toolbarDisabled}
+												triggerClassName={composerToolbarTriggerClassName}
+												onSelectEffort={onSelectEffort}
+											/>
+										) : null}
+									</>
 								)}
 							</div>
 							<div className="flex shrink-0 items-center gap-1.5">
@@ -981,63 +993,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											</Tooltip>
 										)}
 
-										{supportsEffort && (
-											<DropdownMenu>
-												<DropdownMenuTrigger
-													disabled={toolbarDisabled}
-													className={cn(
-														`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
-														effectiveEffort === "max" ||
-															effectiveEffort === "xhigh"
-															? "effort-max-text"
-															: "text-muted-foreground",
-														toolbarDisabled
-															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
-															: null,
-													)}
-												>
-													<span className="capitalize">
-														{effectiveEffort === "xhigh"
-															? "Extra High"
-															: effectiveEffort}
-													</span>
-													<ChevronDown
-														className="size-3 text-muted-foreground/40"
-														strokeWidth={2}
-													/>
-												</DropdownMenuTrigger>
-												<DropdownMenuContent
-													side="top"
-													align="start"
-													sideOffset={4}
-													className="min-w-[11rem]"
-												>
-													<DropdownMenuGroup>
-														<DropdownMenuLabel>Effort</DropdownMenuLabel>
-														{availableEffortLevels.map((level) => (
-															<DropdownMenuItem
-																key={level}
-																disabled={toolbarDisabled}
-																onClick={() => onSelectEffort(level)}
-																className="flex items-center justify-between gap-3"
-															>
-																<div className="flex items-center gap-2.5">
-																	<EffortBrainIcon level={level} />
-																	<span className="capitalize">
-																		{level === "xhigh" ? "Extra High" : level}
-																	</span>
-																</div>
-																{level === effectiveEffort ? (
-																	<span className="text-[11px] text-foreground">
-																		✓
-																	</span>
-																) : null}
-															</DropdownMenuItem>
-														))}
-													</DropdownMenuGroup>
-												</DropdownMenuContent>
-											</DropdownMenu>
-										)}
+										{supportsEffort ? (
+											<EffortLevelPicker
+												effectiveEffort={effectiveEffort}
+												availableEffortLevels={availableEffortLevels}
+												toolbarDisabled={toolbarDisabled}
+												triggerClassName={composerToolbarTriggerClassName}
+												onSelectEffort={onSelectEffort}
+											/>
+										) : null}
 										<ComposerButton
 											aria-label="Plan mode"
 											disabled={toolbarDisabled}
@@ -1261,6 +1225,75 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		</div>
 	);
 });
+
+function formatEffortLabel(level: string): string {
+	return level === "xhigh" ? "Extra High" : level;
+}
+
+type EffortLevelPickerProps = {
+	effectiveEffort: string;
+	availableEffortLevels: readonly string[];
+	toolbarDisabled: boolean;
+	triggerClassName: string;
+	onSelectEffort: (level: string) => void;
+};
+
+function EffortLevelPicker({
+	effectiveEffort,
+	availableEffortLevels,
+	toolbarDisabled,
+	triggerClassName,
+	onSelectEffort,
+}: EffortLevelPickerProps) {
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger
+				disabled={toolbarDisabled}
+				className={cn(
+					`flex shrink-0 items-center gap-0.5 ${triggerClassName}`,
+					effectiveEffort === "max" || effectiveEffort === "xhigh"
+						? "effort-max-text"
+						: "text-muted-foreground",
+					toolbarDisabled
+						? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+						: null,
+				)}
+			>
+				<span className="capitalize">{formatEffortLabel(effectiveEffort)}</span>
+				<ChevronDown
+					className="size-3 text-muted-foreground/40"
+					strokeWidth={2}
+				/>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent
+				side="top"
+				align="start"
+				sideOffset={4}
+				className="min-w-[11rem]"
+			>
+				<DropdownMenuGroup>
+					<DropdownMenuLabel>Effort</DropdownMenuLabel>
+					{availableEffortLevels.map((level) => (
+						<DropdownMenuItem
+							key={level}
+							disabled={toolbarDisabled}
+							onClick={() => onSelectEffort(level)}
+							className="flex items-center justify-between gap-3"
+						>
+							<div className="flex items-center gap-2.5">
+								<EffortBrainIcon level={level} />
+								<span className="capitalize">{formatEffortLabel(level)}</span>
+							</div>
+							{level === effectiveEffort ? (
+								<span className="text-[11px] text-foreground">✓</span>
+							) : null}
+						</DropdownMenuItem>
+					))}
+				</DropdownMenuGroup>
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
 
 function EffortBrainIcon({ level }: { level: string }) {
 	const cls = "shrink-0";

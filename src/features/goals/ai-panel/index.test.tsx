@@ -7,6 +7,7 @@ import { GoalsAiPanel } from "./index";
 
 const conversationMockState = vi.hoisted(() => ({
 	props: null as {
+		compact?: boolean;
 		preferredDefaultModelId?: string | null;
 		modelFilter?: (model: AgentModelOption) => boolean;
 		buildSendRequestExtras?: (context: {
@@ -62,6 +63,7 @@ describe("GoalsAiPanel", () => {
 			/>,
 		);
 
+		expect(conversationMockState.props?.compact).toBe(true);
 		expect(conversationMockState.props?.modelFilter?.(piModel)).toBe(true);
 		expect(conversationMockState.props?.modelFilter?.(codexModel)).toBe(false);
 	});
