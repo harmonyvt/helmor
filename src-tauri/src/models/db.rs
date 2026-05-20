@@ -25,6 +25,7 @@ use chrono::{SecondsFormat, Utc};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, OpenFlags, Transaction};
+use serde::Serialize;
 use tauri::async_runtime::Mutex;
 
 pub type PooledConn = PooledConnection<SqliteConnectionManager>;
@@ -69,6 +70,51 @@ struct LibsqlBundle {
     write_lock: Arc<Mutex<()>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolStateSnapshot {
+    pub connections: u32,
+    pub idle_connections: u32,
+}
+
+impl From<r2d2::State> for PoolStateSnapshot {
+    fn from(value: r2d2::State) -> Self {
+        Self {
+            connections: value.connections,
+            idle_connections: value.idle_connections,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbLockSnapshot {
+    pub global_workspace_fs_mutation_locked: bool,
+    pub tracked_workspace_lock_count: usize,
+    pub libsql_write_locked: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbFileSnapshot {
+    pub path: String,
+    pub exists: bool,
+    pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbRuntimeDiagnostics {
+    pub db_path: String,
+    pub read_pool: Option<PoolStateSnapshot>,
+    pub write_pool: Option<PoolStateSnapshot>,
+    pub locks: DbLockSnapshot,
+    pub files: Vec<DbFileSnapshot>,
+    pub wal_checkpoint: Option<WalCheckpointStats>,
+    pub pragmas: serde_json::Value,
+    pub errors: Vec<String>,
+}
+
 /// RwLock-wrapped so tests can transparently rebuild the pools when they
 /// swap `HELMOR_DATA_DIR`. In production [`init_pools`] runs once and the
 /// lock sees a single writer forever.
@@ -96,7 +142,8 @@ pub enum WalCheckpointMode {
     Truncate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WalCheckpointStats {
     pub busy: i64,
     pub log_frames: i64,
@@ -706,6 +753,170 @@ where
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────
+
+pub fn runtime_diagnostics() -> DbRuntimeDiagnostics {
+    let mut errors = Vec::new();
+    let db_path = match crate::data_dir::db_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return DbRuntimeDiagnostics {
+                db_path: String::new(),
+                read_pool: None,
+                write_pool: None,
+                locks: DbLockSnapshot {
+                    global_workspace_fs_mutation_locked: WORKSPACE_FS_MUTATION_LOCK
+                        .try_lock()
+                        .is_err(),
+                    tracked_workspace_lock_count: per_workspace_locks()
+                        .lock()
+                        .map(|locks| locks.len())
+                        .unwrap_or_default(),
+                    libsql_write_locked: None,
+                },
+                files: Vec::new(),
+                wal_checkpoint: None,
+                pragmas: serde_json::json!({}),
+                errors: vec![format!("failed to resolve db path: {error:#}")],
+            };
+        }
+    };
+
+    let (read_pool, write_pool) = match pool_slot().read() {
+        Ok(guard) => guard
+            .as_ref()
+            .filter(|bundle| bundle.path == db_path)
+            .map(|bundle| {
+                (
+                    Some(PoolStateSnapshot::from(bundle.read.state())),
+                    Some(PoolStateSnapshot::from(bundle.write.state())),
+                )
+            })
+            .unwrap_or((None, None)),
+        Err(_) => {
+            errors.push("pool slot lock poisoned".to_string());
+            (None, None)
+        }
+    };
+
+    let libsql_write_locked = match libsql_slot().read() {
+        Ok(guard) => guard
+            .as_ref()
+            .filter(|bundle| bundle.path == db_path)
+            .map(|bundle| bundle.write_lock.try_lock().is_err()),
+        Err(_) => {
+            errors.push("libSQL bundle lock poisoned".to_string());
+            None
+        }
+    };
+
+    let global_workspace_fs_mutation_locked = WORKSPACE_FS_MUTATION_LOCK.try_lock().is_err();
+    let tracked_workspace_lock_count = per_workspace_locks()
+        .lock()
+        .map(|locks| locks.len())
+        .unwrap_or_else(|_| {
+            errors.push("per-workspace lock map poisoned".to_string());
+            0
+        });
+
+    let files = db_related_file_snapshots(&db_path);
+    let mut pragmas = serde_json::json!({});
+    let mut wal_checkpoint = None;
+    match read_conn() {
+        Ok(conn) => {
+            pragmas = serde_json::json!({
+                "journalMode": query_pragma_string(&conn, "journal_mode").ok(),
+                "synchronous": query_pragma_i64(&conn, "synchronous").ok(),
+                "busyTimeoutMs": query_pragma_i64(&conn, "busy_timeout").ok(),
+                "walAutocheckpoint": query_pragma_i64(&conn, "wal_autocheckpoint").ok(),
+                "cacheSize": query_pragma_i64(&conn, "cache_size").ok(),
+                "mmapSize": query_pragma_i64(&conn, "mmap_size").ok(),
+                "lockingMode": query_pragma_string(&conn, "locking_mode").ok(),
+                "databaseList": database_list(&conn).unwrap_or_else(|error| {
+                    errors.push(format!("failed to read PRAGMA database_list: {error:#}"));
+                    Vec::new()
+                }),
+            });
+            match wal_checkpoint_passive(&conn) {
+                Ok(stats) => wal_checkpoint = Some(stats),
+                Err(error) => {
+                    errors.push(format!("failed to run passive WAL checkpoint: {error:#}"))
+                }
+            }
+        }
+        Err(error) => errors.push(format!(
+            "failed to borrow read connection for diagnostics: {error:#}"
+        )),
+    }
+
+    DbRuntimeDiagnostics {
+        db_path: db_path.display().to_string(),
+        read_pool,
+        write_pool,
+        locks: DbLockSnapshot {
+            global_workspace_fs_mutation_locked,
+            tracked_workspace_lock_count,
+            libsql_write_locked,
+        },
+        files,
+        wal_checkpoint,
+        pragmas,
+        errors,
+    }
+}
+
+fn db_related_file_snapshots(db_path: &std::path::Path) -> Vec<DbFileSnapshot> {
+    [
+        db_path.to_path_buf(),
+        sqlite_sidecar_path(db_path, "wal"),
+        sqlite_sidecar_path(db_path, "shm"),
+    ]
+    .into_iter()
+    .map(|path| {
+        let metadata = std::fs::metadata(&path).ok();
+        DbFileSnapshot {
+            path: path.display().to_string(),
+            exists: metadata.is_some(),
+            bytes: metadata.map(|meta| meta.len()),
+        }
+    })
+    .collect()
+}
+
+fn sqlite_sidecar_path(db_path: &std::path::Path, suffix: &str) -> PathBuf {
+    let mut os = db_path.as_os_str().to_os_string();
+    os.push(format!("-{suffix}"));
+    PathBuf::from(os)
+}
+
+fn query_pragma_string(conn: &Connection, name: &str) -> rusqlite::Result<String> {
+    conn.query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))
+}
+
+fn query_pragma_i64(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
+    conn.query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))
+}
+
+fn wal_checkpoint_passive(conn: &Connection) -> rusqlite::Result<WalCheckpointStats> {
+    conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+        Ok(WalCheckpointStats {
+            busy: row.get(0)?,
+            log_frames: row.get(1)?,
+            checkpointed_frames: row.get(2)?,
+        })
+    })
+}
+
+fn database_list(conn: &Connection) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let mut stmt = conn.prepare("PRAGMA database_list")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "seq": row.get::<_, i64>(0)?,
+            "name": row.get::<_, String>(1)?,
+            "file": row.get::<_, String>(2)?,
+        }))
+    })?;
+    rows.collect()
+}
 
 /// Current UTC timestamp in RFC 3339 / millisecond precision.
 pub fn current_timestamp() -> Result<String> {

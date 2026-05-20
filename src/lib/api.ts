@@ -145,6 +145,8 @@ export type FrontendLogEntry = {
 	url?: string;
 };
 
+export type FrontendLogDiagnostics = Record<string, unknown>;
+
 export type LogExportResult = {
 	exportDir: string;
 	files: string[];
@@ -1312,9 +1314,11 @@ export async function recordGoalKnowledgeNote(
 
 export async function exportVerboseLogs(
 	frontendLogs: FrontendLogEntry[],
+	frontendDiagnostics?: FrontendLogDiagnostics,
 ): Promise<LogExportResult> {
 	return await invoke<LogExportResult>("export_verbose_logs", {
 		frontendLogs,
+		frontendDiagnostics,
 	});
 }
 
