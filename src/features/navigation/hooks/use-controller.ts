@@ -97,7 +97,6 @@ type UseWorkspacesSidebarControllerArgs = {
 	pushWorkspaceToast: WorkspaceToastFn;
 };
 
-const WORKSPACE_GROUPS_INITIAL_DATA = workspaceGroupsQueryOptions().initialData;
 const EMPTY_PENDING_CREATIONS = new Map<string, PendingCreationEntry>();
 
 export function useWorkspacesSidebarController({
@@ -447,14 +446,6 @@ export function useWorkspacesSidebarController({
 			selectedWorkspaceId === null &&
 			groupsQuery.data === undefined &&
 			archivedQuery.data === undefined
-		) {
-			return;
-		}
-
-		if (
-			selectedWorkspaceId === null &&
-			groupsQuery.isFetching &&
-			groupsQuery.data === WORKSPACE_GROUPS_INITIAL_DATA
 		) {
 			return;
 		}
@@ -1790,6 +1781,8 @@ export function useWorkspacesSidebarController({
 		creatingWorkspaceRepoId,
 		cloneDefaultDirectory,
 		groups,
+		isWorkspacesInitialLoading:
+			groupsQuery.data === undefined || archivedQuery.data === undefined,
 		// True whenever either workspace list query is fetching — covers both
 		// the initial load and every background poll. Used to drive the sidebar
 		// polling shimmer so users know the list is live.

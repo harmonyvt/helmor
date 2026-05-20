@@ -66,6 +66,7 @@ export const WorkspacesSidebarContainer = memo(
 			handleSelectWorkspace,
 			handleSetWorkspaceStatus,
 			handleTogglePin,
+			isWorkspacesInitialLoading,
 			isCreateGithubProjectDialogOpen,
 			isCloneDialogOpen,
 			prefetchWorkspace,
@@ -85,6 +86,7 @@ export const WorkspacesSidebarContainer = memo(
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
 				convertingGoalWorkspaceIds={convertingGoalWorkspaceIds}
+				isInitialLoading={isWorkspacesInitialLoading}
 				isPolling={isWorkspacesFetching}
 				layoutMode={layoutMode}
 				onSetLayoutMode={setLayoutMode}

@@ -115,6 +115,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
 	creatingWorkspaceRepoId,
+	isInitialLoading,
 	isPolling,
 	onAddRepository,
 	onOpenCloneDialog,
@@ -159,6 +160,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
 	creatingWorkspaceRepoId?: string | null;
+	/** True while the first workspace-list snapshots are still loading. */
+	isInitialLoading?: boolean;
 	/** When true, renders the polling shimmer hairline below the header. */
 	isPolling?: boolean;
 	onAddRepository?: () => void;
@@ -966,6 +969,25 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				data-slot="workspace-groups-scroll"
 				className="scrollbar-stable relative mt-2 min-h-0 flex-1 overflow-y-auto pr-1 pl-2 [scrollbar-width:thin]"
 			>
+				{isInitialLoading && activeItems.length === 0 ? (
+					<div className="space-y-3 pr-3 pl-1" aria-hidden="true">
+						{Array.from({ length: 4 }).map((_, groupIndex) => (
+							<div key={groupIndex} className="space-y-2">
+								<div className="h-5 w-28 animate-pulse rounded-md bg-muted/70" />
+								<div className="space-y-1.5 pl-2">
+									{Array.from({ length: groupIndex === 0 ? 3 : 2 }).map(
+										(__, rowIndex) => (
+											<div
+												key={rowIndex}
+												className="h-7 animate-pulse rounded-md bg-muted/45"
+											/>
+										),
+									)}
+								</div>
+							</div>
+						))}
+					</div>
+				) : null}
 				<div
 					style={{
 						height: `${virtualizer.getTotalSize()}px`,
