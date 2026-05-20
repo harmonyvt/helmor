@@ -900,6 +900,11 @@ fn export_verbose_logs_impl(
     write_json_pretty(&backend_diagnostics_path, &db::runtime_diagnostics())?;
     files.push(backend_diagnostics_path.display().to_string());
 
+    let crash_diagnostics_path = export_dir.join("crash-diagnostics.json");
+    let crash_diagnostics = super::crash_diagnostics::collect(&export_dir, &mut files);
+    write_json_pretty(&crash_diagnostics_path, &crash_diagnostics)?;
+    files.push(crash_diagnostics_path.display().to_string());
+
     let manifest_path = export_dir.join("manifest.json");
     let manifest = serde_json::json!({
         "exportedAt": chrono::Local::now().to_rfc3339(),
@@ -908,6 +913,7 @@ fn export_verbose_logs_impl(
         "dataDir": data_dir.display().to_string(),
         "logsDir": logs_dir.display().to_string(),
         "frontendLogCount": frontend_logs.len(),
+        "crashReportCount": crash_diagnostics.report_count(),
         "files": files.clone(),
     });
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?).with_context(|| {

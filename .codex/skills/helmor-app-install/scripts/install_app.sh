@@ -9,6 +9,9 @@ entitlements="$repo_root/src-tauri/Entitlements.plist"
 
 cd "$repo_root" || exit 1
 
+export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
+export RUST_LIB_BACKTRACE="${RUST_LIB_BACKTRACE:-1}"
+
 if [[ ! -f package.json || ! -f src-tauri/tauri.conf.json ]]; then
   echo "error: run from the Helmor repo root, or pass the repo root as argv[1]" >&2
   exit 1
@@ -23,6 +26,7 @@ echo "==> Working tree status"
 git status --short
 
 echo "==> Building production app"
+echo "==> Rust telemetry: RUST_BACKTRACE=$RUST_BACKTRACE RUST_LIB_BACKTRACE=$RUST_LIB_BACKTRACE"
 build_started_at=$(date +%s)
 bun run tauri build --bundles app
 build_status=$?

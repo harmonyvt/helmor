@@ -113,14 +113,6 @@ pub fn lookup_workspace_linked_directories(helmor_session_id: Option<&str>) -> V
     let hsid = hsid.to_string();
     let hsid_for_worker = hsid.clone();
     match std::thread::spawn(move || {
-        if let Err(err) = crate::models::db::init_libsql() {
-            tracing::warn!(
-                helmor_session_id = %hsid_for_worker,
-                error = %err,
-                "Failed to initialise libSQL for linked-directory lookup; falling back to empty list",
-            );
-            return Vec::new();
-        }
         tauri::async_runtime::block_on(async {
             lookup_workspace_linked_directories_async(Some(&hsid_for_worker)).await
         })

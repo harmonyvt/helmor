@@ -70,6 +70,14 @@ pub(super) fn run_command(
     let mut command = Command::new(&spec.program);
     command.args(&spec.args);
     command.current_dir(&spec.current_dir);
+    command.env(
+        "RUST_BACKTRACE",
+        std::env::var("RUST_BACKTRACE").unwrap_or_else(|_| "full".to_string()),
+    );
+    command.env(
+        "RUST_LIB_BACKTRACE",
+        std::env::var("RUST_LIB_BACKTRACE").unwrap_or_else(|_| "1".to_string()),
+    );
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     use std::os::unix::process::CommandExt;

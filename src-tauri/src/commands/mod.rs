@@ -3,6 +3,7 @@ pub(crate) mod app_install_commands;
 pub(crate) mod browser_commands;
 mod common;
 pub(crate) mod conductor_commands;
+mod crash_diagnostics;
 pub(crate) mod debug_ingest_commands;
 pub(crate) mod editor_commands;
 pub(crate) mod editors;

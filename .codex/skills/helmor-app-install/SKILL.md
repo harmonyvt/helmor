@@ -36,7 +36,7 @@ defaults read /Applications/Helmor.app/Contents/Info CFBundleShortVersionString 
 2. Build the production app bundle:
 
 ```bash
-bun run tauri build --bundles app
+RUST_BACKTRACE=full RUST_LIB_BACKTRACE=1 bun run tauri build --bundles app
 ```
 
 If this exits nonzero because `TAURI_SIGNING_PRIVATE_KEY` is missing, continue only when the app bundle exists at:
