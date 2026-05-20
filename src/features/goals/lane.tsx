@@ -15,6 +15,7 @@ import { WorkspaceCardWithHover } from "./card";
 type GoalLaneProps = {
 	lane: GoalLaneDefinition;
 	workspaces: WorkspaceDetail[];
+	isLoading?: boolean;
 	isDragOver: boolean;
 	/** True when a non-mergeable card is being dragged over the Merged lane. */
 	isDragRejected?: boolean;
@@ -38,6 +39,7 @@ type GoalLaneProps = {
 export function GoalLane({
 	lane,
 	workspaces,
+	isLoading = false,
 	isDragOver,
 	isDragRejected = false,
 	draggedId,
@@ -115,7 +117,16 @@ export function GoalLane({
 						/>
 					);
 				})}
-				{workspaces.length === 0 ? (
+				{isLoading && workspaces.length === 0 ? (
+					<div className="space-y-2" aria-hidden="true">
+						{Array.from({ length: 3 }).map((_, index) => (
+							<div
+								key={index}
+								className="h-24 animate-pulse rounded-lg border border-border/60 bg-muted/35"
+							/>
+						))}
+					</div>
+				) : workspaces.length === 0 ? (
 					<div
 						className={cn(
 							"rounded-lg border border-dashed px-3 py-8 text-center text-xs text-muted-foreground transition-colors duration-150",

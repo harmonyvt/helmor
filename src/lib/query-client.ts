@@ -5,7 +5,6 @@ import {
 	type AgentProvider,
 	type BrowserTabRecord,
 	type ChangeRequestInfo,
-	DEFAULT_WORKSPACE_GROUPS,
 	type DetectedEditor,
 	detectInstalledEditors,
 	type ForgeActionStatus,
@@ -332,8 +331,6 @@ export function workspaceGroupsQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceGroups,
 		queryFn: () => probedQuery("workspaceGroups", {}, loadWorkspaceGroups),
-		initialData: DEFAULT_WORKSPACE_GROUPS,
-		initialDataUpdatedAt: 0,
 		staleTime: 0,
 		refetchInterval: WORKSPACE_LIST_POLL_INTERVAL,
 	});
@@ -343,8 +340,6 @@ export function archivedWorkspacesQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.archivedWorkspaces,
 		queryFn: loadArchivedWorkspaces,
-		initialData: [],
-		initialDataUpdatedAt: 0,
 		staleTime: 0,
 		refetchInterval: WORKSPACE_LIST_POLL_INTERVAL,
 	});
@@ -404,7 +399,6 @@ export function goalChildWorkspacesQueryOptions(goalWorkspaceId: string) {
 			probedQuery("goalChildWorkspaces", { goalWorkspaceId }, () =>
 				listGoalChildWorkspaces(goalWorkspaceId),
 			),
-		initialData: [] as import("./api").WorkspaceDetail[],
 		staleTime: 0,
 	});
 }

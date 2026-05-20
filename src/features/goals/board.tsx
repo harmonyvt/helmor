@@ -20,6 +20,7 @@ type DragState = {
 
 type GoalBoardProps = {
 	workspaces: WorkspaceDetail[];
+	isLoading?: boolean;
 	selectedId: string | null;
 	dragState: DragState;
 	dragOverLane: GoalLaneId | null;
@@ -46,6 +47,7 @@ type GoalBoardProps = {
 
 export function GoalBoard({
 	workspaces,
+	isLoading = false,
 	selectedId,
 	dragState,
 	dragOverLane,
@@ -137,6 +139,7 @@ export function GoalBoard({
 							key={lane.id}
 							lane={lane}
 							workspaces={byLane.get(lane.id) ?? []}
+							isLoading={isLoading}
 							isDragOver={isOver}
 							isDragRejected={isDragRejected}
 							draggedId={dragState?.workspaceId ?? null}

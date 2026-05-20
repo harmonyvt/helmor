@@ -754,6 +754,7 @@ export function GoalWorkspaceContainer({
 					<div className="flex min-h-0 flex-1 overflow-hidden">
 						<GoalBoard
 							workspaces={childWorkspaces}
+							isLoading={childQuery.data === undefined}
 							selectedId={selectedId}
 							dragState={dragState}
 							dragOverLane={dragOverLane}
