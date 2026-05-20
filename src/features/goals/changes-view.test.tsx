@@ -10,6 +10,9 @@ import { GoalChangesView } from "./changes-view";
 
 const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChangesWithContent: vi.fn(),
+	listRemoteBranches: vi.fn(),
+	updateIntendedTargetBranch: vi.fn(),
+	renameWorkspaceBranch: vi.fn(),
 }));
 
 vi.mock("file-extension-icon-js", () => ({
@@ -21,6 +24,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
+		listRemoteBranches: apiMocks.listRemoteBranches,
+		updateIntendedTargetBranch: apiMocks.updateIntendedTargetBranch,
+		renameWorkspaceBranch: apiMocks.renameWorkspaceBranch,
 	};
 });
 
@@ -74,6 +80,12 @@ function response(items: InspectorFileItem[]): EditorFilesWithContentResponse {
 describe("GoalChangesView", () => {
 	beforeEach(() => {
 		apiMocks.listWorkspaceChangesWithContent.mockReset();
+		apiMocks.listRemoteBranches.mockReset();
+		apiMocks.listRemoteBranches.mockResolvedValue(["main", "develop"]);
+		apiMocks.updateIntendedTargetBranch.mockReset();
+		apiMocks.updateIntendedTargetBranch.mockResolvedValue({ reset: false });
+		apiMocks.renameWorkspaceBranch.mockReset();
+		apiMocks.renameWorkspaceBranch.mockResolvedValue(undefined);
 	});
 
 	it("shows goal and card branch changes with card trace labels", async () => {
@@ -106,6 +118,13 @@ describe("GoalChangesView", () => {
 			expect(screen.getByText("Goal branch")).toBeInTheDocument();
 			expect(screen.getByText("Auth card")).toBeInTheDocument();
 		});
+
+		expect(
+			screen.getAllByRole("button", { name: "Compare against origin/main" }),
+		).toHaveLength(2);
+		expect(
+			screen.getAllByRole("button", { name: "Rename branch" }),
+		).toHaveLength(2);
 
 		await waitFor(() => {
 			expect(screen.getAllByText("auth.ts")).toHaveLength(2);
