@@ -164,6 +164,7 @@ const DEBUG_INGEST_STARTUP_TIMEOUT_MS = 5_000;
 type DebugIngestViewState = {
 	active: boolean;
 	starting: boolean;
+	publicForwarding: boolean;
 	status: DebugIngestStatus | null;
 	error: string | null;
 	publicForwardAttemptKey: string | null;
@@ -172,6 +173,7 @@ type DebugIngestViewState = {
 const EMPTY_DEBUG_INGEST_STATE: DebugIngestViewState = {
 	active: false,
 	starting: false,
+	publicForwarding: false,
 	status: null,
 	error: null,
 	publicForwardAttemptKey: null,
@@ -599,30 +601,70 @@ function AppShell({
 
 	const ensureDebugIngestForSubmit = useCallback(
 		async (workspaceId: string): Promise<DebugIngestStatus | null> => {
+			const attemptKey = currentDebugIngestPublicForwardAttemptKey;
+			const wantsPublicForward = appSettings.debugIngestPublicForward;
+			const publicForward = {
+				enabled: wantsPublicForward,
+				ngrokDomain: appSettings.debugIngestNgrokDomain || null,
+			};
 			updateDebugIngestState(workspaceId, (current) => ({
 				...current,
 				active: true,
 				starting: true,
+				publicForwarding: false,
 				error: null,
-				publicForwardAttemptKey: currentDebugIngestPublicForwardAttemptKey,
+				publicForwardAttemptKey: attemptKey,
 			}));
 			try {
 				const status = await withDebugIngestStartupTimeout(
 					ensureDebugIngestServer(workspaceId, {
-						publicForward: {
-							enabled: appSettings.debugIngestPublicForward,
-							ngrokDomain: appSettings.debugIngestNgrokDomain || null,
-						},
+						publicForward: wantsPublicForward ? undefined : publicForward,
 					}),
 				);
 				updateDebugIngestState(workspaceId, (current) => ({
 					...current,
 					active: true,
 					starting: false,
+					publicForwarding: wantsPublicForward,
 					status,
 					error: null,
-					publicForwardAttemptKey: currentDebugIngestPublicForwardAttemptKey,
+					publicForwardAttemptKey: attemptKey,
 				}));
+				if (wantsPublicForward) {
+					void ensureDebugIngestServer(workspaceId, { publicForward }).then(
+						(publicStatus) => {
+							updateDebugIngestState(workspaceId, (current) => {
+								if (current.publicForwardAttemptKey !== attemptKey) {
+									return current;
+								}
+								return {
+									...current,
+									active: true,
+									starting: false,
+									publicForwarding: false,
+									status: publicStatus,
+									error: null,
+								};
+							});
+						},
+						(error) => {
+							const message =
+								error instanceof Error ? error.message : String(error);
+							updateDebugIngestState(workspaceId, (current) => {
+								if (current.publicForwardAttemptKey !== attemptKey) {
+									return current;
+								}
+								return {
+									...current,
+									active: true,
+									starting: false,
+									publicForwarding: false,
+									error: message,
+								};
+							});
+						},
+					);
+				}
 				return status;
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
@@ -630,8 +672,9 @@ function AppShell({
 					...current,
 					active: true,
 					starting: false,
+					publicForwarding: false,
 					error: message,
-					publicForwardAttemptKey: currentDebugIngestPublicForwardAttemptKey,
+					publicForwardAttemptKey: attemptKey,
 				}));
 				return null;
 			}
@@ -680,6 +723,7 @@ function AppShell({
 				attemptedCurrentPublicForward;
 			if (
 				state?.starting ||
+				state?.publicForwarding ||
 				state?.error ||
 				(state?.status && (tunnelStateMatches || tunnelFailureAlreadyAttempted))
 			) {

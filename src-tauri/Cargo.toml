@@ -1,6 +1,6 @@
 [package]
 name = "helmor"
-version = "1.5.4"
+version = "1.5.5"
 description = "The local-first IDE for coding agent orchestration."
 authors = ["Caspian Zhao", "Nathan Lian"]
 edition = "2021"
@@ -27,6 +27,7 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 rand = "0.10.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"

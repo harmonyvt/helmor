@@ -66,6 +66,7 @@ pub fn schema_init(conn: &rusqlite::Connection) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_runtime_telemetry();
+    install_rustls_crypto_provider();
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
@@ -503,6 +504,10 @@ fn install_runtime_telemetry() {
     }));
 }
 
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 fn default_env(key: &str, value: &str) {
     if std::env::var_os(key).is_none() {
         std::env::set_var(key, value);
@@ -517,6 +522,17 @@ fn log_runtime_telemetry() {
         data_mode = data_dir::data_mode_label(),
         "Runtime crash telemetry configured"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rustls_crypto_provider_install_is_idempotent() {
+        install_rustls_crypto_provider();
+        install_rustls_crypto_provider();
+    }
 }
 
 #[cfg(debug_assertions)]
