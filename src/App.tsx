@@ -2777,6 +2777,7 @@ function AppShell({
 																workspaceId={selectedWorkspaceId}
 																workspaceRootPath={workspaceRootPath}
 																onOpenEditorFile={handleOpenEditorFile}
+																onOpenFileReference={handleOpenFileReference}
 																onExit={handleExitDiagramMode}
 															/>
 														)}

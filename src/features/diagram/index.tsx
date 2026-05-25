@@ -6,7 +6,7 @@
 //   - Single click: select a file and highlight its 1-hop connections
 //     (everything it imports + everything that imports it). All other
 //     nodes/edges dim so the dependency picture pops.
-//   - Double click: open the Monaco diff for that file (reuses the
+//   - Double click: open the Monaco diff or file view for that file (reuses the
 //     existing editor view-mode flow).
 //   - Click empty canvas / Esc: clear selection.
 
@@ -21,7 +21,7 @@ import {
 	ReactFlow,
 	ReactFlowProvider,
 } from "@xyflow/react";
-import { FileCode2, Network, X } from "lucide-react";
+import { FileCode2, GitCompareArrows, Network, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { CodeGraphNode } from "@/lib/api";
@@ -37,11 +37,17 @@ import {
 } from "./layout/apply-layout";
 import { computeSelectionContext } from "./layout/selection";
 import { FileNode, type FileNodeData } from "./nodes/file-node";
+import {
+	canOpenNodeDiff,
+	canOpenNodeFile,
+	resolveNodeEditorPath,
+} from "./open-actions";
 
 type WorkspaceDiagramSurfaceProps = {
 	workspaceId: string | null;
 	workspaceRootPath: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenFileReference: (path: string) => void;
 	onExit: () => void;
 };
 
@@ -59,6 +65,7 @@ function DiagramInner({
 	workspaceId,
 	workspaceRootPath,
 	onOpenEditorFile,
+	onOpenFileReference,
 	onExit,
 }: WorkspaceDiagramSurfaceProps) {
 	const {
@@ -115,14 +122,20 @@ function DiagramInner({
 			const data = node.data as FileNodeData;
 			const file = data?.node;
 			if (!file || file.isExternal) return;
-			const status = file.status ?? "M";
-			onOpenEditorFile(file.path, {
-				fileStatus: status,
+			const editorPath = resolveNodeEditorPath(file.path, workspaceRootPath);
+			if (!canOpenNodeDiff(file)) {
+				if (canOpenNodeFile(file)) {
+					onOpenFileReference(editorPath);
+				}
+				return;
+			}
+			onOpenEditorFile(editorPath, {
+				fileStatus: file.status,
 				workspaceRootPath,
 				workspaceId,
 			});
 		},
-		[onOpenEditorFile, workspaceId, workspaceRootPath],
+		[onOpenEditorFile, onOpenFileReference, workspaceId, workspaceRootPath],
 	);
 
 	// Escape clears selection.
@@ -147,14 +160,23 @@ function DiagramInner({
 	}, [selectedId, subgraph]);
 
 	const handleOpenSelectedDiff = useCallback(() => {
-		if (!selectedNode || selectedNode.isExternal) return;
-		const status = selectedNode.status ?? "M";
-		onOpenEditorFile(selectedNode.path, {
-			fileStatus: status,
-			workspaceRootPath,
-			workspaceId,
-		});
+		if (!selectedNode || !canOpenNodeDiff(selectedNode)) return;
+		onOpenEditorFile(
+			resolveNodeEditorPath(selectedNode.path, workspaceRootPath),
+			{
+				fileStatus: selectedNode.status,
+				workspaceRootPath,
+				workspaceId,
+			},
+		);
 	}, [onOpenEditorFile, selectedNode, workspaceId, workspaceRootPath]);
+
+	const handleOpenSelectedFile = useCallback(() => {
+		if (!selectedNode || !canOpenNodeFile(selectedNode)) return;
+		onOpenFileReference(
+			resolveNodeEditorPath(selectedNode.path, workspaceRootPath),
+		);
+	}, [onOpenFileReference, selectedNode, workspaceRootPath]);
 
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-background">
@@ -208,13 +230,14 @@ function DiagramInner({
 						outbound={selectionCtx.outboundCount}
 						onClear={() => setSelectedId(null)}
 						onOpenDiff={handleOpenSelectedDiff}
+						onOpenFile={handleOpenSelectedFile}
 					/>
 				)}
 				{showOverlay && <ProgressOverlay progress={progress} />}
 			</div>
 			<div className="border-t border-border bg-muted/10 px-3 py-1 text-[10px] text-muted-foreground">
 				Click a file to highlight its imports and importers · Double-click to
-				open the diff · Esc to clear
+				open the file or diff · Esc to clear
 			</div>
 		</div>
 	);
@@ -226,13 +249,17 @@ function SelectionCard({
 	outbound,
 	onClear,
 	onOpenDiff,
+	onOpenFile,
 }: {
 	node: CodeGraphNode;
 	inbound: number;
 	outbound: number;
 	onClear: () => void;
 	onOpenDiff: () => void;
+	onOpenFile: () => void;
 }) {
+	const showDiff = canOpenNodeDiff(node);
+	const showFile = canOpenNodeFile(node);
 	return (
 		<div
 			className={cn(
@@ -279,17 +306,29 @@ function SelectionCard({
 					</span>
 				)}
 			</div>
-			<div className="mt-2">
-				<Button
-					size="xs"
-					variant="outline"
-					onClick={onOpenDiff}
-					disabled={node.isExternal}
-					className="gap-1.5"
-				>
-					<FileCode2 className="size-3" />
-					Open diff
-				</Button>
+			<div className="mt-2 flex flex-wrap items-center gap-2">
+				{showFile && (
+					<Button
+						size="xs"
+						variant="outline"
+						onClick={onOpenFile}
+						className="gap-1.5"
+					>
+						<FileCode2 className="size-3" />
+						Open file
+					</Button>
+				)}
+				{showDiff && (
+					<Button
+						size="xs"
+						variant="outline"
+						onClick={onOpenDiff}
+						className="gap-1.5"
+					>
+						<GitCompareArrows className="size-3" />
+						Open diff
+					</Button>
+				)}
 			</div>
 		</div>
 	);
