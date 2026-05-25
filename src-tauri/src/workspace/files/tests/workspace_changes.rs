@@ -44,7 +44,7 @@ fn classification_staged_modification() {
 fn classification_untracked_file() {
     let repo = GitRepoHarness::new();
 
-    repo.write_file("new-file.txt", "hello\n");
+    repo.write_file("new-file.txt", "hello\nworld\n");
 
     let item = repo.find("new-file.txt").expect("file should appear");
     assert_eq!(
@@ -60,6 +60,8 @@ fn classification_untracked_file() {
         item.committed_status.is_none(),
         "untracked should NOT have committed_status: {item:?}"
     );
+    assert_eq!(item.insertions, 2);
+    assert_eq!(item.deletions, 0);
 }
 
 #[test]

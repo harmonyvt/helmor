@@ -204,7 +204,9 @@ pub fn list_editor_files_with_content(
 /// - both `from_ref` and `to_ref` → `git diff <from_ref> <to_ref> -- <file>`
 /// - neither, `cached = false` → unstaged diff (`git diff -- <file>`)
 ///
-/// Returns `None` when the workspace is gone or the diff is empty.
+/// Returns `None` when the workspace is gone or the diff is empty. For
+/// untracked text files, Git has no unstaged diff, so we synthesize the
+/// full-file addition that the UI expects to preview.
 pub fn get_file_unified_diff(
     workspace_root_path: &str,
     relative_path: &str,
@@ -230,9 +232,86 @@ pub fn get_file_unified_diff(
     args.push(relative_path.into());
 
     match crate::git_ops::run_git(args, Some(&workspace_root)) {
-        Ok(output) if output.is_empty() => Ok(None),
+        Ok(output) if output.is_empty() => {
+            if cached || from_ref.is_some() || to_ref.is_some() {
+                return Ok(None);
+            }
+            synthesize_untracked_file_diff(&workspace_root, relative_path)
+        }
         Ok(output) => Ok(Some(output)),
         Err(_) => Ok(None),
+    }
+}
+
+fn synthesize_untracked_file_diff(
+    workspace_root: &Path,
+    relative_path: &str,
+) -> Result<Option<String>> {
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Ok(None);
+    }
+
+    let untracked = crate::git_ops::run_git(
+        [
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--",
+            relative_path,
+        ],
+        Some(workspace_root),
+    )
+    .unwrap_or_default();
+    if !untracked.lines().any(|line| line.trim() == relative_path) {
+        return Ok(None);
+    }
+
+    let path = workspace_root.join(relative_path);
+    let metadata = match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => metadata,
+        _ => return Ok(None),
+    };
+    if metadata.len() > MAX_PREFETCH_BYTES {
+        return Ok(None);
+    }
+
+    let bytes =
+        fs::read(&path).with_context(|| format!("Failed to read file {}", path.display()))?;
+    let content = match String::from_utf8(bytes) {
+        Ok(content) => content,
+        Err(_) => return Ok(None),
+    };
+    let line_count = count_text_lines(&content);
+    let mut diff = format!(
+        "diff --git a/{relative_path} b/{relative_path}\nnew file mode 100644\n--- /dev/null\n+++ b/{relative_path}\n@@ -0,0 +1,{line_count} @@\n"
+    );
+    if !content.is_empty() {
+        for line in content.split_inclusive('\n') {
+            diff.push('+');
+            diff.push_str(line);
+        }
+        if !content.ends_with('\n') {
+            diff.push_str("\n\\ No newline at end of file");
+        }
+    }
+
+    Ok(Some(diff))
+}
+
+fn count_text_lines(content: &str) -> u32 {
+    if content.is_empty() {
+        return 0;
+    }
+    let newline_count = content.bytes().filter(|byte| *byte == b'\n').count() as u32;
+    if content.ends_with('\n') {
+        newline_count
+    } else {
+        newline_count + 1
     }
 }
 
