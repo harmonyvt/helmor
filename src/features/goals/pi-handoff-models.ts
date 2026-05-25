@@ -245,6 +245,13 @@ function modelMatchesProviderOption(
 			normalizeProviderModelId(option.label).includes("sonnet")
 		);
 	}
+	if (normalizedTarget.startsWith("claude-haiku-")) {
+		return (
+			option.id === "haiku" ||
+			option.cliModel === "haiku" ||
+			normalizeProviderModelId(option.label).includes("haiku")
+		);
+	}
 	return [option.id, option.cliModel, option.label].some(
 		(value) => normalizeProviderModelId(value) === normalizedTarget,
 	);
@@ -292,6 +299,7 @@ function goalAssigneeModelRank(
 		"claude-opus-4-7",
 		"claude-opus-4-6",
 		"claude-sonnet-4-6",
+		"claude-haiku-4-5",
 		"sonnet",
 		"haiku",
 	].indexOf(bareModelId);
