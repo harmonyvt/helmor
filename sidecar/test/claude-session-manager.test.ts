@@ -469,7 +469,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 
 		expect(bySupports.default).toBeUndefined();
 		expect(bySupports.sonnet).toBeUndefined();
-		expect(bySupports["claude-opus-4-6[1m]"]).toBe(true);
+		expect(bySupports["claude-opus-4-7[1m]"]).toBe(true);
 	});
 
 	test("ignores fastMode for models not in the hardcoded catalog", async () => {
@@ -1361,27 +1361,27 @@ describe("ClaudeSessionManager.listModels", () => {
 		expect(models).toEqual([
 			{
 				id: "default",
-				label: "Opus 4.7 1M",
+				label: "Default · Opus 4.7 1M",
 				cliModel: "default",
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 			},
 			{
-				id: "claude-opus-4-6[1m]",
-				label: "Opus 4.6 1M",
-				cliModel: "claude-opus-4-6[1m]",
+				id: "claude-opus-4-7[1m]",
+				label: "Opus 4.7 1M",
+				cliModel: "claude-opus-4-7[1m]",
 				effortLevels: ["low", "medium", "high", "max"],
 				supportsFastMode: true,
 			},
 			{
-				id: "sonnet",
-				label: "Sonnet",
-				cliModel: "sonnet",
+				id: "claude-sonnet-4-6",
+				label: "Sonnet 4.6",
+				cliModel: "claude-sonnet-4-6",
 				effortLevels: ["low", "medium", "high", "max"],
 			},
 			{
-				id: "haiku",
-				label: "Haiku",
-				cliModel: "haiku",
+				id: "claude-haiku-4-5",
+				label: "Haiku 4.5",
+				cliModel: "claude-haiku-4-5",
 				effortLevels: [],
 			},
 		]);

@@ -113,6 +113,11 @@ fn model_matches_provider_option(option: &AgentModelOption, target_model: &str) 
             || option.cli_model == "sonnet"
             || normalize_provider_model_id(&option.label).contains("sonnet");
     }
+    if normalized_target.starts_with("claude-haiku-") {
+        return option.id == "haiku"
+            || option.cli_model == "haiku"
+            || normalize_provider_model_id(&option.label).contains("haiku");
+    }
     [&option.id, &option.cli_model, &option.label]
         .iter()
         .any(|value| normalize_provider_model_id(value) == normalized_target)
@@ -172,6 +177,7 @@ fn goal_assignee_model_rank(model: &AgentModelOption) -> usize {
         "claude-opus-4-7",
         "claude-opus-4-6",
         "claude-sonnet-4-6",
+        "claude-haiku-4-5",
         "sonnet",
         "haiku",
     ]
@@ -269,8 +275,27 @@ mod tests {
             section(
                 "claude",
                 vec![
-                    model("default", "claude", "Opus 4.7 1M", "default", None),
-                    model("sonnet", "claude", "Sonnet", "sonnet", None),
+                    model(
+                        "default",
+                        "claude",
+                        "Default · Opus 4.7 1M",
+                        "default",
+                        None,
+                    ),
+                    model(
+                        "claude-sonnet-4-6",
+                        "claude",
+                        "Sonnet 4.6",
+                        "claude-sonnet-4-6",
+                        None,
+                    ),
+                    model(
+                        "claude-haiku-4-5",
+                        "claude",
+                        "Haiku 4.5",
+                        "claude-haiku-4-5",
+                        None,
+                    ),
                 ],
             ),
             section(
@@ -285,6 +310,13 @@ mod tests {
                         "pi",
                         "Pi · Claude Sonnet 4.6",
                         "anthropic/claude-sonnet-4-6",
+                        None,
+                    ),
+                    model(
+                        "pi:anthropic/claude-haiku-4-5",
+                        "pi",
+                        "Pi · Claude Haiku 4.5",
+                        "anthropic/claude-haiku-4-5",
                         None,
                     ),
                     model(
@@ -318,6 +350,7 @@ mod tests {
             vec![
                 "pi:azure-openai-responses/gpt-5.5",
                 "pi:anthropic/claude-sonnet-4-6",
+                "pi:anthropic/claude-haiku-4-5",
             ]
         );
         assert_eq!(
