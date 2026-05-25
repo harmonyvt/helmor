@@ -105,9 +105,11 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     let mut unstaged_map = BTreeMap::<String, String>::new();
     parse_name_status_into(&unstaged_output, &mut unstaged_map);
 
+    let mut untracked_paths = Vec::<String>::new();
     for line in untracked_output.lines() {
         let path = line.trim();
         if !path.is_empty() {
+            untracked_paths.push(path.to_string());
             unstaged_map
                 .entry(path.to_string())
                 .or_insert_with(|| "A".to_string());
@@ -129,6 +131,11 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     parse_numstat_into(&committed_numstat, &mut stats_map);
     parse_numstat_into(&staged_numstat, &mut stats_map);
     parse_numstat_into(&unstaged_numstat, &mut stats_map);
+    for path in &untracked_paths {
+        stats_map.entry(path.clone()).or_insert_with(|| {
+            count_text_file_lines(&workspace_root.join(path)).map_or((0, 0), |lines| (lines, 0))
+        });
+    }
 
     let items = file_map
         .into_iter()
@@ -552,4 +559,17 @@ fn parse_numstat_into(output: &str, map: &mut BTreeMap<String, (u32, u32)>) {
         entry.0 += ins;
         entry.1 += del;
     }
+}
+
+fn count_text_file_lines(path: &Path) -> Option<u32> {
+    let content = fs::read_to_string(path).ok()?;
+    if content.is_empty() {
+        return Some(0);
+    }
+    let newline_count = content.bytes().filter(|byte| *byte == b'\n').count() as u32;
+    Some(if content.ends_with('\n') {
+        newline_count
+    } else {
+        newline_count + 1
+    })
 }
