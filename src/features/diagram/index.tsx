@@ -1,6 +1,14 @@
 // Full-screen diagram view. Renders the workspace import graph using
 // @xyflow/react. Activated from the inspector "View as graph" button
 // and mounted by App.tsx when `workspaceViewMode === "diagram"`.
+//
+// Interaction model:
+//   - Single click: select a file and highlight its 1-hop connections
+//     (everything it imports + everything that imports it). All other
+//     nodes/edges dim so the dependency picture pops.
+//   - Double click: open the Monaco diff for that file (reuses the
+//     existing editor view-mode flow).
+//   - Click empty canvas / Esc: clear selection.
 
 import "@xyflow/react/dist/style.css";
 
@@ -12,16 +20,22 @@ import {
 	type NodeMouseHandler,
 	ReactFlow,
 	ReactFlowProvider,
-	type Edge as XyEdge,
-	type Node as XyNode,
 } from "@xyflow/react";
-import { Network } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { FileCode2, Network, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import type { CodeGraphNode } from "@/lib/api";
 import type { DiffOpenOptions } from "@/lib/editor-session";
+import { cn } from "@/lib/utils";
 import { DiagramToolbar } from "./controls/diagram-toolbar";
 import { ProgressOverlay } from "./controls/progress-overlay";
 import { useCodeGraph } from "./hooks/use-code-graph";
-import { type LayoutDirection, layoutGraph } from "./layout/apply-layout";
+import {
+	applySelectionStyling,
+	type LayoutDirection,
+	layoutGraph,
+} from "./layout/apply-layout";
+import { computeSelectionContext } from "./layout/selection";
 import { FileNode, type FileNodeData } from "./nodes/file-node";
 
 type WorkspaceDiagramSurfaceProps = {
@@ -59,17 +73,44 @@ function DiagramInner({
 		setFilter,
 	} = useCodeGraph(workspaceId);
 	const [direction, setDirection] = useState<LayoutDirection>("LR");
+	const [selectedId, setSelectedId] = useState<string | null>(null);
 
-	const { rfNodes, rfEdges } = useMemo<{
-		rfNodes: XyNode[];
-		rfEdges: XyEdge[];
-	}>(() => {
-		if (!subgraph) return { rfNodes: [], rfEdges: [] };
-		const laid = layoutGraph(subgraph.nodes, subgraph.edges, direction);
-		return { rfNodes: laid.nodes, rfEdges: laid.edges };
+	// Clear selection if the underlying graph changes out from under us.
+	useEffect(() => {
+		if (!subgraph || !selectedId) return;
+		if (!subgraph.visibleNodeIds.has(selectedId)) {
+			setSelectedId(null);
+		}
+	}, [subgraph, selectedId]);
+
+	// Layout — expensive; only re-run on subgraph/direction change.
+	const laid = useMemo(() => {
+		if (!subgraph) return null;
+		return layoutGraph(subgraph.nodes, subgraph.edges, direction);
 	}, [subgraph, direction]);
 
-	const onNodeClick = useCallback<NodeMouseHandler>(
+	// Selection context — derived from subgraph edges + selectedId.
+	const selectionCtx = useMemo(
+		() => computeSelectionContext(selectedId, subgraph?.edges ?? []),
+		[selectedId, subgraph],
+	);
+
+	// Cheap re-style pass; doesn't move nodes around.
+	const { rfNodes, rfEdges } = useMemo(() => {
+		if (!laid) return { rfNodes: [], rfEdges: [] };
+		const styled = applySelectionStyling(laid, selectionCtx);
+		return { rfNodes: styled.nodes, rfEdges: styled.edges };
+	}, [laid, selectionCtx]);
+
+	const onNodeClick = useCallback<NodeMouseHandler>((_event, node) => {
+		setSelectedId((prev) => (prev === node.id ? null : node.id));
+	}, []);
+
+	const onPaneClick = useCallback(() => {
+		setSelectedId(null);
+	}, []);
+
+	const onNodeDoubleClick = useCallback<NodeMouseHandler>(
 		(_event, node) => {
 			const data = node.data as FileNodeData;
 			const file = data?.node;
@@ -84,9 +125,36 @@ function DiagramInner({
 		[onOpenEditorFile, workspaceId, workspaceRootPath],
 	);
 
+	// Escape clears selection.
+	useEffect(() => {
+		function handler(event: KeyboardEvent) {
+			if (event.key === "Escape" && selectedId !== null) {
+				event.preventDefault();
+				setSelectedId(null);
+			}
+		}
+		window.addEventListener("keydown", handler);
+		return () => window.removeEventListener("keydown", handler);
+	}, [selectedId]);
+
 	const totalNodes = graph?.nodes.length ?? 0;
 	const visibleNodes = subgraph?.nodes.length ?? 0;
 	const showOverlay = isLoading || (isFetching && !graph);
+
+	const selectedNode: CodeGraphNode | null = useMemo(() => {
+		if (!selectedId || !subgraph) return null;
+		return subgraph.nodes.find((n) => n.id === selectedId) ?? null;
+	}, [selectedId, subgraph]);
+
+	const handleOpenSelectedDiff = useCallback(() => {
+		if (!selectedNode || selectedNode.isExternal) return;
+		const status = selectedNode.status ?? "M";
+		onOpenEditorFile(selectedNode.path, {
+			fileStatus: status,
+			workspaceRootPath,
+			workspaceId,
+		});
+	}, [onOpenEditorFile, selectedNode, workspaceId, workspaceRootPath]);
 
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-background">
@@ -124,6 +192,8 @@ function DiagramInner({
 					fitViewOptions={{ padding: 0.1, maxZoom: 1.4 }}
 					proOptions={{ hideAttribution: true }}
 					onNodeClick={onNodeClick}
+					onNodeDoubleClick={onNodeDoubleClick}
+					onPaneClick={onPaneClick}
 					minZoom={0.1}
 					maxZoom={2}
 				>
@@ -131,7 +201,95 @@ function DiagramInner({
 					<MiniMap pannable zoomable className="!bg-card !border-border" />
 					<Controls className="!bg-card !border-border" />
 				</ReactFlow>
+				{selectedNode && (
+					<SelectionCard
+						node={selectedNode}
+						inbound={selectionCtx.inboundCount}
+						outbound={selectionCtx.outboundCount}
+						onClear={() => setSelectedId(null)}
+						onOpenDiff={handleOpenSelectedDiff}
+					/>
+				)}
 				{showOverlay && <ProgressOverlay progress={progress} />}
+			</div>
+			<div className="border-t border-border bg-muted/10 px-3 py-1 text-[10px] text-muted-foreground">
+				Click a file to highlight its imports and importers · Double-click to
+				open the diff · Esc to clear
+			</div>
+		</div>
+	);
+}
+
+function SelectionCard({
+	node,
+	inbound,
+	outbound,
+	onClear,
+	onOpenDiff,
+}: {
+	node: CodeGraphNode;
+	inbound: number;
+	outbound: number;
+	onClear: () => void;
+	onOpenDiff: () => void;
+}) {
+	return (
+		<div
+			className={cn(
+				"absolute bottom-3 left-3 z-10 max-w-[420px] rounded-md border border-border bg-card p-3 shadow-md",
+				"text-[12px]",
+			)}
+		>
+			<div className="flex items-start justify-between gap-3">
+				<div className="min-w-0">
+					<div
+						className="truncate font-medium text-foreground"
+						title={node.path}
+					>
+						{node.name}
+					</div>
+					<div
+						className="truncate text-[11px] text-muted-foreground"
+						title={node.path}
+					>
+						{node.path}
+					</div>
+				</div>
+				<button
+					type="button"
+					onClick={onClear}
+					aria-label="Clear selection"
+					className="cursor-pointer text-muted-foreground hover:text-foreground"
+				>
+					<X className="size-3.5" />
+				</button>
+			</div>
+			<div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
+				<span>
+					<span className="font-medium text-foreground">{inbound}</span>{" "}
+					importer{inbound === 1 ? "" : "s"}
+				</span>
+				<span>
+					<span className="font-medium text-foreground">{outbound}</span> import
+					{outbound === 1 ? "" : "s"}
+				</span>
+				{node.status && (
+					<span className="rounded border border-yellow-500/40 bg-yellow-500/10 px-1 py-px text-[10px] font-semibold text-yellow-700 dark:text-yellow-300">
+						{node.status}
+					</span>
+				)}
+			</div>
+			<div className="mt-2">
+				<Button
+					size="xs"
+					variant="outline"
+					onClick={onOpenDiff}
+					disabled={node.isExternal}
+					className="gap-1.5"
+				>
+					<FileCode2 className="size-3" />
+					Open diff
+				</Button>
 			</div>
 		</div>
 	);

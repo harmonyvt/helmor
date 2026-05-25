@@ -1,12 +1,17 @@
 // Custom xyflow node: shows the file's basename, a language pill, a git
 // status badge (M/A/D) if the file is part of the diff, and ±line counts.
+// Renders "selected / connected / dimmed / default" states so the
+// diagram surface can highlight a clicked file and everything that
+// imports it (or that it imports).
 
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 import type { CodeGraphNode } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { NodeSelectionState } from "../layout/selection";
 
 export type FileNodeData = {
 	node: CodeGraphNode;
+	selectionState: NodeSelectionState;
 };
 
 const STATUS_TOKEN: Record<NonNullable<CodeGraphNode["status"]>, string> = {
@@ -24,18 +29,24 @@ const LANG_TOKEN: Record<CodeGraphNode["language"], string> = {
 	python: "PY",
 };
 
-export function FileNode({ data, selected }: NodeProps) {
-	const { node } = data as FileNodeData;
+export function FileNode({ data }: NodeProps) {
+	const { node, selectionState } = data as FileNodeData;
 	const status = node.status;
 	const isChanged = status !== null;
+	const selected = selectionState === "selected";
+	const connected = selectionState === "connected";
+	const dimmed = selectionState === "dimmed";
+
 	return (
 		<div
 			className={cn(
-				"min-w-[180px] rounded-md border bg-card px-3 py-2 text-left shadow-sm transition-colors",
-				selected
-					? "border-foreground/80 shadow-md"
-					: "border-border hover:border-border/70",
-				isChanged && "ring-2 ring-yellow-500/30",
+				"min-w-[180px] rounded-md border bg-card px-3 py-2 text-left shadow-sm transition-[opacity,border-color,box-shadow] duration-150",
+				selected &&
+					"border-blue-500 shadow-lg ring-2 ring-blue-500/60 ring-offset-1 ring-offset-background",
+				connected && "border-blue-400/70 shadow-md",
+				dimmed && "border-border/60 opacity-30",
+				!selected && !connected && !dimmed && "border-border",
+				isChanged && !dimmed && "ring-2 ring-yellow-500/30",
 			)}
 		>
 			<Handle

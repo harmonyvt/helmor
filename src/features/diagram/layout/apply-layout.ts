@@ -2,21 +2,32 @@
 // (changed + 1 hop) is small. If users opt into the full-graph view we
 // surface a warning and recommend filtering down — running dagre on
 // thousands of nodes is the v2 worker-based job.
+//
+// Layout is split from selection-styling so re-running dagre is
+// expensive (changes subgraph or direction) while restyling on click
+// is cheap (recolours nodes/edges without moving them).
 
 import type { Edge as XyEdge, Node as XyNode } from "@xyflow/react";
 import dagre from "dagre";
 import type { CodeGraphEdge, CodeGraphNode } from "@/lib/api";
+import { edgeStateFor, nodeStateFor, type SelectionContext } from "./selection";
 
 export type LayoutDirection = "LR" | "TB";
 
 const NODE_WIDTH = 180;
 const NODE_HEIGHT = 64;
 
+export type LaidOutGraph = {
+	nodes: XyNode[];
+	edges: XyEdge[];
+	rawEdges: CodeGraphEdge[];
+};
+
 export function layoutGraph(
 	nodes: CodeGraphNode[],
 	edges: CodeGraphEdge[],
 	direction: LayoutDirection,
-): { nodes: XyNode[]; edges: XyEdge[] } {
+): LaidOutGraph {
 	const g = new dagre.graphlib.Graph({ multigraph: false, compound: false });
 	g.setGraph({
 		rankdir: direction,
@@ -46,7 +57,7 @@ export function layoutGraph(
 			position: pos
 				? { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 }
 				: { x: 0, y: 0 },
-			data: { node },
+			data: { node, selectionState: "default" },
 			draggable: false,
 		};
 	});
@@ -55,18 +66,46 @@ export function layoutGraph(
 		id: edge.id,
 		source: edge.source,
 		target: edge.target,
-		type: edgeTypeFor(edge.kind),
+		type: "default",
 		animated: edge.kind === "dynamic",
 		data: { kind: edge.kind },
-		style:
-			edge.kind === "typeOnly"
-				? { strokeDasharray: "4 4", strokeOpacity: 0.6 }
-				: undefined,
 	}));
 
-	return { nodes: xyNodes, edges: xyEdges };
+	return { nodes: xyNodes, edges: xyEdges, rawEdges: edges };
 }
 
-function edgeTypeFor(_kind: CodeGraphEdge["kind"]): string {
-	return "default";
+/// Apply selection state on top of a laid-out graph. Cheap — pure data
+/// mutation on new arrays, no dagre re-run.
+export function applySelectionStyling(
+	laid: LaidOutGraph,
+	selection: SelectionContext,
+): { nodes: XyNode[]; edges: XyEdge[] } {
+	const nodes = laid.nodes.map((node) => ({
+		...node,
+		data: {
+			...node.data,
+			selectionState: nodeStateFor(node.id, selection),
+		},
+	}));
+
+	const edges = laid.edges.map((edge, i) => {
+		const raw = laid.rawEdges[i];
+		const state = raw ? edgeStateFor(raw, selection) : "default";
+		const isHighlighted = state === "connected";
+		const isDimmed = state === "dimmed";
+		const baseDashed = raw?.kind === "typeOnly";
+		return {
+			...edge,
+			animated: raw?.kind === "dynamic" || isHighlighted,
+			style: {
+				strokeOpacity: isDimmed ? 0.15 : isHighlighted ? 1 : 0.7,
+				strokeWidth: isHighlighted ? 2 : 1,
+				...(baseDashed ? { strokeDasharray: "4 4" } : {}),
+				...(isHighlighted ? { stroke: "var(--color-primary)" } : {}),
+			},
+			zIndex: isHighlighted ? 1 : 0,
+		};
+	});
+
+	return { nodes, edges };
 }
