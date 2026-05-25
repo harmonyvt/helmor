@@ -6,10 +6,11 @@ use std::{
 
 use crate::data_dir::TEST_ENV_LOCK as TEST_LOCK;
 use crate::error::{extract_code, ErrorCode};
+use crate::git_ops;
 
 use super::{
-    canonicalize_missing_path, list_editor_files, list_workspace_files, read_editor_file,
-    stat_editor_file, support::EditorFilesHarness, write_editor_file,
+    canonicalize_missing_path, get_file_unified_diff, list_editor_files, list_workspace_files,
+    read_editor_file, stat_editor_file, support::EditorFilesHarness, write_editor_file,
 };
 
 #[test]
@@ -97,6 +98,60 @@ fn list_editor_files_returns_empty_when_workspace_root_is_missing() {
 }
 
 #[test]
+fn get_file_unified_diff_synthesizes_untracked_text_file() {
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let harness = EditorFilesHarness::new();
+    init_git_repo(&harness.workspace_dir);
+    fs::write(
+        harness.workspace_dir.join("new-file.ts"),
+        "export const added = true;\nexport const second = true;\n",
+    )
+    .unwrap();
+
+    let diff = get_file_unified_diff(
+        harness.workspace_dir.to_str().unwrap(),
+        "new-file.ts",
+        None,
+        None,
+        false,
+    )
+    .unwrap()
+    .expect("untracked file should produce a synthetic diff");
+
+    assert!(diff.contains("new file mode 100644"), "{diff}");
+    assert!(diff.contains("--- /dev/null"), "{diff}");
+    assert!(diff.contains("+++ b/new-file.ts"), "{diff}");
+    assert!(diff.contains("+export const added = true;"), "{diff}");
+    assert!(diff.contains("+export const second = true;"), "{diff}");
+}
+
+#[test]
+fn get_file_unified_diff_returns_git_diff_for_staged_new_file() {
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let harness = EditorFilesHarness::new();
+    init_git_repo(&harness.workspace_dir);
+    fs::write(
+        harness.workspace_dir.join("staged-file.ts"),
+        "export const x = 1;\n",
+    )
+    .unwrap();
+    git_ops::run_git(["add", "staged-file.ts"], Some(&harness.workspace_dir)).unwrap();
+
+    let diff = get_file_unified_diff(
+        harness.workspace_dir.to_str().unwrap(),
+        "staged-file.ts",
+        None,
+        None,
+        true,
+    )
+    .unwrap()
+    .expect("staged added file should produce a git diff");
+
+    assert!(diff.contains("new file mode"), "{diff}");
+    assert!(diff.contains("+export const x = 1;"), "{diff}");
+}
+
+#[test]
 fn read_editor_file_marks_missing_workspace_as_broken() {
     let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let harness = EditorFilesHarness::new();
@@ -108,6 +163,20 @@ fn read_editor_file_marks_missing_workspace_as_broken() {
     let error = read_editor_file(file.to_str().unwrap()).unwrap_err();
 
     assert_eq!(extract_code(&error), ErrorCode::WorkspaceBroken);
+}
+
+fn init_git_repo(workspace_dir: &Path) {
+    git_ops::run_git(["init", "-b", "main"], Some(workspace_dir)).unwrap();
+    git_ops::run_git(
+        ["config", "user.email", "test@helmor.test"],
+        Some(workspace_dir),
+    )
+    .unwrap();
+    git_ops::run_git(["config", "user.name", "Test"], Some(workspace_dir)).unwrap();
+    git_ops::run_git(["config", "commit.gpgsign", "false"], Some(workspace_dir)).unwrap();
+    fs::write(workspace_dir.join("README.md"), "# Test\n").unwrap();
+    git_ops::run_git(["add", "README.md"], Some(workspace_dir)).unwrap();
+    git_ops::run_git(["commit", "-m", "init"], Some(workspace_dir)).unwrap();
 }
 
 #[test]

@@ -16,6 +16,13 @@ const piModels: AgentModelOption[] = [
 		supportsContextUsage: false,
 	},
 	{
+		id: "pi:anthropic/claude-haiku-4-5",
+		provider: "pi",
+		label: "Pi · Claude Haiku 4.5",
+		cliModel: "anthropic/claude-haiku-4-5",
+		supportsContextUsage: false,
+	},
+	{
 		id: "pi:azure-openai-responses/gpt-5.5",
 		provider: "pi",
 		label: "Pi · GPT-5.5",
@@ -38,10 +45,17 @@ const modelSections: AgentModelSection[] = [
 		label: "Claude Code",
 		options: [
 			{
-				id: "sonnet",
+				id: "claude-sonnet-4-6",
 				provider: "claude",
-				label: "Sonnet",
-				cliModel: "sonnet",
+				label: "Sonnet 4.6",
+				cliModel: "claude-sonnet-4-6",
+				supportsContextUsage: true,
+			},
+			{
+				id: "claude-haiku-4-5",
+				provider: "claude",
+				label: "Haiku 4.5",
+				cliModel: "claude-haiku-4-5",
 				supportsContextUsage: true,
 			},
 		],
@@ -86,10 +100,11 @@ describe("isDefaultGoalAssigneePiModelAllowed", () => {
 	it("allows Anthropic and Codex-backed Pi models by default", () => {
 		expect(isDefaultGoalAssigneePiModelAllowed(piModels[0])).toBe(true);
 		expect(isDefaultGoalAssigneePiModelAllowed(piModels[1])).toBe(true);
+		expect(isDefaultGoalAssigneePiModelAllowed(piModels[2])).toBe(true);
 	});
 
 	it("rejects other Pi providers by default", () => {
-		expect(isDefaultGoalAssigneePiModelAllowed(piModels[2])).toBe(false);
+		expect(isDefaultGoalAssigneePiModelAllowed(piModels[3])).toBe(false);
 	});
 });
 
@@ -129,10 +144,12 @@ describe("resolveGoalAssigneePiHandoffModel", () => {
 				suggestedModelIds: [
 					"pi:azure-openai-responses/gpt-5.5",
 					"pi:anthropic/claude-sonnet-4-6",
+					"pi:anthropic/claude-haiku-4-5",
 				],
 				allowedModelIds: [
 					"pi:azure-openai-responses/gpt-5.5",
 					"pi:anthropic/claude-sonnet-4-6",
+					"pi:anthropic/claude-haiku-4-5",
 				],
 			}),
 		);
@@ -155,8 +172,14 @@ describe("resolveGoalAssigneePiHandoffModel", () => {
 				assignedModelId: null,
 				resolvedModelId: null,
 				fallbackUsed: false,
-				allowedModelIds: ["pi:anthropic/claude-sonnet-4-6"],
-				suggestedModelIds: ["pi:anthropic/claude-sonnet-4-6"],
+				allowedModelIds: [
+					"pi:anthropic/claude-sonnet-4-6",
+					"pi:anthropic/claude-haiku-4-5",
+				],
+				suggestedModelIds: [
+					"pi:anthropic/claude-sonnet-4-6",
+					"pi:anthropic/claude-haiku-4-5",
+				],
 			}),
 		);
 	});
@@ -171,6 +194,7 @@ describe("resolveGoalAssigneePiHandoffModel", () => {
 		).toEqual([
 			"pi:azure-openai-responses/gpt-5.5",
 			"pi:anthropic/claude-sonnet-4-6",
+			"pi:anthropic/claude-haiku-4-5",
 		]);
 	});
 
