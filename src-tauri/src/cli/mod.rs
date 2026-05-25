@@ -17,6 +17,7 @@ mod data;
 mod files;
 mod github;
 mod goal;
+mod ngrok;
 mod output;
 mod refs;
 mod repo;
@@ -105,6 +106,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
         C::Github { action } => github::dispatch(action, cli),
         C::Scripts { action } => scripts::dispatch(action, cli),
         C::Skills { action } => skills::dispatch(action, cli),
+        C::Ngrok { action } => ngrok::dispatch(action, cli),
         C::Conductor { action } => conductor::dispatch(action, cli),
         C::Mcp => crate::mcp::run_mcp_server(),
     }

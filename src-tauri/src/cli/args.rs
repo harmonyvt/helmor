@@ -91,6 +91,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: SkillsAction,
     },
+    /// Manage Debug ingest ngrok forwarding.
+    Ngrok {
+        #[command(subcommand)]
+        action: NgrokAction,
+    },
     /// Migrate from Helmor v1 (Conductor).
     Conductor {
         #[command(subcommand)]
@@ -162,6 +167,39 @@ pub enum SkillExportTarget {
     Codex,
     Claude,
     Agents,
+}
+
+// ---------------------------------------------------------------------------
+// ngrok
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+pub enum NgrokAction {
+    /// Show Debug ingest ngrok settings and runtime reachability.
+    Status,
+    /// Enable public Debug ingest forwarding through ngrok.
+    Enable {
+        /// Optional reserved ngrok domain.
+        #[arg(long)]
+        domain: Option<String>,
+    },
+    /// Disable public Debug ingest forwarding and close active tunnels in a running app.
+    Disable,
+    /// Set or clear the reserved ngrok domain.
+    Domain {
+        #[command(subcommand)]
+        action: NgrokDomainAction,
+    },
+    /// Disable forwarding, clear the domain, and close active tunnels in a running app.
+    Reset,
+}
+
+#[derive(Subcommand)]
+pub enum NgrokDomainAction {
+    /// Set the reserved ngrok domain.
+    Set { domain: String },
+    /// Clear the reserved ngrok domain.
+    Clear,
 }
 
 // ---------------------------------------------------------------------------

@@ -345,6 +345,11 @@ function handleUiMutation(
 				});
 			}
 			return;
+		case "debugIngestNgrokResetRequested":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.debugIngestOverview,
+			});
+			return;
 		case "goalOrchestratorStateChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.goalOrchestratorState(event.goalWorkspaceId),

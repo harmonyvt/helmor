@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use tauri::{AppHandle, Manager, Runtime};
 
-use super::{events::UiMutationEnvelope, manager::UiSyncManager};
+use super::{events::UiMutationEnvelope, manager::UiSyncManager, UiMutationEvent};
 
 const SOCKET_FILENAME: &str = "ui-sync.sock";
 
@@ -44,6 +44,13 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>) -> Result<()> {
                         Ok(0) => br#"{"ok":false,"error":"empty request"}"#.as_slice(),
                         Ok(_) => match serde_json::from_str::<UiMutationEnvelope>(&line) {
                             Ok(envelope) if envelope.version == UiMutationEnvelope::VERSION => {
+                                if matches!(
+                                    envelope.event,
+                                    UiMutationEvent::DebugIngestNgrokResetRequested
+                                ) {
+                                    app.state::<crate::debug_ingest::DebugIngestManager>()
+                                        .reset_public_tunnels();
+                                }
                                 let manager = app.state::<UiSyncManager>();
                                 manager.publish(envelope.event);
                                 br#"{"ok":true}"#.as_slice()

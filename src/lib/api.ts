@@ -2001,6 +2001,7 @@ export type UiMutationEvent =
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
+	| { type: "debugIngestNgrokResetRequested" }
 	| { type: "goalOrchestratorStateChanged"; goalWorkspaceId: string }
 	| {
 			type: "goalAssigneeRunChanged";

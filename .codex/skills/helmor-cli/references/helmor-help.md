@@ -12,12 +12,15 @@ Commands:
   settings     App settings stored in `settings` table
   repo         Repository registration and configuration
   workspace    Workspace CRUD, branching, syncing, archiving
+  goal         Goal workspace orchestration
   session      Session CRUD and inspection
   files        File listing, reading, writing, staging (editor surface)
   send         Send a prompt to an AI agent
   models       List available AI models
   github       GitHub integration — auth, PR lookup, merge
   scripts      Inspect repo-level setup/run/archive scripts
+  skills       Export bundled Helmor skills to local agent skill directories
+  ngrok        Manage Debug ingest ngrok forwarding
   conductor    Migrate from Helmor v1 (Conductor)
   completions  Shell completion scripts
   cli-status   Report whether the current Helmor CLI entrypoint is installed to PATH and which data mode it uses

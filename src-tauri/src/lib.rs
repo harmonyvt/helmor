@@ -19,6 +19,7 @@ pub mod knowledge;
 pub mod logging;
 pub mod mcp;
 pub mod models;
+pub mod ngrok_config;
 pub mod pipeline;
 pub mod rate_limits;
 pub mod schema;
@@ -527,17 +528,6 @@ fn log_runtime_telemetry() {
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rustls_crypto_provider_install_is_idempotent() {
-        install_rustls_crypto_provider();
-        install_rustls_crypto_provider();
-    }
-}
-
 #[cfg(debug_assertions)]
 fn resolve_mcp_base_port() -> u16 {
     std::env::var("HELMOR_MCP_BASE_PORT")
@@ -634,5 +624,16 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
 fn emit_close_current_session_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://close-current-session", ()) {
         tracing::warn!(error = %e, "Failed to emit close-current-session event");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rustls_crypto_provider_install_is_idempotent() {
+        install_rustls_crypto_provider();
+        install_rustls_crypto_provider();
     }
 }

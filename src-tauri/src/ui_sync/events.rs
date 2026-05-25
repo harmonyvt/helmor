@@ -58,6 +58,7 @@ pub enum UiMutationEvent {
     SettingsChanged {
         key: Option<String>,
     },
+    DebugIngestNgrokResetRequested,
     GoalOrchestratorStateChanged {
         goal_workspace_id: String,
     },
@@ -160,6 +161,7 @@ mod tests {
                 repo_id: "r".into(),
             },
             UiMutationEvent::SettingsChanged { key: None },
+            UiMutationEvent::DebugIngestNgrokResetRequested,
             UiMutationEvent::GoalOrchestratorStateChanged {
                 goal_workspace_id: "goal".into(),
             },

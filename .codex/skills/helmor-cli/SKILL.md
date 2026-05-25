@@ -37,7 +37,7 @@ Treat Helmor CLI install/update as beta.
 Treat Helmor skills install/update as a beta app-managed flow.
 
 - Prefer the Helmor desktop onboarding/settings flow for installing or updating bundled Helmor skills.
-- Do not invent a `helmor skills` command; the top-level CLI help does not currently expose one.
+- Use `helmor skills export --target all|codex|claude|agents` when the current CLI help exposes it.
 - If the user asks to update a bundled Helmor skill inside the repo, edit the skill files directly and validate them with the skill validation tooling.
 - Keep user-facing skill content concise and English-first unless the user explicitly asks for another language.
 
@@ -141,9 +141,24 @@ Use the relevant command group:
 
 ```bash
 helmor github --help
+helmor ngrok --help
 helmor scripts --help
 helmor models --help
 ```
+
+Use `helmor ngrok` for Debug ingest public-forwarding config that should be
+available to workspace agents through Helmor MCP as well as the CLI:
+
+```bash
+helmor ngrok status
+helmor ngrok enable --domain debug.example.ngrok.app
+helmor ngrok disable
+helmor ngrok domain clear
+helmor ngrok reset
+```
+
+`reset` disables public forwarding, clears the reserved domain, and asks a
+running Helmor app to close active ngrok tunnels.
 
 ### MCP Server
 

@@ -306,6 +306,24 @@ impl DebugIngestManager {
         }
     }
 
+    pub fn reset_public_tunnels(&self) {
+        let tunnels: Vec<PublicTunnelHandle> = {
+            let mut servers = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+            servers
+                .values_mut()
+                .filter_map(|handle| {
+                    handle.public_tunnel_error = None;
+                    handle.public_tunnel_config_key = None;
+                    handle.public_tunnel.take()
+                })
+                .collect()
+        };
+        for tunnel in tunnels {
+            close_public_tunnel(tunnel);
+        }
+        self.close_ngrok_agent_if_idle();
+    }
+
     pub async fn overview(&self) -> DebugIngestOverview {
         let mut instances: Vec<DebugIngestStatus> = self
             .servers
