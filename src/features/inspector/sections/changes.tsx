@@ -12,6 +12,7 @@ import {
 	ListTreeIcon,
 	LoaderCircleIcon,
 	MinusIcon,
+	Network,
 	PlusIcon,
 	Undo2Icon,
 } from "lucide-react";
@@ -72,6 +73,8 @@ type ChangesSectionProps = {
 	changeRequest: ChangeRequestInfo | null;
 	/** Cold-fetch indicator owned by App; drives the git-header shimmer. */
 	forgeIsRefreshing?: boolean;
+	/** Opens the full-viewport code-graph diagram view. */
+	onOpenDiagramMode?: () => void;
 };
 
 export function ChangesSection({
@@ -90,6 +93,7 @@ export function ChangesSection({
 	commitButtonState,
 	changeRequest,
 	forgeIsRefreshing = false,
+	onOpenDiagramMode,
 }: ChangesSectionProps) {
 	const queryClient = useQueryClient();
 	const [changesTreeView, setChangesTreeView] = useState(true);
@@ -385,6 +389,17 @@ export function ChangesSection({
 				onContinueWorkspace={handleContinueWorkspace}
 				onRefreshPrStatus={workspaceId ? handleRefreshPrStatus : undefined}
 			/>
+			{onOpenDiagramMode && workspaceId && (
+				<button
+					type="button"
+					onClick={onOpenDiagramMode}
+					className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-border/40 bg-muted/20 px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+					title="Open the code-graph diagram view"
+				>
+					<Network className="size-3" />
+					<span>View as graph</span>
+				</button>
+			)}
 
 			<ScrollArea
 				aria-label="Changes panel body"

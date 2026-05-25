@@ -5,6 +5,7 @@ import {
 	type AgentProvider,
 	type BrowserTabRecord,
 	type ChangeRequestInfo,
+	type CodeGraph,
 	type DetectedEditor,
 	detectInstalledEditors,
 	type ForgeActionStatus,
@@ -12,6 +13,7 @@ import {
 	type ForgeDetection,
 	type ForgeProvider,
 	getClaudeRateLimits,
+	getCodeGraph,
 	getCodexRateLimits,
 	getForgeCliStatus,
 	getGoalOrchestratorState,
@@ -189,6 +191,7 @@ export const helmorQueryKeys = {
 		["workspaceCandidateDirectories", excludeWorkspaceId ?? ""] as const,
 	workspaceBrowserTabs: (workspaceId: string) =>
 		["workspaceBrowserTabs", workspaceId] as const,
+	codeGraph: (workspaceId: string) => ["codeGraph", workspaceId] as const,
 };
 
 export function createHelmorQueryClient() {
@@ -362,6 +365,17 @@ export function workspaceBrowserTabsQueryOptions(workspaceId: string) {
 		initialData: [],
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
+	});
+}
+
+// The code graph is invalidated by UiMutationEvent::WorkspaceCodeGraphChanged
+// (fired whenever the working tree or HEAD changes), so we set a long
+// staleTime to avoid eager refetches while the user is just panning.
+export function codeGraphQueryOptions(workspaceId: string) {
+	return queryOptions<CodeGraph>({
+		queryKey: helmorQueryKeys.codeGraph(workspaceId),
+		queryFn: () => getCodeGraph(workspaceId),
+		staleTime: 60_000,
 	});
 }
 

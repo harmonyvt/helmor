@@ -297,6 +297,11 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.workspaceBrowserTabs(event.workspaceId),
 			});
 			return;
+		case "workspaceCodeGraphChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.codeGraph(event.workspaceId),
+			});
+			return;
 		case "repositoryListChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.repositories,

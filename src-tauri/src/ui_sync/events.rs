@@ -48,6 +48,9 @@ pub enum UiMutationEvent {
     WorkspaceBrowserTabsChanged {
         workspace_id: String,
     },
+    WorkspaceCodeGraphChanged {
+        workspace_id: String,
+    },
     RepositoryListChanged,
     RepositoryChanged {
         repo_id: String,
@@ -148,6 +151,9 @@ mod tests {
                 workspace_id: "w".into(),
             },
             UiMutationEvent::WorkspaceBrowserTabsChanged {
+                workspace_id: "w".into(),
+            },
+            UiMutationEvent::WorkspaceCodeGraphChanged {
                 workspace_id: "w".into(),
             },
             UiMutationEvent::RepositoryChanged {

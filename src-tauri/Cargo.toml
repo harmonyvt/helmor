@@ -56,6 +56,17 @@ tokio-stream = "0.1"
 futures-util = "0.3"
 libsql = { version = "0.9.30", default-features = false, features = ["core"] }
 
+# Code-graph: tree-sitter parsers for the diagram view.
+# Each grammar crate is independently versioned; pin in Cargo.lock so a
+# grammar update doesn't silently break the query strings in
+# src/code_graph/parsers/*.
+tree-sitter = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+blake3 = "1"
+
 # libc backs Unix process groups, signals, and PTY handling.
 # Windows support will need platform-specific replacements before this can be gated.
 [dependencies.libc]
