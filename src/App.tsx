@@ -2754,6 +2754,7 @@ function AppShell({
 													{workspaceViewMode === "editor" && editorSession && (
 														<WorkspaceEditorSurface
 															editorSession={editorSession}
+															workspaceId={selectedWorkspaceId}
 															workspaceRootPath={workspaceRootPath}
 															onChangeSession={handleEditorSessionChange}
 															onExit={handleExitEditorMode}

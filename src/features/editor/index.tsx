@@ -1,19 +1,29 @@
-import { X } from "lucide-react";
+import { FileCode2, GitCompareArrows, X } from "lucide-react";
 import {
 	type MutableRefObject,
+	type ReactNode,
 	useEffect,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import { ShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import type { EditorSessionState } from "@/lib/editor-session";
+import type { CodeGraph } from "@/lib/api";
+import {
+	describeEditorPath,
+	type EditorSessionState,
+} from "@/lib/editor-session";
+import type { FileViewerGraphContext } from "@/lib/monaco-runtime";
+import { cn } from "@/lib/utils";
 import { describeUnknownError } from "@/lib/workspace-helpers";
+import { buildViewerGraphContext } from "./viewer-graph";
 
 type WorkspaceEditorSurfaceProps = {
 	editorSession: EditorSessionState;
+	workspaceId?: string | null;
 	workspaceRootPath?: string | null;
 	onChangeSession: (session: EditorSessionState) => void;
 	onExit: () => void;
@@ -32,9 +42,14 @@ type FileController = Awaited<
 type DiffController = Awaited<
 	ReturnType<MonacoRuntimeModule["createDiffEditor"]>
 >;
+type FileViewerController = Awaited<
+	ReturnType<MonacoRuntimeModule["createFileViewer"]>
+>;
+type ReviewTab = "diff" | "file";
 
 export function WorkspaceEditorSurface({
 	editorSession,
+	workspaceId,
 	workspaceRootPath,
 	onChangeSession,
 	onExit,
@@ -43,6 +58,7 @@ export function WorkspaceEditorSurface({
 	const editorHostRef = useRef<HTMLDivElement>(null);
 	const fileControllerRef = useRef<FileController | null>(null);
 	const diffControllerRef = useRef<DiffController | null>(null);
+	const viewerControllerRef = useRef<FileViewerController | null>(null);
 	const changeSubscriptionRef = useRef<{ dispose(): void } | null>(null);
 	const latestSessionRef = useRef(editorSession);
 	const onChangeSessionRef = useRef(onChangeSession);
@@ -52,6 +68,8 @@ export function WorkspaceEditorSurface({
 	const [surfaceStatus, setSurfaceStatus] = useState<SurfaceStatus>({
 		kind: "ready",
 	});
+	const [reviewTab, setReviewTab] = useState<ReviewTab>("diff");
+	const [codeGraph, setCodeGraph] = useState<CodeGraph | null>(null);
 	latestSessionRef.current = editorSession;
 	onChangeSessionRef.current = onChangeSession;
 	onErrorRef.current = onError;
@@ -64,10 +82,20 @@ export function WorkspaceEditorSurface({
 		editorSession.kind === "diff" &&
 		editorSession.originalText !== undefined &&
 		editorSession.modifiedText !== undefined;
+	const canRenderViewer =
+		editorSession.kind === "diff" && editorSession.modifiedText !== undefined;
 	const effectiveWorkspaceRootPath =
 		editorSession.workspaceRootPath ?? workspaceRootPath;
 	const closeLabel =
 		editorSession.kind === "diff" ? "Close diff view" : "Close editor view";
+	const viewerGraphContext: FileViewerGraphContext | null = useMemo(
+		() => buildViewerGraphContext(codeGraph, editorSession.path),
+		[codeGraph, editorSession.path],
+	);
+
+	useEffect(() => {
+		setReviewTab("diff");
+	}, [editorSession.kind, editorSession.path]);
 
 	useEffect(() => {
 		if (
@@ -85,15 +113,14 @@ export function WorkspaceEditorSurface({
 				const isDiff = editorSession.kind === "diff";
 				const status = editorSession.fileStatus ?? "M";
 				const origRef = editorSession.originalRef ?? "HEAD";
+				const gitPath = effectiveWorkspaceRootPath
+					? describeEditorPath(editorSession.path, effectiveWorkspaceRootPath)
+					: editorSession.path;
 
 				// Fetch original side (from git ref)
 				const originalPromise =
 					isDiff && status !== "A" && effectiveWorkspaceRootPath
-						? api.readFileAtRef(
-								effectiveWorkspaceRootPath,
-								editorSession.path,
-								origRef,
-							)
+						? api.readFileAtRef(effectiveWorkspaceRootPath, gitPath, origRef)
 						: Promise.resolve(null);
 
 				// Fetch modified side (from disk or git ref)
@@ -101,7 +128,7 @@ export function WorkspaceEditorSurface({
 					? effectiveWorkspaceRootPath
 						? api.readFileAtRef(
 								effectiveWorkspaceRootPath,
-								editorSession.path,
+								gitPath,
 								editorSession.modifiedRef,
 							)
 						: Promise.resolve(null)
@@ -145,6 +172,32 @@ export function WorkspaceEditorSurface({
 		};
 	}, [canRenderDiff, canRenderFile, editorSession, effectiveWorkspaceRootPath]);
 
+	useEffect(() => {
+		if (editorSession.kind !== "diff" || reviewTab !== "file" || !workspaceId) {
+			setCodeGraph(null);
+			return;
+		}
+
+		let cancelled = false;
+		void import("@/lib/api")
+			.then(({ getCodeGraph }) => getCodeGraph(workspaceId))
+			.then((graph) => {
+				if (!cancelled) {
+					setCodeGraph(graph);
+				}
+			})
+			.catch((error) => {
+				if (!cancelled) {
+					console.warn("[file-viewer] failed to load code graph", error);
+					setCodeGraph(null);
+				}
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [editorSession.kind, reviewTab, workspaceId]);
+
 	// Dispose editors on unmount (separate from the switching effect so the
 	// fast-path can skip cleanup without leaking on unmount).
 	useEffect(() => {
@@ -152,6 +205,7 @@ export function WorkspaceEditorSurface({
 			disposeControllers({
 				fileControllerRef,
 				diffControllerRef,
+				viewerControllerRef,
 				changeSubscriptionRef,
 			});
 		};
@@ -241,6 +295,7 @@ export function WorkspaceEditorSurface({
 		disposeControllers({
 			fileControllerRef,
 			diffControllerRef,
+			viewerControllerRef,
 			changeSubscriptionRef,
 		});
 		host.replaceChildren();
@@ -295,7 +350,42 @@ export function WorkspaceEditorSurface({
 					onErrorRef.current?.(message, "Editor startup failed");
 				}
 			})();
+		} else if (reviewTab === "file") {
+			if (!canRenderViewer) {
+				return;
+			}
+
+			void (async () => {
+				try {
+					const { createFileViewer } = await import("@/lib/monaco-runtime");
+					const controller = await createFileViewer({
+						container: host,
+						path: editorSession.path,
+						content: editorSession.modifiedText ?? "",
+						graphContext: viewerGraphContext,
+					});
+
+					if (disposed || requestId !== buildRequestIdRef.current) {
+						controller.dispose();
+						return;
+					}
+
+					viewerControllerRef.current = controller;
+					setSurfaceStatus({ kind: "ready" });
+				} catch (error) {
+					const message = describeUnknownError(
+						error,
+						"Unable to start the file viewer.",
+					);
+					setSurfaceStatus({ kind: "error", message });
+					onErrorRef.current?.(message, "File viewer failed");
+				}
+			})();
 		} else {
+			if (!canRenderDiff) {
+				return;
+			}
+
 			void (async () => {
 				try {
 					const { createDiffEditor } = await import("@/lib/monaco-runtime");
@@ -332,7 +422,16 @@ export function WorkspaceEditorSurface({
 			// changes), and the separate unmount effect handles final cleanup.
 			disposed = true;
 		};
-	}, [canRenderDiff, canRenderFile, editorSession.kind, editorSession.path]);
+	}, [
+		canRenderDiff,
+		canRenderFile,
+		canRenderViewer,
+		editorSession.kind,
+		editorSession.modifiedText,
+		editorSession.path,
+		reviewTab,
+		viewerGraphContext,
+	]);
 
 	useEffect(() => {
 		if (
@@ -384,6 +483,29 @@ export function WorkspaceEditorSurface({
 		editorSession.originalText,
 	]);
 
+	useEffect(() => {
+		if (
+			editorSession.kind !== "diff" ||
+			reviewTab !== "file" ||
+			!viewerControllerRef.current ||
+			editorSession.modifiedText === undefined
+		) {
+			return;
+		}
+
+		viewerControllerRef.current.setContent({
+			path: editorSession.path,
+			content: editorSession.modifiedText,
+			graphContext: viewerGraphContext,
+		});
+	}, [
+		editorSession.kind,
+		editorSession.modifiedText,
+		editorSession.path,
+		reviewTab,
+		viewerGraphContext,
+	]);
+
 	return (
 		<section
 			aria-label="Workspace editor surface"
@@ -396,6 +518,25 @@ export function WorkspaceEditorSurface({
 			>
 				{/* Traffic-light inset. macOS: left; Windows / Linux: right. */}
 				<TrafficLightSpacer side="left" width={86} />
+
+				<div className="min-w-0 flex-1" data-tauri-drag-region />
+
+				{editorSession.kind === "diff" && (
+					<div className="flex shrink-0 items-center gap-1 rounded-md border border-border/60 bg-muted/20 p-0.5">
+						<ReviewTabButton
+							active={reviewTab === "diff"}
+							onClick={() => setReviewTab("diff")}
+							icon={<GitCompareArrows className="size-3.5" />}
+							label="Diff"
+						/>
+						<ReviewTabButton
+							active={reviewTab === "file"}
+							onClick={() => setReviewTab("file")}
+							icon={<FileCode2 className="size-3.5" />}
+							label="File"
+						/>
+					</div>
+				)}
 
 				<div className="min-w-0 flex-1" data-tauri-drag-region />
 
@@ -431,6 +572,35 @@ export function WorkspaceEditorSurface({
 	);
 }
 
+function ReviewTabButton({
+	active,
+	onClick,
+	icon,
+	label,
+}: {
+	active: boolean;
+	onClick: () => void;
+	icon: ReactNode;
+	label: string;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			aria-pressed={active}
+			className={cn(
+				"inline-flex h-6 cursor-pointer items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors",
+				active
+					? "bg-background text-foreground shadow-sm"
+					: "text-muted-foreground hover:bg-background/60 hover:text-foreground",
+			)}
+		>
+			{icon}
+			<span>{label}</span>
+		</button>
+	);
+}
+
 function SurfaceMessage({ message }: { message: string }) {
 	return (
 		<p className="text-[13px] leading-5 text-muted-foreground">{message}</p>
@@ -440,10 +610,12 @@ function SurfaceMessage({ message }: { message: string }) {
 function disposeControllers({
 	fileControllerRef,
 	diffControllerRef,
+	viewerControllerRef,
 	changeSubscriptionRef,
 }: {
 	fileControllerRef: MutableRefObject<FileController | null>;
 	diffControllerRef: MutableRefObject<DiffController | null>;
+	viewerControllerRef: MutableRefObject<FileViewerController | null>;
 	changeSubscriptionRef: MutableRefObject<{ dispose(): void } | null>;
 }) {
 	changeSubscriptionRef.current?.dispose();
@@ -452,4 +624,6 @@ function disposeControllers({
 	fileControllerRef.current = null;
 	diffControllerRef.current?.dispose();
 	diffControllerRef.current = null;
+	viewerControllerRef.current?.dispose();
+	viewerControllerRef.current = null;
 }
