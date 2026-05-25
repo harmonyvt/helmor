@@ -2,6 +2,7 @@ pub mod agents;
 pub mod background_agents;
 pub mod browser_profile;
 pub mod cli;
+pub mod code_graph;
 pub(crate) mod commands;
 pub mod data_dir;
 pub mod debug_ingest;
@@ -428,7 +429,9 @@ pub fn run() {
             commands::settings_commands::save_auto_close_opt_in_asked,
             global_hotkey::sync_global_hotkey,
             ui_sync::subscribe_ui_mutations,
-            commands::editor_commands::write_editor_file
+            commands::editor_commands::write_editor_file,
+            commands::code_graph_commands::code_graph_get,
+            commands::code_graph_commands::code_graph_invalidate
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

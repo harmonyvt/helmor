@@ -85,6 +85,8 @@ type WorkspaceInspectorSidebarProps = {
 	onSelectSession?: (sessionId: string) => void;
 	/** Opens the full-viewport browser surface. */
 	onOpenBrowserMode?: () => void;
+	/** Opens the full-viewport code-graph diagram view. */
+	onOpenDiagramMode?: () => void;
 	debugIngestState?: {
 		active: boolean;
 		starting: boolean;
@@ -115,6 +117,7 @@ export function WorkspaceInspectorSidebar({
 	forgeIsRefreshing = false,
 	onOpenSettings,
 	onOpenBrowserMode,
+	onOpenDiagramMode,
 	debugIngestState = null,
 	onOpenBrowserUrl,
 }: WorkspaceInspectorSidebarProps) {
@@ -523,6 +526,7 @@ export function WorkspaceInspectorSidebar({
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
+				onOpenDiagramMode={onOpenDiagramMode}
 			/>
 
 			<HorizontalResizeHandle

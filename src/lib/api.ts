@@ -1997,6 +1997,7 @@ export type UiMutationEvent =
 	| { type: "workspaceChangeRequestChanged"; workspaceId: string }
 	| { type: "workspaceLandingChanged"; workspaceId: string }
 	| { type: "workspaceBrowserTabsChanged"; workspaceId: string }
+	| { type: "workspaceCodeGraphChanged"; workspaceId: string }
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
@@ -2047,6 +2048,81 @@ export async function subscribeUiMutations(
 	const onEvent = new Channel<UiMutationEvent>();
 	onEvent.onmessage = callback;
 	await invoke("subscribe_ui_mutations", { onEvent });
+}
+
+// --- Code graph (diagram view) -------------------------------------------
+
+export type CodeGraphLanguage =
+	| "typescript"
+	| "tsx"
+	| "javascript"
+	| "jsx"
+	| "rust"
+	| "python";
+
+export type CodeGraphEdgeKind = "static" | "dynamic" | "typeOnly" | "reexport";
+
+export type CodeGraphChangeStatus = "M" | "A" | "D";
+
+export type CodeGraphNode = {
+	id: string;
+	path: string;
+	name: string;
+	language: CodeGraphLanguage;
+	isExternal: boolean;
+	status: CodeGraphChangeStatus | null;
+	insertions: number;
+	deletions: number;
+	fanIn: number;
+	fanOut: number;
+};
+
+export type CodeGraphEdge = {
+	id: string;
+	source: string;
+	target: string;
+	kind: CodeGraphEdgeKind;
+};
+
+export type CodeGraphStats = {
+	parsedFiles: number;
+	cachedFiles: number;
+	unresolvedSpecifiers: number;
+	externalPackages: number;
+};
+
+export type CodeGraph = {
+	workspaceId: string;
+	generatedAtMs: number;
+	contentRevision: string;
+	nodes: CodeGraphNode[];
+	edges: CodeGraphEdge[];
+	stats: CodeGraphStats;
+};
+
+export type CodeGraphBuildProgress =
+	| { phase: "walking"; discovered: number }
+	| { phase: "parsing"; processed: number; total: number }
+	| { phase: "resolving"; processed: number; total: number }
+	| { phase: "done"; contentRevision: string };
+
+export async function getCodeGraph(
+	workspaceId: string,
+	onProgress?: (event: CodeGraphBuildProgress) => void,
+): Promise<CodeGraph> {
+	const { Channel } = await import("@tauri-apps/api/core");
+	const channel = new Channel<CodeGraphBuildProgress>();
+	if (onProgress) {
+		channel.onmessage = onProgress;
+	}
+	return invoke<CodeGraph>("code_graph_get", {
+		workspaceId,
+		onProgress: channel,
+	});
+}
+
+export async function invalidateCodeGraph(workspaceId: string): Promise<void> {
+	await invoke("code_graph_invalidate", { workspaceId });
 }
 
 export type PrefetchRemoteRefsResponse = {

@@ -1036,6 +1036,22 @@ CREATE TRIGGER IF NOT EXISTS update_workspace_browser_tabs_updated_at
         WHERE id = NEW.id;
     END;
 
+-- Per-file edges for the code-graph diagram view. Keyed by content hash
+-- so unchanged files skip the tree-sitter parse on subsequent builds.
+-- `edges_json` is a serialised Vec<UnresolvedEdge> (raw specifiers) so
+-- resolver changes don't force a re-parse.
+CREATE TABLE IF NOT EXISTS code_graph_file_edges (
+    workspace_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    language TEXT NOT NULL,
+    parsed_at_ms INTEGER NOT NULL,
+    edges_json TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, file_path)
+);
+CREATE INDEX IF NOT EXISTS idx_code_graph_file_edges_workspace
+    ON code_graph_file_edges (workspace_id);
+
 "#;
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 pub(crate) mod agent_commands;
 pub(crate) mod app_install_commands;
 pub(crate) mod browser_commands;
+pub(crate) mod code_graph_commands;
 mod common;
 pub(crate) mod conductor_commands;
 mod crash_diagnostics;

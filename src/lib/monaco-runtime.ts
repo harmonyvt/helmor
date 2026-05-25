@@ -34,6 +34,26 @@ type FileEditorController = {
 	): boolean;
 };
 
+export type FileViewerGraphContext = {
+	path: string;
+	language: string;
+	fanIn: number;
+	fanOut: number;
+	imports: string[];
+	importedBy: string[];
+	languageServicesLabel: string;
+};
+
+type FileViewerController = {
+	editor: StandaloneEditor;
+	dispose(): void;
+	setContent(options: {
+		path: string;
+		content: string;
+		graphContext?: FileViewerGraphContext | null;
+	}): void;
+};
+
 type DiffEditorController = {
 	editor: StandaloneDiffEditor;
 	dispose(): void;
@@ -155,6 +175,73 @@ export async function createFileEditor(options: {
 	};
 }
 
+export async function createFileViewer(options: {
+	container: HTMLElement;
+	path: string;
+	content: string;
+	graphContext?: FileViewerGraphContext | null;
+}): Promise<FileViewerController> {
+	const runtime = await ensureRuntime();
+	const { monaco } = runtime;
+	const language = resolveLanguageId(monaco, options.path);
+	const model = monaco.editor.createModel(
+		options.content,
+		language,
+		monaco.Uri.file(options.path).with({ query: "helmor-viewer=1" }),
+	);
+	let graphContext = options.graphContext ?? null;
+	let hoverDisposable = registerViewerHoverProvider(
+		monaco,
+		model,
+		() => graphContext,
+	);
+
+	const editor = monaco.editor.create(options.container, {
+		automaticLayout: true,
+		bracketPairColorization: { enabled: true },
+		fontFamily:
+			'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace',
+		fontLigatures: true,
+		fontSize: 13,
+		lineHeight: 21,
+		minimap: { enabled: true, maxColumn: 80, renderCharacters: false },
+		model,
+		padding: { top: 14, bottom: 24 },
+		readOnly: true,
+		renderValidationDecorations: "on",
+		scrollBeyondLastLine: false,
+		smoothScrolling: true,
+		tabSize: 2,
+		theme: themeId(desiredTheme),
+		wordWrap: "off",
+	});
+
+	return {
+		editor,
+		dispose() {
+			hoverDisposable.dispose();
+			editor.dispose();
+			model.dispose();
+		},
+		setContent(next) {
+			graphContext = next.graphContext ?? null;
+			if (model.getValue() !== next.content) {
+				model.setValue(next.content);
+			}
+			const nextLanguage = resolveLanguageId(monaco, next.path);
+			if (nextLanguage && model.getLanguageId() !== nextLanguage) {
+				monaco.editor.setModelLanguage(model, nextLanguage);
+				hoverDisposable.dispose();
+				hoverDisposable = registerViewerHoverProvider(
+					monaco,
+					model,
+					() => graphContext,
+				);
+			}
+		},
+	};
+}
+
 export async function createDiffEditor(options: {
 	container: HTMLElement;
 	path: string;
@@ -233,6 +320,62 @@ export async function createDiffEditor(options: {
 			editor.updateOptions({ renderSideBySide: !inline });
 		},
 	};
+}
+
+function registerViewerHoverProvider(
+	monaco: MonacoModule,
+	model: Monaco.editor.ITextModel,
+	getGraphContext: () => FileViewerGraphContext | null,
+): DisposableLike {
+	const language = model.getLanguageId();
+	return monaco.languages.registerHoverProvider(language, {
+		provideHover(hoverModel, position) {
+			if (hoverModel.uri.toString() !== model.uri.toString()) {
+				return null;
+			}
+			const context = getGraphContext();
+			if (!context) {
+				return null;
+			}
+			const word = hoverModel.getWordAtPosition(position);
+			const range = word
+				? new monaco.Range(
+						position.lineNumber,
+						word.startColumn,
+						position.lineNumber,
+						word.endColumn,
+					)
+				: undefined;
+
+			const imports = summarizePaths(context.imports);
+			const importedBy = summarizePaths(context.importedBy);
+			return {
+				range,
+				contents: [
+					{ value: `**${context.path}**` },
+					{
+						value: [
+							`Graph: imports **${context.fanOut}**, imported by **${context.fanIn}**.`,
+							`Imports: ${imports}`,
+							`Imported by: ${importedBy}`,
+							`Language services: ${context.languageServicesLabel}`,
+						].join("\n\n"),
+					},
+				],
+			};
+		},
+	});
+}
+
+function summarizePaths(paths: string[]): string {
+	if (paths.length === 0) {
+		return "none";
+	}
+	const visible = paths.slice(0, 5).map((path) => `\`${path}\``);
+	const extra = paths.length - visible.length;
+	return extra > 0
+		? `${visible.join(", ")} and ${extra} more`
+		: visible.join(", ");
 }
 
 /** Cache file contents so future switchFile calls resolve instantly (no IPC). */

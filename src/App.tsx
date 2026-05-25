@@ -37,6 +37,7 @@ import type { BrowserSessionState } from "@/features/browser/browser-session";
 import { CommandPalette } from "@/features/command-palette";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { WorkspaceConversationContainer } from "@/features/conversation";
+import { WorkspaceDiagramSurface } from "@/features/diagram";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { GoalWorkspaceContainer } from "@/features/goals";
@@ -422,9 +423,9 @@ function AppShell({
 	const [workspaceReselectTick, setWorkspaceReselectTick] = useState(0);
 	const lastMarkedReadReselectTickRef = useRef(0);
 
-	const workspaceViewModeRef = useRef<"conversation" | "editor" | "browser">(
-		"conversation",
-	);
+	const workspaceViewModeRef = useRef<
+		"conversation" | "editor" | "browser" | "diagram"
+	>("conversation");
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
 		Record<string, string[]>
 	>({});
@@ -514,7 +515,7 @@ function AppShell({
 		null,
 	);
 	const [workspaceViewMode, setWorkspaceViewMode] = useState<
-		"conversation" | "editor" | "browser"
+		"conversation" | "editor" | "browser" | "diagram"
 	>("conversation");
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
@@ -1402,6 +1403,14 @@ function AppShell({
 	);
 
 	const handleExitBrowserMode = useCallback(() => {
+		setWorkspaceViewMode("conversation");
+	}, []);
+
+	const handleOpenDiagramMode = useCallback(() => {
+		setWorkspaceViewMode("diagram");
+	}, []);
+
+	const handleExitDiagramMode = useCallback(() => {
 		setWorkspaceViewMode("conversation");
 	}, []);
 
@@ -2745,6 +2754,7 @@ function AppShell({
 													{workspaceViewMode === "editor" && editorSession && (
 														<WorkspaceEditorSurface
 															editorSession={editorSession}
+															workspaceId={selectedWorkspaceId}
 															workspaceRootPath={workspaceRootPath}
 															onChangeSession={handleEditorSessionChange}
 															onExit={handleExitEditorMode}
@@ -2759,6 +2769,16 @@ function AppShell({
 																session={browserSession}
 																onChangeSession={handleBrowserSessionChange}
 																onExit={handleExitBrowserMode}
+															/>
+														)}
+													{workspaceViewMode === "diagram" &&
+														selectedWorkspaceId && (
+															<WorkspaceDiagramSurface
+																workspaceId={selectedWorkspaceId}
+																workspaceRootPath={workspaceRootPath}
+																onOpenEditorFile={handleOpenEditorFile}
+																onOpenFileReference={handleOpenFileReference}
+																onExit={handleExitDiagramMode}
 															/>
 														)}
 													{workspaceViewMode === "conversation" &&
@@ -3199,6 +3219,7 @@ function AppShell({
 																forgeIsRefreshing={workspaceForgeIsRefreshing}
 																onOpenSettings={handleOpenSettings}
 																onOpenBrowserMode={handleOpenBrowserMode}
+																onOpenDiagramMode={handleOpenDiagramMode}
 																debugIngestState={selectedDebugIngestState}
 																onOpenBrowserUrl={handleOpenBrowserUrl}
 															/>

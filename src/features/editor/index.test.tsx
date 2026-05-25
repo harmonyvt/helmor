@@ -1,4 +1,10 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -23,11 +29,23 @@ const runtimeMocks = vi.hoisted(() => {
 		setValue: vi.fn((value: string) => {
 			fileValue = value;
 		}),
+		switchFile: vi.fn((_path: string, content?: string) => {
+			if (content === undefined) {
+				return false;
+			}
+			fileValue = content;
+			return true;
+		}),
 	};
 
 	const diffController = {
 		dispose: vi.fn(),
 		setTexts: vi.fn(),
+	};
+
+	const viewerController = {
+		dispose: vi.fn(),
+		setContent: vi.fn(),
 	};
 
 	return {
@@ -38,6 +56,7 @@ const runtimeMocks = vi.hoisted(() => {
 				return fileController;
 			},
 		),
+		createFileViewer: vi.fn(async () => viewerController),
 		diffController,
 		emitFileChange: (value: string) => {
 			fileValue = value;
@@ -56,9 +75,13 @@ const runtimeMocks = vi.hoisted(() => {
 			this.fileController.onDidChangeModelContent.mockClear();
 			this.fileController.revealPosition.mockClear();
 			this.fileController.setValue.mockClear();
+			this.fileController.switchFile.mockClear();
 			this.syncVirtualFile.mockClear();
+			this.viewerController.dispose.mockClear();
+			this.viewerController.setContent.mockClear();
 		},
 		syncVirtualFile: vi.fn(async () => undefined),
+		viewerController,
 	};
 });
 
@@ -74,6 +97,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 vi.mock("@/lib/monaco-runtime", () => ({
 	createDiffEditor: runtimeMocks.createDiffEditor,
 	createFileEditor: runtimeMocks.createFileEditor,
+	createFileViewer: runtimeMocks.createFileViewer,
 	syncVirtualFile: runtimeMocks.syncVirtualFile,
 }));
 
@@ -181,6 +205,39 @@ describe("WorkspaceEditorSurface", () => {
 			).toBeInTheDocument();
 			expect(screen.getByLabelText("Editor canvas")).toBeInTheDocument();
 			expect(screen.getByText("No such file")).toBeInTheDocument();
+		});
+	});
+
+	it("opens the read-only file viewer tab for diff sessions", async () => {
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspaceEditorSurface
+					editorSession={{
+						kind: "diff",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+						originalText: "const value = 1;\n",
+						modifiedText: "const value = 2;\n",
+					}}
+					workspaceRootPath="/tmp/helmor-workspace"
+					onChangeSession={vi.fn()}
+					onExit={vi.fn()}
+				/>
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(runtimeMocks.createDiffEditor).toHaveBeenCalled();
+		});
+
+		fireEvent.click(screen.getByRole("button", { name: "File" }));
+
+		await waitFor(() => {
+			expect(runtimeMocks.createFileViewer).toHaveBeenCalledWith(
+				expect.objectContaining({
+					content: "const value = 2;\n",
+					path: "/tmp/helmor-workspace/src/App.tsx",
+				}),
+			);
 		});
 	});
 });
