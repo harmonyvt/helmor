@@ -121,6 +121,13 @@ fn handle_tools_list(request: &Value) -> Value {
             "permission_mode": { "type": "string", "description": "Optional permission mode for prompt" },
             "finalize": { "type": "boolean", "description": "Create worktree now (default true)" }
         }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["goal_workspace", "title"] })).unwrap()),
+        tool_def("helmor_ngrok_status", "Show Debug ingest ngrok forwarding settings and whether a running app can receive reset events", json!({})),
+        tool_def("helmor_ngrok_update", "Update Debug ingest ngrok forwarding settings", json!({
+            "enabled": { "type": "boolean", "description": "Enable or disable public Debug ingest forwarding" },
+            "domain": { "type": "string", "description": "Optional reserved ngrok domain. Empty string clears it." },
+            "clear_domain": { "type": "boolean", "description": "Clear the reserved ngrok domain" }
+        })),
+        tool_def("helmor_ngrok_reset", "Disable Debug ingest ngrok forwarding, clear the domain, and close active tunnels in a running app", json!({})),
         tool_def("helmor_browser_list_tabs", "List durable browser tabs for a workspace", json!({
             "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" }
         }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["workspace"] })).unwrap()),
@@ -261,6 +268,38 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                 &mut on_event,
             )?;
             Ok(serde_json::to_string_pretty(&result)?)
+        }
+        "helmor_ngrok_status" => {
+            let status = crate::ngrok_config::status()?;
+            Ok(serde_json::to_string_pretty(&status)?)
+        }
+        "helmor_ngrok_update" => {
+            let enabled = args.get("enabled").and_then(Value::as_bool);
+            let domain = if args
+                .get("clear_domain")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                Some(None)
+            } else {
+                args.get("domain").and_then(Value::as_str).map(|value| {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                })
+            };
+            let status = crate::ngrok_config::update(crate::ngrok_config::NgrokConfigUpdate {
+                enabled,
+                domain,
+            })?;
+            Ok(serde_json::to_string_pretty(&status)?)
+        }
+        "helmor_ngrok_reset" => {
+            let status = crate::ngrok_config::reset()?;
+            Ok(serde_json::to_string_pretty(&status)?)
         }
         "helmor_browser_list_tabs" => {
             let ws_ref = args["workspace"]
