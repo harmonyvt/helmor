@@ -151,7 +151,10 @@ available to workspace agents through Helmor MCP as well as the CLI:
 
 ```bash
 helmor ngrok status
+helmor ngrok overview
 helmor ngrok enable --domain debug.example.ngrok.app
+helmor ngrok ensure <workspace-ref>
+helmor ngrok stop <workspace-ref>
 helmor ngrok disable
 helmor ngrok domain clear
 helmor ngrok reset
@@ -159,6 +162,12 @@ helmor ngrok reset
 
 `reset` disables public forwarding, clears the reserved domain, and asks a
 running Helmor app to close active ngrok tunnels.
+
+Use `overview` when an agent needs the live ingest URLs. It returns the
+workspace-local `ingestUrl`, public `publicIngestUrl`, tunnel errors, ngrok
+agent status, and stale-tunnel recovery guidance. Use `ensure <workspace-ref>`
+when URLs are missing or stale; the Helmor app must be running because ingest
+tokens and servers live in app memory.
 
 ### MCP Server
 
