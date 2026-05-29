@@ -16,11 +16,20 @@ const MODEL_CATALOG: Record<
 	readonly ProviderModelInfo[]
 > = {
 	claude: [
+		// Keep this list scoped to Anthropic Claude Code models. Pi has its own
+		// provider section, so do not use Pi entries to stand in for Claude Code
+		// variants like non-1M Opus.
 		{
 			id: "default",
 			label: "Default · Opus 4.8 1M",
 			cliModel: "default",
 			effortLevels: ["low", "medium", "high", "xhigh", "max"],
+		},
+		{
+			id: "claude-opus-4-8",
+			label: "Opus 4.8",
+			cliModel: "claude-opus-4-8",
+			effortLevels: ["low", "medium", "high", "max"],
 		},
 		{
 			id: "claude-opus-4-8[1m]",

@@ -63,10 +63,19 @@ fn official_claude_section() -> AgentModelSection {
         label: "Claude Code".to_string(),
         status: AgentModelSectionStatus::Ready,
         options: vec![
+            // Keep this list scoped to Anthropic Claude Code models. Pi has its
+            // own provider section, so do not use Pi entries to stand in for
+            // Claude Code variants like non-1M Opus.
             claude_model(
                 "default",
                 "Opus 4.8 1M",
                 &["low", "medium", "high", "xhigh", "max"],
+                false,
+            ),
+            claude_model(
+                "claude-opus-4-8",
+                "Opus 4.8",
+                &["low", "medium", "high", "max"],
                 false,
             ),
             claude_model(
@@ -422,6 +431,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "default",
+                "claude-opus-4-8",
                 "claude-opus-4-8[1m]",
                 "claude-sonnet-4-6",
                 "claude-haiku-4-5"
@@ -510,6 +520,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "default",
+                "claude-opus-4-8",
                 "claude-opus-4-8[1m]",
                 "claude-sonnet-4-6",
                 "claude-haiku-4-5",
@@ -517,14 +528,14 @@ mod tests {
             ]
         );
         assert_eq!(
-            sections[0].options[4].provider_key.as_deref(),
+            sections[0].options[5].provider_key.as_deref(),
             Some("minimax")
         );
         assert_eq!(
-            sections[0].options[4].effort_levels,
+            sections[0].options[5].effort_levels,
             vec!["low", "medium", "high", "xhigh", "max"]
         );
-        assert!(!sections[0].options[4].supports_context_usage);
+        assert!(!sections[0].options[5].supports_context_usage);
         assert_eq!(sections[1].id, "codex");
         assert_eq!(sections[2].id, "pi");
     }
