@@ -18,14 +18,14 @@ const MODEL_CATALOG: Record<
 	claude: [
 		{
 			id: "default",
-			label: "Default · Opus 4.7 1M",
+			label: "Default · Opus 4.8 1M",
 			cliModel: "default",
 			effortLevels: ["low", "medium", "high", "xhigh", "max"],
 		},
 		{
-			id: "claude-opus-4-7[1m]",
-			label: "Opus 4.7 1M",
-			cliModel: "claude-opus-4-7[1m]",
+			id: "claude-opus-4-8[1m]",
+			label: "Opus 4.8 1M",
+			cliModel: "claude-opus-4-8[1m]",
 			effortLevels: ["low", "medium", "high", "max"],
 			supportsFastMode: true,
 		},
@@ -88,9 +88,9 @@ const MODEL_CATALOG: Record<
 	],
 	pi: [
 		{
-			id: "pi:anthropic/claude-opus-4-7",
-			label: "Pi · Claude Opus 4.7",
-			cliModel: "anthropic/claude-opus-4-7",
+			id: "pi:anthropic/claude-opus-4-8",
+			label: "Pi · Claude Opus 4.8",
+			cliModel: "anthropic/claude-opus-4-8",
 			effortLevels: PI_EFFORT_LEVELS_WITH_XHIGH,
 		},
 		{

@@ -103,10 +103,10 @@ fn section_has_model(sections: &[AgentModelSection], section_id: &str, target_mo
 
 fn model_matches_provider_option(option: &AgentModelOption, target_model: &str) -> bool {
     let normalized_target = normalize_provider_model_id(target_model);
-    if normalized_target == "claude-opus-4-7" {
+    if normalized_target == "claude-opus-4-8" {
         return option.id == "default"
             || option.cli_model == "default"
-            || normalize_provider_model_id(&option.label).contains("opus-4-7");
+            || normalize_provider_model_id(&option.label).contains("opus-4-8");
     }
     if normalized_target.starts_with("claude-sonnet-") {
         return option.id == "sonnet"
@@ -174,6 +174,7 @@ fn goal_assignee_model_rank(model: &AgentModelOption) -> usize {
     }
 
     if let Some(rank) = [
+        "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
         "claude-sonnet-4-6",
@@ -278,7 +279,7 @@ mod tests {
                     model(
                         "default",
                         "claude",
-                        "Default · Opus 4.7 1M",
+                        "Default · Opus 4.8 1M",
                         "default",
                         None,
                     ),

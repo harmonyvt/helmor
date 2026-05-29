@@ -10,7 +10,7 @@ goalTitle: Launch Goal
 helmorSessionId: s-goal
 kanbanSnapshot: "[{\"id\":\"child-1\",\"title\":\"Build UI\"}]"
 kanbanWorkspaceId: goal-workspace-1
-model: anthropic/claude-opus-4-7
+model: anthropic/claude-opus-4-8
 permissionMode: bypassPermissions
 prompt: hello
 provider: pi

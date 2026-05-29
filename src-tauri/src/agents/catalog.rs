@@ -65,18 +65,23 @@ fn official_claude_section() -> AgentModelSection {
         options: vec![
             claude_model(
                 "default",
-                "Opus 4.7 1M",
+                "Opus 4.8 1M",
                 &["low", "medium", "high", "xhigh", "max"],
                 false,
             ),
             claude_model(
-                "claude-opus-4-6[1m]",
-                "Opus 4.6 1M",
+                "claude-opus-4-8[1m]",
+                "Opus 4.8 1M",
                 &["low", "medium", "high", "max"],
                 true,
             ),
-            claude_model("sonnet", "Sonnet", &["low", "medium", "high", "max"], false),
-            claude_model("haiku", "Haiku", &[], false),
+            claude_model(
+                "claude-sonnet-4-6",
+                "Sonnet 4.6",
+                &["low", "medium", "high", "max"],
+                false,
+            ),
+            claude_model("claude-haiku-4-5", "Haiku 4.5", &[], false),
         ],
     }
 }
@@ -106,9 +111,9 @@ fn pi_section() -> AgentModelSection {
         status: AgentModelSectionStatus::Ready,
         options: vec![
             pi_model(
-                "pi:anthropic/claude-opus-4-7",
-                "Pi · Claude Opus 4.7",
-                "anthropic/claude-opus-4-7",
+                "pi:anthropic/claude-opus-4-8",
+                "Pi · Claude Opus 4.8",
+                "anthropic/claude-opus-4-8",
                 &pi_effort_levels(true),
             ),
             pi_model(
@@ -415,12 +420,17 @@ mod tests {
                 .iter()
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["default", "claude-opus-4-6[1m]", "sonnet", "haiku"]
+            vec![
+                "default",
+                "claude-opus-4-8[1m]",
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5"
+            ]
         );
         assert!(sections[0]
             .options
             .iter()
-            .any(|model| model.id == "claude-opus-4-6[1m]" && model.supports_fast_mode));
+            .any(|model| model.id == "claude-opus-4-8[1m]" && model.supports_fast_mode));
 
         assert_eq!(sections[1].id, "codex");
         assert_eq!(sections[1].status, AgentModelSectionStatus::Ready);
@@ -457,7 +467,7 @@ mod tests {
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
             vec![
-                "pi:anthropic/claude-opus-4-7",
+                "pi:anthropic/claude-opus-4-8",
                 "pi:anthropic/claude-sonnet-4-6",
                 "pi:azure-openai-responses/gpt-5.5",
                 "pi:azure-openai-responses/gpt-5.4",
@@ -500,9 +510,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "default",
-                "claude-opus-4-6[1m]",
-                "sonnet",
-                "haiku",
+                "claude-opus-4-8[1m]",
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5",
                 "claude-custom|minimax|MiniMax-M2.7",
             ]
         );

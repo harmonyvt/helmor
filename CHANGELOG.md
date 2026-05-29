@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.5.8
+
+### Patch Changes
+
+- [`b3663ba`](https://github.com/dohooo/helmor/commit/b3663baa5cbde69d99bcec47e19a9047013d9e5f) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Allow archiving or permanently deleting a Goal and all of its child workspaces from the Goal sidebar.
+
+- [`d322fb5`](https://github.com/dohooo/helmor/commit/d322fb5bda6103390f33782c6d4fbb7dbfa88d45) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Add a Codex-only Goal composer toggle that submits prompts through Codex `/goal` and upgrades the bundled Codex CLI to 0.130.0.
+
+- [`b3663ba`](https://github.com/dohooo/helmor/commit/b3663baa5cbde69d99bcec47e19a9047013d9e5f) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Fix file and image attachments whose absolute paths contain whitespace (a common case for macOS Finder drops like `Application Support/...` or CleanShot screenshots) — they now round-trip end-to-end without being truncated, and steer turns keep their image badges after a reload.
+
+- [`d3b35d3`](https://github.com/dohooo/helmor/commit/d3b35d374d61f5988217a0e568ce5f86114ffb3d) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Add a composer debug toggle that sends hidden debugging guidance with new agent turns.
+
+- [`5ed27c2`](https://github.com/dohooo/helmor/commit/5ed27c2f234d73a18cb094ec8c0baa8e881cca58) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Add an opt-in ngrok tunnel for Debug ingest so remote preview deployments can send evidence back to Helmor.
+
+- [`863fa66`](https://github.com/dohooo/helmor/commit/863fa6683ea4cd061a9c8ac1d53e2f32fb7d4ed9) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Skip noisy query-cache persistence failures when localStorage is full, including Debug ingest refresh state.
+
+- [`b3663ba`](https://github.com/dohooo/helmor/commit/b3663baa5cbde69d99bcec47e19a9047013d9e5f) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Hide "Open in Finder" on archived workspaces and show the real error message instead of "[object Object]" when opening Finder fails.
+
+- [`b3663ba`](https://github.com/dohooo/helmor/commit/b3663baa5cbde69d99bcec47e19a9047013d9e5f) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Fix the Edit tool-call diff hover popover overflowing past the viewport when the badge sits near the bottom of the chat — it now flips above the trigger or shrinks to scroll within the available space.
+
+- [`ebee362`](https://github.com/dohooo/helmor/commit/ebee36204785f7cdc72a03e1a78ee539d4943cd0) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Add a New GitHub project flow that creates a local project and publishes it as a private or public GitHub repository.
+
+- [`e709570`](https://github.com/dohooo/helmor/commit/e709570811d569e23587cf6413a3fdba223132ea) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Add a developer settings button that pulls `~/helmor`, runs the local Helmor app installer, and restarts after a successful install.
+
+- [`1cb4900`](https://github.com/dohooo/helmor/commit/1cb4900da636c8a1083649918b9dae2e7c6c6217) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Expose Debug ingest ngrok forwarding through Helmor CLI and MCP agent tools.
+
+- [`b3663ba`](https://github.com/dohooo/helmor/commit/b3663baa5cbde69d99bcec47e19a9047013d9e5f) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Route Pi GPT models through Azure OpenAI Responses so Azure Foundry credentials are used instead of ChatGPT Codex auth.
+
+- [`b3663ba`](https://github.com/dohooo/helmor/commit/b3663baa5cbde69d99bcec47e19a9047013d9e5f) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Keep cached pull request details during transient GitHub CLI lookup failures and show a Git header refresh button for manual PR status retries.
+
+- [`c00f9ac`](https://github.com/dohooo/helmor/commit/c00f9acb55004c1b4a742179678087a66c32760a) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Add a Helmor-owned project and goal knowledge base sidecar so Goals Pi and auto-started sub-workspaces can retrieve indexed context.
+
+- [`ca24b14`](https://github.com/dohooo/helmor/commit/ca24b14d0af5982bf6334653914c784c4cd50589) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Improve the PR comments panel expansion and make inspector resizing smoother.
+
+- [`b3663ba`](https://github.com/dohooo/helmor/commit/b3663baa5cbde69d99bcec47e19a9047013d9e5f) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Fix Quit Helmor from the macOS app menu during onboarding so the app exits normally before the main workspace shell is loaded.
+
+- [`2a80906`](https://github.com/dohooo/helmor/commit/2a80906a75f48198a5076c6d3a8a057933b1f489) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Add a bundled Helmor skills export command and Settings reinstall flow for Codex, Claude, and generic agents.
+
+- [`b3663ba`](https://github.com/dohooo/helmor/commit/b3663baa5cbde69d99bcec47e19a9047013d9e5f) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Fix terminal panel collapsing during text selection — the expanded terminal now stays open while selecting text, even when the cursor moves outside the container boundary.
+
+- [`f0116fe`](https://github.com/dohooo/helmor/commit/f0116fe95a82c6ddb68b4acaa34747967eb7e75a) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Make terminal thread titles reflect their provider/runtime and live terminal activity.
+
+- [`01368e1`](https://github.com/dohooo/helmor/commit/01368e102e62d4149d785b6857affef3325da7da) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Add tmux-backed terminal profiles for Shell, Claude, Codex, OpenCode, and Pi with live status and capture controls.
+
+- [`ce27cce`](https://github.com/dohooo/helmor/commit/ce27cceb12fd458f5c56f8aaf277a5b75aec3d8d) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Update the built-in Claude Code and Pi Anthropic model lists to Claude Opus 4.8.
+
 ## 0.12.2
 
 ### Patch Changes

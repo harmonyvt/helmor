@@ -231,11 +231,11 @@ function modelMatchesProviderOption(
 	targetModel: string,
 ): boolean {
 	const normalizedTarget = normalizeProviderModelId(targetModel);
-	if (normalizedTarget === "claude-opus-4-7") {
+	if (normalizedTarget === "claude-opus-4-8") {
 		return (
 			option.id === "default" ||
 			option.cliModel === "default" ||
-			normalizeProviderModelId(option.label).includes("opus-4-7")
+			normalizeProviderModelId(option.label).includes("opus-4-8")
 		);
 	}
 	if (normalizedTarget.startsWith("claude-sonnet-")) {
@@ -296,6 +296,7 @@ function goalAssigneeModelRank(
 	if (codexRank >= 0) return codexRank;
 
 	const claudeRank = [
+		"claude-opus-4-8",
 		"claude-opus-4-7",
 		"claude-opus-4-6",
 		"claude-sonnet-4-6",

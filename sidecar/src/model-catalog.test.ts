@@ -6,13 +6,13 @@ describe("model catalog", () => {
 		expect(listProviderModels("claude")).toEqual([
 			expect.objectContaining({
 				id: "default",
-				label: "Default · Opus 4.7 1M",
+				label: "Default · Opus 4.8 1M",
 				cliModel: "default",
 			}),
 			expect.objectContaining({
-				id: "claude-opus-4-7[1m]",
-				label: "Opus 4.7 1M",
-				cliModel: "claude-opus-4-7[1m]",
+				id: "claude-opus-4-8[1m]",
+				label: "Opus 4.8 1M",
+				cliModel: "claude-opus-4-8[1m]",
 				supportsFastMode: true,
 			}),
 			expect.objectContaining({

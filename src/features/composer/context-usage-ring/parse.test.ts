@@ -11,7 +11,7 @@ import {
 	type StoredContextUsageMeta,
 } from "./parse";
 
-const CLAUDE_MODEL = "claude-opus-4-7[1m]";
+const CLAUDE_MODEL = "claude-opus-4-8[1m]";
 
 describe("parseStoredMeta", () => {
 	it("returns null for empty / null / unparseable input", () => {

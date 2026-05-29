@@ -74,7 +74,7 @@ const MODEL_SECTIONS = [
 			{
 				id: "opus-1m",
 				provider: "claude",
-				label: "Opus 4.7 1M",
+				label: "Opus 4.8 1M",
 				cliModel: "opus-1m",
 				effortLevels: ["low", "medium", "high", "max"],
 				supportsFastMode: true,
@@ -815,7 +815,7 @@ describe("WorkspaceComposer", () => {
 			</QueryClientProvider>,
 		);
 
-		await user.click(screen.getByText("Opus 4.7 1M"));
+		await user.click(screen.getByText("Opus 4.8 1M"));
 
 		expect(screen.getByText("Pi · Anthropic")).toBeInTheDocument();
 		expect(screen.getByText("Pi · Azure OpenAI Responses")).toBeInTheDocument();
@@ -878,7 +878,7 @@ describe("WorkspaceComposer", () => {
 		render(<Harness />);
 
 		await user.click(
-			screen.getByRole("button", { name: "Model: Opus 4.7 1M" }),
+			screen.getByRole("button", { name: "Model: Opus 4.8 1M" }),
 		);
 		await user.click(screen.getByRole("button", { name: "Pi · GPT-5.4" }));
 
@@ -934,7 +934,7 @@ describe("WorkspaceComposer", () => {
 		);
 
 		await user.click(
-			screen.getByRole("button", { name: "Model: Opus 4.7 1M" }),
+			screen.getByRole("button", { name: "Model: Opus 4.8 1M" }),
 		);
 
 		await screen.findByRole("listbox", { name: "Select model" });

@@ -125,7 +125,7 @@ const MODEL_SECTIONS = [
 			{
 				id: "opus-1m",
 				provider: "claude",
-				label: "Opus 4.7 1M",
+				label: "Opus 4.8 1M",
 				cliModel: "opus-1m",
 				effortLevels: ["low", "medium", "high", "max"],
 				supportsFastMode: true,
