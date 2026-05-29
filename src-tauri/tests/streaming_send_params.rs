@@ -152,7 +152,7 @@ fn includes_goal_pi_context_for_kanban_tools() {
 
     let mut input = base_input(Some("s-goal"));
     input.provider = "pi";
-    input.cli_model = "anthropic/claude-opus-4-7";
+    input.cli_model = "anthropic/claude-opus-4-8";
     input.kanban_workspace_id = Some("goal-workspace-1");
     input.kanban_snapshot = Some(r#"[{"id":"child-1","title":"Build UI"}]"#);
     input.goal_title = Some("Launch Goal");

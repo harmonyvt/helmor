@@ -772,7 +772,7 @@ function parsePiModelId(modelId: string | undefined): {
 	provider: string;
 	model: string;
 } {
-	const raw = (modelId || "anthropic/claude-opus-4-7").replace(/^pi:/, "");
+	const raw = (modelId || "anthropic/claude-opus-4-8").replace(/^pi:/, "");
 	const slash = raw.indexOf("/");
 	if (slash > 0) {
 		const provider = raw.slice(0, slash);

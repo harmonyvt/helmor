@@ -5,7 +5,7 @@ import {
 	buildCodexStoredMeta,
 } from "./context-usage";
 
-const CLAUDE_MODEL = "claude-opus-4-7[1m]";
+const CLAUDE_MODEL = "claude-opus-4-8[1m]";
 const CODEX_MODEL = "gpt-5.1-codex";
 
 describe("buildClaudeStoredMeta", () => {

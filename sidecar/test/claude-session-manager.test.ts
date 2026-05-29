@@ -246,7 +246,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 					output_tokens: 10,
 				},
 				modelUsage: {
-					"claude-opus-4-7[1m]": { contextWindow: 1_000_000 },
+					"claude-opus-4-8[1m]": { contextWindow: 1_000_000 },
 				},
 			},
 		];
@@ -257,7 +257,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-ctx",
 				prompt: "hi",
-				model: "claude-opus-4-7[1m]",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -274,7 +274,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		expect(ctxUsage?.sessionId).toBe("helmor-sess-ctx");
 		const meta = JSON.parse(ctxUsage?.meta as string);
 		expect(meta).toEqual({
-			modelId: "claude-opus-4-7[1m]",
+			modelId: "claude-opus-4-8[1m]",
 			usedTokens: 25_384,
 			maxTokens: 1_000_000,
 			// 25384 / 1_000_000 * 100 rounded to 2 decimals.
@@ -469,7 +469,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 
 		expect(bySupports.default).toBeUndefined();
 		expect(bySupports.sonnet).toBeUndefined();
-		expect(bySupports["claude-opus-4-7[1m]"]).toBe(true);
+		expect(bySupports["claude-opus-4-8[1m]"]).toBe(true);
 	});
 
 	test("ignores fastMode for models not in the hardcoded catalog", async () => {
@@ -1361,14 +1361,14 @@ describe("ClaudeSessionManager.listModels", () => {
 		expect(models).toEqual([
 			{
 				id: "default",
-				label: "Default · Opus 4.7 1M",
+				label: "Default · Opus 4.8 1M",
 				cliModel: "default",
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 			},
 			{
-				id: "claude-opus-4-7[1m]",
-				label: "Opus 4.7 1M",
-				cliModel: "claude-opus-4-7[1m]",
+				id: "claude-opus-4-8[1m]",
+				label: "Opus 4.8 1M",
+				cliModel: "claude-opus-4-8[1m]",
 				effortLevels: ["low", "medium", "high", "max"],
 				supportsFastMode: true,
 			},
