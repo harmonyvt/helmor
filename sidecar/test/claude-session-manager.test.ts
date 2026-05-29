@@ -469,6 +469,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 
 		expect(bySupports.default).toBeUndefined();
 		expect(bySupports.sonnet).toBeUndefined();
+		expect(bySupports["claude-opus-4-8"]).toBeUndefined();
 		expect(bySupports["claude-opus-4-8[1m]"]).toBe(true);
 	});
 
@@ -1364,6 +1365,12 @@ describe("ClaudeSessionManager.listModels", () => {
 				label: "Default · Opus 4.8 1M",
 				cliModel: "default",
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
+			},
+			{
+				id: "claude-opus-4-8",
+				label: "Opus 4.8",
+				cliModel: "claude-opus-4-8",
+				effortLevels: ["low", "medium", "high", "max"],
 			},
 			{
 				id: "claude-opus-4-8[1m]",

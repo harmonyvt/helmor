@@ -10,6 +10,11 @@ describe("model catalog", () => {
 				cliModel: "default",
 			}),
 			expect.objectContaining({
+				id: "claude-opus-4-8",
+				label: "Opus 4.8",
+				cliModel: "claude-opus-4-8",
+			}),
+			expect.objectContaining({
 				id: "claude-opus-4-8[1m]",
 				label: "Opus 4.8 1M",
 				cliModel: "claude-opus-4-8[1m]",
