@@ -147,7 +147,11 @@ helmor models --help
 ```
 
 Use `helmor ngrok` for Debug ingest public-forwarding config that should be
-available to workspace agents through Helmor MCP as well as the CLI:
+available to workspace agents through Helmor MCP as well as the CLI. Debug
+ingest is workspace-scoped: only start, read, clear, or stop ingest for a
+resolved Helmor workspace. If the current directory is not inside a Helmor
+workspace, resolve one first with `helmor workspace list` or ask which
+workspace should be used.
 
 ```bash
 helmor ngrok status
