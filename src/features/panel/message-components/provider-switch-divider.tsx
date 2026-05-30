@@ -4,6 +4,7 @@ import type { AgentProvider, ProviderSwitchDividerPart } from "@/lib/api";
 const PROVIDER_LABELS: Record<AgentProvider, string> = {
 	claude: "Claude",
 	codex: "Codex",
+	cursor: "Cursor",
 	pi: "Pi",
 };
 

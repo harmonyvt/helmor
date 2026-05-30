@@ -438,6 +438,9 @@ export function resolveSessionDisplayProvider({
 	if (session.agentType === "codex") {
 		return "codex";
 	}
+	if (session.agentType === "cursor") {
+		return "cursor";
+	}
 	if (session.agentType === "claude") {
 		return "claude";
 	}
