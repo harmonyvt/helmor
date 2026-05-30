@@ -24,6 +24,15 @@ pub struct NgrokConfigUpdate {
     pub domain: Option<Option<String>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NgrokManagementGuide {
+    pub process: Vec<String>,
+    pub ingest_api: Vec<String>,
+    pub stale_recovery: Vec<String>,
+    pub commands: Vec<String>,
+}
+
 pub fn status() -> Result<NgrokConfigStatus> {
     Ok(NgrokConfigStatus {
         enabled: read_enabled()?,
@@ -57,6 +66,44 @@ pub fn reset() -> Result<NgrokConfigStatus> {
     notify_settings_changed();
     let _ = crate::ui_sync::notify_running_app(UiMutationEvent::DebugIngestNgrokResetRequested);
     status()
+}
+
+pub fn public_forward_config() -> Result<crate::debug_ingest::DebugIngestPublicForwardConfig> {
+    Ok(crate::debug_ingest::DebugIngestPublicForwardConfig {
+        enabled: read_enabled()?,
+        ngrok_domain: read_domain()?,
+    })
+}
+
+pub fn management_guide() -> NgrokManagementGuide {
+    NgrokManagementGuide {
+        process: vec![
+            "Enable public forwarding with `helmor ngrok enable`; add `--domain <reserved-domain>` when the ngrok account owns a stable domain.".to_string(),
+            "Start Debug mode for a workspace, or run `helmor ngrok ensure <workspace>` while the Helmor app is running, so the app can allocate the local ingest server and token.".to_string(),
+            "Read live ingest URLs with `helmor ngrok overview`; agents should prefer `publicIngestUrl` for remote previews and `ingestUrl` for local-only producers.".to_string(),
+            "Send evidence with POST /ingest?token=... using JSON; read collected evidence with GET; clear it with DELETE.".to_string(),
+        ],
+        ingest_api: vec![
+            "GET /health returns a lightweight liveness payload.".to_string(),
+            "GET /ingest?token=... returns the current workspace evidence buffer.".to_string(),
+            "POST /ingest?token=... stores a JSON payload such as `{ \"level\": \"info\", \"source\": \"agent\", \"message\": \"captured evidence\" }`.".to_string(),
+            "DELETE /ingest?token=... clears the current workspace evidence buffer.".to_string(),
+        ],
+        stale_recovery: vec![
+            "If a public URL is stale, run `helmor ngrok overview` and check `tunnelError`, `publicIngestUrl`, and `ngrokAgent.lastError`.".to_string(),
+            "If the running app is unavailable, start Helmor first; ingest servers and tokens are in app memory and cannot be reconstructed from the database.".to_string(),
+            "Run `helmor ngrok ensure <workspace>` to re-open the workspace ingest server and recreate its ngrok tunnel with current settings.".to_string(),
+            "Run `helmor ngrok reset` when tunnels are wedged; then re-enable or ensure the workspace again.".to_string(),
+        ],
+        commands: vec![
+            "helmor ngrok status".to_string(),
+            "helmor ngrok overview".to_string(),
+            "helmor ngrok enable --domain <domain>".to_string(),
+            "helmor ngrok ensure <workspace>".to_string(),
+            "helmor ngrok stop <workspace>".to_string(),
+            "helmor ngrok reset".to_string(),
+        ],
+    }
 }
 
 pub fn reset_running_app_tunnels() -> bool {
@@ -125,5 +172,18 @@ mod tests {
         assert_eq!(json["domain"], "debug.example.ngrok.app");
         assert_eq!(json["ngrokAuthtokenPresent"], true);
         assert_eq!(json["runningAppAvailable"], false);
+    }
+
+    #[test]
+    fn management_guide_names_ingest_urls_and_recovery_commands() {
+        let guide = management_guide();
+        assert!(guide
+            .process
+            .iter()
+            .any(|step| step.contains("publicIngestUrl")));
+        assert!(guide
+            .stale_recovery
+            .iter()
+            .any(|step| step.contains("helmor ngrok reset")));
     }
 }

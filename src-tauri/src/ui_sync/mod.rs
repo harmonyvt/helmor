@@ -6,7 +6,10 @@ use tauri::{ipc::Channel, AppHandle, Manager, Runtime};
 
 pub use events::{UiMutationEnvelope, UiMutationEvent};
 pub use manager::UiSyncManager;
-pub use socket::{is_listener_running, notify_running_app, socket_path, start_listener};
+pub use socket::{
+    ensure_running_app_debug_ingest, is_listener_running, notify_running_app,
+    request_debug_ingest_overview, socket_path, start_listener, stop_running_app_debug_ingest,
+};
 
 pub fn publish<R: Runtime>(app: &AppHandle<R>, event: UiMutationEvent) {
     // Side-effect: invalidate the in-memory code-graph cache when the

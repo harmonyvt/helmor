@@ -2,6 +2,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
 
 use super::{events::UiMutationEnvelope, manager::UiSyncManager, UiMutationEvent};
@@ -41,27 +44,12 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>) -> Result<()> {
                     };
 
                     let response = match read_result {
-                        Ok(0) => br#"{"ok":false,"error":"empty request"}"#.as_slice(),
-                        Ok(_) => match serde_json::from_str::<UiMutationEnvelope>(&line) {
-                            Ok(envelope) if envelope.version == UiMutationEnvelope::VERSION => {
-                                if matches!(
-                                    envelope.event,
-                                    UiMutationEvent::DebugIngestNgrokResetRequested
-                                ) {
-                                    app.state::<crate::debug_ingest::DebugIngestManager>()
-                                        .reset_public_tunnels();
-                                }
-                                let manager = app.state::<UiSyncManager>();
-                                manager.publish(envelope.event);
-                                br#"{"ok":true}"#.as_slice()
-                            }
-                            Ok(_) => br#"{"ok":false,"error":"unsupported version"}"#.as_slice(),
-                            Err(_) => br#"{"ok":false,"error":"invalid payload"}"#.as_slice(),
-                        },
-                        Err(_) => br#"{"ok":false,"error":"read failed"}"#.as_slice(),
+                        Ok(0) => socket_response_error("empty request"),
+                        Ok(_) => handle_socket_line(&app, &line),
+                        Err(_) => socket_response_error("read failed"),
                     };
 
-                    let _ = stream.write_all(response);
+                    let _ = stream.write_all(response.as_bytes());
                     let _ = stream.write_all(b"\n");
                     let _ = stream.flush();
                 }
@@ -76,6 +64,86 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>) -> Result<()> {
         let _ = app;
         Ok(())
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "request", rename_all = "camelCase")]
+enum UiSyncRequest {
+    #[serde(rename = "debugIngestOverview")]
+    Overview,
+    #[serde(rename = "debugIngestEnsure")]
+    Ensure {
+        workspace_id: String,
+        public_forward: Option<crate::debug_ingest::DebugIngestPublicForwardConfig>,
+    },
+    #[serde(rename = "debugIngestStop")]
+    Stop { workspace_id: String },
+}
+
+fn handle_socket_line<R: Runtime>(app: &AppHandle<R>, line: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return socket_response_error("invalid payload");
+    };
+
+    if value.get("request").is_some() {
+        return match serde_json::from_value::<UiSyncRequest>(value) {
+            Ok(request) => handle_request(app, request),
+            Err(_) => socket_response_error("invalid request"),
+        };
+    }
+
+    match serde_json::from_value::<UiMutationEnvelope>(value) {
+        Ok(envelope) if envelope.version == UiMutationEnvelope::VERSION => {
+            publish_socket_event(app, envelope.event);
+            socket_response_ok(serde_json::json!(null))
+        }
+        Ok(_) => socket_response_error("unsupported version"),
+        Err(_) => socket_response_error("invalid payload"),
+    }
+}
+
+fn handle_request<R: Runtime>(app: &AppHandle<R>, request: UiSyncRequest) -> String {
+    match request {
+        UiSyncRequest::Overview => {
+            let manager = app.state::<crate::debug_ingest::DebugIngestManager>();
+            let overview = tauri::async_runtime::block_on(manager.overview());
+            socket_response_ok(overview)
+        }
+        UiSyncRequest::Ensure {
+            workspace_id,
+            public_forward,
+        } => {
+            let manager = app.state::<crate::debug_ingest::DebugIngestManager>();
+            match tauri::async_runtime::block_on(manager.ensure(&workspace_id, public_forward)) {
+                Ok(status) => socket_response_ok(status),
+                Err(error) => socket_response_error(&format!("{error:#}")),
+            }
+        }
+        UiSyncRequest::Stop { workspace_id } => {
+            let manager = app.state::<crate::debug_ingest::DebugIngestManager>();
+            manager.stop(&workspace_id);
+            socket_response_ok(serde_json::json!(true))
+        }
+    }
+}
+
+fn publish_socket_event<R: Runtime>(app: &AppHandle<R>, event: UiMutationEvent) {
+    if matches!(event, UiMutationEvent::DebugIngestNgrokResetRequested) {
+        app.state::<crate::debug_ingest::DebugIngestManager>()
+            .reset_public_tunnels();
+    }
+    let manager = app.state::<UiSyncManager>();
+    manager.publish(event);
+}
+
+fn socket_response_ok(data: impl Serialize) -> String {
+    serde_json::to_string(&serde_json::json!({ "ok": true, "data": data }))
+        .unwrap_or_else(|_| r#"{"ok":false,"error":"response serialization failed"}"#.to_string())
+}
+
+fn socket_response_error(error: &str) -> String {
+    serde_json::to_string(&serde_json::json!({ "ok": false, "error": error }))
+        .unwrap_or_else(|_| r#"{"ok":false,"error":"response serialization failed"}"#.to_string())
 }
 
 pub fn notify_running_app(event: super::events::UiMutationEvent) -> Result<bool> {
@@ -119,6 +187,86 @@ pub fn notify_running_app(event: super::events::UiMutationEvent) -> Result<bool>
     {
         let _ = event;
         Ok(false)
+    }
+}
+
+pub fn request_debug_ingest_overview() -> Result<Option<crate::debug_ingest::DebugIngestOverview>> {
+    request_running_app(serde_json::json!({ "request": "debugIngestOverview" }))
+}
+
+pub fn ensure_running_app_debug_ingest(
+    workspace_id: &str,
+    public_forward: Option<crate::debug_ingest::DebugIngestPublicForwardConfig>,
+) -> Result<Option<crate::debug_ingest::DebugIngestStatus>> {
+    request_running_app(serde_json::json!({
+        "request": "debugIngestEnsure",
+        "workspaceId": workspace_id,
+        "publicForward": public_forward,
+    }))
+}
+
+pub fn stop_running_app_debug_ingest(workspace_id: &str) -> Result<bool> {
+    request_running_app::<bool>(serde_json::json!({
+        "request": "debugIngestStop",
+        "workspaceId": workspace_id,
+    }))
+    .map(|value| value.unwrap_or(false))
+}
+
+fn request_running_app<T: DeserializeOwned>(payload: Value) -> Result<Option<T>> {
+    #[cfg(unix)]
+    {
+        let socket_path = socket_path()?;
+        if !socket_path.exists() {
+            return Ok(None);
+        }
+
+        let mut stream = match std::os::unix::net::UnixStream::connect(&socket_path) {
+            Ok(stream) => stream,
+            Err(_) => return Ok(None),
+        };
+
+        let payload =
+            serde_json::to_string(&payload).context("Failed to serialize UI sync request")?;
+        stream
+            .write_all(payload.as_bytes())
+            .context("Failed to write UI sync request")?;
+        stream
+            .write_all(b"\n")
+            .context("Failed to terminate UI sync request")?;
+        stream.flush().context("Failed to flush UI sync request")?;
+
+        let mut reader = BufReader::new(stream);
+        let mut response = String::new();
+        reader
+            .read_line(&mut response)
+            .context("Failed to read UI sync response")?;
+
+        let response: Value =
+            serde_json::from_str(&response).context("Failed to parse UI sync response")?;
+        if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            let Some(data) = response.get("data").filter(|value| !value.is_null()) else {
+                return Ok(None);
+            };
+            Ok(Some(
+                serde_json::from_value(data.clone())
+                    .context("Failed to parse UI sync response data")?,
+            ))
+        } else {
+            Err(anyhow::anyhow!(
+                "{}",
+                response
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("UI sync request failed")
+            ))
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = payload;
+        Ok(None)
     }
 }
 
