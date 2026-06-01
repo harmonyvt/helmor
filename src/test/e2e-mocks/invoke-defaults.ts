@@ -91,6 +91,7 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 		remoteTrackingRef: null,
 		pushStatus: "unknown",
 	}),
+	list_workspace_git_timeline: () => [],
 	get_workspace_forge_action_status: () => ({
 		changeRequest: null,
 		reviewDecision: null,

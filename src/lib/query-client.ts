@@ -32,6 +32,7 @@ import {
 	listWorkspaceChangesWithContent,
 	listWorkspaceFiles,
 	listWorkspaceGitPanel,
+	listWorkspaceGitTimeline,
 	listWorkspaceLinkedDirectories,
 	loadAgentModelSections,
 	loadArchivedWorkspaces,
@@ -166,6 +167,8 @@ export const helmorQueryKeys = {
 	forgeCliStatusAll: ["forgeCliStatus"] as const,
 	workspaceGitActionStatus: (workspaceId: string) =>
 		["workspaceGitActionStatus", workspaceId] as const,
+	workspaceGitTimeline: (workspaceRootPath: string) =>
+		["workspaceGitTimeline", workspaceRootPath] as const,
 	workspaceForgeActionStatus: (workspaceId: string) =>
 		["workspaceForgeActionStatus", workspaceId] as const,
 	workspacePrComments: (workspaceId: string) =>
@@ -285,7 +288,12 @@ export function shouldDehydrateHelmorQuery(query: PersistCandidateQuery) {
 	if (
 		key[0] === "workspaceChanges" ||
 		key[0] === "workspaceGitPanel" ||
-		key[0] === "workspaceFiles"
+		key[0] === "workspaceFiles" ||
+		// Git timeline rows are cheap to re-fetch from the local repo and
+		// can be large (up to a few hundred commits per workspace).
+		// Persisting them would inflate localStorage and briefly show
+		// stale history on app restart before the live query refreshes.
+		key[0] === "workspaceGitTimeline"
 	) {
 		return false;
 	}
@@ -746,6 +754,25 @@ export function workspaceGitActionStatusQueryOptions(workspaceId: string) {
 		gcTime: DEFAULT_GC_TIME,
 		refetchOnWindowFocus: true,
 		refetchInterval: 10_000,
+		retry: 0,
+	});
+}
+
+/**
+ * Recent commit history for the inspector Git Timeline tab. Polls at the same
+ * cadence as Changes / GitPanel so new commits appear shortly after the user
+ * runs the underlying git commands from a terminal. Keyed on root path
+ * (matches the other change-related queries) so multiple workspaces don't
+ * share entries.
+ */
+export function workspaceGitTimelineQueryOptions(workspaceRootPath: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspaceGitTimeline(workspaceRootPath),
+		queryFn: () => listWorkspaceGitTimeline(workspaceRootPath),
+		staleTime: CHANGES_STALE_TIME,
+		gcTime: DEFAULT_GC_TIME,
+		refetchOnWindowFocus: true,
+		refetchInterval: CHANGES_REFETCH_INTERVAL,
 		retry: 0,
 	});
 }

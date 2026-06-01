@@ -244,6 +244,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 					remoteTrackingRef: null,
 					pushStatus: "unknown",
 				};
+			case "list_workspace_git_timeline":
+				return [];
 			case "get_workspace_forge_action_status":
 				return {
 					changeRequest: null,

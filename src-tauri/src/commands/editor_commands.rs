@@ -220,6 +220,24 @@ pub async fn get_workspace_git_action_status(
     .await
 }
 
+/// Recent commit history for the inspector's Git Timeline tab. Local-only —
+/// never contacts a remote, so it is safe to call on every workspace switch
+/// without worrying about credential prompts or network stalls.
+///
+/// `max_count` is clamped to `[1, 1000]` inside `git_ops::list_recent_commits`
+/// so the UI can't accidentally request the whole repo history.
+#[tauri::command]
+pub async fn list_workspace_git_timeline(
+    workspace_root_path: String,
+    max_count: Option<u32>,
+) -> CmdResult<Vec<git_ops::GitTimelineCommit>> {
+    run_blocking(move || {
+        let path = std::path::PathBuf::from(&workspace_root_path);
+        git_ops::list_recent_commits(&path, max_count.unwrap_or(200))
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn get_file_unified_diff(
     workspace_root_path: String,
