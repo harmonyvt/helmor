@@ -4,8 +4,9 @@ mod support;
 mod types;
 
 pub use changes::{
-    discard_workspace_file, list_workspace_changes, list_workspace_changes_with_content,
-    list_workspace_git_panel, push_git_context_to_remote, stage_workspace_file,
+    discard_workspace_file, evict_all_context_change_requests, evict_context_change_request_cache,
+    list_workspace_changes, list_workspace_changes_with_content, list_workspace_git_panel,
+    push_git_context_to_remote, stage_workspace_file, sync_git_context_with_target_branch,
     unstage_workspace_file,
 };
 pub use editor::{

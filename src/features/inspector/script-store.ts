@@ -95,8 +95,11 @@ export function startScript(
 	repoId: string,
 	scriptType: "setup" | "run" | "archive",
 	workspaceId: string,
+	processScope?: string | null,
+	workingDirectoryOverride?: string | null,
 ) {
-	const k = key(workspaceId, scriptType);
+	const scope = processScope ?? workspaceId;
+	const k = key(scope, scriptType);
 
 	// Notify any already-attached listener to reset (e.g. clear its terminal)
 	// before we swap in the fresh entry — prevents old output from the
@@ -187,6 +190,8 @@ export function startScript(
 			}
 		},
 		workspaceId,
+		scope,
+		workingDirectoryOverride,
 	).catch((err) => {
 		if (entries.get(k) !== entry) return;
 		const msg = `\r\n\x1b[31mFailed to start: ${err}\x1b[0m\r\n`;
@@ -203,8 +208,14 @@ export function stopScript(
 	repoId: string,
 	scriptType: "setup" | "run" | "archive",
 	workspaceId: string,
+	processScope?: string | null,
 ) {
-	void stopRepoScript(repoId, scriptType, workspaceId);
+	void stopRepoScript(
+		repoId,
+		scriptType,
+		workspaceId,
+		processScope ?? workspaceId,
+	);
 }
 
 /**
@@ -216,9 +227,16 @@ export function writeStdin(
 	repoId: string,
 	scriptType: "setup" | "run" | "archive",
 	workspaceId: string,
+	processScope: string | null,
 	data: string,
 ) {
-	void writeRepoScriptStdin(repoId, scriptType, workspaceId, data);
+	void writeRepoScriptStdin(
+		repoId,
+		scriptType,
+		workspaceId,
+		processScope ?? workspaceId,
+		data,
+	);
 }
 
 /**
@@ -230,10 +248,18 @@ export function resizeScript(
 	repoId: string,
 	scriptType: "setup" | "run" | "archive",
 	workspaceId: string,
+	processScope: string | null,
 	cols: number,
 	rows: number,
 ) {
-	void resizeRepoScript(repoId, scriptType, workspaceId, cols, rows);
+	void resizeRepoScript(
+		repoId,
+		scriptType,
+		workspaceId,
+		processScope ?? workspaceId,
+		cols,
+		rows,
+	);
 }
 
 /** Attach a live listener. Returns current entry for replay, or null. */

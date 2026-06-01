@@ -1,4 +1,5 @@
 mod editor_files;
+mod git_context_sync;
 mod support;
 mod workspace_changes;
 mod workspace_targets;

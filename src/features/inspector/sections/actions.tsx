@@ -32,12 +32,16 @@ import {
 	type ChangeRequestInfo,
 	type ForgeActionItem,
 	type ForgeActionStatus,
+	type GitActionContext,
+	type GitPanelContext,
 	getWorkspaceForgeCheckInsertText,
 	getWorkspaceForgeDeploymentInsertText,
 	loadRepoPreferences,
 	type RepoPreferences,
 	type SyncWorkspaceTargetResponse,
+	syncGitContextWithTargetBranch,
 	syncWorkspaceWithTargetBranch,
+	toGitActionContext,
 	type WorkspaceGitActionStatus,
 } from "@/lib/api";
 import { buildComposerPreviewPayload } from "@/lib/composer-insert";
@@ -109,10 +113,14 @@ type ActionsSectionProps = {
 	workspaceState?: string | null;
 	repoId?: string | null;
 	workspaceRemote?: string | null;
+	activeGitContext?: GitPanelContext | null;
 	sectionRef?: React.RefObject<HTMLElement | null>;
 	bodyHeight: number;
 	expanded: boolean;
-	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	onCommitAction?: (
+		mode: WorkspaceCommitButtonMode,
+		context?: GitActionContext,
+	) => Promise<void>;
 	currentSessionId?: string | null;
 	onQueuePendingPromptForSession?: (request: {
 		sessionId: string;
@@ -158,6 +166,7 @@ export function ActionsSection({
 	workspaceState,
 	repoId,
 	workspaceRemote,
+	activeGitContext = null,
 	sectionRef,
 	bodyHeight,
 	expanded,
@@ -182,22 +191,37 @@ export function ActionsSection({
 	const isArchived = workspaceState === "archived";
 	const gitStatusQuery = useQuery({
 		...workspaceGitActionStatusQueryOptions(workspaceId ?? "__none__"),
-		enabled: workspaceId !== null && !isArchived,
+		enabled: workspaceId !== null && !isArchived && activeGitContext === null,
 	});
 	const forgeStatusQuery = useQuery({
 		...workspaceForgeActionStatusQueryOptions(workspaceId ?? "__none__"),
-		enabled: workspaceId !== null && !isArchived,
+		enabled: workspaceId !== null && !isArchived && activeGitContext === null,
 	});
-	const gitStatus = gitStatusQuery.data ?? EMPTY_GIT_ACTION_STATUS;
-	const forgeStatus = forgeStatusQuery.data ?? EMPTY_FORGE_ACTION_STATUS;
+	const activeContextAction = activeGitContext
+		? toGitActionContext(activeGitContext)
+		: undefined;
+	const gitStatus =
+		activeGitContext?.gitStatus ??
+		gitStatusQuery.data ??
+		EMPTY_GIT_ACTION_STATUS;
+	const contextChangeRequest = activeGitContext?.changeRequest ?? null;
+	const forgeStatus: ForgeActionStatus = activeGitContext
+		? {
+				...EMPTY_FORGE_ACTION_STATUS,
+				changeRequest: contextChangeRequest,
+				remoteState: contextChangeRequest ? "ok" : "noPr",
+			}
+		: (forgeStatusQuery.data ?? EMPTY_FORGE_ACTION_STATUS);
 	const changeRequestName = forgeQuery.data?.labels.changeRequestName ?? "PR";
 	const providerName = forgeQuery.data?.labels.providerName ?? "Forge";
 	// Auth-flip invalidation lives in the sync bridge — no frontend edge-detect.
-	const gitRows = sortStatusRows(buildGitRows(gitStatus, workspaceRemote));
+	const gitRows = sortStatusRows(
+		buildGitRows(gitStatus, activeGitContext?.remote ?? workspaceRemote),
+	);
 	const reviewRows = sortStatusRows(
 		buildReviewRows(
 			forgeStatus,
-			changeRequest,
+			contextChangeRequest ?? changeRequest,
 			changeRequestName,
 			providerName,
 		),
@@ -254,12 +278,29 @@ export function ActionsSection({
 
 		setSyncPending(true);
 		try {
-			const result = await syncWorkspaceWithTargetBranch(workspaceId);
+			const result = activeGitContext
+				? await syncGitContextWithTargetBranch(
+						activeGitContext.rootPath,
+						activeGitContext.remote,
+						activeGitContext.targetBranch,
+					)
+				: await syncWorkspaceWithTargetBranch(workspaceId);
 			const target = result.targetBranch;
 			if (result.outcome === "updated") {
 				toast.success(`Pulled latest from ${target}`);
 			} else if (result.outcome === "alreadyUpToDate") {
 				toast(`Already up to date with ${target}`);
+			} else if (result.outcome === "noTargetBranch") {
+				// Submodule whose upstream / default branch couldn't be
+				// resolved locally — surface that explicitly instead of
+				// silently fetching origin/main.
+				toast.error(
+					"Cannot pull updates: no target branch is configured for this submodule. Set its upstream with `git branch --set-upstream-to=origin/<branch>` and try again.",
+				);
+			} else if (result.outcome === "fetchFailed") {
+				toast.error(
+					`Failed to fetch from origin/${target || "<target>"}. Check the remote and your network, then try again.`,
+				);
 			} else if (result.outcome === "conflict") {
 				await queueSyncResolutionPrompt(result);
 			} else {
@@ -293,7 +334,13 @@ export function ActionsSection({
 			]);
 			setSyncPending(false);
 		}
-	}, [queryClient, queueSyncResolutionPrompt, syncPending, workspaceId]);
+	}, [
+		activeGitContext,
+		queryClient,
+		queueSyncResolutionPrompt,
+		syncPending,
+		workspaceId,
+	]);
 	const handleInsertCheck = useCallback(
 		async (item: ForgeActionItem) => {
 			if (!workspaceId) {
@@ -383,6 +430,18 @@ export function ActionsSection({
 				<div className="px-2.5 pb-1 pt-2">
 					<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 						Git
+						{activeGitContext ? (
+							// Surface which submodule the Git row actions will
+							// run against — otherwise the user can't tell at a
+							// glance that Sync targets `vendor/lib` instead of
+							// the parent workspace.
+							<>
+								{" · "}
+								<span className="font-mono text-muted-foreground/80">
+									{activeGitContext.parentRelativePath ?? activeGitContext.name}
+								</span>
+							</>
+						) : null}
 					</span>
 				</div>
 				{gitRows.map((item) => {
@@ -413,6 +472,10 @@ export function ActionsSection({
 										}
 										if (action.kind === "sync") {
 											void handleSync();
+											return;
+										}
+										if (activeContextAction) {
+											void onCommitAction?.(action.mode!, activeContextAction);
 											return;
 										}
 										void onCommitAction?.(action.mode!);

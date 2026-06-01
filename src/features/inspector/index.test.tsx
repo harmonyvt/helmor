@@ -19,6 +19,7 @@ import { _resetForTesting as resetTerminalStoreForTesting } from "./terminal-sto
 
 const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChangesWithContent: vi.fn(),
+	listWorkspaceGitPanel: vi.fn(),
 	getWorkspaceForgeCheckInsertText: vi.fn(),
 	getWorkspacePrCommentInsertText: vi.fn(),
 	createSession: vi.fn(),
@@ -58,6 +59,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		getWorkspaceForgeCheckInsertText: apiMocks.getWorkspaceForgeCheckInsertText,
 		getWorkspacePrCommentInsertText: apiMocks.getWorkspacePrCommentInsertText,
 		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
+		listWorkspaceGitPanel: apiMocks.listWorkspaceGitPanel,
 		loadWorkspaceGitActionStatus: apiMocks.loadWorkspaceGitActionStatus,
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
 		getWorkspacePrComments: apiMocks.getWorkspacePrComments,
@@ -155,6 +157,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		_resetTabsUiStateForTesting();
 		resetTerminalStoreForTesting();
 		apiMocks.listWorkspaceChangesWithContent.mockReset();
+		apiMocks.listWorkspaceGitPanel.mockReset();
 		apiMocks.getWorkspaceForgeCheckInsertText.mockReset();
 		apiMocks.getWorkspacePrCommentInsertText.mockReset();
 		apiMocks.createSession.mockReset();
@@ -169,6 +172,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 
 		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
 			items: [],
+			prefetched: [],
+		});
+		apiMocks.listWorkspaceGitPanel.mockResolvedValue({
+			items: [],
+			contexts: [],
 			prefetched: [],
 		});
 		apiMocks.getWorkspaceForgeCheckInsertText.mockResolvedValue(
@@ -231,6 +239,81 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			within(actions).getByText("Branch fully pushed"),
 		).toBeInTheDocument();
 		expect(within(actions).getAllByLabelText("Passed")).toHaveLength(3);
+	});
+
+	it("switches actions to the selected submodule git context", async () => {
+		const onCommitAction = vi.fn();
+		apiMocks.listWorkspaceGitPanel.mockResolvedValue({
+			items: [],
+			prefetched: [],
+			contexts: [
+				{
+					id: "workspace",
+					kind: "workspace",
+					name: "Workspace",
+					rootPath: "/tmp/workspace",
+					parentRelativePath: null,
+					branch: "feature/actions",
+					remote: "testuser",
+					remoteUrl: "git@github.com:test/repo.git",
+					targetBranch: "main",
+					gitStatus: cleanGitStatus(),
+					changeRequest: null,
+					available: true,
+					unavailableReason: null,
+				},
+				{
+					id: "submodule:vendor/lib",
+					kind: "submodule",
+					name: "lib",
+					rootPath: "/tmp/workspace/vendor/lib",
+					parentRelativePath: "vendor/lib",
+					branch: "feature/lib",
+					remote: "origin",
+					remoteUrl: "git@github.com:test/lib.git",
+					targetBranch: "main",
+					gitStatus: {
+						...cleanGitStatus(),
+						uncommittedCount: 2,
+						aheadOfRemoteCount: 1,
+						remoteTrackingRef: "refs/remotes/origin/feature/lib",
+					},
+					changeRequest: {
+						url: "https://github.com/test/lib/pull/7",
+						number: 7,
+						state: "OPEN",
+						title: "Update lib",
+						isMerged: false,
+						headBranch: "feature/lib",
+						baseBranch: "main",
+						headCommitSha: "abc",
+					},
+					available: true,
+					unavailableReason: null,
+				},
+			],
+		});
+
+		renderInspector({ onCommitAction });
+
+		const tab = await screen.findByRole("tab", {
+			name: /lib on feature\/lib/,
+		});
+		await userEvent.click(tab);
+
+		await screen.findByText("2 uncommitted changes");
+		expect(screen.getByText("#7")).toBeInTheDocument();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "Commit and push" }),
+		);
+		expect(onCommitAction).toHaveBeenCalledWith(
+			"commit-and-push",
+			expect.objectContaining({
+				id: "submodule:vendor/lib",
+				rootPath: "/tmp/workspace/vendor/lib",
+			}),
+		);
 	});
 
 	it("keeps the actions scroll area shrinkable when tabs are collapsed", async () => {

@@ -31,6 +31,8 @@ import {
 type RunTabProps = {
 	repoId: string | null;
 	workspaceId: string | null;
+	scriptScopeId?: string | null;
+	workingDirectoryOverride?: string | null;
 	runScript: string | null;
 	isActive: boolean;
 	onOpenSettings: () => void;
@@ -139,6 +141,8 @@ export function OpenDevServerButton({ urls }: { urls: string[] }) {
 export function RunTab({
 	repoId,
 	workspaceId,
+	scriptScopeId,
+	workingDirectoryOverride,
 	runScript,
 	isActive,
 	onOpenSettings,
@@ -152,6 +156,11 @@ export function RunTab({
 	const { settings } = useSettings();
 	const runShortcut = getShortcut(settings.shortcuts, "script.run");
 
+	// Default the script scope to the workspace id when the parent
+	// doesn't supply one explicitly — keeps existing call sites and
+	// tests working unchanged.
+	const effectiveScopeId = scriptScopeId ?? workspaceId;
+
 	// Notify parent whenever the run-script status transitions so the tab
 	// header can conditionally show controls like the Open-dev-server button.
 	useEffect(() => {
@@ -159,12 +168,12 @@ export function RunTab({
 	}, [status, onStatusChange]);
 
 	useEffect(() => {
-		if (!workspaceId) {
+		if (!workspaceId || !effectiveScopeId) {
 			onUrlsChange?.([]);
 			return;
 		}
 
-		const existing = attach(workspaceId, "run", {
+		const existing = attach(effectiveScopeId, "run", {
 			onChunk: (data) => termRef.current?.write(data),
 			onStatusChange: setStatus,
 			onUrlsChange: (urls) => onUrlsChange?.(urls),
@@ -199,38 +208,44 @@ export function RunTab({
 			termRef.current?.clear();
 		}
 
-		return () => detach(workspaceId, "run");
-	}, [workspaceId]);
+		return () => detach(effectiveScopeId, "run");
+	}, [workspaceId, effectiveScopeId]);
 
 	const handleRun = useCallback(() => {
-		if (!repoId || !workspaceId) return;
+		if (!repoId || !workspaceId || !effectiveScopeId) return;
 		termRef.current?.clear();
 		setStatus("running");
 		setHasRun(true);
-		startScript(repoId, "run", workspaceId);
-	}, [repoId, workspaceId]);
+		startScript(
+			repoId,
+			"run",
+			workspaceId,
+			effectiveScopeId,
+			workingDirectoryOverride,
+		);
+	}, [repoId, workspaceId, effectiveScopeId, workingDirectoryOverride]);
 
 	const handleStop = useCallback(() => {
-		if (!repoId || !workspaceId) return;
-		stopScript(repoId, "run", workspaceId);
-	}, [repoId, workspaceId]);
+		if (!repoId || !workspaceId || !effectiveScopeId) return;
+		stopScript(repoId, "run", workspaceId, effectiveScopeId);
+	}, [repoId, workspaceId, effectiveScopeId]);
 
 	// Forward keystrokes to the PTY. The backend silently ignores writes
 	// when no script is live, so we don't gate this on status.
 	const handleData = useCallback(
 		(data: string) => {
-			if (!repoId || !workspaceId) return;
-			writeStdin(repoId, "run", workspaceId, data);
+			if (!repoId || !workspaceId || !effectiveScopeId) return;
+			writeStdin(repoId, "run", workspaceId, effectiveScopeId, data);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, effectiveScopeId],
 	);
 
 	const handleResize = useCallback(
 		(cols: number, rows: number) => {
-			if (!repoId || !workspaceId) return;
-			resizeScript(repoId, "run", workspaceId, cols, rows);
+			if (!repoId || !workspaceId || !effectiveScopeId) return;
+			resizeScript(repoId, "run", workspaceId, effectiveScopeId, cols, rows);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, effectiveScopeId],
 	);
 
 	const hasScript = !!runScript?.trim();

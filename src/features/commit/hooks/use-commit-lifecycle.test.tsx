@@ -21,6 +21,9 @@ const apiMocks = vi.hoisted(() => ({
 	refreshWorkspaceChangeRequest: vi.fn(),
 	mergeWorkspaceChangeRequest: vi.fn(),
 	pushWorkspaceToRemote: vi.fn(),
+	mergeGitContextChangeRequest: vi.fn(),
+	closeGitContextChangeRequest: vi.fn(),
+	refreshGitContextPrCache: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -36,6 +39,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		refreshWorkspaceChangeRequest: apiMocks.refreshWorkspaceChangeRequest,
 		mergeWorkspaceChangeRequest: apiMocks.mergeWorkspaceChangeRequest,
 		pushWorkspaceToRemote: apiMocks.pushWorkspaceToRemote,
+		mergeGitContextChangeRequest: apiMocks.mergeGitContextChangeRequest,
+		closeGitContextChangeRequest: apiMocks.closeGitContextChangeRequest,
+		refreshGitContextPrCache: apiMocks.refreshGitContextPrCache,
 	};
 });
 
@@ -78,6 +84,10 @@ describe("useWorkspaceCommitLifecycle", () => {
 		apiMocks.refreshWorkspaceChangeRequest.mockReset();
 		apiMocks.mergeWorkspaceChangeRequest.mockReset();
 		apiMocks.pushWorkspaceToRemote.mockReset();
+		apiMocks.mergeGitContextChangeRequest.mockReset();
+		apiMocks.closeGitContextChangeRequest.mockReset();
+		apiMocks.refreshGitContextPrCache.mockReset();
+		apiMocks.refreshGitContextPrCache.mockResolvedValue(undefined);
 
 		apiMocks.createSession.mockResolvedValue({ sessionId: "session-action" });
 		apiMocks.loadRepoPreferences.mockResolvedValue({});
@@ -753,5 +763,115 @@ describe("useWorkspaceCommitLifecycle", () => {
 				"destructive",
 			);
 		});
+	});
+
+	it("routes merge through the submodule PR when a non-workspace context is passed", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		apiMocks.mergeGitContextChangeRequest.mockResolvedValueOnce({
+			number: 7,
+			title: "Update lib",
+			url: "https://github.com/example/lib/pull/7",
+			state: "MERGED",
+			isMerged: true,
+		} satisfies ChangeRequestInfo);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					selectedRepoId: "repo-1",
+					selectedWorkspaceRootPath: "/tmp/workspace",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					sendingSessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("merge", {
+				id: "submodule:vendor/lib",
+				kind: "submodule",
+				name: "lib",
+				rootPath: "/tmp/workspace/vendor/lib",
+				parentRelativePath: "vendor/lib",
+				branch: "feature/lib",
+				remote: "origin",
+				remoteUrl: "git@github.com:example/lib.git",
+				targetBranch: "main",
+			});
+		});
+
+		// The submodule path must NOT touch the parent workspace's PR.
+		expect(apiMocks.mergeWorkspaceChangeRequest).not.toHaveBeenCalled();
+		expect(apiMocks.mergeGitContextChangeRequest).toHaveBeenCalledWith(
+			"git@github.com:example/lib.git",
+			"feature/lib",
+		);
+		// And it should drop the per-context PR cache so the next poll
+		// reflects the merge immediately.
+		expect(apiMocks.refreshGitContextPrCache).toHaveBeenCalledWith(
+			"git@github.com:example/lib.git",
+			"feature/lib",
+		);
+	});
+
+	it("routes close through the submodule PR when a non-workspace context is passed", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		apiMocks.closeGitContextChangeRequest.mockResolvedValueOnce({
+			number: 7,
+			title: "Update lib",
+			url: "https://github.com/example/lib/pull/7",
+			state: "CLOSED",
+			isMerged: false,
+		} satisfies ChangeRequestInfo);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					selectedRepoId: "repo-1",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					sendingSessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("closed", {
+				id: "submodule:vendor/lib",
+				kind: "submodule",
+				name: "lib",
+				rootPath: "/tmp/workspace/vendor/lib",
+				parentRelativePath: "vendor/lib",
+				branch: "feature/lib",
+				remote: "origin",
+				remoteUrl: "git@github.com:example/lib.git",
+				targetBranch: "main",
+			});
+		});
+
+		expect(apiMocks.closeWorkspaceChangeRequest).not.toHaveBeenCalled();
+		expect(apiMocks.closeGitContextChangeRequest).toHaveBeenCalledWith(
+			"git@github.com:example/lib.git",
+			"feature/lib",
+		);
 	});
 });

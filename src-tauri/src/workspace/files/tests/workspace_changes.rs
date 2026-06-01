@@ -239,6 +239,15 @@ fn git_panel_discovers_submodule_branch_and_inner_changes() {
 
     assert_eq!(submodule.kind, "submodule");
     assert_eq!(submodule.branch.as_deref(), Some("main"));
+    // The submodule's remote is a local file:// URL — `parse_github_remote`
+    // rejects it, so the change_request lookup must short-circuit to None
+    // instead of being conjured from a stale cache entry or a stranger's
+    // PR with the same head branch.
+    assert!(
+        submodule.change_request.is_none(),
+        "submodule context should not surface a change_request for a non-github remote: {:?}",
+        submodule.change_request
+    );
     assert!(
         panel
             .items

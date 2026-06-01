@@ -2,6 +2,8 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
@@ -18,10 +20,46 @@ use super::{
 use crate::{
     bail_coded, db,
     error::{AnyhowCodedExt, ErrorCode},
+    forge::ChangeRequestInfo,
     git_ops, workspace_state,
 };
 
 const MAX_PREFETCH_BYTES: u64 = 1_048_576;
+const CONTEXT_CHANGE_REQUEST_TTL: Duration = Duration::from_secs(60);
+/// Bound on the per-(remote, branch) PR cache so long-running sessions
+/// with many branch switches don't leak entries forever. When the cache
+/// hits this size we drop the oldest-recorded entries on insert.
+const CONTEXT_CHANGE_REQUEST_CACHE_LIMIT: usize = 256;
+
+type ContextChangeRequestCache =
+    Mutex<BTreeMap<(String, String), (Instant, Option<ChangeRequestInfo>)>>;
+
+static CONTEXT_CHANGE_REQUEST_CACHE: OnceLock<ContextChangeRequestCache> = OnceLock::new();
+
+fn context_change_request_cache() -> &'static ContextChangeRequestCache {
+    CONTEXT_CHANGE_REQUEST_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+/// Drop the cached PR lookup for a specific (remote, branch) pair. Called
+/// after merge/close mutations and from `evict_all_context_change_requests`
+/// when the UI requests a force-refresh.
+pub fn evict_context_change_request_cache(remote_url: &str, branch: &str) {
+    let key = (remote_url.to_string(), branch.trim().to_string());
+    let mut guard = context_change_request_cache()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    guard.remove(&key);
+}
+
+/// Drop every cached PR lookup. Used by the manual "Refresh PR status"
+/// affordance so the next git-panel call goes straight to gh instead of
+/// waiting on the 60s TTL.
+pub fn evict_all_context_change_requests() {
+    let mut guard = context_change_request_cache()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    guard.clear();
+}
 
 pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFileListItem>> {
     list_git_root_changes(workspace_root_path, None)
@@ -274,6 +312,111 @@ pub fn push_git_context_to_remote(
     })
 }
 
+pub fn sync_git_context_with_target_branch(
+    context_root_path: &str,
+    remote: Option<&str>,
+    target_branch: Option<&str>,
+) -> Result<crate::workspaces::SyncWorkspaceTargetResponse> {
+    let context_root = validate_git_context_root(context_root_path)?;
+    let remote = remote
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("origin");
+
+    // Try caller-provided value first; if missing, attempt to re-resolve
+    // from the local git config (upstream → remote HEAD → main → master).
+    // If none of those apply, return NoTargetBranch instead of silently
+    // assuming "main" and pulling the wrong branch — this hits submodules
+    // whose default branch is `master`, `trunk`, `develop`, etc.
+    let target_branch = target_branch
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| resolve_context_target_branch(&context_root, remote));
+    let Some(target_branch) = target_branch else {
+        return Ok(crate::workspaces::SyncWorkspaceTargetResponse {
+            outcome: crate::workspaces::SyncWorkspaceTargetOutcome::NoTargetBranch,
+            target_branch: String::new(),
+            conflicted_files: Vec::new(),
+        });
+    };
+
+    let current_status =
+        git_ops::workspace_action_status(&context_root, Some(remote), Some(&target_branch))?;
+    if current_status.conflict_count > 0 {
+        return Ok(crate::workspaces::SyncWorkspaceTargetResponse {
+            outcome: crate::workspaces::SyncWorkspaceTargetOutcome::Conflict,
+            target_branch,
+            conflicted_files: Vec::new(),
+        });
+    }
+    if current_status.uncommitted_count > 0 {
+        return Ok(crate::workspaces::SyncWorkspaceTargetResponse {
+            outcome: crate::workspaces::SyncWorkspaceTargetOutcome::DirtyWorktree,
+            target_branch,
+            conflicted_files: Vec::new(),
+        });
+    }
+
+    if let Err(error) = git_ops::fetch_remote_branch(&context_root, remote, &target_branch) {
+        tracing::warn!(
+            context_root = %context_root.display(),
+            remote,
+            target_branch,
+            error = %error,
+            "git fetch failed during context sync",
+        );
+        return Ok(crate::workspaces::SyncWorkspaceTargetResponse {
+            outcome: crate::workspaces::SyncWorkspaceTargetOutcome::FetchFailed,
+            target_branch,
+            conflicted_files: Vec::new(),
+        });
+    }
+    let target_ref = format!("refs/remotes/{remote}/{target_branch}");
+    let behind_count = git_ops::commits_behind(&context_root, &target_ref)?;
+    if behind_count == 0 {
+        return Ok(crate::workspaces::SyncWorkspaceTargetResponse {
+            outcome: crate::workspaces::SyncWorkspaceTargetOutcome::AlreadyUpToDate,
+            target_branch,
+            conflicted_files: Vec::new(),
+        });
+    }
+
+    let preflight = git_ops::preflight_merge_ref(&context_root, &target_ref)?;
+    if !preflight.conflicted_files.is_empty() {
+        return Ok(crate::workspaces::SyncWorkspaceTargetResponse {
+            outcome: crate::workspaces::SyncWorkspaceTargetOutcome::Conflict,
+            target_branch,
+            conflicted_files: preflight.conflicted_files,
+        });
+    }
+
+    match git_ops::merge_ref_no_edit(&context_root, &target_ref) {
+        Ok(()) => Ok(crate::workspaces::SyncWorkspaceTargetResponse {
+            outcome: crate::workspaces::SyncWorkspaceTargetOutcome::Updated,
+            target_branch,
+            conflicted_files: Vec::new(),
+        }),
+        Err(error) => {
+            let merge_status = git_ops::workspace_action_status(
+                &context_root,
+                Some(remote),
+                Some(&target_branch),
+            )?;
+            if merge_status.conflict_count > 0 {
+                let _ = git_ops::abort_merge(&context_root);
+                Ok(crate::workspaces::SyncWorkspaceTargetResponse {
+                    outcome: crate::workspaces::SyncWorkspaceTargetOutcome::Conflict,
+                    target_branch,
+                    conflicted_files: Vec::new(),
+                })
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
 fn validate_git_context_root(context_root_path: &str) -> Result<PathBuf> {
     let context_root = PathBuf::from(context_root_path);
     if !context_root.is_absolute() {
@@ -325,13 +468,19 @@ fn discover_git_panel_contexts(workspace_root: &Path) -> Result<Vec<GitPanelCont
         return Ok(Vec::new());
     }
 
-    let mut contexts = Vec::new();
-    contexts.push(build_git_panel_context(
-        workspace_root,
-        None,
-        "workspace",
-        "Workspace",
-    ));
+    // Build per-submodule descriptors first (cheap, sync), then fan out
+    // the gh GraphQL lookups in parallel. The old serial loop blocked
+    // panel discovery for ~N × 500ms in workspaces with many submodules
+    // because each `lookup_context_change_request` waits on a `gh`
+    // subprocess. We keep the workspace descriptor in slot 0 so the
+    // existing "workspace first" sort contract still holds.
+    let mut descriptors: Vec<ContextDescriptor> = Vec::new();
+    descriptors.push(ContextDescriptor {
+        root: workspace_root.to_path_buf(),
+        parent_relative_path: None,
+        kind: "workspace",
+        name: "Workspace".to_string(),
+    });
 
     let output = git_ops::run_git(["submodule", "status", "--recursive"], Some(workspace_root))
         .unwrap_or_default();
@@ -344,15 +493,42 @@ fn discover_git_panel_contexts(workspace_root: &Path) -> Result<Vec<GitPanelCont
             .file_name()
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_else(|| relative_path.clone());
-        contexts.push(build_git_panel_context(
-            &root,
-            Some(relative_path),
-            "submodule",
-            &name,
-        ));
+        descriptors.push(ContextDescriptor {
+            root,
+            parent_relative_path: Some(relative_path),
+            kind: "submodule",
+            name,
+        });
     }
 
+    let contexts: Vec<GitPanelContext> = std::thread::scope(|scope| {
+        let handles: Vec<_> = descriptors
+            .into_iter()
+            .map(|descriptor| {
+                scope.spawn(move || {
+                    build_git_panel_context(
+                        &descriptor.root,
+                        descriptor.parent_relative_path,
+                        descriptor.kind,
+                        &descriptor.name,
+                    )
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .collect()
+    });
+
     Ok(contexts)
+}
+
+struct ContextDescriptor {
+    root: PathBuf,
+    parent_relative_path: Option<String>,
+    kind: &'static str,
+    name: String,
 }
 
 fn build_git_panel_context(
@@ -374,6 +550,7 @@ fn build_git_panel_context(
             remote_url: None,
             target_branch: None,
             git_status: quiet_git_status(None),
+            change_request: None,
             available: false,
             unavailable_reason: Some("Submodule is not initialized on disk".to_string()),
         };
@@ -390,6 +567,18 @@ fn build_git_panel_context(
     let git_status =
         git_ops::workspace_action_status(root, remote.as_deref(), target_branch.as_deref())
             .unwrap_or_else(|_| quiet_git_status(target_branch.clone()));
+    // Only query GitHub for submodule PRs when the local branch has a
+    // remote-tracking ref. Mirrors the workspace-PR guard — without it a
+    // freshly-created local branch can match a historical PR whose head
+    // ref happens to share the placeholder name, badging the submodule
+    // with a stranger's old PR.
+    let has_remote_tracking = remote
+        .as_deref()
+        .is_some_and(|remote| git_ops::resolve_remote_tracking_ref(root, Some(remote)).is_some());
+    let change_request = (kind == "submodule" && has_remote_tracking)
+        .then(|| remote_url.as_deref().zip(branch.as_deref()))
+        .flatten()
+        .and_then(|(remote_url, branch)| lookup_context_change_request(remote_url, branch));
 
     GitPanelContext {
         id: context_id(kind, parent_relative_path.as_deref()),
@@ -402,9 +591,48 @@ fn build_git_panel_context(
         remote_url,
         target_branch,
         git_status,
+        change_request,
         available: true,
         unavailable_reason: None,
     }
+}
+
+fn lookup_context_change_request(remote_url: &str, branch: &str) -> Option<ChangeRequestInfo> {
+    let key = (remote_url.to_string(), branch.to_string());
+    let cache = context_change_request_cache();
+    {
+        let guard = cache.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((cached_at, value)) = guard.get(&key) {
+            if cached_at.elapsed() <= CONTEXT_CHANGE_REQUEST_TTL {
+                return value.clone();
+            }
+        }
+    }
+
+    let loaded =
+        crate::github_graphql::lookup_change_request_by_remote_and_branch(remote_url, branch)
+            .unwrap_or_else(|error| {
+                tracing::debug!(
+                    remote_url,
+                    branch,
+                    error = %error,
+                    "Git context change request lookup failed"
+                );
+                None
+            });
+    let mut guard = cache.lock().unwrap_or_else(|p| p.into_inner());
+    // Bound the cache before insert. We don't track real LRU; popping
+    // the lexicographically-smallest key is good enough as long as we
+    // bound the working set — the goal is preventing unbounded growth,
+    // not perfect recall.
+    while guard.len() >= CONTEXT_CHANGE_REQUEST_CACHE_LIMIT {
+        let Some(first_key) = guard.keys().next().cloned() else {
+            break;
+        };
+        guard.remove(&first_key);
+    }
+    guard.insert(key, (Instant::now(), loaded.clone()));
+    loaded
 }
 
 fn context_id(kind: &str, parent_relative_path: Option<&str>) -> String {

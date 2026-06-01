@@ -101,6 +101,71 @@ pub async fn push_git_context_to_remote(
 }
 
 #[tauri::command]
+pub async fn sync_git_context_with_target_branch(
+    context_root_path: String,
+    remote: Option<String>,
+    target_branch: Option<String>,
+) -> CmdResult<crate::workspaces::SyncWorkspaceTargetResponse> {
+    run_blocking(move || {
+        editor_files::sync_git_context_with_target_branch(
+            &context_root_path,
+            remote.as_deref(),
+            target_branch.as_deref(),
+        )
+    })
+    .await
+}
+
+/// Drop the in-Rust PR cache. The git-panel poll currently caches each
+/// submodule's PR lookup for 60s; this is the only way for the UI to
+/// force a fresh lookup. Targets a single (remote, branch) when both are
+/// provided, else clears every entry.
+#[tauri::command]
+pub async fn refresh_git_context_pr_cache(
+    remote_url: Option<String>,
+    branch: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        match (remote_url.as_deref(), branch.as_deref()) {
+            (Some(remote_url), Some(branch)) => {
+                editor_files::evict_context_change_request_cache(remote_url, branch);
+            }
+            _ => editor_files::evict_all_context_change_requests(),
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Merge the PR attached to a submodule git-panel context. Uses the
+/// context's remote_url + branch directly so the parent workspace's PR is
+/// not affected.
+#[tauri::command]
+pub async fn merge_git_context_change_request(
+    remote_url: String,
+    branch: String,
+) -> CmdResult<Option<crate::forge::ChangeRequestInfo>> {
+    run_blocking(move || {
+        crate::github_graphql::merge_change_request_by_remote_and_branch(&remote_url, &branch)
+    })
+    .await
+}
+
+/// Close (without merging) the PR attached to a submodule git-panel
+/// context. Like `merge_git_context_change_request`, scoped to the
+/// submodule and never the parent workspace.
+#[tauri::command]
+pub async fn close_git_context_change_request(
+    remote_url: String,
+    branch: String,
+) -> CmdResult<Option<crate::forge::ChangeRequestInfo>> {
+    run_blocking(move || {
+        crate::github_graphql::close_change_request_by_remote_and_branch(&remote_url, &branch)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn get_workspace_git_action_status(
     workspace_id: String,
 ) -> CmdResult<git_ops::WorkspaceGitActionStatus> {
