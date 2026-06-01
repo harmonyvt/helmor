@@ -1,4 +1,5 @@
 import {
+	ChevronDown,
 	Flag,
 	GitBranch,
 	GitPullRequest,
@@ -8,6 +9,7 @@ import {
 } from "lucide-react";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BranchPickerPopover } from "@/components/branch-picker";
 import { Button } from "@/components/ui/button";
 import {
 	Command,
@@ -448,20 +450,27 @@ export function WorkspaceCreateDialog({
 								<Label className="text-[12px] font-medium tracking-[-0.01em]">
 									Remote branch
 								</Label>
-								<select
-									value={remoteBranch}
-									onChange={(event) => setRemoteBranch(event.target.value)}
-									disabled={
-										busy || remoteLoading || remoteBranches.length === 0
-									}
-									className="h-8 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60"
+								<BranchPickerPopover
+									currentBranch={remoteBranch}
+									branches={remoteBranches}
+									loading={remoteLoading}
+									onOpen={() => {}}
+									onSelect={setRemoteBranch}
 								>
-									{remoteBranches.map((branch) => (
-										<option key={branch} value={branch}>
-											{branch}
-										</option>
-									))}
-								</select>
+									<button
+										type="button"
+										disabled={
+											busy || remoteLoading || remoteBranches.length === 0
+										}
+										className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-2 text-left text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60"
+									>
+										<GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+										<span className="min-w-0 flex-1 truncate">
+											{remoteBranch || "No branches found"}
+										</span>
+										<ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+									</button>
+								</BranchPickerPopover>
 							</div>
 							<StatusText loading={remoteLoading} error={remoteError} />
 							<div className="flex justify-end">

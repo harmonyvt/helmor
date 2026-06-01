@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::{data_dir::TEST_ENV_LOCK as TEST_LOCK, git_ops};
 
 use super::{
-    parse_workspace_path, query_workspace_target, resolve_target_ref,
+    list_workspace_git_panel, parse_workspace_path, query_workspace_target, resolve_target_ref,
     support::{test_db_with_workspace, TestDataDir},
 };
 
@@ -142,5 +142,97 @@ fn resolve_target_ref_uses_configured_target_branch() {
     assert_eq!(
         resolved, "refs/heads/custom/target",
         "should resolve to the configured target branch ref"
+    );
+}
+
+#[test]
+fn git_panel_uses_configured_target_branch_not_branch_upstream() {
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let test_dir = TestDataDir::new("git-panel-target");
+
+    let repo_root = test_dir.root.join("source-repo");
+    fs::create_dir_all(&repo_root).unwrap();
+    git_ops::run_git(["init", "-b", "main"], Some(&repo_root)).unwrap();
+    git_ops::run_git(
+        ["config", "user.email", "test@helmor.test"],
+        Some(&repo_root),
+    )
+    .unwrap();
+    git_ops::run_git(["config", "user.name", "Test"], Some(&repo_root)).unwrap();
+    git_ops::run_git(["config", "commit.gpgsign", "false"], Some(&repo_root)).unwrap();
+    fs::write(repo_root.join("README.md"), "base\n").unwrap();
+    git_ops::run_git(["add", "."], Some(&repo_root)).unwrap();
+    git_ops::run_git(["commit", "-m", "init"], Some(&repo_root)).unwrap();
+    git_ops::run_git(
+        ["update-ref", "refs/remotes/origin/main", "HEAD"],
+        Some(&repo_root),
+    )
+    .unwrap();
+
+    git_ops::run_git(["checkout", "-b", "workspace/dev"], Some(&repo_root)).unwrap();
+    fs::write(repo_root.join("README.md"), "branch change\n").unwrap();
+    git_ops::run_git(["add", "."], Some(&repo_root)).unwrap();
+    git_ops::run_git(["commit", "-m", "branch change"], Some(&repo_root)).unwrap();
+    git_ops::run_git(
+        ["update-ref", "refs/remotes/origin/workspace/dev", "HEAD"],
+        Some(&repo_root),
+    )
+    .unwrap();
+    git_ops::run_git(
+        ["config", "branch.workspace/dev.remote", "origin"],
+        Some(&repo_root),
+    )
+    .unwrap();
+    git_ops::run_git(
+        [
+            "config",
+            "branch.workspace/dev.merge",
+            "refs/heads/workspace/dev",
+        ],
+        Some(&repo_root),
+    )
+    .unwrap();
+    git_ops::run_git(["checkout", "main"], Some(&repo_root)).unwrap();
+
+    let workspace_dir = crate::data_dir::workspace_dir("target-repo", "target-ws").unwrap();
+    git_ops::run_git(
+        [
+            "worktree",
+            "add",
+            workspace_dir.to_str().unwrap(),
+            "workspace/dev",
+        ],
+        Some(&repo_root),
+    )
+    .unwrap();
+
+    let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    conn.execute(
+		"INSERT INTO repos (id, name, root_path, default_branch, remote) VALUES ('r1', 'target-repo', ?1, 'main', 'origin')",
+		[repo_root.display().to_string()],
+	)
+	.unwrap();
+    conn.execute(
+		"INSERT INTO workspaces (id, repository_id, directory_name, state, status, intended_target_branch)
+		 VALUES ('w1', 'r1', 'target-ws', 'ready', 'in-progress', 'main')",
+		[],
+	)
+	.unwrap();
+    drop(conn);
+
+    let panel = list_workspace_git_panel(workspace_dir.to_str().unwrap()).unwrap();
+    let workspace_context = panel
+        .contexts
+        .iter()
+        .find(|context| context.kind == "workspace")
+        .expect("workspace context should exist");
+    assert_eq!(workspace_context.target_branch.as_deref(), Some("main"));
+    assert!(
+        panel
+            .items
+            .iter()
+            .any(|item| item.path == "README.md" && item.status == "M"),
+        "README.md branch change should be compared against origin/main, got {:?}",
+        panel.items
     );
 }

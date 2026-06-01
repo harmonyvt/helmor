@@ -557,13 +557,21 @@ fn build_git_panel_context(
     }
 
     let branch = git_ops::current_branch_name(root).ok();
-    let remote = resolve_default_remote(root);
+    let workspace_target = (kind == "workspace")
+        .then(|| lookup_workspace_target(root))
+        .flatten();
+    let remote = workspace_target
+        .as_ref()
+        .map(|(remote, _)| remote.clone())
+        .or_else(|| resolve_default_remote(root));
     let remote_url = remote
         .as_deref()
         .and_then(|remote| git_config(root, &format!("remote.{remote}.url")));
-    let target_branch = remote
-        .as_deref()
-        .and_then(|remote| resolve_context_target_branch(root, remote));
+    let target_branch = workspace_target.map(|(_, target)| target).or_else(|| {
+        remote
+            .as_deref()
+            .and_then(|remote| resolve_context_target_branch(root, remote))
+    });
     let git_status =
         git_ops::workspace_action_status(root, remote.as_deref(), target_branch.as_deref())
             .unwrap_or_else(|_| quiet_git_status(target_branch.clone()));
