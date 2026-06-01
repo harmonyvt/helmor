@@ -31,6 +31,7 @@ import {
 	listWorkspaceCandidateDirectories,
 	listWorkspaceChangesWithContent,
 	listWorkspaceFiles,
+	listWorkspaceGitPanel,
 	listWorkspaceLinkedDirectories,
 	loadAgentModelSections,
 	loadArchivedWorkspaces,
@@ -150,6 +151,8 @@ export const helmorQueryKeys = {
 		["sessionDelegations", sessionId] as const,
 	workspaceChanges: (workspaceRootPath: string) =>
 		["workspaceChanges", workspaceRootPath] as const,
+	workspaceGitPanel: (workspaceRootPath: string) =>
+		["workspaceGitPanel", workspaceRootPath] as const,
 	workspaceFiles: (workspaceRootPath: string) =>
 		["workspaceFiles", workspaceRootPath] as const,
 	workspaceChangeRequest: (workspaceId: string) =>
@@ -279,7 +282,11 @@ export function shouldDehydrateHelmorQuery(query: PersistCandidateQuery) {
 	if (key[0] === "workspaceGroups" || key[0] === "archivedWorkspaces") {
 		return false;
 	}
-	if (key[0] === "workspaceChanges" || key[0] === "workspaceFiles") {
+	if (
+		key[0] === "workspaceChanges" ||
+		key[0] === "workspaceGitPanel" ||
+		key[0] === "workspaceFiles"
+	) {
 		return false;
 	}
 	return query.state.status === "success";
@@ -781,6 +788,16 @@ export function workspaceChangesQueryOptions(workspaceRootPath: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
 		queryFn: () => listWorkspaceChangesWithContent(workspaceRootPath),
+		staleTime: CHANGES_STALE_TIME,
+		refetchOnWindowFocus: true,
+		refetchInterval: CHANGES_REFETCH_INTERVAL,
+	});
+}
+
+export function workspaceGitPanelQueryOptions(workspaceRootPath: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspaceGitPanel(workspaceRootPath),
+		queryFn: () => listWorkspaceGitPanel(workspaceRootPath),
 		staleTime: CHANGES_STALE_TIME,
 		refetchOnWindowFocus: true,
 		refetchInterval: CHANGES_REFETCH_INTERVAL,

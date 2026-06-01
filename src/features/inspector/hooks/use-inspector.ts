@@ -8,9 +8,13 @@ import {
 	useState,
 } from "react";
 import { flushSync } from "react-dom";
-import { loadRepoScripts, type RepoScripts } from "@/lib/api";
+import {
+	type GitPanelContext,
+	loadRepoScripts,
+	type RepoScripts,
+} from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
-import { workspaceChangesQueryOptions } from "@/lib/query-client";
+import { workspaceGitPanelQueryOptions } from "@/lib/query-client";
 import {
 	DEFAULT_TABS_BODY_HEIGHT,
 	MIN_SECTION_HEIGHT,
@@ -153,10 +157,11 @@ export function useWorkspaceInspectorSidebar({
 	const isTabsResizing = resizeState?.target === "tabs";
 
 	const changesQuery = useQuery({
-		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
+		...workspaceGitPanelQueryOptions(workspaceRootPath ?? ""),
 		enabled: !!workspaceRootPath,
 	});
 	const changes: InspectorFileItem[] = changesQuery.data?.items ?? [];
+	const gitContexts: GitPanelContext[] = changesQuery.data?.contexts ?? [];
 
 	const prevChangesRef = useRef<Map<string, string> | null>(null);
 	const prevRootPathRef = useRef(workspaceRootPath);
@@ -378,6 +383,7 @@ export function useWorkspaceInspectorSidebar({
 		changesRef,
 		containerRef,
 		flashingPaths,
+		gitContexts,
 		handleResizeStart,
 		handleToggleTabs,
 		isActionsResizing,

@@ -892,6 +892,9 @@ export function useConversationStreaming({
 					void queryClient.invalidateQueries({
 						queryKey: ["workspaceChanges"],
 					});
+					void queryClient.invalidateQueries({
+						queryKey: ["workspaceGitPanel"],
+					});
 				}, 3_000);
 
 				const flushStreamMessages = () => {
@@ -1079,6 +1082,9 @@ export function useConversationStreaming({
 
 							void queryClient.invalidateQueries({
 								queryKey: ["workspaceChanges"],
+							});
+							void queryClient.invalidateQueries({
+								queryKey: ["workspaceGitPanel"],
 							});
 
 							setLiveSessionsByContext((current) => ({
@@ -1484,6 +1490,9 @@ export function useConversationStreaming({
 					void queryClient.invalidateQueries({
 						queryKey: ["workspaceChanges"],
 					});
+					void queryClient.invalidateQueries({
+						queryKey: ["workspaceGitPanel"],
+					});
 				}, 3_000);
 
 				const flushStreamMessages = () => {
@@ -1691,6 +1700,9 @@ export function useConversationStreaming({
 
 							void queryClient.invalidateQueries({
 								queryKey: ["workspaceChanges"],
+							});
+							void queryClient.invalidateQueries({
+								queryKey: ["workspaceGitPanel"],
 							});
 
 							setLiveSessionsByContext((current) => ({

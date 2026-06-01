@@ -1000,6 +1000,7 @@ function AppShell({
 					queryKey: helmorQueryKeys.workspaceGroups,
 				}),
 				queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] }),
+				queryClient.invalidateQueries({ queryKey: ["workspaceGitPanel"] }),
 			]);
 		}
 	}, [queryClient, selectedWorkspaceId]);

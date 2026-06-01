@@ -17,6 +17,7 @@ import {
 	type ChangeRequestInfo,
 	createSession,
 	type DebugIngestStatus,
+	type GitActionContext,
 	type PrComment,
 	type PrCommentData,
 	type WorkspaceDetail,
@@ -62,7 +63,10 @@ type WorkspaceInspectorSidebarProps = {
 	activeEditorPath?: string | null;
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
-	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	onCommitAction?: (
+		mode: WorkspaceCommitButtonMode,
+		context?: GitActionContext,
+	) => Promise<void>;
 	currentSessionId?: string | null;
 	onQueuePendingPromptForSession?: (request: {
 		sessionId: string;
@@ -130,6 +134,7 @@ export function WorkspaceInspectorSidebar({
 		changesRef,
 		containerRef,
 		flashingPaths,
+		gitContexts,
 		handleResizeStart,
 		handleToggleTabs,
 		isActionsResizing,
@@ -517,6 +522,7 @@ export function WorkspaceInspectorSidebar({
 				workspaceRootPath={workspaceRootPath ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
+				gitContexts={gitContexts}
 				editorMode={editorMode}
 				activeEditorPath={activeEditorPath}
 				onOpenEditorFile={onOpenEditorFile}

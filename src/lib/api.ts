@@ -2418,6 +2418,20 @@ export async function listWorkspaceChangesWithContent(
 	}
 }
 
+export async function listWorkspaceGitPanel(
+	workspaceRootPath: string,
+): Promise<GitPanelResponse> {
+	try {
+		return await invoke<GitPanelResponse>("list_workspace_git_panel", {
+			workspaceRootPath,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace Git panel."),
+		);
+	}
+}
+
 export async function discardWorkspaceFile(
 	workspaceRootPath: string,
 	relativePath: string,
@@ -2466,6 +2480,20 @@ export async function unstageWorkspaceFile(
 	}
 }
 
+export async function pushGitContextToRemote(
+	contextRootPath: string,
+	remote?: string | null,
+): Promise<PushWorkspaceToRemoteResponse> {
+	try {
+		return await invoke<PushWorkspaceToRemoteResponse>(
+			"push_git_context_to_remote",
+			{ contextRootPath, remote: remote ?? null },
+		);
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to push branch."));
+	}
+}
+
 export type ChangeRequestInfo = {
 	url: string;
 	number: number;
@@ -2491,6 +2519,38 @@ export type WorkspaceGitActionStatus = {
 	remoteTrackingRef?: string | null;
 	aheadOfRemoteCount: number;
 	pushStatus?: WorkspacePushStatus;
+};
+
+export type GitPanelContext = {
+	id: string;
+	kind: "workspace" | "submodule" | string;
+	name: string;
+	rootPath: string;
+	parentRelativePath?: string | null;
+	branch?: string | null;
+	remote?: string | null;
+	remoteUrl?: string | null;
+	targetBranch?: string | null;
+	gitStatus: WorkspaceGitActionStatus;
+	available: boolean;
+	unavailableReason?: string | null;
+};
+
+export type GitActionContext = Pick<
+	GitPanelContext,
+	| "id"
+	| "kind"
+	| "name"
+	| "rootPath"
+	| "parentRelativePath"
+	| "branch"
+	| "remote"
+	| "remoteUrl"
+	| "targetBranch"
+>;
+
+export type GitPanelResponse = EditorFilesWithContentResponse & {
+	contexts: GitPanelContext[];
 };
 
 export type SyncWorkspaceTargetOutcome =

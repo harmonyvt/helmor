@@ -56,6 +56,13 @@ pub async fn list_workspace_changes_with_content(
 }
 
 #[tauri::command]
+pub async fn list_workspace_git_panel(
+    workspace_root_path: String,
+) -> CmdResult<editor_files::GitPanelResponse> {
+    run_blocking(move || editor_files::list_workspace_git_panel(&workspace_root_path)).await
+}
+
+#[tauri::command]
 pub async fn discard_workspace_file(
     workspace_root_path: String,
     relative_path: String,
@@ -80,6 +87,17 @@ pub async fn unstage_workspace_file(
 ) -> CmdResult<()> {
     run_blocking(move || editor_files::unstage_workspace_file(&workspace_root_path, &relative_path))
         .await
+}
+
+#[tauri::command]
+pub async fn push_git_context_to_remote(
+    context_root_path: String,
+    remote: Option<String>,
+) -> CmdResult<crate::workspaces::PushWorkspaceToRemoteResponse> {
+    run_blocking(move || {
+        editor_files::push_git_context_to_remote(&context_root_path, remote.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
