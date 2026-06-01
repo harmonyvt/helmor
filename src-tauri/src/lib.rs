@@ -397,6 +397,7 @@ pub fn run() {
             commands::editor_commands::merge_git_context_change_request,
             commands::editor_commands::close_git_context_change_request,
             commands::editor_commands::get_workspace_git_action_status,
+            commands::editor_commands::list_workspace_git_timeline,
             commands::system_commands::drain_pending_cli_sends,
             commands::system_commands::ack_pending_cli_send_started,
             commands::editor_commands::read_editor_file,

@@ -2739,6 +2739,48 @@ export async function loadWorkspaceGitActionStatus(
 	}
 }
 
+/**
+ * One commit row for the inspector Git Timeline tab. Mirrors
+ * `GitTimelineCommit` in `src-tauri/src/git/ops.rs` (serde camelCase).
+ *
+ * `parents` is the list of parent SHAs — 1 for normal commits, 2+ for merges,
+ * 0 for the root commit — used by the timeline UI to draw branch / merge
+ * connectors. `refs` is the raw `git log --decorate=short` decoration (e.g.
+ * `HEAD -> main, tag: v1.0`), parsed in the component.
+ */
+export type GitTimelineCommit = {
+	sha: string;
+	shortSha: string;
+	parents: string[];
+	authorName: string;
+	authorEmail: string;
+	/** Strict ISO-8601 (RFC 3339); empty only on parse failure. */
+	authorDate: string;
+	subject: string;
+	refs: string;
+};
+
+/**
+ * Recent commit history (newest first) for the workspace's worktree. Local
+ * `git log` — never touches a remote. `maxCount` is clamped to `[1, 1000]`
+ * server-side; default 200 is plenty for the timeline tab's scroll view.
+ */
+export async function listWorkspaceGitTimeline(
+	workspaceRootPath: string,
+	maxCount?: number,
+): Promise<GitTimelineCommit[]> {
+	try {
+		return await invoke<GitTimelineCommit[]>("list_workspace_git_timeline", {
+			workspaceRootPath,
+			maxCount,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load Git commit history."),
+		);
+	}
+}
+
 export async function syncWorkspaceWithTargetBranch(
 	workspaceId: string,
 ): Promise<SyncWorkspaceTargetResponse> {

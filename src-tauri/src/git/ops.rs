@@ -1240,6 +1240,123 @@ pub fn reset_current_branch_hard(workspace_dir: &Path, target_ref: &str) -> Resu
     })
 }
 
+/// One commit row returned by [`list_recent_commits`]. Shape is shared with
+/// the frontend Git Timeline tab via `#[serde(rename_all = "camelCase")]`.
+///
+/// `parents` is the list of full parent SHAs (1 entry for a normal commit, 2+
+/// for merges, 0 for the root commit). The timeline UI can use it to draw
+/// branch / merge connectors. `refs` contains the decoration string produced
+/// by `git log --decorate` (e.g. `HEAD -> main, tag: v1.0, origin/main`) —
+/// the frontend splits and styles it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTimelineCommit {
+    pub sha: String,
+    pub short_sha: String,
+    pub parents: Vec<String>,
+    pub author_name: String,
+    pub author_email: String,
+    /// Author date in strict ISO-8601 (RFC 3339). Empty only on parse error.
+    pub author_date: String,
+    pub subject: String,
+    /// Raw `%D` decoration string. Empty when the commit isn't tipped by a ref.
+    pub refs: String,
+}
+
+/// Field separator used inside `git log --format`. ASCII Unit Separator
+/// (0x1f) is non-printable and not a valid character in any commit field
+/// (`%s` is single-line by definition; SHAs, emails, names, dates can't
+/// contain it), so splitting on it is safe.
+const GIT_LOG_FIELD_SEP: char = '\x1f';
+
+/// List the most recent `max_count` commits reachable from HEAD, one row per
+/// commit, ordered newest first.
+///
+/// Uses `git log` with a strict field-separated format so we don't have to
+/// parse free-form text. `%D` is included so the frontend can render branch /
+/// tag tips next to their commits without an extra round-trip.
+///
+/// Bounded by `max_count` to keep the response small for hot polling — the
+/// timeline tab is intended for quick history scanning, not full archaeology.
+pub fn list_recent_commits(workspace_dir: &Path, max_count: u32) -> Result<Vec<GitTimelineCommit>> {
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    // Clamp to a sensible upper bound so the UI can't accidentally ask for the
+    // whole repo history (which would block the blocking pool worker).
+    let capped = max_count.clamp(1, 1000);
+    let max_arg = format!("--max-count={capped}");
+    // Field order MUST match `parse_git_log_row` below. `%aI` is strict ISO-8601
+    // so JS `Date` can parse it directly; `%D` is decoration without the
+    // surrounding parentheses git would otherwise add.
+    let format_arg = format!(
+        "--format=%H{sep}%h{sep}%P{sep}%an{sep}%ae{sep}%aI{sep}%s{sep}%D",
+        sep = GIT_LOG_FIELD_SEP,
+    );
+    let output = run_git(
+        [
+            "-C",
+            workspace_dir_arg.as_str(),
+            "log",
+            "--decorate=short",
+            max_arg.as_str(),
+            format_arg.as_str(),
+        ],
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to read git log for {} (max {})",
+            workspace_dir.display(),
+            capped
+        )
+    })?;
+
+    let commits = output
+        .lines()
+        .filter(|line| !line.is_empty())
+        .filter_map(parse_git_log_row)
+        .collect();
+    Ok(commits)
+}
+
+/// Parse a single `git log` row produced by `list_recent_commits`. Returns
+/// `None` (skips the row) when the line doesn't have all expected fields —
+/// safer than `bail!` because a single malformed row shouldn't poison the
+/// whole timeline.
+fn parse_git_log_row(line: &str) -> Option<GitTimelineCommit> {
+    let mut fields = line.split(GIT_LOG_FIELD_SEP);
+    let sha = fields.next()?.to_string();
+    let short_sha = fields.next()?.to_string();
+    let parents_field = fields.next()?;
+    let author_name = fields.next()?.to_string();
+    let author_email = fields.next()?.to_string();
+    let author_date = fields.next()?.to_string();
+    let subject = fields.next()?.to_string();
+    // `%D` is the last field; if the commit has no refs git emits an empty
+    // string here, so `fields.next()` returns `Some("")` rather than `None`.
+    let refs = fields.next().unwrap_or("").to_string();
+
+    if sha.is_empty() {
+        return None;
+    }
+
+    let parents = parents_field
+        .split_whitespace()
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    Some(GitTimelineCommit {
+        sha,
+        short_sha,
+        parents,
+        author_name,
+        author_email,
+        author_date,
+        subject,
+        refs,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1580,5 +1697,63 @@ mod tests {
         let parsed = parse_unmerged_paths(raw);
         assert_eq!(parsed.len(), 1);
         assert!(parsed.contains("valid.txt"));
+    }
+
+    #[test]
+    fn list_recent_commits_returns_newest_first_with_parents() {
+        let dir = init_repo();
+        // Append a second commit so we have a 2-entry history with a parent
+        // chain; `git log` defaults to newest-first so we expect commit #2
+        // at index 0 with the initial commit's SHA in `parents`.
+        std::fs::write(dir.path().join("file.txt"), "follow up\n").unwrap();
+        run(dir.path(), &["commit", "-am", "follow-up commit"]);
+
+        let commits = list_recent_commits(dir.path(), 50).unwrap();
+
+        assert_eq!(commits.len(), 2, "expected initial + follow-up");
+        assert_eq!(commits[0].subject, "follow-up commit");
+        assert_eq!(commits[1].subject, "initial");
+        assert_eq!(
+            commits[0].parents,
+            vec![commits[1].sha.clone()],
+            "follow-up commit should list initial commit as its parent"
+        );
+        assert!(
+            commits[1].parents.is_empty(),
+            "root commit must have no parents"
+        );
+        assert_eq!(commits[0].author_name, "Helmor Test");
+        // `%D` includes `HEAD -> <branch>` for the tip when --decorate is on.
+        assert!(
+            commits[0].refs.contains("HEAD"),
+            "tip commit should be decorated with HEAD; got refs={:?}",
+            commits[0].refs
+        );
+    }
+
+    #[test]
+    fn parse_git_log_row_handles_empty_refs_field() {
+        // A trailing empty field (common when a commit isn't a ref tip) must
+        // still produce a complete row — split keeps the trailing empty.
+        let line = format!(
+            "abc123def{sep}abc123{sep}{sep}Alice{sep}alice@x.test{sep}2024-01-01T00:00:00Z{sep}initial commit{sep}",
+            sep = GIT_LOG_FIELD_SEP,
+        );
+        let parsed = parse_git_log_row(&line).expect("row should parse");
+        assert_eq!(parsed.sha, "abc123def");
+        assert!(parsed.parents.is_empty(), "no parents for root commit");
+        assert_eq!(parsed.subject, "initial commit");
+        assert_eq!(parsed.refs, "", "absent decoration → empty refs string");
+    }
+
+    #[test]
+    fn parse_git_log_row_splits_multiple_parents_for_merge_commit() {
+        let line = format!(
+            "merge1{sep}merge1{sep}parent_a parent_b{sep}Bob{sep}bob@x.test{sep}2024-02-02T12:00:00Z{sep}Merge branch foo{sep}HEAD -> main",
+            sep = GIT_LOG_FIELD_SEP,
+        );
+        let parsed = parse_git_log_row(&line).expect("merge row should parse");
+        assert_eq!(parsed.parents, vec!["parent_a", "parent_b"]);
+        assert_eq!(parsed.refs, "HEAD -> main");
     }
 }

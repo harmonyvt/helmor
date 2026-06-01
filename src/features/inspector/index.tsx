@@ -7,6 +7,7 @@ import type {
 import { AgentToolsSection } from "@/features/inspector/sections/agent-tools";
 import { ArchiveTab } from "@/features/inspector/sections/archive";
 import { CommentsTab } from "@/features/inspector/sections/comments";
+import { GitTimelineSection } from "@/features/inspector/sections/git-timeline";
 import { KnowledgeSection } from "@/features/inspector/sections/knowledge";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import {
@@ -473,7 +474,12 @@ export function WorkspaceInspectorSidebar({
 		if (activeTab === "setup" || activeTab === "run" || activeTab === "archive")
 			return;
 		// Permanent tabs — never reset.
-		if (activeTab === "knowledge" || activeTab === "tools") return;
+		if (
+			activeTab === "knowledge" ||
+			activeTab === "tools" ||
+			activeTab === "git-timeline"
+		)
+			return;
 		if (activeTab === "ingest") {
 			if (showIngestTab) return;
 			setActiveTab("setup");
@@ -518,7 +524,9 @@ export function WorkspaceInspectorSidebar({
 			? showCommentsTab
 			: activeTab === "ingest"
 				? false
-				: activeTab === "knowledge" || activeTab === "tools"
+				: activeTab === "knowledge" ||
+						activeTab === "tools" ||
+						activeTab === "git-timeline"
 					? false
 					: isTerminalTabActive
 						? true
@@ -653,6 +661,10 @@ export function WorkspaceInspectorSidebar({
 					workspaceId={workspaceId ?? null}
 					repoId={repoId ?? null}
 					isActive={activeTab === "knowledge"}
+				/>
+				<GitTimelineSection
+					workspaceRootPath={workspaceRootPath ?? null}
+					isActive={activeTab === "git-timeline"}
 				/>
 				<AgentToolsSection isActive={activeTab === "tools"} />
 				{terminalInstances.map((instance) => (

@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, Terminal, X } from "lucide-react";
+import { ChevronDown, GitCommit, Plus, Terminal, X } from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -734,6 +734,30 @@ export function InspectorTabsSection({
 										className={cn(
 											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
 											activeTab === "knowledge" && "opacity-100",
+										)}
+									/>
+								</button>
+								<button
+									type="button"
+									role="tab"
+									id="inspector-tab-git-timeline"
+									aria-controls="inspector-panel-git-timeline"
+									aria-selected={activeTab === "git-timeline"}
+									tabIndex={activeTab === "git-timeline" ? 0 : -1}
+									className={cn(
+										INSPECTOR_TAB_BUTTON_CLASS,
+										"shrink-0",
+										activeTab === "git-timeline" && "text-foreground",
+									)}
+									onClick={() => handleTabClick("git-timeline")}
+								>
+									<GitCommit className="size-3" strokeWidth={1.8} />
+									Timeline
+									<span
+										aria-hidden="true"
+										className={cn(
+											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+											activeTab === "git-timeline" && "opacity-100",
 										)}
 									/>
 								</button>
