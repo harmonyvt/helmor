@@ -13,10 +13,12 @@ import {
 	createSession,
 	type ForgeActionStatus,
 	type ForgeDetection,
+	type GitActionContext,
 	hideSession,
 	loadAutoCloseActionKinds,
 	loadRepoPreferences,
 	mergeWorkspaceChangeRequest,
+	pushGitContextToRemote,
 	pushWorkspaceToRemote,
 	refreshWorkspaceChangeRequest,
 	type WorkspaceDetail,
@@ -121,6 +123,35 @@ function getErrorMessage(error: unknown, fallback: string): string {
 	return error instanceof Error ? error.message : fallback;
 }
 
+function prefixGitActionContextPrompt(
+	prompt: string,
+	context?: GitActionContext,
+): string {
+	if (!context || context.kind === "workspace") {
+		return prompt;
+	}
+
+	const path = context.parentRelativePath ?? context.rootPath;
+	const branchLine = context.branch
+		? `The selected submodule branch is \`${context.branch}\`.`
+		: "The selected submodule may be in detached HEAD; inspect it before changing refs.";
+	const targetLine = context.targetBranch
+		? `Use \`${context.targetBranch}\` as the target/base branch for this submodule unless the repository state clearly says otherwise.`
+		: "Resolve the target/base branch from the submodule's own upstream/default remote.";
+
+	return `Run this git action inside the selected submodule, not the parent workspace.
+
+Submodule: \`${context.name}\`
+Path from workspace root: \`${path}\`
+Absolute path: \`${context.rootPath}\`
+${branchLine}
+${targetLine}
+
+Before doing anything else, change directory to \`${context.rootPath}\` and keep every git/forge command scoped there. Do not stage or commit the parent repository's submodule pointer unless the user explicitly asks for that follow-up.
+
+${prompt}`;
+}
+
 type CommitLifecycle = {
 	workspaceId: string;
 	trackedSessionId: string | null;
@@ -217,7 +248,7 @@ export function useWorkspaceCommitLifecycle({
 	);
 
 	const handleInspectorCommitAction = useCallback(
-		async (mode: WorkspaceCommitButtonMode) => {
+		async (mode: WorkspaceCommitButtonMode, context?: GitActionContext) => {
 			const workspaceId = selectedWorkspaceIdRef.current;
 			if (!workspaceId) {
 				console.warn("[commitButton] action ignored: no selected workspace");
@@ -225,7 +256,11 @@ export function useWorkspaceCommitLifecycle({
 			}
 
 			completedSessionHandledRef.current = null;
-			console.log("[commitButton] begin", { mode, workspaceId });
+			console.log("[commitButton] begin", {
+				mode,
+				workspaceId,
+				context: context?.id ?? "workspace",
+			});
 
 			if (mode === "merge" || mode === "closed") {
 				// ── Merge pre-validation ─────────────────────────────────
@@ -338,7 +373,11 @@ export function useWorkspaceCommitLifecycle({
 
 			if (mode === "push") {
 				try {
-					await pushWorkspaceToRemote(workspaceId);
+					if (context && context.kind !== "workspace") {
+						await pushGitContextToRemote(context.rootPath, context.remote);
+					} else {
+						await pushWorkspaceToRemote(workspaceId);
+					}
 					setCommitLifecycle((current) =>
 						current ? { ...current, phase: "done" } : current,
 					);
@@ -373,10 +412,11 @@ export function useWorkspaceCommitLifecycle({
 				const prompt = buildCommitButtonPrompt(
 					mode,
 					repoPreferences,
-					selectedWorkspaceTargetBranch,
+					context?.targetBranch ?? selectedWorkspaceTargetBranch,
 					forge,
-					selectedWorkspaceRemote,
+					context?.remote ?? selectedWorkspaceRemote,
 				);
+				const scopedPrompt = prefixGitActionContextPrompt(prompt, context);
 				console.log("[commitButton] session created", { sessionId });
 
 				await queryClient.invalidateQueries({
@@ -389,7 +429,7 @@ export function useWorkspaceCommitLifecycle({
 						: current,
 				);
 
-				setPendingPromptForSession({ sessionId, prompt });
+				setPendingPromptForSession({ sessionId, prompt: scopedPrompt });
 				onSelectSession(sessionId);
 			} catch (error) {
 				console.error("[commitButton] Failed to start session:", error);
@@ -589,6 +629,9 @@ export function useWorkspaceCommitLifecycle({
 			}
 			queryClient.invalidateQueries({
 				queryKey: ["workspaceChanges"],
+			});
+			queryClient.invalidateQueries({
+				queryKey: ["workspaceGitPanel"],
 			});
 
 			void (async () => {

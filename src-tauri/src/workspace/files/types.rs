@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::git_ops::WorkspaceGitActionStatus;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFileReadResponse {
@@ -52,6 +54,31 @@ pub struct EditorFilePrefetchItem {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFilesWithContentResponse {
+    pub items: Vec<EditorFileListItem>,
+    pub prefetched: Vec<EditorFilePrefetchItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPanelContext {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub root_path: String,
+    pub parent_relative_path: Option<String>,
+    pub branch: Option<String>,
+    pub remote: Option<String>,
+    pub remote_url: Option<String>,
+    pub target_branch: Option<String>,
+    pub git_status: WorkspaceGitActionStatus,
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPanelResponse {
+    pub contexts: Vec<GitPanelContext>,
     pub items: Vec<EditorFileListItem>,
     pub prefetched: Vec<EditorFilePrefetchItem>,
 }

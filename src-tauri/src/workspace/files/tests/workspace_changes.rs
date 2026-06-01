@@ -1,4 +1,7 @@
+use super::list_workspace_git_panel;
 use super::support::GitRepoHarness;
+
+use std::fs;
 
 #[test]
 fn classification_unstaged_modification() {
@@ -179,5 +182,70 @@ fn classification_discard_removes_from_changes() {
     assert!(
         repo.find("README.md").is_none(),
         "discarded file should NOT show"
+    );
+}
+
+#[test]
+fn git_panel_discovers_submodule_branch_and_inner_changes() {
+    let repo = GitRepoHarness::new();
+    let submodule_source = tempfile::tempdir().unwrap();
+
+    crate::git_ops::run_git(["init", "-b", "main"], Some(submodule_source.path())).unwrap();
+    crate::git_ops::run_git(
+        ["config", "user.email", "test@helmor.test"],
+        Some(submodule_source.path()),
+    )
+    .unwrap();
+    crate::git_ops::run_git(
+        ["config", "user.name", "Test"],
+        Some(submodule_source.path()),
+    )
+    .unwrap();
+    fs::create_dir_all(submodule_source.path().join("src")).unwrap();
+    fs::write(
+        submodule_source.path().join("src/lib.rs"),
+        "pub fn v1() {}\n",
+    )
+    .unwrap();
+    crate::git_ops::run_git(["add", "."], Some(submodule_source.path())).unwrap();
+    crate::git_ops::run_git(
+        ["commit", "-m", "init submodule"],
+        Some(submodule_source.path()),
+    )
+    .unwrap();
+
+    repo.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        submodule_source.path().to_str().unwrap(),
+        "vendor/lib",
+    ]);
+    repo.git(&["commit", "-am", "add submodule"]);
+
+    fs::write(
+        std::path::Path::new(repo.path_str()).join("vendor/lib/src/lib.rs"),
+        "pub fn v2() {}\n",
+    )
+    .unwrap();
+
+    let panel = list_workspace_git_panel(repo.path_str()).unwrap();
+    let submodule = panel
+        .contexts
+        .iter()
+        .find(|context| context.parent_relative_path.as_deref() == Some("vendor/lib"))
+        .expect("submodule context should be discovered");
+
+    assert_eq!(submodule.kind, "submodule");
+    assert_eq!(submodule.branch.as_deref(), Some("main"));
+    assert!(
+        panel
+            .items
+            .iter()
+            .any(|item| item.path == "vendor/lib/src/lib.rs"
+                && item.unstaged_status.as_deref() == Some("M")),
+        "inner submodule file change should be represented with parent-relative path: {:?}",
+        panel.items
     );
 }

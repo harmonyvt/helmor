@@ -5,8 +5,13 @@ import {
 	getMaterialFolderIcon,
 } from "file-extension-icon-js";
 import {
+	AlertTriangleIcon,
+	ArrowDownIcon,
+	ArrowUpIcon,
+	BoxIcon,
 	ChevronRightIcon,
 	CloudIcon,
+	FolderGit2Icon,
 	LaptopIcon,
 	ListIcon,
 	ListTreeIcon,
@@ -22,6 +27,11 @@ import { Button } from "@/components/ui/button";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ShinyFlash } from "@/components/ui/shiny-flash";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -35,9 +45,12 @@ import {
 	continueWorkspaceFromTargetBranch,
 	discardWorkspaceFile,
 	type ForgeDetection,
+	type GitActionContext,
+	type GitPanelContext,
 	stageWorkspaceFile,
 	unstageWorkspaceFile,
 } from "@/lib/api";
+import { deriveCommitButtonMode } from "@/lib/commit-button-logic";
 import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
 import {
@@ -56,6 +69,8 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	D: "text-red-500",
 };
 
+const ROOT_CONTEXT_ID = "workspace";
+
 type ChangesSectionProps = {
 	sectionRef?: React.RefObject<HTMLElement | null>;
 	bodyHeight?: number;
@@ -67,7 +82,11 @@ type ChangesSectionProps = {
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
-	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	gitContexts?: GitPanelContext[];
+	onCommitAction?: (
+		mode: WorkspaceCommitButtonMode,
+		context?: GitActionContext,
+	) => Promise<void>;
 	commitButtonMode?: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
 	changeRequest: ChangeRequestInfo | null;
@@ -88,6 +107,7 @@ export function ChangesSection({
 	activeEditorPath,
 	onOpenEditorFile,
 	flashingPaths,
+	gitContexts = [],
 	onCommitAction,
 	commitButtonMode = "create-pr",
 	commitButtonState,
@@ -117,64 +137,142 @@ export function ChangesSection({
 		: null;
 	const forgeDetection = forgeQuery.data ?? cachedForgeDetection ?? null;
 	const changeRequestName = forgeDetection?.labels.changeRequestName ?? "PR";
+	const rootContext = useMemo<GitPanelContext>(
+		() => ({
+			id: ROOT_CONTEXT_ID,
+			kind: "workspace",
+			name: "Workspace",
+			rootPath: workspaceRootPath ?? "",
+			parentRelativePath: null,
+			branch: null,
+			remote: null,
+			remoteUrl: null,
+			targetBranch: workspaceTargetBranch,
+			gitStatus: {
+				uncommittedCount: 0,
+				conflictCount: 0,
+				syncTargetBranch: workspaceTargetBranch,
+				syncStatus: "unknown",
+				behindTargetCount: 0,
+				remoteTrackingRef: null,
+				aheadOfRemoteCount: 0,
+				pushStatus: "unknown",
+			},
+			available: Boolean(workspaceRootPath),
+			unavailableReason: null,
+		}),
+		[workspaceRootPath, workspaceTargetBranch],
+	);
+	const contexts = gitContexts.length > 0 ? gitContexts : [rootContext];
+	const [selectedContextId, setSelectedContextId] = useState(ROOT_CONTEXT_ID);
+	useEffect(() => {
+		if (contexts.some((context) => context.id === selectedContextId)) {
+			return;
+		}
+		setSelectedContextId(contexts[0]?.id ?? ROOT_CONTEXT_ID);
+	}, [contexts, selectedContextId]);
+	const selectedContext =
+		contexts.find((context) => context.id === selectedContextId) ??
+		contexts[0] ??
+		rootContext;
+	const selectedContextRoot =
+		selectedContext.kind === "workspace"
+			? workspaceRootPath
+			: selectedContext.rootPath;
+	const selectedContextChanges = useMemo(
+		() => changesForContext(changes, selectedContext, contexts),
+		[changes, selectedContext, contexts],
+	);
+	const selectedFlashingPaths = useMemo(
+		() => flashingPathsForContext(flashingPaths, selectedContext),
+		[flashingPaths, selectedContext],
+	);
+	// Per-context change counts shown on the selector tabs so users can spot
+	// which submodule has work pending without clicking through. We derive
+	// from `changes` (not just `gitStatus.uncommittedCount`) because the
+	// front-end already has the full diff list and stays consistent with the
+	// rows the user sees once they switch contexts.
+	const contextChangeCounts = useMemo(() => {
+		const counts = new Map<string, number>();
+		for (const context of contexts) {
+			counts.set(
+				context.id,
+				changesForContext(changes, context, contexts).length,
+			);
+		}
+		return counts;
+	}, [changes, contexts]);
+	const effectiveCommitButtonMode =
+		selectedContext.kind === "workspace"
+			? commitButtonMode
+			: deriveCommitButtonMode(null, null, null, selectedContext.gitStatus);
+	const effectiveCommitButtonState =
+		selectedContext.kind === "workspace" ? commitButtonState : "idle";
+	const effectiveChangeRequest =
+		selectedContext.kind === "workspace" ? changeRequest : null;
+	const effectiveWorkspaceTargetBranch =
+		selectedContext.kind === "workspace"
+			? workspaceTargetBranch
+			: selectedContext.targetBranch;
 
 	// Only show loading when the user switches target branch within the
 	// same workspace — not on workspace/repo navigation or routine polling.
 	const [branchSwitching, setBranchSwitching] = useState(false);
-	const prevTargetRef = useRef(workspaceTargetBranch);
+	const prevTargetRef = useRef(effectiveWorkspaceTargetBranch);
 	const prevWorkspaceRef = useRef(workspaceId);
-	const switchChangesRef = useRef(changes);
+	const switchChangesRef = useRef(selectedContextChanges);
 	useEffect(() => {
 		const sameWorkspace = prevWorkspaceRef.current === workspaceId;
 		prevWorkspaceRef.current = workspaceId;
-		const targetChanged = prevTargetRef.current !== workspaceTargetBranch;
-		prevTargetRef.current = workspaceTargetBranch;
+		const targetChanged =
+			prevTargetRef.current !== effectiveWorkspaceTargetBranch;
+		prevTargetRef.current = effectiveWorkspaceTargetBranch;
 		if (targetChanged && sameWorkspace) {
-			switchChangesRef.current = changes;
+			switchChangesRef.current = selectedContextChanges;
 			setBranchSwitching(true);
 		}
-	}, [workspaceId, workspaceTargetBranch, changes]);
+	}, [workspaceId, effectiveWorkspaceTargetBranch, selectedContextChanges]);
 	useEffect(() => {
 		if (!branchSwitching) return;
 		// Clear once fresh data arrives (array identity changes).
-		if (changes !== switchChangesRef.current) {
+		if (selectedContextChanges !== switchChangesRef.current) {
 			setBranchSwitching(false);
 			return;
 		}
 		// Safety timeout so loading never gets stuck.
 		const id = window.setTimeout(() => setBranchSwitching(false), 5000);
 		return () => window.clearTimeout(id);
-	}, [branchSwitching, changes]);
+	}, [branchSwitching, selectedContextChanges]);
 
 	const stagedChanges = useMemo(
 		() =>
-			changes
+			selectedContextChanges
 				.filter((change) => change.stagedStatus != null)
 				.map((change) => ({
 					...change,
 					status: change.stagedStatus ?? change.status,
 				})),
-		[changes],
+		[selectedContextChanges],
 	);
 	const unstagedChanges = useMemo(
 		() =>
-			changes
+			selectedContextChanges
 				.filter((change) => change.unstagedStatus != null)
 				.map((change) => ({
 					...change,
 					status: change.unstagedStatus ?? change.status,
 				})),
-		[changes],
+		[selectedContextChanges],
 	);
 	const committedChanges = useMemo(
 		() =>
-			changes
+			selectedContextChanges
 				.filter((change) => change.committedStatus != null)
 				.map((change) => ({
 					...change,
 					status: change.committedStatus ?? change.status,
 				})),
-		[changes],
+		[selectedContextChanges],
 	);
 	const hasUncommittedChanges =
 		stagedChanges.length > 0 || unstagedChanges.length > 0;
@@ -185,6 +283,9 @@ export function ChangesSection({
 		}
 		queryClient.invalidateQueries({
 			queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
+		});
+		queryClient.invalidateQueries({
+			queryKey: helmorQueryKeys.workspaceGitPanel(workspaceRootPath),
 		});
 		if (workspaceId) {
 			queryClient.invalidateQueries({
@@ -217,42 +318,42 @@ export function ChangesSection({
 
 	const stageFile = useCallback(
 		async (relativePath: string) => {
-			if (!workspaceRootPath) {
+			if (!selectedContextRoot) {
 				return;
 			}
 			try {
-				await stageWorkspaceFile(workspaceRootPath, relativePath);
+				await stageWorkspaceFile(selectedContextRoot, relativePath);
 			} catch (error) {
 				surfaceChangeError("stage file", error);
 			} finally {
 				invalidateChanges();
 			}
 		},
-		[invalidateChanges, surfaceChangeError, workspaceRootPath],
+		[invalidateChanges, selectedContextRoot, surfaceChangeError],
 	);
 	const unstageFile = useCallback(
 		async (relativePath: string) => {
-			if (!workspaceRootPath) {
+			if (!selectedContextRoot) {
 				return;
 			}
 			try {
-				await unstageWorkspaceFile(workspaceRootPath, relativePath);
+				await unstageWorkspaceFile(selectedContextRoot, relativePath);
 			} catch (error) {
 				surfaceChangeError("unstage file", error);
 			} finally {
 				invalidateChanges();
 			}
 		},
-		[invalidateChanges, surfaceChangeError, workspaceRootPath],
+		[invalidateChanges, selectedContextRoot, surfaceChangeError],
 	);
 	const stageAll = useCallback(async () => {
-		if (!workspaceRootPath) {
+		if (!selectedContextRoot) {
 			return;
 		}
 		const paths = unstagedChanges.map((change) => change.path);
 		try {
 			for (const path of paths) {
-				await stageWorkspaceFile(workspaceRootPath, path);
+				await stageWorkspaceFile(selectedContextRoot, path);
 			}
 		} catch (error) {
 			surfaceChangeError("stage files", error);
@@ -261,48 +362,58 @@ export function ChangesSection({
 		}
 	}, [
 		invalidateChanges,
+		selectedContextRoot,
 		surfaceChangeError,
 		unstagedChanges,
-		workspaceRootPath,
 	]);
 	const unstageAll = useCallback(async () => {
-		if (!workspaceRootPath) {
+		if (!selectedContextRoot) {
 			return;
 		}
 		const paths = stagedChanges.map((change) => change.path);
 		try {
 			for (const path of paths) {
-				await unstageWorkspaceFile(workspaceRootPath, path);
+				await unstageWorkspaceFile(selectedContextRoot, path);
 			}
 		} catch (error) {
 			surfaceChangeError("unstage files", error);
 		} finally {
 			invalidateChanges();
 		}
-	}, [invalidateChanges, stagedChanges, surfaceChangeError, workspaceRootPath]);
+	}, [
+		invalidateChanges,
+		selectedContextRoot,
+		stagedChanges,
+		surfaceChangeError,
+	]);
 
 	const discardFile = useCallback(
 		async (relativePath: string) => {
-			if (!workspaceRootPath) {
+			if (!selectedContextRoot) {
 				return;
 			}
 			try {
-				await discardWorkspaceFile(workspaceRootPath, relativePath);
+				await discardWorkspaceFile(selectedContextRoot, relativePath);
 			} catch (error) {
 				surfaceChangeError("discard changes", error);
 			} finally {
 				invalidateChanges();
 			}
 		},
-		[invalidateChanges, surfaceChangeError, workspaceRootPath],
+		[invalidateChanges, selectedContextRoot, surfaceChangeError],
 	);
 
 	const handleCommitButtonClick = useCallback(async () => {
 		if (!onCommitAction) {
 			return;
 		}
-		await onCommitAction(commitButtonMode);
-	}, [commitButtonMode, onCommitAction]);
+		await onCommitAction(
+			effectiveCommitButtonMode,
+			selectedContext.kind === "workspace"
+				? undefined
+				: toGitActionContext(selectedContext),
+		);
+	}, [effectiveCommitButtonMode, onCommitAction, selectedContext]);
 
 	const handleRefreshPrStatus = useCallback(async () => {
 		if (!workspaceId) return;
@@ -372,23 +483,47 @@ export function ChangesSection({
 			}
 		>
 			<GitSectionHeader
-				commitButtonMode={commitButtonMode}
-				commitButtonState={commitButtonState}
-				changeRequest={changeRequest}
+				commitButtonMode={effectiveCommitButtonMode}
+				commitButtonState={effectiveCommitButtonState}
+				changeRequest={effectiveChangeRequest}
 				changeRequestName={changeRequestName}
-				forgeRemoteState={forgeStatusQuery.data?.remoteState ?? null}
-				forgeDetection={forgeDetection}
+				forgeRemoteState={
+					selectedContext.kind === "workspace"
+						? (forgeStatusQuery.data?.remoteState ?? null)
+						: null
+				}
+				forgeDetection={
+					selectedContext.kind === "workspace" ? forgeDetection : null
+				}
 				workspaceId={workspaceId}
 				hasChanges={hasChanges}
-				isRefreshing={isForgeRefreshing}
+				isRefreshing={selectedContext.kind === "workspace" && isForgeRefreshing}
 				isContinuingWorkspace={isContinuingWorkspace}
 				onChangeRequestClick={
-					changeRequest ? () => void openUrl(changeRequest.url) : undefined
+					effectiveChangeRequest
+						? () => void openUrl(effectiveChangeRequest.url)
+						: undefined
 				}
 				onCommit={handleCommitButtonClick}
-				onContinueWorkspace={handleContinueWorkspace}
-				onRefreshPrStatus={workspaceId ? handleRefreshPrStatus : undefined}
+				onContinueWorkspace={
+					selectedContext.kind === "workspace"
+						? handleContinueWorkspace
+						: undefined
+				}
+				onRefreshPrStatus={
+					workspaceId && selectedContext.kind === "workspace"
+						? handleRefreshPrStatus
+						: undefined
+				}
 			/>
+			{contexts.length > 1 && (
+				<GitContextSelector
+					contexts={contexts}
+					selectedContextId={selectedContext.id}
+					changeCounts={contextChangeCounts}
+					onSelect={setSelectedContextId}
+				/>
+			)}
 			{onOpenDiagramMode && workspaceId && (
 				<button
 					type="button"
@@ -422,8 +557,8 @@ export function ChangesSection({
 								editorMode={editorMode}
 								activeEditorPath={activeEditorPath}
 								onOpenEditorFile={onOpenEditorFile}
-								flashingPaths={flashingPaths}
-								workspaceRootPath={workspaceRootPath}
+								flashingPaths={selectedFlashingPaths}
+								workspaceRootPath={selectedContextRoot}
 								diffScope={{ kind: "staged" }}
 							/>
 						)}
@@ -449,8 +584,8 @@ export function ChangesSection({
 								editorMode={editorMode}
 								activeEditorPath={activeEditorPath}
 								onOpenEditorFile={onOpenEditorFile}
-								flashingPaths={flashingPaths}
-								workspaceRootPath={workspaceRootPath}
+								flashingPaths={selectedFlashingPaths}
+								workspaceRootPath={selectedContextRoot}
 								diffScope={{ kind: "unstaged" }}
 							/>
 						)}
@@ -459,7 +594,7 @@ export function ChangesSection({
 
 				{(committedChanges.length > 0 || branchSwitching) && (
 					<BranchDiffSection
-						targetBranch={workspaceTargetBranch}
+						targetBranch={effectiveWorkspaceTargetBranch ?? null}
 						count={committedChanges.length}
 						loading={branchSwitching}
 						open={branchDiffOpen}
@@ -470,19 +605,358 @@ export function ChangesSection({
 						editorMode={editorMode}
 						activeEditorPath={activeEditorPath}
 						onOpenEditorFile={onOpenEditorFile}
-						flashingPaths={flashingPaths}
-						workspaceRootPath={workspaceRootPath}
+						flashingPaths={selectedFlashingPaths}
+						workspaceRootPath={selectedContextRoot}
 					/>
 				)}
 
 				{!hasChanges && (
-					<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
-						No changes on this branch yet.
-					</div>
+					<ContextEmptyState
+						context={selectedContext}
+						hasOtherContextChanges={
+							selectedContext.kind === "workspace" &&
+							contexts.some(
+								(other) =>
+									other.id !== selectedContext.id &&
+									(contextChangeCounts.get(other.id) ?? 0) > 0,
+							)
+						}
+						onJumpToFirstChangedSubmodule={
+							selectedContext.kind === "workspace"
+								? () => {
+										const target = contexts.find(
+											(other) =>
+												other.id !== selectedContext.id &&
+												(contextChangeCounts.get(other.id) ?? 0) > 0,
+										);
+										if (target) {
+											setSelectedContextId(target.id);
+										}
+									}
+								: undefined
+						}
+					/>
 				)}
 			</ScrollArea>
 		</section>
 	);
+}
+
+function GitContextSelector({
+	contexts,
+	selectedContextId,
+	changeCounts,
+	onSelect,
+}: {
+	contexts: GitPanelContext[];
+	selectedContextId: string;
+	changeCounts: Map<string, number>;
+	onSelect: (contextId: string) => void;
+}) {
+	// Visually separate the workspace root from submodules so the user can
+	// tell at a glance which surface they're acting on. The root is always
+	// first (the backend sorts it that way) and gets its own icon.
+	const workspaceContexts = contexts.filter(
+		(context) => context.kind === "workspace",
+	);
+	const submoduleContexts = contexts.filter(
+		(context) => context.kind !== "workspace",
+	);
+	return (
+		<div
+			role="tablist"
+			aria-label="Git context"
+			className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border/40 bg-muted/20 px-2 py-1"
+		>
+			{workspaceContexts.map((context) => (
+				<GitContextTab
+					key={context.id}
+					context={context}
+					selected={context.id === selectedContextId}
+					changeCount={changeCounts.get(context.id) ?? 0}
+					onSelect={onSelect}
+				/>
+			))}
+			{submoduleContexts.length > 0 && workspaceContexts.length > 0 && (
+				<span
+					aria-hidden="true"
+					className="mx-0.5 h-3.5 w-px shrink-0 bg-border/60"
+				/>
+			)}
+			{submoduleContexts.map((context) => (
+				<GitContextTab
+					key={context.id}
+					context={context}
+					selected={context.id === selectedContextId}
+					changeCount={changeCounts.get(context.id) ?? 0}
+					onSelect={onSelect}
+				/>
+			))}
+		</div>
+	);
+}
+
+function GitContextTab({
+	context,
+	selected,
+	changeCount,
+	onSelect,
+}: {
+	context: GitPanelContext;
+	selected: boolean;
+	changeCount: number;
+	onSelect: (contextId: string) => void;
+}) {
+	const isWorkspace = context.kind === "workspace";
+	const Icon = isWorkspace ? FolderGit2Icon : BoxIcon;
+	const displayName = isWorkspace ? "Workspace" : context.name;
+	const branchLabel = context.branch ?? (isWorkspace ? null : "detached");
+	const ahead = context.gitStatus.aheadOfRemoteCount;
+	const behind = context.gitStatus.behindTargetCount;
+	const hasSyncSignal = ahead > 0 || behind > 0;
+	const hasChanges = changeCount > 0;
+	const unavailable = !context.available;
+	const ariaLabel = (() => {
+		const parts: string[] = [displayName];
+		if (branchLabel) parts.push(`on ${branchLabel}`);
+		if (changeCount > 0) parts.push(`${changeCount} changes`);
+		if (ahead > 0) parts.push(`${ahead} ahead`);
+		if (behind > 0) parts.push(`${behind} behind`);
+		if (unavailable && context.unavailableReason)
+			parts.push(`(${context.unavailableReason})`);
+		return parts.join(" ");
+	})();
+	const button = (
+		<button
+			type="button"
+			role="tab"
+			aria-selected={selected}
+			aria-label={ariaLabel}
+			disabled={unavailable && !selected}
+			className={cn(
+				"group/git-tab inline-flex max-w-[14rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-sm px-1.5 py-0.5 text-[10.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+				selected && "bg-muted text-foreground",
+				unavailable && "opacity-50",
+				unavailable && !selected && "cursor-not-allowed hover:bg-transparent",
+			)}
+			onClick={() => onSelect(context.id)}
+		>
+			{unavailable ? (
+				<AlertTriangleIcon
+					className="size-3 shrink-0 text-amber-500"
+					strokeWidth={2}
+				/>
+			) : (
+				<Icon className="size-3 shrink-0" strokeWidth={2} />
+			)}
+			<span className="truncate font-medium">{displayName}</span>
+			{branchLabel && (
+				<span
+					className={cn(
+						"min-w-0 truncate font-mono text-[10px]",
+						selected ? "text-muted-foreground" : "text-muted-foreground/70",
+					)}
+				>
+					{branchLabel}
+				</span>
+			)}
+			{hasSyncSignal && !unavailable && (
+				<span className="inline-flex shrink-0 items-center gap-0.5 tabular-nums">
+					{ahead > 0 && (
+						<span
+							className="inline-flex items-center gap-px text-chart-2"
+							aria-label={`${ahead} ahead`}
+						>
+							<ArrowUpIcon className="size-2.5" strokeWidth={2.5} />
+							{ahead}
+						</span>
+					)}
+					{behind > 0 && (
+						<span
+							className="inline-flex items-center gap-px text-amber-500"
+							aria-label={`${behind} behind`}
+						>
+							<ArrowDownIcon className="size-2.5" strokeWidth={2.5} />
+							{behind}
+						</span>
+					)}
+				</span>
+			)}
+			{hasChanges && !unavailable && (
+				<Badge
+					variant={selected ? "default" : "secondary"}
+					className="h-3.5 min-w-[14px] justify-center rounded-full px-1 text-[9px] font-semibold leading-none"
+				>
+					{changeCount}
+				</Badge>
+			)}
+		</button>
+	);
+
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>{button}</TooltipTrigger>
+			<TooltipContent
+				side="bottom"
+				className="flex max-w-[280px] flex-col gap-0.5 rounded-md px-2 py-1.5 text-[11px] leading-tight"
+			>
+				<span className="font-medium">{displayName}</span>
+				{context.parentRelativePath && (
+					<span className="font-mono text-[10px] opacity-80">
+						{context.parentRelativePath}
+					</span>
+				)}
+				{branchLabel && (
+					<span className="opacity-80">
+						Branch: <span className="font-mono">{branchLabel}</span>
+					</span>
+				)}
+				{context.targetBranch && (
+					<span className="opacity-80">
+						Target: <span className="font-mono">{context.targetBranch}</span>
+					</span>
+				)}
+				{context.remote && (
+					<span className="opacity-80">
+						Remote: <span className="font-mono">{context.remote}</span>
+					</span>
+				)}
+				{!unavailable && (changeCount > 0 || hasSyncSignal) && (
+					<span className="opacity-80">
+						{[
+							changeCount > 0
+								? `${changeCount} ${changeCount === 1 ? "change" : "changes"}`
+								: null,
+							ahead > 0 ? `${ahead} ahead` : null,
+							behind > 0 ? `${behind} behind` : null,
+						]
+							.filter(Boolean)
+							.join(" · ")}
+					</span>
+				)}
+				{unavailable && context.unavailableReason && (
+					<span className="text-amber-300">{context.unavailableReason}</span>
+				)}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
+function ContextEmptyState({
+	context,
+	hasOtherContextChanges,
+	onJumpToFirstChangedSubmodule,
+}: {
+	context: GitPanelContext;
+	hasOtherContextChanges: boolean;
+	onJumpToFirstChangedSubmodule?: () => void;
+}) {
+	if (!context.available) {
+		return (
+			<div className="flex flex-col gap-1 px-3 py-3 text-[11px] leading-5 text-muted-foreground">
+				<div className="inline-flex items-center gap-1.5 font-medium text-foreground">
+					<AlertTriangleIcon
+						className="size-3 text-amber-500"
+						strokeWidth={2}
+					/>
+					{context.name} unavailable
+				</div>
+				<span>
+					{context.unavailableReason ??
+						"This submodule is not initialized in the workspace."}
+				</span>
+				<span className="text-muted-foreground/80">
+					Initialize it with{" "}
+					<code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">
+						git submodule update --init
+					</code>{" "}
+					to manage it here.
+				</span>
+			</div>
+		);
+	}
+
+	const baseMessage =
+		context.kind === "workspace"
+			? "No changes on this branch yet."
+			: `${context.name} is clean — no changes in this submodule yet.`;
+
+	return (
+		<div className="flex flex-col gap-1 px-3 py-3 text-[11px] leading-5 text-muted-foreground">
+			<span>{baseMessage}</span>
+			{hasOtherContextChanges && onJumpToFirstChangedSubmodule && (
+				<button
+					type="button"
+					onClick={onJumpToFirstChangedSubmodule}
+					className="inline-flex w-fit cursor-pointer items-center gap-1 rounded-sm text-[10.5px] text-muted-foreground transition-colors hover:text-foreground"
+				>
+					<BoxIcon className="size-3" strokeWidth={2} />
+					Pending changes in submodules — jump to the next one
+					<ChevronRightIcon className="size-3" strokeWidth={2} />
+				</button>
+			)}
+		</div>
+	);
+}
+
+function changesForContext(
+	changes: InspectorFileItem[],
+	context: GitPanelContext,
+	contexts: GitPanelContext[],
+): InspectorFileItem[] {
+	const prefix = context.parentRelativePath?.replace(/^\/+|\/+$/g, "");
+	if (!prefix) {
+		const submodulePrefixes = contexts
+			.map((candidate) =>
+				candidate.parentRelativePath?.replace(/^\/+|\/+$/g, ""),
+			)
+			.filter((value): value is string => Boolean(value));
+		return changes.filter((change) => {
+			return !submodulePrefixes.some((candidate) =>
+				change.path.startsWith(`${candidate}/`),
+			);
+		});
+	}
+
+	const prefixWithSlash = `${prefix}/`;
+	return changes
+		.filter((change) => change.path.startsWith(prefixWithSlash))
+		.map((change) => ({
+			...change,
+			path: change.path.slice(prefixWithSlash.length),
+		}));
+}
+
+function flashingPathsForContext(
+	flashingPaths: Set<string>,
+	context: GitPanelContext,
+): Set<string> {
+	const prefix = context.parentRelativePath?.replace(/^\/+|\/+$/g, "");
+	if (!prefix) {
+		return flashingPaths;
+	}
+	const prefixWithSlash = `${prefix}/`;
+	const next = new Set<string>();
+	for (const path of flashingPaths) {
+		if (path.startsWith(prefixWithSlash)) {
+			next.add(path.slice(prefixWithSlash.length));
+		}
+	}
+	return next;
+}
+
+function toGitActionContext(context: GitPanelContext): GitActionContext {
+	return {
+		id: context.id,
+		kind: context.kind,
+		name: context.name,
+		rootPath: context.rootPath,
+		parentRelativePath: context.parentRelativePath,
+		branch: context.branch,
+		remote: context.remote,
+		remoteUrl: context.remoteUrl,
+		targetBranch: context.targetBranch,
+	};
 }
 
 type StageActionKind = "stage" | "unstage";
@@ -641,9 +1115,10 @@ function BranchDiffSection({
 				fileStatus: options?.fileStatus ?? "M",
 				originalRef: targetBranch ?? undefined,
 				modifiedRef: "HEAD",
+				workspaceRootPath,
 			});
 		},
-		[onOpenEditorFile, targetBranch],
+		[onOpenEditorFile, targetBranch, workspaceRootPath],
 	);
 
 	return (
@@ -1008,12 +1483,18 @@ function TreeFileRow({
 			onMouseEnter={onMouseEnter}
 			onMouseLeave={onMouseLeave}
 			onClick={() =>
-				onOpenEditorFile(file.absolutePath, { fileStatus: file.status })
+				onOpenEditorFile(file.absolutePath, {
+					fileStatus: file.status,
+					workspaceRootPath,
+				})
 			}
 			onKeyDown={(event) => {
 				if (event.key === "Enter" || event.key === " ") {
 					event.preventDefault();
-					onOpenEditorFile(file.absolutePath, { fileStatus: file.status });
+					onOpenEditorFile(file.absolutePath, {
+						fileStatus: file.status,
+						workspaceRootPath,
+					});
 				}
 			}}
 		>
@@ -1130,6 +1611,7 @@ function FlatFileRow({
 			onClick={() =>
 				onOpenEditorFile(change.absolutePath, {
 					fileStatus: change.status,
+					workspaceRootPath,
 				})
 			}
 			onKeyDown={(event) => {
@@ -1137,6 +1619,7 @@ function FlatFileRow({
 					event.preventDefault();
 					onOpenEditorFile(change.absolutePath, {
 						fileStatus: change.status,
+						workspaceRootPath,
 					});
 				}
 			}}

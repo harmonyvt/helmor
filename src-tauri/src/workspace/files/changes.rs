@@ -10,7 +10,10 @@ use rusqlite::Connection;
 
 use super::{
     support::allowed_workspace_roots,
-    types::{EditorFileListItem, EditorFilePrefetchItem, EditorFilesWithContentResponse},
+    types::{
+        EditorFileListItem, EditorFilePrefetchItem, EditorFilesWithContentResponse,
+        GitPanelContext, GitPanelResponse,
+    },
 };
 use crate::{
     bail_coded, db,
@@ -21,6 +24,13 @@ use crate::{
 const MAX_PREFETCH_BYTES: u64 = 1_048_576;
 
 pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFileListItem>> {
+    list_git_root_changes(workspace_root_path, None)
+}
+
+fn list_git_root_changes(
+    workspace_root_path: &str,
+    target_ref_override: Option<&str>,
+) -> Result<Vec<EditorFileListItem>> {
     let workspace_root = Path::new(workspace_root_path);
     if !workspace_root.is_absolute() {
         bail!(
@@ -40,7 +50,10 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
         return Ok(Vec::new());
     }
 
-    let target_ref = resolve_target_ref(workspace_root)?;
+    let target_ref = target_ref_override
+        .map(ToOwned::to_owned)
+        .map(Ok)
+        .unwrap_or_else(|| resolve_target_ref(workspace_root))?;
 
     // Run all git commands in parallel — they're independent reads.
     let (
@@ -186,6 +199,331 @@ pub fn list_workspace_changes_with_content(
         .collect();
 
     Ok(EditorFilesWithContentResponse { items, prefetched })
+}
+
+pub fn list_workspace_git_panel(workspace_root_path: &str) -> Result<GitPanelResponse> {
+    let workspace_root = Path::new(workspace_root_path);
+    let mut contexts = discover_git_panel_contexts(workspace_root)?;
+    let mut items = Vec::<EditorFileListItem>::new();
+
+    for context in &contexts {
+        if !context.available {
+            continue;
+        }
+        let target_ref = context
+            .target_branch
+            .as_ref()
+            .zip(context.remote.as_ref())
+            .map(|(branch, remote)| format!("refs/remotes/{remote}/{branch}"));
+        let mut context_items =
+            list_git_root_changes(&context.root_path, target_ref.as_deref()).unwrap_or_default();
+        for item in &mut context_items {
+            item.absolute_path = Path::new(&context.root_path)
+                .join(&item.path)
+                .display()
+                .to_string();
+            if let Some(prefix) = &context.parent_relative_path {
+                item.path = format!(
+                    "{}/{}",
+                    prefix.trim_matches('/'),
+                    item.path.trim_start_matches('/')
+                );
+            }
+        }
+        items.extend(context_items);
+    }
+
+    let prefetched = prefetch_changed_items(&items);
+    contexts.sort_by(|left, right| {
+        if left.kind != right.kind {
+            return if left.kind == "workspace" {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        left.name.cmp(&right.name)
+    });
+    Ok(GitPanelResponse {
+        contexts,
+        items,
+        prefetched,
+    })
+}
+
+pub fn push_git_context_to_remote(
+    context_root_path: &str,
+    remote: Option<&str>,
+) -> Result<crate::workspaces::PushWorkspaceToRemoteResponse> {
+    let context_root = validate_git_context_root(context_root_path)?;
+    let remote = remote
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("origin");
+
+    let current_status = git_ops::workspace_action_status(&context_root, Some(remote), None)?;
+    if current_status.conflict_count > 0 {
+        bail!("Cannot push branch while merge conflicts are present");
+    }
+
+    let push_result = git_ops::push_current_branch(&context_root, remote)?;
+    let head_commit = git_ops::current_workspace_head_commit(&context_root)?;
+    Ok(crate::workspaces::PushWorkspaceToRemoteResponse {
+        target_ref: push_result.target_ref,
+        head_commit,
+    })
+}
+
+fn validate_git_context_root(context_root_path: &str) -> Result<PathBuf> {
+    let context_root = PathBuf::from(context_root_path);
+    if !context_root.is_absolute() {
+        bail!(
+            "Git context root must be an absolute path: {}",
+            context_root.display()
+        );
+    }
+    if !context_root.is_dir() {
+        bail_coded!(
+            ErrorCode::WorkspaceBroken,
+            "Git context directory is missing: {}",
+            context_root.display()
+        );
+    }
+    let canonical = context_root.canonicalize().map_err(|error| {
+        anyhow::Error::new(error)
+            .context(format!(
+                "Failed to canonicalize git context root: {}",
+                context_root.display()
+            ))
+            .with_code(ErrorCode::WorkspaceBroken)
+    })?;
+    let workspace_roots = allowed_workspace_roots()?;
+    if !workspace_roots
+        .iter()
+        .any(|root| canonical.starts_with(root))
+    {
+        bail!(
+            "Git context root is not registered as an editable location: {}",
+            context_root.display()
+        );
+    }
+    Ok(context_root)
+}
+
+fn discover_git_panel_contexts(workspace_root: &Path) -> Result<Vec<GitPanelContext>> {
+    if !workspace_root.is_absolute() {
+        bail!(
+            "Workspace root must be an absolute path: {}",
+            workspace_root.display()
+        );
+    }
+    if !workspace_root.is_dir() {
+        tracing::warn!(
+            path = %workspace_root.display(),
+            "workspace root missing; returning empty git panel",
+        );
+        return Ok(Vec::new());
+    }
+
+    let mut contexts = Vec::new();
+    contexts.push(build_git_panel_context(
+        workspace_root,
+        None,
+        "workspace",
+        "Workspace",
+    ));
+
+    let output = git_ops::run_git(["submodule", "status", "--recursive"], Some(workspace_root))
+        .unwrap_or_default();
+    for line in output.lines() {
+        let Some(relative_path) = parse_submodule_status_path(line) else {
+            continue;
+        };
+        let root = workspace_root.join(&relative_path);
+        let name = Path::new(&relative_path)
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| relative_path.clone());
+        contexts.push(build_git_panel_context(
+            &root,
+            Some(relative_path),
+            "submodule",
+            &name,
+        ));
+    }
+
+    Ok(contexts)
+}
+
+fn build_git_panel_context(
+    root: &Path,
+    parent_relative_path: Option<String>,
+    kind: &str,
+    name: &str,
+) -> GitPanelContext {
+    let root_path = root.display().to_string();
+    if !root.is_dir() {
+        return GitPanelContext {
+            id: context_id(kind, parent_relative_path.as_deref()),
+            kind: kind.to_string(),
+            name: name.to_string(),
+            root_path,
+            parent_relative_path,
+            branch: None,
+            remote: None,
+            remote_url: None,
+            target_branch: None,
+            git_status: quiet_git_status(None),
+            available: false,
+            unavailable_reason: Some("Submodule is not initialized on disk".to_string()),
+        };
+    }
+
+    let branch = git_ops::current_branch_name(root).ok();
+    let remote = resolve_default_remote(root);
+    let remote_url = remote
+        .as_deref()
+        .and_then(|remote| git_config(root, &format!("remote.{remote}.url")));
+    let target_branch = remote
+        .as_deref()
+        .and_then(|remote| resolve_context_target_branch(root, remote));
+    let git_status =
+        git_ops::workspace_action_status(root, remote.as_deref(), target_branch.as_deref())
+            .unwrap_or_else(|_| quiet_git_status(target_branch.clone()));
+
+    GitPanelContext {
+        id: context_id(kind, parent_relative_path.as_deref()),
+        kind: kind.to_string(),
+        name: name.to_string(),
+        root_path,
+        parent_relative_path,
+        branch,
+        remote,
+        remote_url,
+        target_branch,
+        git_status,
+        available: true,
+        unavailable_reason: None,
+    }
+}
+
+fn context_id(kind: &str, parent_relative_path: Option<&str>) -> String {
+    match parent_relative_path {
+        Some(path) => format!("{kind}:{path}"),
+        None => "workspace".to_string(),
+    }
+}
+
+fn quiet_git_status(target_branch: Option<String>) -> git_ops::WorkspaceGitActionStatus {
+    git_ops::WorkspaceGitActionStatus {
+        uncommitted_count: 0,
+        conflict_count: 0,
+        sync_target_branch: target_branch,
+        sync_status: git_ops::WorkspaceSyncStatus::Unknown,
+        behind_target_count: 0,
+        remote_tracking_ref: None,
+        ahead_of_remote_count: 0,
+        push_status: git_ops::WorkspacePushStatus::Unknown,
+    }
+}
+
+fn parse_submodule_status_path(line: &str) -> Option<String> {
+    let trimmed = line.trim_start_matches([' ', '+', '-', 'U']);
+    let mut parts = trimmed.split_whitespace();
+    let _sha = parts.next()?;
+    parts.next().map(ToOwned::to_owned)
+}
+
+fn resolve_default_remote(root: &Path) -> Option<String> {
+    git_config(root, "branch.HEAD.remote")
+        .filter(|value| value != ".")
+        .or_else(|| {
+            let branch = git_ops::current_branch_name(root).ok()?;
+            git_config(root, &format!("branch.{branch}.remote")).filter(|value| value != ".")
+        })
+        .or_else(|| {
+            let remotes = git_ops::run_git(["remote"], Some(root)).ok()?;
+            let names = remotes
+                .lines()
+                .map(str::trim)
+                .filter(|remote| !remote.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            names
+                .iter()
+                .find(|remote| remote.as_str() == "origin")
+                .cloned()
+                .or_else(|| names.first().cloned())
+        })
+}
+
+fn resolve_context_target_branch(root: &Path, remote: &str) -> Option<String> {
+    let upstream = git_ops::run_git(
+        [
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+        Some(root),
+    )
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty());
+    if let Some(upstream) = upstream {
+        if let Some(branch) = upstream.strip_prefix(&format!("{remote}/")) {
+            return Some(branch.to_string());
+        }
+    }
+
+    let remote_head = git_ops::run_git(
+        ["symbolic-ref", "-q", &format!("refs/remotes/{remote}/HEAD")],
+        Some(root),
+    )
+    .ok()
+    .map(|value| value.trim().to_string())
+    .and_then(|value| {
+        value
+            .strip_prefix(&format!("refs/remotes/{remote}/"))
+            .map(ToOwned::to_owned)
+    });
+    if remote_head.is_some() {
+        return remote_head;
+    }
+
+    for candidate in ["main", "master"] {
+        if git_ops::verify_remote_ref_exists(root, remote, candidate).unwrap_or(false) {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+fn git_config(root: &Path, key: &str) -> Option<String> {
+    git_ops::run_git(["config", "--get", key], Some(root))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn prefetch_changed_items(items: &[EditorFileListItem]) -> Vec<EditorFilePrefetchItem> {
+    items
+        .iter()
+        .filter(|item| item.status != "D")
+        .filter_map(|item| {
+            let path = Path::new(&item.absolute_path);
+            let metadata = fs::metadata(path).ok()?;
+            if metadata.len() > MAX_PREFETCH_BYTES {
+                return None;
+            }
+            let bytes = fs::read(path).ok()?;
+            let content = String::from_utf8(bytes).ok()?;
+            Some(EditorFilePrefetchItem {
+                absolute_path: item.absolute_path.clone(),
+                content,
+            })
+        })
+        .collect()
 }
 
 fn validate_workspace_relative_path(

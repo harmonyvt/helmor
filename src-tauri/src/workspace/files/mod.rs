@@ -5,7 +5,8 @@ mod types;
 
 pub use changes::{
     discard_workspace_file, list_workspace_changes, list_workspace_changes_with_content,
-    stage_workspace_file, unstage_workspace_file,
+    list_workspace_git_panel, push_git_context_to_remote, stage_workspace_file,
+    unstage_workspace_file,
 };
 pub use editor::{
     get_file_unified_diff, list_editor_files, list_editor_files_with_content, list_workspace_files,
@@ -13,7 +14,7 @@ pub use editor::{
 };
 pub use types::{
     EditorFileListItem, EditorFilePrefetchItem, EditorFileReadResponse, EditorFileStatResponse,
-    EditorFileWriteResponse, EditorFilesWithContentResponse,
+    EditorFileWriteResponse, EditorFilesWithContentResponse, GitPanelContext, GitPanelResponse,
 };
 
 #[cfg(test)]

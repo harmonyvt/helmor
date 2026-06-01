@@ -476,6 +476,12 @@ async fn dispatch_invoke(command: &str, args: Value) -> Result<Value> {
                 &workspace_root_path,
             ))
         }
+        "list_workspace_git_panel" => {
+            let workspace_root_path: String = arg(&args, "workspaceRootPath")?;
+            json_any(crate::editor_files::list_workspace_git_panel(
+                &workspace_root_path,
+            ))
+        }
         "discard_workspace_file" => {
             let workspace_root_path: String = arg(&args, "workspaceRootPath")?;
             let relative_path: String = arg(&args, "relativePath")?;
@@ -498,6 +504,14 @@ async fn dispatch_invoke(command: &str, args: Value) -> Result<Value> {
             json_any(crate::editor_files::unstage_workspace_file(
                 &workspace_root_path,
                 &relative_path,
+            ))
+        }
+        "push_git_context_to_remote" => {
+            let context_root_path: String = arg(&args, "contextRootPath")?;
+            let remote: Option<String> = opt_arg(&args, "remote")?;
+            json_any(crate::editor_files::push_git_context_to_remote(
+                &context_root_path,
+                remote.as_deref(),
             ))
         }
         "get_workspace_git_action_status" => {

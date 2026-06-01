@@ -289,6 +289,7 @@ export function ActionsSection({
 					queryKey: helmorQueryKeys.workspaceGroups,
 				}),
 				queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] }),
+				queryClient.invalidateQueries({ queryKey: ["workspaceGitPanel"] }),
 			]);
 			setSyncPending(false);
 		}
