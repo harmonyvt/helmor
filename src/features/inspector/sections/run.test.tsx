@@ -118,6 +118,8 @@ describe("RunTab", () => {
 			"run",
 			expect.any(Function),
 			"ws-1",
+			"ws-1",
+			undefined,
 		);
 	});
 
@@ -140,6 +142,7 @@ describe("RunTab", () => {
 		expect(apiMocks.stopRepoScript).toHaveBeenCalledWith(
 			"repo-1",
 			"run",
+			"ws-1",
 			"ws-1",
 		);
 	});

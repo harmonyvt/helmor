@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
 	type ChangeRequestInfo,
+	closeGitContextChangeRequest,
 	closeWorkspaceChangeRequest,
 	createSession,
 	type ForgeActionStatus,
@@ -17,9 +18,11 @@ import {
 	hideSession,
 	loadAutoCloseActionKinds,
 	loadRepoPreferences,
+	mergeGitContextChangeRequest,
 	mergeWorkspaceChangeRequest,
 	pushGitContextToRemote,
 	pushWorkspaceToRemote,
+	refreshGitContextPrCache,
 	refreshWorkspaceChangeRequest,
 	type WorkspaceDetail,
 	type WorkspaceGitActionStatus,
@@ -180,6 +183,7 @@ export function useWorkspaceCommitLifecycle({
 	selectedRepoId,
 	selectedWorkspaceTargetBranch,
 	selectedWorkspaceRemote,
+	selectedWorkspaceRootPath,
 	changeRequest,
 	forgeDetection,
 	forgeActionStatus,
@@ -200,6 +204,10 @@ export function useWorkspaceCommitLifecycle({
 	 *  Threaded into PR/push prompts so the agent gets a concrete remote
 	 *  instead of a literal `<remote>` placeholder. */
 	selectedWorkspaceRemote?: string | null;
+	/** Absolute path of the selected workspace root. Used to invalidate
+	 *  the git-panel query after a submodule merge/close so the inspector
+	 *  re-renders without waiting for the next poll. */
+	selectedWorkspaceRootPath?: string | null;
 	changeRequest?: ChangeRequestInfo | null;
 	forgeDetection?: ForgeDetection | null;
 	forgeActionStatus?: ForgeActionStatus | null;
@@ -263,8 +271,17 @@ export function useWorkspaceCommitLifecycle({
 			});
 
 			if (mode === "merge" || mode === "closed") {
+				// Submodule contexts target a PR distinct from the parent
+				// workspace's. Route merge/close through the submodule-aware
+				// IPC so we never accidentally close the wrong PR.
+				const submoduleContext =
+					context && context.kind !== "workspace" ? context : null;
+
 				// ── Merge pre-validation ─────────────────────────────────
-				if (mode === "merge") {
+				// Only enforced for the parent workspace path — for submodule
+				// PRs we don't have a `mergeable` signal locally, so let
+				// GitHub itself reject if appropriate.
+				if (mode === "merge" && !submoduleContext) {
 					const currentMergeable = forgeActionStatusRef.current?.mergeable;
 					if (currentMergeable === "CONFLICTING") {
 						console.warn(
@@ -292,6 +309,67 @@ export function useWorkspaceCommitLifecycle({
 						});
 						return;
 					}
+				}
+
+				if (submoduleContext) {
+					if (!submoduleContext.remoteUrl || !submoduleContext.branch) {
+						pushToast?.(
+							`Cannot ${mode === "merge" ? "merge" : "close"} ${changeRequestName}: submodule context is missing remote / branch.`,
+							getActionFailureTitle(mode, changeRequestName),
+							"destructive",
+						);
+						return;
+					}
+					setCommitLifecycle({
+						workspaceId,
+						trackedSessionId: null,
+						mode,
+						phase: "creating",
+						changeRequest: null,
+					});
+					void (async () => {
+						try {
+							const result =
+								mode === "merge"
+									? await mergeGitContextChangeRequest(
+											submoduleContext.remoteUrl as string,
+											submoduleContext.branch as string,
+										)
+									: await closeGitContextChangeRequest(
+											submoduleContext.remoteUrl as string,
+											submoduleContext.branch as string,
+										);
+							// Drop the Rust-side cache so the next git-panel
+							// poll reflects the new PR state immediately.
+							await refreshGitContextPrCache(
+								submoduleContext.remoteUrl,
+								submoduleContext.branch,
+							);
+							if (selectedWorkspaceRootPath) {
+								await queryClient.invalidateQueries({
+									queryKey: helmorQueryKeys.workspaceGitPanel(
+										selectedWorkspaceRootPath,
+									),
+								});
+							}
+							setCommitLifecycle((prev) =>
+								prev
+									? { ...prev, phase: "done", changeRequest: result ?? null }
+									: prev,
+							);
+						} catch (error) {
+							console.error(`[commitButton] submodule ${mode} failed:`, error);
+							pushToast?.(
+								getErrorMessage(error, "Unable to complete action."),
+								getActionFailureTitle(mode, changeRequestName),
+								"destructive",
+							);
+							setCommitLifecycle((prev) =>
+								prev ? { ...prev, phase: "error" } : prev,
+							);
+						}
+					})();
+					return;
 				}
 
 				const cachedChangeRequest =

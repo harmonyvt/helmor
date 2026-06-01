@@ -2494,6 +2494,76 @@ export async function pushGitContextToRemote(
 	}
 }
 
+export async function syncGitContextWithTargetBranch(
+	contextRootPath: string,
+	remote?: string | null,
+	targetBranch?: string | null,
+): Promise<SyncWorkspaceTargetResponse> {
+	try {
+		return await invoke<SyncWorkspaceTargetResponse>(
+			"sync_git_context_with_target_branch",
+			{
+				contextRootPath,
+				remote: remote ?? null,
+				targetBranch: targetBranch ?? null,
+			},
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to pull target branch updates."),
+		);
+	}
+}
+
+/**
+ * Force a backend refresh of the per-(remote, branch) PR cache used by the
+ * git panel. When `remoteUrl` and `branch` are both provided we evict that
+ * single entry; otherwise the entire cache is cleared. Callers typically
+ * follow this with a React Query invalidation so the next poll repopulates
+ * the cache.
+ */
+export async function refreshGitContextPrCache(
+	remoteUrl?: string | null,
+	branch?: string | null,
+): Promise<void> {
+	try {
+		await invoke<void>("refresh_git_context_pr_cache", {
+			remoteUrl: remoteUrl ?? null,
+			branch: branch ?? null,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to refresh PR status."));
+	}
+}
+
+export async function mergeGitContextChangeRequest(
+	remoteUrl: string,
+	branch: string,
+): Promise<ChangeRequestInfo | null> {
+	try {
+		return await invoke<ChangeRequestInfo | null>(
+			"merge_git_context_change_request",
+			{ remoteUrl, branch },
+		);
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to merge PR."));
+	}
+}
+
+export async function closeGitContextChangeRequest(
+	remoteUrl: string,
+	branch: string,
+): Promise<ChangeRequestInfo | null> {
+	try {
+		return await invoke<ChangeRequestInfo | null>(
+			"close_git_context_change_request",
+			{ remoteUrl, branch },
+		);
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to close PR."));
+	}
+}
+
 export type ChangeRequestInfo = {
 	url: string;
 	number: number;
@@ -2532,6 +2602,7 @@ export type GitPanelContext = {
 	remoteUrl?: string | null;
 	targetBranch?: string | null;
 	gitStatus: WorkspaceGitActionStatus;
+	changeRequest?: ChangeRequestInfo | null;
 	available: boolean;
 	unavailableReason?: string | null;
 };
@@ -2549,6 +2620,26 @@ export type GitActionContext = Pick<
 	| "targetBranch"
 >;
 
+/**
+ * Strip a {@link GitPanelContext} down to the action-relevant subset that
+ * commit-button callbacks accept. Used wherever the UI hands off a context
+ * for a write operation — keeps the marshalled payload narrow and avoids
+ * leaking transient fields like `gitStatus` / `changeRequest`.
+ */
+export function toGitActionContext(context: GitPanelContext): GitActionContext {
+	return {
+		id: context.id,
+		kind: context.kind,
+		name: context.name,
+		rootPath: context.rootPath,
+		parentRelativePath: context.parentRelativePath,
+		branch: context.branch,
+		remote: context.remote,
+		remoteUrl: context.remoteUrl,
+		targetBranch: context.targetBranch,
+	};
+}
+
 export type GitPanelResponse = EditorFilesWithContentResponse & {
 	contexts: GitPanelContext[];
 };
@@ -2557,7 +2648,9 @@ export type SyncWorkspaceTargetOutcome =
 	| "updated"
 	| "alreadyUpToDate"
 	| "conflict"
-	| "dirtyWorktree";
+	| "dirtyWorktree"
+	| "noTargetBranch"
+	| "fetchFailed";
 
 export type SyncWorkspaceTargetResponse = {
 	outcome: SyncWorkspaceTargetOutcome;
@@ -4077,6 +4170,8 @@ export async function executeRepoScript(
 	scriptType: "setup" | "run" | "archive",
 	onEvent: (event: ScriptEvent) => void,
 	workspaceId?: string | null,
+	processScope?: string | null,
+	workingDirectoryOverride?: string | null,
 ): Promise<void> {
 	const channel = new Channel<ScriptEvent>();
 	channel.onmessage = onEvent;
@@ -4084,6 +4179,8 @@ export async function executeRepoScript(
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		processScope: processScope ?? null,
+		workingDirectoryOverride: workingDirectoryOverride ?? null,
 		channel,
 	});
 }
@@ -4092,11 +4189,13 @@ export async function stopRepoScript(
 	repoId: string,
 	scriptType: "setup" | "run" | "archive",
 	workspaceId?: string | null,
+	processScope?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("stop_repo_script", {
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		processScope: processScope ?? null,
 	});
 }
 
@@ -4113,12 +4212,14 @@ export async function writeRepoScriptStdin(
 	repoId: string,
 	scriptType: "setup" | "run" | "archive",
 	workspaceId: string | null,
+	processScope: string | null,
 	data: string,
 ): Promise<boolean> {
 	return invoke<boolean>("write_repo_script_stdin", {
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		processScope: processScope ?? null,
 		data,
 	});
 }
@@ -4131,6 +4232,7 @@ export async function resizeRepoScript(
 	repoId: string,
 	scriptType: "setup" | "run" | "archive",
 	workspaceId: string | null,
+	processScope: string | null,
 	cols: number,
 	rows: number,
 ): Promise<boolean> {
@@ -4138,6 +4240,7 @@ export async function resizeRepoScript(
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		processScope: processScope ?? null,
 		cols,
 		rows,
 	});

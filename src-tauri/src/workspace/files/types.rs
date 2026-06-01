@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::git_ops::WorkspaceGitActionStatus;
+use crate::{forge::ChangeRequestInfo, git_ops::WorkspaceGitActionStatus};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +71,7 @@ pub struct GitPanelContext {
     pub remote_url: Option<String>,
     pub target_branch: Option<String>,
     pub git_status: WorkspaceGitActionStatus,
+    pub change_request: Option<ChangeRequestInfo>,
     pub available: bool,
     pub unavailable_reason: Option<String>,
 }

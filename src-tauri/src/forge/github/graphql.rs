@@ -223,6 +223,244 @@ query($owner: String!, $name: String!, $head: String!) {
         .transpose()
 }
 
+/// Look up a PR for an arbitrary remote+branch pair (not tied to a workspace
+/// record). Used by the git panel to badge submodule contexts.
+///
+/// Returns `Ok(None)` when:
+///   - branch is empty
+///   - remote is not a github.com URL
+///   - gh CLI is not ready (not installed / not authenticated)
+///   - the repo isn't accessible (private, deleted, or the token lacks scope)
+///   - no PR exists for `headRefName == branch`
+///
+/// Returns `Err(_)` only for unexpected transport / parse failures.
+pub(crate) fn lookup_change_request_by_remote_and_branch(
+    remote_url: &str,
+    branch: &str,
+) -> Result<Option<ChangeRequestInfo>> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Ok(None);
+    }
+    let Some((owner, name)) = parse_github_remote(remote_url) else {
+        return Ok(None);
+    };
+
+    // Skip the network call entirely when gh isn't ready. Mirrors the auth
+    // guard in `lookup_workspace_pr` so an unauthenticated session doesn't
+    // spawn a `gh graphql` subprocess per submodule on every poll.
+    let cli_status = github_cli::get_github_cli_status()?;
+    if !matches!(cli_status, github_cli::GithubCliStatus::Ready { .. }) {
+        return Ok(None);
+    }
+
+    let query = r#"
+query($owner: String!, $name: String!, $head: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $head, states: [OPEN, MERGED, CLOSED], first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        url
+        number
+        state
+        title
+        merged
+        headRefName
+        baseRefName
+        commits(last: 1) {
+          nodes { commit { oid } }
+        }
+      }
+    }
+  }
+}
+"#;
+    let parsed: GraphqlEnvelope = github_cli::graphql(
+        query,
+        &[
+            ("owner", owner),
+            ("name", name),
+            ("head", branch.to_string()),
+        ],
+    )?;
+    // Mirror `lookup_workspace_pr`: collapse "Could not resolve to a
+    // Repository" / "NOT_FOUND" to Ok(None) so private submodules don't
+    // spam the log every 60s with a hard error. Other GraphQL errors still
+    // bubble.
+    if let Some(errors) = parsed.errors.as_deref() {
+        if !errors.is_empty() {
+            let is_repo_not_found = errors.iter().any(|e| {
+                e.message.contains("Could not resolve to a Repository")
+                    || e.message.contains("NOT_FOUND")
+            });
+            if is_repo_not_found {
+                return Ok(None);
+            }
+            return Err(anyhow!(
+                "GitHub GraphQL errors: {}",
+                errors
+                    .iter()
+                    .map(|error| error.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+    }
+    let Some(node) = parsed
+        .data
+        .and_then(|data| data.repository)
+        .and_then(|repository| repository.pull_requests.nodes.into_iter().next())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ChangeRequestInfo {
+        url: node.url,
+        number: node.number,
+        state: node.state,
+        title: node.title,
+        is_merged: node.merged,
+        head_branch: node.head_ref_name,
+        base_branch: node.base_ref_name,
+        head_commit_sha: latest_pull_request_commit_oid(node.commits.as_ref()),
+    }))
+}
+
+/// Merge/close a PR by raw `(remote_url, branch)`. Used by the inspector's
+/// submodule context — the workspace-keyed `merge_workspace_pr` /
+/// `close_workspace_pr` would target the parent workspace's PR instead.
+///
+/// Returns `Ok(None)` when the PR can't be resolved (mirrors `lookup_change_request_by_remote_and_branch`).
+fn resolve_pr_node_id_by_remote_and_branch(
+    owner: &str,
+    name: &str,
+    branch: &str,
+) -> Result<Option<(i64, String)>> {
+    let id_query = r#"
+query($owner: String!, $name: String!, $head: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $head, states: [OPEN], first: 1) {
+      nodes { id, url, number, state, title, merged }
+    }
+  }
+}
+"#;
+    let response: GraphqlEnvelope = github_cli::graphql(
+        id_query,
+        &[
+            ("owner", owner.to_string()),
+            ("name", name.to_string()),
+            ("head", branch.to_string()),
+        ],
+    )
+    .context("Failed to resolve PR node ID with gh")?;
+    ensure_no_graphql_errors(response.errors.as_deref())?;
+    let Some(node) = response
+        .data
+        .and_then(|d| d.repository)
+        .and_then(|r| r.pull_requests.nodes.into_iter().next())
+    else {
+        return Ok(None);
+    };
+    let Some(node_id) = node.id else {
+        return Ok(None);
+    };
+    Ok(Some((node.number, node_id)))
+}
+
+pub(crate) fn merge_change_request_by_remote_and_branch(
+    remote_url: &str,
+    branch: &str,
+) -> Result<Option<ChangeRequestInfo>> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Ok(None);
+    }
+    let Some((owner, name)) = parse_github_remote(remote_url) else {
+        return Ok(None);
+    };
+    let cli_status = github_cli::get_github_cli_status()?;
+    if !matches!(cli_status, github_cli::GithubCliStatus::Ready { .. }) {
+        bail!("GitHub CLI is not authenticated");
+    }
+
+    let Some((number, node_id)) = resolve_pr_node_id_by_remote_and_branch(&owner, &name, branch)?
+    else {
+        bail!("No open PR found for branch `{branch}` in {owner}/{name}");
+    };
+
+    let merge_mutation = r#"
+mutation($prId: ID!) {
+  mergePullRequest(input: { pullRequestId: $prId }) {
+    pullRequest { url, number, state, title, merged }
+  }
+}
+"#;
+    let merge_response: serde_json::Value =
+        github_cli::graphql(merge_mutation, &[("prId", node_id)])
+            .context("Failed to call mergePullRequest with gh")?;
+    if let Some(errors) = merge_response.get("errors") {
+        if let Some(arr) = errors.as_array() {
+            if !arr.is_empty() {
+                let msgs: Vec<&str> = arr
+                    .iter()
+                    .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                    .collect();
+                bail!("mergePullRequest #{number} failed: {}", msgs.join("; "));
+            }
+        }
+    }
+    // After-state lookup so the UI updates with the merged status without
+    // waiting for the next poll. Drop the cache for this (remote, branch)
+    // via the in-Rust cache so subsequent context queries reflect the merge.
+    crate::editor_files::evict_context_change_request_cache(remote_url, branch);
+    lookup_change_request_by_remote_and_branch(remote_url, branch)
+}
+
+pub(crate) fn close_change_request_by_remote_and_branch(
+    remote_url: &str,
+    branch: &str,
+) -> Result<Option<ChangeRequestInfo>> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Ok(None);
+    }
+    let Some((owner, name)) = parse_github_remote(remote_url) else {
+        return Ok(None);
+    };
+    let cli_status = github_cli::get_github_cli_status()?;
+    if !matches!(cli_status, github_cli::GithubCliStatus::Ready { .. }) {
+        bail!("GitHub CLI is not authenticated");
+    }
+
+    let Some((number, node_id)) = resolve_pr_node_id_by_remote_and_branch(&owner, &name, branch)?
+    else {
+        bail!("No open PR found for branch `{branch}` in {owner}/{name}");
+    };
+
+    let close_mutation = r#"
+mutation($prId: ID!) {
+  closePullRequest(input: { pullRequestId: $prId }) {
+    pullRequest { url, number, state, title, merged }
+  }
+}
+"#;
+    let close_response: serde_json::Value =
+        github_cli::graphql(close_mutation, &[("prId", node_id)])
+            .context("Failed to call closePullRequest with gh")?;
+    if let Some(errors) = close_response.get("errors") {
+        if let Some(arr) = errors.as_array() {
+            if !arr.is_empty() {
+                let msgs: Vec<&str> = arr
+                    .iter()
+                    .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                    .collect();
+                bail!("closePullRequest #{number} failed: {}", msgs.join("; "));
+            }
+        }
+    }
+    crate::editor_files::evict_context_change_request_cache(remote_url, branch);
+    lookup_change_request_by_remote_and_branch(remote_url, branch)
+}
+
 fn ensure_no_graphql_errors(errors: Option<&[GraphqlError]>) -> Result<()> {
     let Some(errors) = errors else {
         return Ok(());
@@ -2033,6 +2271,34 @@ mod tests {
     fn rejects_malformed_remote() {
         assert_eq!(parse_github_remote("https://github.com/"), None);
         assert_eq!(parse_github_remote("git@github.com:incomplete"), None);
+    }
+
+    #[test]
+    fn lookup_change_request_by_remote_and_branch_short_circuits_for_empty_branch() {
+        // Empty / whitespace branch must never hit the gh subprocess —
+        // GitHub's pullRequests filter behaves differently on empty
+        // headRefName and would surface unrelated PRs.
+        let result =
+            lookup_change_request_by_remote_and_branch("https://github.com/owner/repo.git", "")
+                .expect("empty branch should be Ok(None)");
+        assert!(result.is_none());
+
+        let result =
+            lookup_change_request_by_remote_and_branch("https://github.com/owner/repo.git", "   ")
+                .expect("whitespace branch should be Ok(None)");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn lookup_change_request_by_remote_and_branch_short_circuits_for_non_github_remote() {
+        // Mirrors the workspace path — non-github remotes never invoke
+        // gh, regardless of whether the user is authenticated.
+        let result = lookup_change_request_by_remote_and_branch(
+            "https://gitlab.com/group/project.git",
+            "main",
+        )
+        .expect("non-github remote should be Ok(None)");
+        assert!(result.is_none());
     }
 
     #[test]

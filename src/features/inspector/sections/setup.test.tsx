@@ -121,6 +121,8 @@ describe("SetupTab", () => {
 			"setup",
 			expect.any(Function),
 			"ws-1",
+			"ws-1",
+			undefined,
 		);
 	});
 
@@ -143,6 +145,7 @@ describe("SetupTab", () => {
 		expect(apiMocks.stopRepoScript).toHaveBeenCalledWith(
 			"repo-1",
 			"setup",
+			"ws-1",
 			"ws-1",
 		);
 	});

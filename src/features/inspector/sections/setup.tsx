@@ -24,6 +24,8 @@ import {
 type SetupTabProps = {
 	repoId: string | null;
 	workspaceId: string | null;
+	scriptScopeId?: string | null;
+	workingDirectoryOverride?: string | null;
 	setupScript: string | null;
 	isActive: boolean;
 	onOpenSettings: () => void;
@@ -32,6 +34,8 @@ type SetupTabProps = {
 export function SetupTab({
 	repoId,
 	workspaceId,
+	scriptScopeId,
+	workingDirectoryOverride,
 	setupScript,
 	isActive,
 	onOpenSettings,
@@ -43,16 +47,20 @@ export function SetupTab({
 	const { isZoomPresented, isHoverExpanded } = useTabsZoom();
 
 	const hasScript = !!setupScript?.trim();
+	// Default the script scope to the workspace id when the parent
+	// doesn't supply one explicitly — keeps existing call sites and
+	// tests working unchanged.
+	const effectiveScopeId = scriptScopeId ?? workspaceId;
 
 	useEffect(() => {
-		if (!workspaceId) return;
+		if (!workspaceId || !effectiveScopeId) return;
 
-		const existing = attach(workspaceId, "setup", {
+		const existing = attach(effectiveScopeId, "setup", {
 			onChunk: (data) => termRef.current?.write(data),
 			onStatusChange: (s) => {
 				setStatus(s);
 				if (s === "exited") {
-					const state = getScriptState(workspaceId, "setup");
+					const state = getScriptState(effectiveScopeId, "setup");
 					if (state?.exitCode === 0) {
 						queryClient.invalidateQueries({
 							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
@@ -82,36 +90,42 @@ export function SetupTab({
 			termRef.current?.clear();
 		}
 
-		return () => detach(workspaceId, "setup");
-	}, [workspaceId, queryClient]);
+		return () => detach(effectiveScopeId, "setup");
+	}, [workspaceId, effectiveScopeId, queryClient]);
 
 	const handleRun = useCallback(() => {
-		if (!repoId || !workspaceId) return;
+		if (!repoId || !workspaceId || !effectiveScopeId) return;
 		termRef.current?.clear();
 		setStatus("running");
 		setHasRun(true);
-		startScript(repoId, "setup", workspaceId);
-	}, [repoId, workspaceId]);
+		startScript(
+			repoId,
+			"setup",
+			workspaceId,
+			effectiveScopeId,
+			workingDirectoryOverride,
+		);
+	}, [repoId, workspaceId, effectiveScopeId, workingDirectoryOverride]);
 
 	const handleStop = useCallback(() => {
-		if (!repoId || !workspaceId) return;
-		stopScript(repoId, "setup", workspaceId);
-	}, [repoId, workspaceId]);
+		if (!repoId || !workspaceId || !effectiveScopeId) return;
+		stopScript(repoId, "setup", workspaceId, effectiveScopeId);
+	}, [repoId, workspaceId, effectiveScopeId]);
 
 	const handleData = useCallback(
 		(data: string) => {
-			if (!repoId || !workspaceId) return;
-			writeStdin(repoId, "setup", workspaceId, data);
+			if (!repoId || !workspaceId || !effectiveScopeId) return;
+			writeStdin(repoId, "setup", workspaceId, effectiveScopeId, data);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, effectiveScopeId],
 	);
 
 	const handleResize = useCallback(
 		(cols: number, rows: number) => {
-			if (!repoId || !workspaceId) return;
-			resizeScript(repoId, "setup", workspaceId, cols, rows);
+			if (!repoId || !workspaceId || !effectiveScopeId) return;
+			resizeScript(repoId, "setup", workspaceId, effectiveScopeId, cols, rows);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, effectiveScopeId],
 	);
 
 	return (

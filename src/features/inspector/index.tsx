@@ -18,6 +18,7 @@ import {
 	createSession,
 	type DebugIngestStatus,
 	type GitActionContext,
+	type GitPanelContext,
 	type PrComment,
 	type PrCommentData,
 	type WorkspaceDetail,
@@ -152,6 +153,26 @@ export function WorkspaceInspectorSidebar({
 	});
 	const queryClient = useQueryClient();
 	const { settings: appSettings } = useSettings();
+	const [selectedGitContextId, setSelectedGitContextId] = useState("workspace");
+	useEffect(() => {
+		setSelectedGitContextId("workspace");
+	}, [workspaceRootPath]);
+	const selectedGitContext: GitPanelContext | null =
+		gitContexts.find((context) => context.id === selectedGitContextId) ?? null;
+	const activeGitContext =
+		selectedGitContext && selectedGitContext.kind !== "workspace"
+			? selectedGitContext
+			: null;
+	// Script scope is intentionally workspace-scoped (not context-scoped).
+	// Earlier iteration scoped by `${workspaceId}:${contextId}` so each
+	// submodule had its own running script — but switching contexts then
+	// hid in-flight scripts from the UI (the user couldn't stop a setup
+	// they had started, and clicking "Run" again spawned a second one).
+	// We use the context only for the working-directory override; the
+	// script identity stays attached to the workspace so the icons /
+	// terminal stay consistent across context switches.
+	const activeScriptScopeId = workspaceId ?? null;
+	const activeScriptWorkingDirectory = activeGitContext?.rootPath ?? null;
 
 	// PR comments — fetched at sidebar level so the Comments tab badge and
 	// the CommentsTab body both share the same query instance.
@@ -200,17 +221,17 @@ export function WorkspaceInspectorSidebar({
 	// Subscribes at the sidebar level so the icons stay live even when the
 	// tab body itself is collapsed / not mounted.
 	const setupScriptState = useScriptStatus(
-		workspaceId ?? null,
+		activeScriptScopeId,
 		"setup",
 		!!repoScripts?.setupScript?.trim(),
 	);
 	const runScriptState = useScriptStatus(
-		workspaceId ?? null,
+		activeScriptScopeId,
 		"run",
 		!!repoScripts?.runScript?.trim(),
 	);
 	const archiveScriptState = useScriptStatus(
-		workspaceId ?? null,
+		activeScriptScopeId,
 		"archive",
 		!!repoScripts?.archiveScript?.trim(),
 	);
@@ -533,6 +554,8 @@ export function WorkspaceInspectorSidebar({
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
 				onOpenDiagramMode={onOpenDiagramMode}
+				selectedContextId={selectedGitContextId}
+				onSelectedContextIdChange={setSelectedGitContextId}
 			/>
 
 			<HorizontalResizeHandle
@@ -545,6 +568,7 @@ export function WorkspaceInspectorSidebar({
 				workspaceState={workspaceState ?? null}
 				repoId={repoId ?? null}
 				workspaceRemote={workspaceRemote ?? null}
+				activeGitContext={activeGitContext}
 				sectionRef={actionsRef}
 				bodyHeight={actionsHeight}
 				expanded={!tabsOpen}
@@ -587,6 +611,8 @@ export function WorkspaceInspectorSidebar({
 				<SetupTab
 					repoId={repoId ?? null}
 					workspaceId={workspaceId ?? null}
+					scriptScopeId={activeScriptScopeId}
+					workingDirectoryOverride={activeScriptWorkingDirectory}
 					setupScript={repoScripts?.setupScript ?? null}
 					isActive={activeTab === "setup"}
 					onOpenSettings={handleOpenSettings}
@@ -594,6 +620,8 @@ export function WorkspaceInspectorSidebar({
 				<RunTab
 					repoId={repoId ?? null}
 					workspaceId={workspaceId ?? null}
+					scriptScopeId={activeScriptScopeId}
+					workingDirectoryOverride={activeScriptWorkingDirectory}
 					runScript={repoScripts?.runScript ?? null}
 					isActive={activeTab === "run"}
 					onOpenSettings={handleOpenSettings}
@@ -603,6 +631,8 @@ export function WorkspaceInspectorSidebar({
 				<ArchiveTab
 					repoId={repoId ?? null}
 					workspaceId={workspaceId ?? null}
+					scriptScopeId={activeScriptScopeId}
+					workingDirectoryOverride={activeScriptWorkingDirectory}
 					archiveScript={repoScripts?.archiveScript ?? null}
 					isActive={activeTab === "archive"}
 					onOpenSettings={handleOpenSettings}

@@ -25,6 +25,8 @@ import { cn } from "@/lib/utils";
 type ArchiveTabProps = {
 	repoId: string | null;
 	workspaceId: string | null;
+	scriptScopeId?: string | null;
+	workingDirectoryOverride?: string | null;
 	archiveScript: string | null;
 	isActive: boolean;
 	onOpenSettings: () => void;
@@ -33,6 +35,8 @@ type ArchiveTabProps = {
 export function ArchiveTab({
 	repoId,
 	workspaceId,
+	scriptScopeId,
+	workingDirectoryOverride,
 	archiveScript,
 	isActive,
 	onOpenSettings,
@@ -43,11 +47,15 @@ export function ArchiveTab({
 	const { isZoomPresented, isHoverExpanded } = useTabsZoom();
 
 	const hasScript = !!archiveScript?.trim();
+	// Default the script scope to the workspace id when the parent
+	// doesn't supply one explicitly — keeps existing call sites and
+	// tests working unchanged.
+	const effectiveScopeId = scriptScopeId ?? workspaceId;
 
 	useEffect(() => {
-		if (!workspaceId) return;
+		if (!workspaceId || !effectiveScopeId) return;
 
-		const existing = attach(workspaceId, "archive", {
+		const existing = attach(effectiveScopeId, "archive", {
 			onChunk: (data) => {
 				setHasRun(true);
 				termRef.current?.write(data);
@@ -80,36 +88,49 @@ export function ArchiveTab({
 			termRef.current?.clear();
 		}
 
-		return () => detach(workspaceId, "archive");
-	}, [workspaceId]);
+		return () => detach(effectiveScopeId, "archive");
+	}, [workspaceId, effectiveScopeId]);
 
 	const handleRun = useCallback(() => {
-		if (!repoId || !workspaceId) return;
+		if (!repoId || !workspaceId || !effectiveScopeId) return;
 		termRef.current?.clear();
 		setStatus("running");
 		setHasRun(true);
-		startScript(repoId, "archive", workspaceId);
-	}, [repoId, workspaceId]);
+		startScript(
+			repoId,
+			"archive",
+			workspaceId,
+			effectiveScopeId,
+			workingDirectoryOverride,
+		);
+	}, [repoId, workspaceId, effectiveScopeId, workingDirectoryOverride]);
 
 	const handleStop = useCallback(() => {
-		if (!repoId || !workspaceId) return;
-		stopScript(repoId, "archive", workspaceId);
-	}, [repoId, workspaceId]);
+		if (!repoId || !workspaceId || !effectiveScopeId) return;
+		stopScript(repoId, "archive", workspaceId, effectiveScopeId);
+	}, [repoId, workspaceId, effectiveScopeId]);
 
 	const handleData = useCallback(
 		(data: string) => {
-			if (!repoId || !workspaceId) return;
-			writeStdin(repoId, "archive", workspaceId, data);
+			if (!repoId || !workspaceId || !effectiveScopeId) return;
+			writeStdin(repoId, "archive", workspaceId, effectiveScopeId, data);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, effectiveScopeId],
 	);
 
 	const handleResize = useCallback(
 		(cols: number, rows: number) => {
-			if (!repoId || !workspaceId) return;
-			resizeScript(repoId, "archive", workspaceId, cols, rows);
+			if (!repoId || !workspaceId || !effectiveScopeId) return;
+			resizeScript(
+				repoId,
+				"archive",
+				workspaceId,
+				effectiveScopeId,
+				cols,
+				rows,
+			);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, effectiveScopeId],
 	);
 
 	return (

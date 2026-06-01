@@ -352,6 +352,15 @@ pub enum SyncWorkspaceTargetOutcome {
     AlreadyUpToDate,
     Conflict,
     DirtyWorktree,
+    /// Caller did not provide a target branch and the backend couldn't
+    /// resolve one from the local git config. Surfaced for submodule
+    /// contexts whose upstream/default branch is unknown — avoids
+    /// silently fetching `origin/main` and pulling the wrong branch.
+    NoTargetBranch,
+    /// `git fetch` failed (network / auth / bad ref). Distinguished from
+    /// generic errors so the UI can offer "check connection" instead of
+    /// a vague "unable to pull" toast.
+    FetchFailed,
 }
 
 #[derive(Debug, Clone, Serialize)]

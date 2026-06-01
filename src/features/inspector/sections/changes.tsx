@@ -47,7 +47,9 @@ import {
 	type ForgeDetection,
 	type GitActionContext,
 	type GitPanelContext,
+	refreshGitContextPrCache,
 	stageWorkspaceFile,
+	toGitActionContext,
 	unstageWorkspaceFile,
 } from "@/lib/api";
 import { deriveCommitButtonMode } from "@/lib/commit-button-logic";
@@ -94,6 +96,8 @@ type ChangesSectionProps = {
 	forgeIsRefreshing?: boolean;
 	/** Opens the full-viewport code-graph diagram view. */
 	onOpenDiagramMode?: () => void;
+	selectedContextId?: string;
+	onSelectedContextIdChange?: (contextId: string) => void;
 };
 
 export function ChangesSection({
@@ -114,6 +118,8 @@ export function ChangesSection({
 	changeRequest,
 	forgeIsRefreshing = false,
 	onOpenDiagramMode,
+	selectedContextId: controlledSelectedContextId,
+	onSelectedContextIdChange,
 }: ChangesSectionProps) {
 	const queryClient = useQueryClient();
 	const [changesTreeView, setChangesTreeView] = useState(true);
@@ -158,13 +164,33 @@ export function ChangesSection({
 				aheadOfRemoteCount: 0,
 				pushStatus: "unknown",
 			},
+			changeRequest: null,
 			available: Boolean(workspaceRootPath),
 			unavailableReason: null,
 		}),
 		[workspaceRootPath, workspaceTargetBranch],
 	);
 	const contexts = gitContexts.length > 0 ? gitContexts : [rootContext];
-	const [selectedContextId, setSelectedContextId] = useState(ROOT_CONTEXT_ID);
+	const isControlled = controlledSelectedContextId !== undefined;
+	const [localSelectedContextId, setLocalSelectedContextId] =
+		useState(ROOT_CONTEXT_ID);
+	const selectedContextId = isControlled
+		? (controlledSelectedContextId as string)
+		: localSelectedContextId;
+	// Only mutate local state when the parent isn't controlling — otherwise
+	// a parent that rejects the change (snaps back to its own value) leaves
+	// us with stale `localSelectedContextId` that re-asserts itself the
+	// moment the parent stops passing the prop. Standard controlled /
+	// uncontrolled trap.
+	const setSelectedContextId = useCallback(
+		(contextId: string) => {
+			if (!isControlled) {
+				setLocalSelectedContextId(contextId);
+			}
+			onSelectedContextIdChange?.(contextId);
+		},
+		[isControlled, onSelectedContextIdChange],
+	);
 	useEffect(() => {
 		if (contexts.some((context) => context.id === selectedContextId)) {
 			return;
@@ -202,14 +228,26 @@ export function ChangesSection({
 		}
 		return counts;
 	}, [changes, contexts]);
+	const effectiveChangeRequest =
+		selectedContext.kind === "workspace"
+			? changeRequest
+			: (selectedContext.changeRequest ?? null);
+	// For submodule contexts we now feed the per-context PR into the
+	// commit-button derivation so the inspector header reflects the
+	// actual PR state — without this a submodule with a clean tree and
+	// an open PR would fall through to "Create PR" and the user would
+	// create a duplicate.
 	const effectiveCommitButtonMode =
 		selectedContext.kind === "workspace"
 			? commitButtonMode
-			: deriveCommitButtonMode(null, null, null, selectedContext.gitStatus);
+			: deriveCommitButtonMode(
+					null,
+					effectiveChangeRequest,
+					null,
+					selectedContext.gitStatus,
+				);
 	const effectiveCommitButtonState =
 		selectedContext.kind === "workspace" ? commitButtonState : "idle";
-	const effectiveChangeRequest =
-		selectedContext.kind === "workspace" ? changeRequest : null;
 	const effectiveWorkspaceTargetBranch =
 		selectedContext.kind === "workspace"
 			? workspaceTargetBranch
@@ -416,6 +454,27 @@ export function ChangesSection({
 	}, [effectiveCommitButtonMode, onCommitAction, selectedContext]);
 
 	const handleRefreshPrStatus = useCallback(async () => {
+		if (selectedContext.kind !== "workspace") {
+			// Submodule PR cache is keyed by (remoteUrl, branch) in the
+			// backend and lives outside React Query. Evict that entry
+			// before invalidating the git-panel query so the next poll
+			// goes straight to gh instead of being served the cached
+			// pre-merge state for up to 60s.
+			if (selectedContext.remoteUrl && selectedContext.branch) {
+				await refreshGitContextPrCache(
+					selectedContext.remoteUrl,
+					selectedContext.branch,
+				).catch((error) => {
+					console.warn("[changes] submodule PR refresh failed", error);
+				});
+			}
+			if (workspaceRootPath) {
+				await queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGitPanel(workspaceRootPath),
+				});
+			}
+			return;
+		}
 		if (!workspaceId) return;
 		await Promise.all([
 			queryClient.invalidateQueries({
@@ -425,7 +484,7 @@ export function ChangesSection({
 				queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 			}),
 		]);
-	}, [queryClient, workspaceId]);
+	}, [queryClient, selectedContext, workspaceId, workspaceRootPath]);
 
 	const handleContinueWorkspace = useCallback(async () => {
 		if (!workspaceId || isContinuingWorkspace) return;
@@ -511,9 +570,14 @@ export function ChangesSection({
 						: undefined
 				}
 				onRefreshPrStatus={
-					workspaceId && selectedContext.kind === "workspace"
-						? handleRefreshPrStatus
-						: undefined
+					selectedContext.kind === "workspace"
+						? workspaceId
+							? handleRefreshPrStatus
+							: undefined
+						: // Submodule contexts also expose the refresh icon so
+							// the user can force a fresh gh lookup instead of
+							// waiting up to 60s for the backend cache to expire.
+							handleRefreshPrStatus
 				}
 			/>
 			{contexts.length > 1 && (
@@ -943,20 +1007,6 @@ function flashingPathsForContext(
 		}
 	}
 	return next;
-}
-
-function toGitActionContext(context: GitPanelContext): GitActionContext {
-	return {
-		id: context.id,
-		kind: context.kind,
-		name: context.name,
-		rootPath: context.rootPath,
-		parentRelativePath: context.parentRelativePath,
-		branch: context.branch,
-		remote: context.remote,
-		remoteUrl: context.remoteUrl,
-		targetBranch: context.targetBranch,
-	};
 }
 
 type StageActionKind = "stage" | "unstage";
