@@ -1246,8 +1246,11 @@ pub fn reset_current_branch_hard(workspace_dir: &Path, target_ref: &str) -> Resu
 /// `parents` is the list of full parent SHAs (1 entry for a normal commit, 2+
 /// for merges, 0 for the root commit). The timeline UI can use it to draw
 /// branch / merge connectors. `refs` contains the decoration string produced
-/// by `git log --decorate` (e.g. `HEAD -> main, tag: v1.0, origin/main`) —
-/// the frontend splits and styles it.
+/// by `git log --decorate=full` (e.g.
+/// `HEAD -> refs/heads/main, tag: refs/tags/v1.0, refs/remotes/origin/main`)
+/// — the full `refs/heads/`, `refs/remotes/`, and `refs/tags/` prefixes are
+/// preserved so the frontend can distinguish local branches with `/` in their
+/// names (e.g. `feature/foo`) from remote-tracking refs.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitTimelineCommit {
@@ -1296,7 +1299,13 @@ pub fn list_recent_commits(workspace_dir: &Path, max_count: u32) -> Result<Vec<G
             "-C",
             workspace_dir_arg.as_str(),
             "log",
-            "--decorate=short",
+            // `--decorate=full` preserves the `refs/heads/`, `refs/remotes/`,
+            // and `refs/tags/` prefixes in `%D`. Without this, a local branch
+            // like `feature/foo` is indistinguishable from a remote like
+            // `origin/foo`: both render as `foo`-style slash-separated labels
+            // in `--decorate=short`. The frontend uses the full prefix to
+            // classify each segment correctly.
+            "--decorate=full",
             max_arg.as_str(),
             format_arg.as_str(),
         ],
@@ -1724,10 +1733,45 @@ mod tests {
         );
         assert_eq!(commits[0].author_name, "Helmor Test");
         // `%D` includes `HEAD -> <branch>` for the tip when --decorate is on.
+        // With `--decorate=full`, the branch is fully qualified as
+        // `refs/heads/<name>` so the frontend can tell local branches apart
+        // from remote-tracking refs that happen to share a slash-separated
+        // shape (e.g. `feature/foo` vs. `origin/main`).
         assert!(
             commits[0].refs.contains("HEAD"),
             "tip commit should be decorated with HEAD; got refs={:?}",
             commits[0].refs
+        );
+        assert!(
+            commits[0].refs.contains("refs/heads/main"),
+            "tip commit should carry the full `refs/heads/` prefix; got refs={:?}",
+            commits[0].refs
+        );
+    }
+
+    #[test]
+    fn list_recent_commits_decorates_local_branch_with_slash_in_name() {
+        // Regression: `--decorate=short` strips `refs/heads/`, leaving local
+        // branches like `feature/foo` indistinguishable from remote refs like
+        // `origin/main`. With `--decorate=full` we keep the prefix so the
+        // frontend classifier can tell them apart.
+        let dir = init_repo();
+        run(dir.path(), &["checkout", "-b", "feature/with-slash"]);
+
+        let commits = list_recent_commits(dir.path(), 10).unwrap();
+
+        assert!(
+            commits[0]
+                .refs
+                .contains("refs/heads/feature/with-slash"),
+            "local branch with `/` should be decorated as `refs/heads/feature/with-slash`; got refs={:?}",
+            commits[0].refs,
+        );
+        // And critically it should NOT look like a remote-tracking ref.
+        assert!(
+            !commits[0].refs.contains("refs/remotes/"),
+            "no remote-tracking ref should appear here; got refs={:?}",
+            commits[0].refs,
         );
     }
 

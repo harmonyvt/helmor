@@ -288,7 +288,12 @@ export function shouldDehydrateHelmorQuery(query: PersistCandidateQuery) {
 	if (
 		key[0] === "workspaceChanges" ||
 		key[0] === "workspaceGitPanel" ||
-		key[0] === "workspaceFiles"
+		key[0] === "workspaceFiles" ||
+		// Git timeline rows are cheap to re-fetch from the local repo and
+		// can be large (up to a few hundred commits per workspace).
+		// Persisting them would inflate localStorage and briefly show
+		// stale history on app restart before the live query refreshes.
+		key[0] === "workspaceGitTimeline"
 	) {
 		return false;
 	}

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNowStrict } from "date-fns";
-import { GitBranchIcon, GitCommitIcon, GitMergeIcon } from "lucide-react";
+import { GitBranchIcon, GitCommitIcon } from "lucide-react";
 import { useMemo } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -11,12 +11,16 @@ import {
 import type { GitTimelineCommit } from "@/lib/api";
 import { workspaceGitTimelineQueryOptions } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
+import { GraphCell } from "./git-timeline-graph";
+import { computeLaneRows, type LaneRow } from "./git-timeline-lanes";
 
 // ─── Decoration parsing ────────────────────────────────────────────────────────
-// `%D` from `git log --decorate=short` looks like:
-//   "HEAD -> main, origin/main, tag: v1.0, refs/stash"
-// We split on `, `, then classify each segment so we can render it with the
-// right style (HEAD pointer, local branch, remote branch, tag).
+// `%D` from `git log --decorate=full` looks like:
+//   "HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1.0, refs/stash"
+// We split on `, `, then classify each segment by its fully-qualified prefix
+// so local branches that happen to contain `/` (e.g. `feature/foo`) aren't
+// mistaken for remote-tracking refs (e.g. `origin/main`). See the matching
+// `--decorate=full` choice in `src-tauri/src/git/ops.rs`.
 
 type DecorationKind = "head" | "branch" | "remote" | "tag";
 
@@ -28,6 +32,44 @@ type ParsedDecoration = {
 	isHeadTarget?: boolean;
 };
 
+const LOCAL_BRANCH_PREFIX = "refs/heads/";
+const REMOTE_BRANCH_PREFIX = "refs/remotes/";
+const TAG_PREFIX = "refs/tags/";
+
+/** Strip a fully-qualified ref prefix, falling back to the segment itself so
+ *  unrecognized refs (e.g. `refs/stash`, `refs/notes/...`) still render
+ *  something readable rather than disappearing silently. */
+function stripRefPrefix(segment: string): string {
+	if (segment.startsWith(LOCAL_BRANCH_PREFIX)) {
+		return segment.slice(LOCAL_BRANCH_PREFIX.length);
+	}
+	if (segment.startsWith(REMOTE_BRANCH_PREFIX)) {
+		return segment.slice(REMOTE_BRANCH_PREFIX.length);
+	}
+	if (segment.startsWith(TAG_PREFIX)) {
+		return segment.slice(TAG_PREFIX.length);
+	}
+	return segment;
+}
+
+function classify(segment: string, isHeadTarget = false): ParsedDecoration {
+	if (segment.startsWith(REMOTE_BRANCH_PREFIX)) {
+		return { kind: "remote", label: stripRefPrefix(segment) };
+	}
+	if (segment.startsWith(TAG_PREFIX)) {
+		return { kind: "tag", label: stripRefPrefix(segment) };
+	}
+	// `refs/heads/...` plus any unrecognized ref shape falls back to "branch"
+	// so we always show *something*. Local branches with `/` in their name
+	// (e.g. `feature/foo`) are correctly classified here because the
+	// `refs/heads/` prefix is preserved by `--decorate=full`.
+	return {
+		kind: "branch",
+		label: stripRefPrefix(segment),
+		...(isHeadTarget ? { isHeadTarget: true } : {}),
+	};
+}
+
 function parseDecorations(raw: string): ParsedDecoration[] {
 	if (!raw.trim()) return [];
 	return raw
@@ -35,25 +77,23 @@ function parseDecorations(raw: string): ParsedDecoration[] {
 		.map((segment) => segment.trim())
 		.filter(Boolean)
 		.map<ParsedDecoration | null>((segment) => {
-			// `HEAD -> main` — the current branch tip. Show HEAD itself, then
-			// the branch with `isHeadTarget` so we can highlight it.
+			// `HEAD -> refs/heads/main` — the current branch tip. We emit a
+			// single chip styled with `isHeadTarget` so the user sees the
+			// branch name with extra emphasis instead of a redundant `HEAD`
+			// + branch pair.
 			if (segment.startsWith("HEAD -> ")) {
-				const branch = segment.slice("HEAD -> ".length);
-				return { kind: "branch", label: branch, isHeadTarget: true };
+				return classify(segment.slice("HEAD -> ".length), true);
 			}
 			if (segment === "HEAD") {
 				return { kind: "head", label: "HEAD" };
 			}
+			// `tag: refs/tags/v1.0` — the `tag: ` marker is what git uses to
+			// disambiguate annotated tags; the trailing payload is the
+			// fully-qualified ref.
 			if (segment.startsWith("tag: ")) {
-				return { kind: "tag", label: segment.slice("tag: ".length) };
+				return classify(segment.slice("tag: ".length));
 			}
-			// `origin/main`, `upstream/feature/foo`, … — anything containing a
-			// "/" is treated as a remote-tracking ref. Local branches never
-			// contain "/" in git's decoration output (refs/heads/<name>).
-			if (segment.includes("/")) {
-				return { kind: "remote", label: segment };
-			}
-			return { kind: "branch", label: segment };
+			return classify(segment);
 		})
 		.filter((d): d is ParsedDecoration => d !== null);
 }
@@ -142,20 +182,17 @@ function DecorationChip({ decoration }: { decoration: ParsedDecoration }) {
 
 type CommitRowProps = {
 	commit: GitTimelineCommit;
+	/** Pre-computed lane layout for this row (commit lane + parent lanes +
+	 *  pass-through snapshot). Comes from `computeLaneRows` in the parent. */
+	laneRow: LaneRow;
+	/** Total lane width to render. Constant per timeline so every row's
+	 *  rail aligns horizontally. */
+	laneCount: number;
 	/** True when this commit is the tip of the current branch (carries HEAD). */
 	isHead: boolean;
-	/** False on the very first row — hide the line segment above the dot. */
-	hasLineAbove: boolean;
-	/** False on the very last row — hide the line segment below the dot. */
-	hasLineBelow: boolean;
 };
 
-function CommitRow({
-	commit,
-	isHead,
-	hasLineAbove,
-	hasLineBelow,
-}: CommitRowProps) {
+function CommitRow({ commit, laneRow, laneCount, isHead }: CommitRowProps) {
 	const decorations = useMemo(
 		() => parseDecorations(commit.refs),
 		[commit.refs],
@@ -168,54 +205,16 @@ function CommitRow({
 
 	return (
 		<div className="group/commit relative flex items-stretch gap-2 px-2 py-1.5 transition-colors hover:bg-accent/30">
-			{/* Graph rail — fixed-width column with the vertical line + dot. */}
-			<div
-				className="relative flex w-5 shrink-0 justify-center"
-				aria-hidden="true"
-			>
-				{/* Vertical line. Painted in two halves (above + below the dot)
-				 * so the very first and very last rows don't have a line
-				 * hanging off the end. */}
-				<span
-					className={cn(
-						"absolute top-0 left-1/2 w-px -translate-x-1/2 bg-border",
-						hasLineAbove ? "h-3" : "h-0",
-					)}
-				/>
-				<span
-					className={cn(
-						"absolute bottom-0 left-1/2 w-px -translate-x-1/2 bg-border",
-						hasLineBelow ? "top-3 h-auto" : "h-0",
-					)}
-				/>
-				{/* Commit dot. Merges get a hollow ring + merge icon, normal
-				 * commits get a filled circle. HEAD commit gets an accent
-				 * outline so the user sees where they are at a glance. */}
-				<span
-					className={cn(
-						"relative z-10 mt-2.5 flex size-3 items-center justify-center rounded-full border-2 bg-sidebar",
-						isHead
-							? "border-blue-500 shadow-[0_0_0_2px_var(--color-sidebar)] ring-2 ring-blue-500/30"
-							: isMerge
-								? "border-muted-foreground/60"
-								: "border-foreground/70",
-					)}
-				>
-					{isMerge ? (
-						<GitMergeIcon
-							className="size-2 text-muted-foreground"
-							strokeWidth={2.5}
-						/>
-					) : (
-						<span
-							className={cn(
-								"size-1.5 rounded-full",
-								isHead ? "bg-blue-500" : "bg-foreground/70",
-							)}
-						/>
-					)}
-				</span>
-			</div>
+			{/* Graph rail — multi-lane SVG that draws branch/merge connectors
+			 * between commits. Lane assignment is pre-computed at the
+			 * section level so each row can render in isolation while still
+			 * agreeing on lane widths and connector targets. */}
+			<GraphCell
+				row={laneRow}
+				laneCount={laneCount}
+				isHead={isHead}
+				isMerge={isMerge}
+			/>
 
 			{/* Commit body. */}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5 py-1">
@@ -332,6 +331,13 @@ export function GitTimelineSection({
 		);
 		return headRow?.sha ?? null;
 	}, [commits]);
+	// Lane assignment for the graph rail. Recomputed whenever the commit
+	// set changes (parent SHAs drive the layout). See `computeLaneRows`
+	// docstring for the algorithm.
+	const { rows: laneRows, maxLanes } = useMemo(
+		() => computeLaneRows(commits),
+		[commits],
+	);
 
 	return (
 		<div
@@ -374,9 +380,22 @@ export function GitTimelineSection({
 							<li key={commit.sha}>
 								<CommitRow
 									commit={commit}
+									// Defensive fallback: if lane computation
+									// ever falls out of sync with the commit
+									// list (shouldn't happen — both derive
+									// from the same `commits` memo), render
+									// the commit on lane 0 with no parents
+									// rather than crashing the panel.
+									laneRow={
+										laneRows[index] ?? {
+											commitLane: 0,
+											parentLanes: [],
+											incoming: [],
+											outgoing: [],
+										}
+									}
+									laneCount={maxLanes}
 									isHead={commit.sha === headSha}
-									hasLineAbove={index > 0}
-									hasLineBelow={index < commits.length - 1}
 								/>
 							</li>
 						))}
