@@ -27,6 +27,9 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceForgeActionStatus: vi.fn(),
 	getWorkspacePrComments: vi.fn(),
 	syncWorkspaceWithTargetBranch: vi.fn(),
+	listGitContextRemoteBranches: vi.fn(),
+	prefetchGitContextRemoteRefs: vi.fn(),
+	updateGitContextTargetBranch: vi.fn(),
 }));
 
 const openerMocks = vi.hoisted(() => ({
@@ -64,6 +67,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
 		getWorkspacePrComments: apiMocks.getWorkspacePrComments,
 		syncWorkspaceWithTargetBranch: apiMocks.syncWorkspaceWithTargetBranch,
+		listGitContextRemoteBranches: apiMocks.listGitContextRemoteBranches,
+		prefetchGitContextRemoteRefs: apiMocks.prefetchGitContextRemoteRefs,
+		updateGitContextTargetBranch: apiMocks.updateGitContextTargetBranch,
 	};
 });
 
@@ -165,6 +171,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
 		apiMocks.getWorkspacePrComments.mockReset();
 		apiMocks.syncWorkspaceWithTargetBranch.mockReset();
+		apiMocks.listGitContextRemoteBranches.mockReset();
+		apiMocks.prefetchGitContextRemoteRefs.mockReset();
+		apiMocks.updateGitContextTargetBranch.mockReset();
 		openerMocks.openUrl.mockReset();
 		toastMocks.toast.mockReset();
 		toastMocks.error.mockReset();
@@ -198,6 +207,12 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			targetBranch: "main",
 			conflictedFiles: [],
 		});
+		apiMocks.listGitContextRemoteBranches.mockResolvedValue([
+			"main",
+			"develop",
+		]);
+		apiMocks.prefetchGitContextRemoteRefs.mockResolvedValue(true);
+		apiMocks.updateGitContextTargetBranch.mockResolvedValue(undefined);
 	});
 
 	afterEach(() => {
@@ -313,6 +328,72 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 				id: "submodule:vendor/lib",
 				rootPath: "/tmp/workspace/vendor/lib",
 			}),
+		);
+	});
+
+	it("updates the selected submodule target branch from the git panel", async () => {
+		const user = userEvent.setup();
+		apiMocks.listWorkspaceGitPanel.mockResolvedValue({
+			items: [],
+			prefetched: [],
+			contexts: [
+				{
+					id: "workspace",
+					kind: "workspace",
+					name: "Workspace",
+					rootPath: "/tmp/workspace",
+					parentRelativePath: null,
+					branch: "feature/actions",
+					remote: "testuser",
+					remoteUrl: "git@github.com:test/repo.git",
+					targetBranch: "main",
+					gitStatus: cleanGitStatus(),
+					changeRequest: null,
+					available: true,
+					unavailableReason: null,
+				},
+				{
+					id: "submodule:vendor/lib",
+					kind: "submodule",
+					name: "lib",
+					rootPath: "/tmp/workspace/vendor/lib",
+					parentRelativePath: "vendor/lib",
+					branch: "feature/lib",
+					remote: "origin",
+					remoteUrl: "git@github.com:test/lib.git",
+					targetBranch: "main",
+					gitStatus: cleanGitStatus(),
+					changeRequest: null,
+					available: true,
+					unavailableReason: null,
+				},
+			],
+		});
+
+		renderInspector();
+
+		await user.click(
+			await screen.findByRole("tab", { name: /lib on feature\/lib/ }),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Target branch for lib" }),
+		);
+		await user.click(await screen.findByText("develop"));
+
+		await waitFor(() => {
+			expect(apiMocks.updateGitContextTargetBranch).toHaveBeenCalledWith(
+				"/tmp/workspace/vendor/lib",
+				"origin",
+				"develop",
+			);
+		});
+		expect(apiMocks.listGitContextRemoteBranches).toHaveBeenCalledWith(
+			"/tmp/workspace/vendor/lib",
+			"origin",
+		);
+		expect(apiMocks.prefetchGitContextRemoteRefs).toHaveBeenCalledWith(
+			"/tmp/workspace/vendor/lib",
+			"origin",
 		);
 	});
 

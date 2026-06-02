@@ -514,6 +514,32 @@ async fn dispatch_invoke(command: &str, args: Value) -> Result<Value> {
                 remote.as_deref(),
             ))
         }
+        "list_git_context_remote_branches" => {
+            let context_root_path: String = arg(&args, "contextRootPath")?;
+            let remote: Option<String> = opt_arg(&args, "remote")?;
+            json_any(crate::editor_files::list_git_context_remote_branches(
+                &context_root_path,
+                remote.as_deref(),
+            ))
+        }
+        "prefetch_git_context_remote_refs" => {
+            let context_root_path: String = arg(&args, "contextRootPath")?;
+            let remote: Option<String> = opt_arg(&args, "remote")?;
+            json_any(crate::editor_files::prefetch_git_context_remote_refs(
+                &context_root_path,
+                remote.as_deref(),
+            ))
+        }
+        "update_git_context_target_branch" => {
+            let context_root_path: String = arg(&args, "contextRootPath")?;
+            let remote: Option<String> = opt_arg(&args, "remote")?;
+            let target_branch: String = arg(&args, "targetBranch")?;
+            json_any(crate::editor_files::update_git_context_target_branch(
+                &context_root_path,
+                remote.as_deref(),
+                &target_branch,
+            ))
+        }
         "get_workspace_git_action_status" => {
             let workspace_id: String = arg(&args, "workspaceId")?;
             json_cmd(

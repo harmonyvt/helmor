@@ -52,6 +52,26 @@ fn init_git_repo(root: &std::path::Path) {
     git_ops::run_git(["commit", "-m", "init"], Some(root)).unwrap();
 }
 
+fn init_remote_with_develop(root: &std::path::Path) -> tempfile::TempDir {
+    let remote = tempfile::tempdir().unwrap();
+    git_ops::run_git(["init", "--bare"], Some(remote.path())).unwrap();
+    git_ops::run_git(
+        ["remote", "add", "origin", remote.path().to_str().unwrap()],
+        Some(root),
+    )
+    .unwrap();
+    git_ops::run_git(["push", "origin", "main"], Some(root)).unwrap();
+
+    git_ops::run_git(["checkout", "-b", "develop"], Some(root)).unwrap();
+    fs::write(root.join("develop.txt"), "develop\n").unwrap();
+    git_ops::run_git(["add", "."], Some(root)).unwrap();
+    git_ops::run_git(["commit", "-m", "develop"], Some(root)).unwrap();
+    git_ops::run_git(["push", "origin", "develop"], Some(root)).unwrap();
+    git_ops::run_git(["checkout", "main"], Some(root)).unwrap();
+
+    remote
+}
+
 #[test]
 fn sync_reports_no_target_branch_when_unresolvable() {
     // Serialize with other env-var-mutating tests (data_dir::tests,
@@ -107,4 +127,63 @@ fn sync_uses_caller_provided_target_branch() {
         "expected FetchFailed outcome when fetch errors, got {result:?}"
     );
     assert_eq!(result.target_branch, "main");
+}
+
+#[test]
+fn git_context_branch_picker_lists_fetched_remote_branches() {
+    let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (_test_dir, workspace_dir) = init_workspace_root();
+    init_git_repo(&workspace_dir);
+    let _remote = init_remote_with_develop(&workspace_dir);
+
+    let fetched = editor_files::prefetch_git_context_remote_refs(
+        workspace_dir.to_str().unwrap(),
+        Some("origin"),
+    )
+    .expect("context prefetch should fetch remote refs");
+    assert!(fetched);
+
+    let branches = editor_files::list_git_context_remote_branches(
+        workspace_dir.to_str().unwrap(),
+        Some("origin"),
+    )
+    .expect("context branch list should read remote refs");
+    assert_eq!(branches, vec!["develop".to_string(), "main".to_string()]);
+}
+
+#[test]
+fn git_context_target_update_sets_current_branch_upstream() {
+    let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (_test_dir, workspace_dir) = init_workspace_root();
+    init_git_repo(&workspace_dir);
+    let _remote = init_remote_with_develop(&workspace_dir);
+
+    editor_files::prefetch_git_context_remote_refs(workspace_dir.to_str().unwrap(), Some("origin"))
+        .expect("context prefetch should fetch remote refs");
+    editor_files::update_git_context_target_branch(
+        workspace_dir.to_str().unwrap(),
+        Some("origin"),
+        "develop",
+    )
+    .expect("context target update should set upstream");
+
+    let upstream = git_ops::run_git(
+        [
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+        Some(&workspace_dir),
+    )
+    .unwrap();
+    assert_eq!(upstream.trim(), "origin/develop");
+
+    let result = editor_files::sync_git_context_with_target_branch(
+        workspace_dir.to_str().unwrap(),
+        Some("origin"),
+        None,
+    )
+    .expect("context sync should resolve the updated upstream target");
+    assert_eq!(result.target_branch, "develop");
 }

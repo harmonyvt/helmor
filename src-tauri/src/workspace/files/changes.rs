@@ -312,6 +312,58 @@ pub fn push_git_context_to_remote(
     })
 }
 
+pub fn list_git_context_remote_branches(
+    context_root_path: &str,
+    remote: Option<&str>,
+) -> Result<Vec<String>> {
+    let context_root = validate_git_context_root(context_root_path)?;
+    let remote = resolve_git_context_remote(&context_root, remote);
+    git_ops::list_remote_branches(&context_root, &remote)
+}
+
+pub fn prefetch_git_context_remote_refs(
+    context_root_path: &str,
+    remote: Option<&str>,
+) -> Result<bool> {
+    let context_root = validate_git_context_root(context_root_path)?;
+    let remote = resolve_git_context_remote(&context_root, remote);
+    git_ops::fetch_all_remote(&context_root, &remote)?;
+    Ok(true)
+}
+
+pub fn update_git_context_target_branch(
+    context_root_path: &str,
+    remote: Option<&str>,
+    target_branch: &str,
+) -> Result<()> {
+    let context_root = validate_git_context_root(context_root_path)?;
+    let remote = resolve_git_context_remote(&context_root, remote);
+    let target_branch = target_branch.trim();
+    if target_branch.is_empty() {
+        bail!("Target branch cannot be empty");
+    }
+
+    if !git_ops::verify_remote_ref_exists(&context_root, &remote, target_branch)? {
+        git_ops::fetch_remote_branch_refspec(&context_root, &remote, target_branch)?;
+    }
+
+    let branch = git_ops::current_branch_name(&context_root)?;
+    let upstream = format!("{remote}/{target_branch}");
+    let set_upstream_arg = format!("--set-upstream-to={upstream}");
+    git_ops::run_git(
+        ["branch", set_upstream_arg.as_str(), branch.as_str()],
+        Some(&context_root),
+    )
+    .map(|_| ())
+    .with_context(|| {
+        format!(
+            "Failed to set upstream for {} to {}",
+            context_root.display(),
+            upstream
+        )
+    })
+}
+
 pub fn sync_git_context_with_target_branch(
     context_root_path: &str,
     remote: Option<&str>,
@@ -451,6 +503,15 @@ fn validate_git_context_root(context_root_path: &str) -> Result<PathBuf> {
         );
     }
     Ok(context_root)
+}
+
+fn resolve_git_context_remote(context_root: &Path, remote: Option<&str>) -> String {
+    remote
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| resolve_default_remote(context_root))
+        .unwrap_or_else(|| "origin".to_string())
 }
 
 fn discover_git_panel_contexts(workspace_root: &Path) -> Result<Vec<GitPanelContext>> {

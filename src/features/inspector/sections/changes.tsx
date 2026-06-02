@@ -9,6 +9,7 @@ import {
 	ArrowDownIcon,
 	ArrowUpIcon,
 	BoxIcon,
+	ChevronDownIcon,
 	ChevronRightIcon,
 	CloudIcon,
 	FolderGit2Icon,
@@ -22,6 +23,7 @@ import {
 	Undo2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BranchPickerPopover } from "@/components/branch-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { NumberTicker } from "@/components/ui/number-ticker";
@@ -47,10 +49,13 @@ import {
 	type ForgeDetection,
 	type GitActionContext,
 	type GitPanelContext,
+	listGitContextRemoteBranches,
+	prefetchGitContextRemoteRefs,
 	refreshGitContextPrCache,
 	stageWorkspaceFile,
 	toGitActionContext,
 	unstageWorkspaceFile,
+	updateGitContextTargetBranch,
 } from "@/lib/api";
 import { deriveCommitButtonMode } from "@/lib/commit-button-logic";
 import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
@@ -588,6 +593,12 @@ export function ChangesSection({
 					onSelect={setSelectedContextId}
 				/>
 			)}
+			{selectedContext.kind !== "workspace" && selectedContext.available && (
+				<GitContextTargetBranchPicker
+					context={selectedContext}
+					workspaceRootPath={workspaceRootPath}
+				/>
+			)}
 			{onOpenDiagramMode && workspaceId && (
 				<button
 					type="button"
@@ -756,6 +767,108 @@ function GitContextSelector({
 					onSelect={onSelect}
 				/>
 			))}
+		</div>
+	);
+}
+
+function GitContextTargetBranchPicker({
+	context,
+	workspaceRootPath,
+}: {
+	context: GitPanelContext;
+	workspaceRootPath: string | null;
+}) {
+	const queryClient = useQueryClient();
+	const pushToast = useWorkspaceToast();
+	const remote = context.remote ?? "origin";
+	const [settingTargetBranch, setSettingTargetBranch] = useState(false);
+	const branchesQuery = useQuery({
+		queryKey: ["gitContextRemoteBranches", context.rootPath, remote],
+		queryFn: () => listGitContextRemoteBranches(context.rootPath, remote),
+		enabled: false,
+		staleTime: 5 * 60 * 1000,
+		gcTime: 10 * 60 * 1000,
+	});
+	const branches = branchesQuery.data ?? [];
+	const currentBranch = context.targetBranch ?? "";
+
+	const refreshBranches = useCallback(() => {
+		void branchesQuery.refetch();
+		void prefetchGitContextRemoteRefs(context.rootPath, remote)
+			.then((fetched) => {
+				if (fetched) {
+					void branchesQuery.refetch();
+				}
+			})
+			.catch(() => {});
+	}, [branchesQuery, context.rootPath, remote]);
+
+	const handleSelectBranch = useCallback(
+		async (branch: string) => {
+			if (branch === currentBranch || settingTargetBranch) {
+				return;
+			}
+
+			setSettingTargetBranch(true);
+			try {
+				await updateGitContextTargetBranch(context.rootPath, remote, branch);
+				if (workspaceRootPath) {
+					await queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
+					});
+				}
+				pushToast(
+					`Target branch set to ${remote}/${branch}.`,
+					context.name,
+					"default",
+				);
+			} catch (error) {
+				pushToast(
+					error instanceof Error ? error.message : String(error),
+					"Target branch update failed",
+					"destructive",
+				);
+			} finally {
+				setSettingTargetBranch(false);
+			}
+		},
+		[
+			context.name,
+			context.rootPath,
+			currentBranch,
+			pushToast,
+			queryClient,
+			remote,
+			settingTargetBranch,
+			workspaceRootPath,
+		],
+	);
+
+	return (
+		<div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/40 bg-muted/10 px-3 py-1">
+			<div className="min-w-0 text-[10.5px] font-medium uppercase text-muted-foreground">
+				Target
+			</div>
+			<BranchPickerPopover
+				currentBranch={currentBranch}
+				branches={branches}
+				loading={branchesQuery.isFetching || settingTargetBranch}
+				onOpen={refreshBranches}
+				onSelect={(branch) => void handleSelectBranch(branch)}
+				align="end"
+			>
+				<button
+					type="button"
+					disabled={settingTargetBranch}
+					className="inline-flex h-6 min-w-0 max-w-[15rem] cursor-pointer items-center gap-1.5 rounded-sm border border-border/40 bg-background/60 px-2 text-[11px] font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+					aria-label={`Target branch for ${context.name}`}
+				>
+					<span className="truncate">
+						{currentBranch ? `${remote}/${currentBranch}` : "Set target branch"}
+					</span>
+					<ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
+				</button>
+			</BranchPickerPopover>
 		</div>
 	);
 }

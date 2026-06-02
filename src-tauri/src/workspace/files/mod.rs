@@ -5,9 +5,10 @@ mod types;
 
 pub use changes::{
     discard_workspace_file, evict_all_context_change_requests, evict_context_change_request_cache,
-    list_workspace_changes, list_workspace_changes_with_content, list_workspace_git_panel,
-    push_git_context_to_remote, stage_workspace_file, sync_git_context_with_target_branch,
-    unstage_workspace_file,
+    list_git_context_remote_branches, list_workspace_changes, list_workspace_changes_with_content,
+    list_workspace_git_panel, prefetch_git_context_remote_refs, push_git_context_to_remote,
+    stage_workspace_file, sync_git_context_with_target_branch, unstage_workspace_file,
+    update_git_context_target_branch,
 };
 pub use editor::{
     get_file_unified_diff, list_editor_files, list_editor_files_with_content, list_workspace_files,

@@ -1,6 +1,6 @@
 use anyhow::Context;
 
-use crate::{editor_files, git_ops, models::workspaces as workspace_models};
+use crate::{editor_files, git_ops, git_watcher, models::workspaces as workspace_models};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -98,6 +98,47 @@ pub async fn push_git_context_to_remote(
         editor_files::push_git_context_to_remote(&context_root_path, remote.as_deref())
     })
     .await
+}
+
+#[tauri::command]
+pub async fn list_git_context_remote_branches(
+    context_root_path: String,
+    remote: Option<String>,
+) -> CmdResult<Vec<String>> {
+    run_blocking(move || {
+        editor_files::list_git_context_remote_branches(&context_root_path, remote.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn prefetch_git_context_remote_refs(
+    context_root_path: String,
+    remote: Option<String>,
+) -> CmdResult<bool> {
+    run_blocking(move || {
+        editor_files::prefetch_git_context_remote_refs(&context_root_path, remote.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn update_git_context_target_branch(
+    app: tauri::AppHandle,
+    context_root_path: String,
+    remote: Option<String>,
+    target_branch: String,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        editor_files::update_git_context_target_branch(
+            &context_root_path,
+            remote.as_deref(),
+            &target_branch,
+        )
+    })
+    .await?;
+    git_watcher::notify_workspace_changed(&app);
+    Ok(())
 }
 
 #[tauri::command]
