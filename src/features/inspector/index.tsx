@@ -7,6 +7,7 @@ import type {
 import { AgentToolsSection } from "@/features/inspector/sections/agent-tools";
 import { ArchiveTab } from "@/features/inspector/sections/archive";
 import { CommentsTab } from "@/features/inspector/sections/comments";
+import { DiffSummaryTab } from "@/features/inspector/sections/diff-summary";
 import { GitTimelineSection } from "@/features/inspector/sections/git-timeline";
 import { KnowledgeSection } from "@/features/inspector/sections/knowledge";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
@@ -106,6 +107,7 @@ type WorkspaceInspectorSidebarProps = {
 export function WorkspaceInspectorSidebar({
 	workspaceId,
 	workspaceRootPath,
+	workspaceBranch,
 	workspaceTargetBranch,
 	workspaceRemote,
 	workspaceState,
@@ -476,6 +478,7 @@ export function WorkspaceInspectorSidebar({
 		// Permanent tabs — never reset.
 		if (
 			activeTab === "knowledge" ||
+			activeTab === "diff-summary" ||
 			activeTab === "tools" ||
 			activeTab === "git-timeline"
 		)
@@ -524,7 +527,8 @@ export function WorkspaceInspectorSidebar({
 			? showCommentsTab
 			: activeTab === "ingest"
 				? false
-				: activeTab === "knowledge" ||
+				: activeTab === "diff-summary" ||
+						activeTab === "knowledge" ||
 						activeTab === "tools" ||
 						activeTab === "git-timeline"
 					? false
@@ -656,6 +660,16 @@ export function WorkspaceInspectorSidebar({
 					isFetching={prCommentsQuery.isFetching}
 					isActive={activeTab === "comments"}
 					onReviewAllComments={handleReviewAllComments}
+				/>
+				<DiffSummaryTab
+					workspaceId={workspaceId ?? null}
+					repoId={repoId ?? null}
+					workspaceRootPath={workspaceRootPath ?? null}
+					workspaceBranch={workspaceBranch ?? null}
+					workspaceTargetBranch={workspaceTargetBranch ?? null}
+					changes={changes}
+					isActive={activeTab === "diff-summary"}
+					onOpenEditorFile={onOpenEditorFile}
 				/>
 				<KnowledgeSection
 					workspaceId={workspaceId ?? null}
