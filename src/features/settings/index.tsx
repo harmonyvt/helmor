@@ -70,8 +70,11 @@ import {
 	ClaudeCustomProvidersPanel,
 	PiModelsCheckPanel,
 } from "./panels/model-providers";
-import { PrCommentReviewModelRow } from "./panels/pr-comment-review-model";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
+import {
+	DiffSummaryModelRow,
+	PrCommentReviewModelRow,
+} from "./panels/review-models";
 import { WebDaemonPanel } from "./panels/web-daemon";
 
 const MIN_FONT_SIZE = 12;
@@ -580,6 +583,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										</div>
 									</SettingsRow>
 									<PrCommentReviewModelRow />
+									<DiffSummaryModelRow />
 									<SettingsRow
 										title="Goal assignee models"
 										description="Allow Goal child assignees to use every Pi model provider. When off, handoffs are limited to Anthropic and Codex-backed Pi models."

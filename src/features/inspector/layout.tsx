@@ -1,4 +1,11 @@
-import { ChevronDown, GitCommit, Plus, Terminal, X } from "lucide-react";
+import {
+	ChevronDown,
+	GitCommit,
+	Plus,
+	Sparkles,
+	Terminal,
+	X,
+} from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -713,6 +720,31 @@ export function InspectorTabsSection({
 										/>
 									</button>
 								)}
+
+								<button
+									type="button"
+									role="tab"
+									id="inspector-tab-diff-summary"
+									aria-controls="inspector-panel-diff-summary"
+									aria-selected={activeTab === "diff-summary"}
+									tabIndex={activeTab === "diff-summary" ? 0 : -1}
+									className={cn(
+										INSPECTOR_TAB_BUTTON_CLASS,
+										"shrink-0",
+										activeTab === "diff-summary" && "text-foreground",
+									)}
+									onClick={() => handleTabClick("diff-summary")}
+								>
+									<Sparkles className="size-3" strokeWidth={1.8} />
+									Diff review
+									<span
+										aria-hidden="true"
+										className={cn(
+											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+											activeTab === "diff-summary" && "opacity-100",
+										)}
+									/>
+								</button>
 
 								<button
 									type="button"
