@@ -2494,6 +2494,48 @@ export async function pushGitContextToRemote(
 	}
 }
 
+export async function listGitContextRemoteBranches(
+	contextRootPath: string,
+	remote?: string | null,
+): Promise<string[]> {
+	try {
+		return await invoke<string[]>("list_git_context_remote_branches", {
+			contextRootPath,
+			remote: remote ?? null,
+		});
+	} catch {
+		return [];
+	}
+}
+
+export async function prefetchGitContextRemoteRefs(
+	contextRootPath: string,
+	remote?: string | null,
+): Promise<boolean> {
+	return invoke<boolean>("prefetch_git_context_remote_refs", {
+		contextRootPath,
+		remote: remote ?? null,
+	});
+}
+
+export async function updateGitContextTargetBranch(
+	contextRootPath: string,
+	remote: string | null | undefined,
+	targetBranch: string,
+): Promise<void> {
+	try {
+		await invoke<void>("update_git_context_target_branch", {
+			contextRootPath,
+			remote: remote ?? null,
+			targetBranch,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to update target branch."),
+		);
+	}
+}
+
 export async function syncGitContextWithTargetBranch(
 	contextRootPath: string,
 	remote?: string | null,
