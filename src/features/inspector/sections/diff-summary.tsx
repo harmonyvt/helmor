@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, LoaderCircle, Sparkles } from "lucide-react";
+import { ChevronLeft, LoaderCircle, Sparkles, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,8 @@ import {
 } from "./diff-summary-model";
 import { DiffSummaryPreview } from "./diff-summary-preview";
 
+type DiffSummaryVariant = "inspector" | "fullWindow";
+
 type DiffSummaryTabProps = {
 	workspaceId: string | null;
 	repoId: string | null;
@@ -33,8 +35,13 @@ type DiffSummaryTabProps = {
 	workspaceBranch: string | null;
 	workspaceTargetBranch: string | null;
 	changes: InspectorFileItem[];
-	isActive: boolean;
+	/** Only relevant for `variant="inspector"`. Ignored in full-window mode. */
+	isActive?: boolean;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	/** Render mode. Defaults to the inspector sidebar tab panel. */
+	variant?: DiffSummaryVariant;
+	/** Required for full-window variant — closes the surface. */
+	onExit?: () => void;
 };
 
 /** Mirrors `WorkspaceConversationContainerProps["pendingPromptForSession"]`
@@ -61,7 +68,10 @@ export function DiffSummaryTab({
 	changes,
 	isActive,
 	onOpenEditorFile,
+	variant = "inspector",
+	onExit,
 }: DiffSummaryTabProps) {
+	const isFullWindow = variant === "fullWindow";
 	const queryClient = useQueryClient();
 	const { settings } = useSettings();
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
@@ -202,14 +212,44 @@ export function DiffSummaryTab({
 	// guard against double-spawn from rapid clicks of the header action.
 	const newReviewDisabled = !canReview || isStarting || pendingReview !== null;
 
+	const containerProps = isFullWindow
+		? ({
+				className: "flex h-full min-h-0 flex-col bg-background",
+			} as const)
+		: ({
+				id: "inspector-panel-diff-summary",
+				role: "tabpanel" as const,
+				"aria-labelledby": "inspector-tab-diff-summary",
+				hidden: !isActive,
+				className: cn("flex h-full flex-col bg-sidebar", !isActive && "hidden"),
+			} as const);
+
 	return (
-		<div
-			id="inspector-panel-diff-summary"
-			role="tabpanel"
-			aria-labelledby="inspector-tab-diff-summary"
-			hidden={!isActive}
-			className={cn("flex h-full flex-col bg-sidebar", !isActive && "hidden")}
-		>
+		<div {...containerProps}>
+			{isFullWindow && (
+				<div className="flex h-9 shrink-0 items-center justify-between border-b border-border/60 bg-muted/15 px-3">
+					<div className="flex items-center gap-2 text-[12px] text-foreground">
+						<Sparkles className="size-3.5 text-primary" strokeWidth={1.8} />
+						<span className="font-medium">Pi diff review</span>
+						<span className="text-muted-foreground">
+							{changes.length} file{changes.length === 1 ? "" : "s"}
+						</span>
+					</div>
+					{onExit && (
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon-xs"
+							className="text-muted-foreground hover:text-foreground"
+							onClick={onExit}
+							aria-label="Close diff review"
+							title="Close diff review (Esc)"
+						>
+							<X className="size-3.5" strokeWidth={1.8} />
+						</Button>
+					)}
+				</div>
+			)}
 			{selectedSessionId ? (
 				<WorkspaceConversationContainer
 					selectedWorkspaceId={workspaceId}
@@ -260,7 +300,7 @@ export function DiffSummaryTab({
 							New review
 						</Button>
 					}
-					compact
+					compact={!isFullWindow}
 				/>
 			) : (
 				<DiffSummaryPreview

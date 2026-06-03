@@ -38,6 +38,7 @@ import { CommandPalette } from "@/features/command-palette";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { WorkspaceDiagramSurface } from "@/features/diagram";
+import { WorkspaceDiffSummarySurface } from "@/features/diff-summary";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { GoalWorkspaceContainer } from "@/features/goals";
@@ -424,7 +425,7 @@ function AppShell({
 	const lastMarkedReadReselectTickRef = useRef(0);
 
 	const workspaceViewModeRef = useRef<
-		"conversation" | "editor" | "browser" | "diagram"
+		"conversation" | "editor" | "browser" | "diagram" | "diff-summary"
 	>("conversation");
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
 		Record<string, string[]>
@@ -515,7 +516,7 @@ function AppShell({
 		null,
 	);
 	const [workspaceViewMode, setWorkspaceViewMode] = useState<
-		"conversation" | "editor" | "browser" | "diagram"
+		"conversation" | "editor" | "browser" | "diagram" | "diff-summary"
 	>("conversation");
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
@@ -1412,6 +1413,14 @@ function AppShell({
 	}, []);
 
 	const handleExitDiagramMode = useCallback(() => {
+		setWorkspaceViewMode("conversation");
+	}, []);
+
+	const handleOpenDiffSummaryMode = useCallback(() => {
+		setWorkspaceViewMode("diff-summary");
+	}, []);
+
+	const handleExitDiffSummaryMode = useCallback(() => {
 		setWorkspaceViewMode("conversation");
 	}, []);
 
@@ -2783,6 +2792,31 @@ function AppShell({
 																onExit={handleExitDiagramMode}
 															/>
 														)}
+													{workspaceViewMode === "diff-summary" &&
+														selectedWorkspaceId && (
+															<WorkspaceDiffSummarySurface
+																workspaceId={selectedWorkspaceId}
+																repoId={
+																	selectedWorkspaceDetailQuery.data?.repoId ??
+																	null
+																}
+																workspaceRootPath={workspaceRootPath}
+																workspaceBranch={
+																	selectedWorkspaceDetailQuery.data?.branch ??
+																	null
+																}
+																workspaceTargetBranch={(() => {
+																	const d = selectedWorkspaceDetailQuery.data;
+																	const target =
+																		d?.intendedTargetBranch ?? d?.defaultBranch;
+																	if (!target) return null;
+																	const remote = d?.remote ?? "origin";
+																	return `${remote}/${target}`;
+																})()}
+																onOpenEditorFile={handleOpenEditorFile}
+																onExit={handleExitDiffSummaryMode}
+															/>
+														)}
 													{workspaceViewMode === "conversation" &&
 													selectedWorkspaceDetailQuery.data?.workspaceKind ===
 														"goal" &&
@@ -3222,6 +3256,9 @@ function AppShell({
 																onOpenSettings={handleOpenSettings}
 																onOpenBrowserMode={handleOpenBrowserMode}
 																onOpenDiagramMode={handleOpenDiagramMode}
+																onOpenDiffSummaryMode={
+																	handleOpenDiffSummaryMode
+																}
 																debugIngestState={selectedDebugIngestState}
 																onOpenBrowserUrl={handleOpenBrowserUrl}
 															/>

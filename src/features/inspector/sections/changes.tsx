@@ -19,6 +19,7 @@ import {
 	MinusIcon,
 	Network,
 	PlusIcon,
+	Sparkles,
 	Undo2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -96,6 +97,8 @@ type ChangesSectionProps = {
 	forgeIsRefreshing?: boolean;
 	/** Opens the full-viewport code-graph diagram view. */
 	onOpenDiagramMode?: () => void;
+	/** Opens the full-viewport Pi diff review view. */
+	onOpenDiffSummaryMode?: () => void;
 	selectedContextId?: string;
 	onSelectedContextIdChange?: (contextId: string) => void;
 };
@@ -118,6 +121,7 @@ export function ChangesSection({
 	changeRequest,
 	forgeIsRefreshing = false,
 	onOpenDiagramMode,
+	onOpenDiffSummaryMode,
 	selectedContextId: controlledSelectedContextId,
 	onSelectedContextIdChange,
 }: ChangesSectionProps) {
@@ -588,16 +592,34 @@ export function ChangesSection({
 					onSelect={setSelectedContextId}
 				/>
 			)}
-			{onOpenDiagramMode && workspaceId && (
-				<button
-					type="button"
-					onClick={onOpenDiagramMode}
-					className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-border/40 bg-muted/20 px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-					title="Open the code-graph diagram view"
-				>
-					<Network className="size-3" />
-					<span>View as graph</span>
-				</button>
+			{(onOpenDiagramMode || onOpenDiffSummaryMode) && workspaceId && (
+				<div className="flex shrink-0 items-stretch border-b border-border/40 bg-muted/20">
+					{onOpenDiffSummaryMode && (
+						<button
+							type="button"
+							onClick={onOpenDiffSummaryMode}
+							className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+							title="Open the full-window Pi diff review"
+						>
+							<Sparkles className="size-3" />
+							<span>Review with Pi</span>
+						</button>
+					)}
+					{onOpenDiagramMode && onOpenDiffSummaryMode && (
+						<span aria-hidden="true" className="w-px shrink-0 bg-border/40" />
+					)}
+					{onOpenDiagramMode && (
+						<button
+							type="button"
+							onClick={onOpenDiagramMode}
+							className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+							title="Open the code-graph diagram view"
+						>
+							<Network className="size-3" />
+							<span>View as graph</span>
+						</button>
+					)}
+				</div>
 			)}
 
 			<ScrollArea

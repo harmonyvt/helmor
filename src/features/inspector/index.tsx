@@ -94,6 +94,8 @@ type WorkspaceInspectorSidebarProps = {
 	onOpenBrowserMode?: () => void;
 	/** Opens the full-viewport code-graph diagram view. */
 	onOpenDiagramMode?: () => void;
+	/** Opens the full-viewport Pi diff review view. */
+	onOpenDiffSummaryMode?: () => void;
 	debugIngestState?: {
 		active: boolean;
 		starting: boolean;
@@ -126,6 +128,7 @@ export function WorkspaceInspectorSidebar({
 	onOpenSettings,
 	onOpenBrowserMode,
 	onOpenDiagramMode,
+	onOpenDiffSummaryMode,
 	debugIngestState = null,
 	onOpenBrowserUrl,
 }: WorkspaceInspectorSidebarProps) {
@@ -566,6 +569,7 @@ export function WorkspaceInspectorSidebar({
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
 				onOpenDiagramMode={onOpenDiagramMode}
+				onOpenDiffSummaryMode={onOpenDiffSummaryMode}
 				selectedContextId={selectedGitContextId}
 				onSelectedContextIdChange={setSelectedGitContextId}
 			/>
