@@ -563,6 +563,17 @@ export type WorkspaceDetail = {
 	goalDescription?: string | null;
 };
 
+export type TransferWorkspaceToOrcaStatus = "alreadyTracked" | "adopted";
+
+export type TransferWorkspaceToOrcaResponse = {
+	workspaceId: string;
+	repoPath: string;
+	workspacePath: string;
+	orcaRepoId?: string | null;
+	orcaWorktreeId?: string | null;
+	status: TransferWorkspaceToOrcaStatus;
+};
+
 export type WorkspaceSessionSummary = {
 	id: string;
 	workspaceId: string;
@@ -1809,6 +1820,21 @@ export async function loadWorkspaceDetail(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load workspace detail."),
+		);
+	}
+}
+
+export async function transferWorkspaceToOrca(
+	workspaceId: string,
+): Promise<TransferWorkspaceToOrcaResponse> {
+	try {
+		return await invoke<TransferWorkspaceToOrcaResponse>(
+			"transfer_workspace_to_orca",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to transfer workspace to Orca."),
 		);
 	}
 }
