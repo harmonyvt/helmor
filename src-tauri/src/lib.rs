@@ -20,6 +20,7 @@ pub mod logging;
 pub mod mcp;
 pub mod models;
 pub mod ngrok_config;
+mod orca_import;
 pub mod pipeline;
 pub mod rate_limits;
 pub mod schema;
@@ -422,6 +423,10 @@ pub fn run() {
             commands::conductor_commands::list_conductor_repos,
             commands::conductor_commands::list_conductor_workspaces,
             commands::conductor_commands::import_conductor_workspaces,
+            commands::orca_commands::orca_source_available,
+            commands::orca_commands::list_orca_repos,
+            commands::orca_commands::list_orca_workspaces,
+            commands::orca_commands::import_orca_workspaces,
             commands::system_commands::save_pasted_image,
             commands::system_commands::show_image_in_finder,
             commands::system_commands::copy_image_to_clipboard,
