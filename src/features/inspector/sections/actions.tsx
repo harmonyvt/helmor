@@ -42,6 +42,7 @@ import {
 	syncGitContextWithTargetBranch,
 	syncWorkspaceWithTargetBranch,
 	toGitActionContext,
+	transferWorkspaceToOrca,
 	type WorkspaceGitActionStatus,
 } from "@/lib/api";
 import { buildComposerPreviewPayload } from "@/lib/composer-insert";
@@ -182,6 +183,7 @@ export function ActionsSection({
 	const queryClient = useQueryClient();
 	const { settings } = useSettings();
 	const [syncPending, setSyncPending] = useState(false);
+	const [transferPending, setTransferPending] = useState(false);
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -341,6 +343,30 @@ export function ActionsSection({
 		syncPending,
 		workspaceId,
 	]);
+	const handleTransferToOrca = useCallback(async () => {
+		if (!workspaceId || transferPending) {
+			return;
+		}
+
+		setTransferPending(true);
+		try {
+			const result = await transferWorkspaceToOrca(workspaceId);
+			if (result.status === "alreadyTracked") {
+				toast.success("Workspace already tracked in Orca.");
+			} else {
+				toast.success("Workspace transferred to Orca.");
+			}
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Unable to transfer workspace to Orca.",
+			);
+		} finally {
+			setTransferPending(false);
+		}
+	}, [transferPending, workspaceId]);
+
 	const handleInsertCheck = useCallback(
 		async (item: ForgeActionItem) => {
 			if (!workspaceId) {
@@ -444,6 +470,29 @@ export function ActionsSection({
 						) : null}
 					</span>
 				</div>
+				{!isArchived && (
+					<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+						<StatusIcon status="pending" />
+						<span className="truncate">Orca workspace</span>
+						<button
+							type="button"
+							onClick={handleTransferToOrca}
+							className="ml-auto cursor-pointer text-[10.5px] hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+							disabled={!workspaceId || transferPending}
+							aria-busy={transferPending ? true : undefined}
+							aria-label={
+								transferPending ? "Transferring to Orca" : "Transfer to Orca"
+							}
+						>
+							{transferPending ? (
+								<ShimmerText>Transfer</ShimmerText>
+							) : (
+								"Transfer"
+							)}
+						</button>
+					</div>
+				)}
+
 				{gitRows.map((item) => {
 					const action = item.action;
 					const isCommitActionBusy =

@@ -30,6 +30,7 @@ const apiMocks = vi.hoisted(() => ({
 	listGitContextRemoteBranches: vi.fn(),
 	prefetchGitContextRemoteRefs: vi.fn(),
 	updateGitContextTargetBranch: vi.fn(),
+	transferWorkspaceToOrca: vi.fn(),
 }));
 
 const openerMocks = vi.hoisted(() => ({
@@ -70,6 +71,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		listGitContextRemoteBranches: apiMocks.listGitContextRemoteBranches,
 		prefetchGitContextRemoteRefs: apiMocks.prefetchGitContextRemoteRefs,
 		updateGitContextTargetBranch: apiMocks.updateGitContextTargetBranch,
+		transferWorkspaceToOrca: apiMocks.transferWorkspaceToOrca,
 	};
 });
 
@@ -174,6 +176,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.listGitContextRemoteBranches.mockReset();
 		apiMocks.prefetchGitContextRemoteRefs.mockReset();
 		apiMocks.updateGitContextTargetBranch.mockReset();
+		apiMocks.transferWorkspaceToOrca.mockReset();
 		openerMocks.openUrl.mockReset();
 		toastMocks.toast.mockReset();
 		toastMocks.error.mockReset();
@@ -213,6 +216,14 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		]);
 		apiMocks.prefetchGitContextRemoteRefs.mockResolvedValue(true);
 		apiMocks.updateGitContextTargetBranch.mockResolvedValue(undefined);
+		apiMocks.transferWorkspaceToOrca.mockResolvedValue({
+			workspaceId: "workspace-1",
+			repoPath: "/tmp/repo",
+			workspacePath: "/tmp/workspace",
+			orcaRepoId: "repo-1",
+			orcaWorktreeId: "worktree-1",
+			status: "adopted",
+		});
 	});
 
 	afterEach(() => {
@@ -236,6 +247,42 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(
 			within(actions).queryByText("staging-locked"),
 		).not.toBeInTheDocument();
+	});
+
+	it("transfers the workspace to Orca from the actions section", async () => {
+		renderInspector();
+
+		const transferButton = await screen.findByRole("button", {
+			name: "Transfer to Orca",
+		});
+		await userEvent.click(transferButton);
+
+		await waitFor(() => {
+			expect(apiMocks.transferWorkspaceToOrca).toHaveBeenCalledWith(
+				"workspace-1",
+			);
+		});
+		expect(toastMocks.success).toHaveBeenCalledWith(
+			"Workspace transferred to Orca.",
+		);
+	});
+
+	it("shows an error when transferring the workspace to Orca fails", async () => {
+		apiMocks.transferWorkspaceToOrca.mockRejectedValue(
+			new Error("Orca did not discover the external worktree."),
+		);
+		renderInspector();
+
+		const transferButton = await screen.findByRole("button", {
+			name: "Transfer to Orca",
+		});
+		await userEvent.click(transferButton);
+
+		await waitFor(() => {
+			expect(toastMocks.error).toHaveBeenCalledWith(
+				"Orca did not discover the external worktree.",
+			);
+		});
 	});
 
 	it("shows clean git rows with passed status icons", async () => {
