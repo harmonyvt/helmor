@@ -43,6 +43,7 @@ import { ShortcutsSettingsPanel } from "@/features/shortcuts/settings-panel";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
 	isConductorAvailable,
+	isOrcaAvailable,
 	loadGithubCliStatus,
 	type RepositoryCreateOption,
 } from "@/lib/api";
@@ -70,6 +71,7 @@ import {
 	ClaudeCustomProvidersPanel,
 	PiModelsCheckPanel,
 } from "./panels/model-providers";
+import { OrcaImportPanel } from "./panels/orca-import";
 import { PrCommentReviewModelRow } from "./panels/pr-comment-review-model";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 import { WebDaemonPanel } from "./panels/web-daemon";
@@ -129,6 +131,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		useState<SettingsSection>("general");
 	const [githubLogin, setGithubLogin] = useState<string | null>(null);
 	const [conductorEnabled, setConductorEnabled] = useState(false);
+	const [orcaEnabled, setOrcaEnabled] = useState(false);
 
 	useEffect(() => {
 		if (open && initialSection) {
@@ -185,6 +188,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 				}
 			});
 			void isConductorAvailable().then(setConductorEnabled);
+			void isOrcaAvailable().then(setOrcaEnabled);
 		}
 	}, [open]);
 
@@ -199,7 +203,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"experimental",
 		"web",
 		"knowledge",
-		...(conductorEnabled ? (["import"] as const) : []),
+		...(conductorEnabled || orcaEnabled ? (["import"] as const) : []),
 		...(isDev ? (["developer"] as const) : []),
 		"account",
 	];
@@ -674,7 +678,12 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 							{activeSection === "knowledge" && <KnowledgeSettingsPanel />}
 
-							{activeSection === "import" && <ConductorImportPanel />}
+							{activeSection === "import" && (
+								<div className="flex flex-col gap-5">
+									{orcaEnabled && <OrcaImportPanel />}
+									{conductorEnabled && <ConductorImportPanel />}
+								</div>
+							)}
 
 							{activeSection === "developer" && <DevToolsPanel />}
 

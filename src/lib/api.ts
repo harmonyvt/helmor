@@ -4003,6 +4003,54 @@ export async function importConductorWorkspaces(
 }
 
 // ---------------------------------------------------------------------------
+// Orca import
+// ---------------------------------------------------------------------------
+
+export type OrcaRepo = {
+	id: string;
+	name: string;
+	rootPath: string;
+	workspaceCount: number;
+	alreadyImportedCount: number;
+};
+
+export type OrcaWorkspace = {
+	id: string;
+	directoryName: string;
+	title: string | null;
+	branch: string | null;
+	status: string | null;
+	absolutePath: string;
+	alreadyImported: boolean;
+};
+
+export async function isOrcaAvailable(): Promise<boolean> {
+	try {
+		return await invoke<boolean>("orca_source_available");
+	} catch {
+		return false;
+	}
+}
+
+export async function listOrcaRepos(): Promise<OrcaRepo[]> {
+	return invoke<OrcaRepo[]>("list_orca_repos");
+}
+
+export async function listOrcaWorkspaces(
+	repoId: string,
+): Promise<OrcaWorkspace[]> {
+	return invoke<OrcaWorkspace[]>("list_orca_workspaces", { repoId });
+}
+
+export async function importOrcaWorkspaces(
+	workspaceIds: string[],
+): Promise<ImportWorkspacesResult> {
+	return invoke<ImportWorkspacesResult>("import_orca_workspaces", {
+		workspaceIds,
+	});
+}
+
+// ---------------------------------------------------------------------------
 // Session hide / delete
 // ---------------------------------------------------------------------------
 
