@@ -177,6 +177,20 @@ pub enum SkillExportTarget {
 pub enum NgrokAction {
     /// Show Debug ingest ngrok settings and runtime reachability.
     Status,
+    /// Show running Debug ingest instances, ingest URLs, and recovery guidance.
+    Overview,
+    /// Ensure a workspace Debug ingest server and ngrok tunnel are running in the app.
+    Ensure {
+        /// Workspace UUID or repo-name/directory-name.
+        #[arg(name = "workspace")]
+        workspace_ref: String,
+    },
+    /// Stop a workspace Debug ingest server in the running app.
+    Stop {
+        /// Workspace UUID or repo-name/directory-name.
+        #[arg(name = "workspace")]
+        workspace_ref: String,
+    },
     /// Enable public Debug ingest forwarding through ngrok.
     Enable {
         /// Optional reserved ngrok domain.

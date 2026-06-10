@@ -35,14 +35,14 @@ pub struct DebugIngestEntry {
     pub payload: Value,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugIngestPublicForwardConfig {
     pub enabled: bool,
     pub ngrok_domain: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugIngestStatus {
     pub workspace_id: String,
@@ -58,7 +58,7 @@ pub struct DebugIngestStatus {
     pub entry_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NgrokAgentStatus {
     pub connected: bool,
@@ -67,7 +67,7 @@ pub struct NgrokAgentStatus {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugIngestOverview {
     pub ngrok_agent: NgrokAgentStatus,

@@ -7,7 +7,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use std::sync::OnceLock;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::agents::AgentStreamEvent;
 use crate::commands::browser_commands;
@@ -122,12 +122,20 @@ fn handle_tools_list(request: &Value) -> Value {
             "finalize": { "type": "boolean", "description": "Create worktree now (default true)" }
         }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["goal_workspace", "title"] })).unwrap()),
         tool_def("helmor_ngrok_status", "Show Debug ingest ngrok forwarding settings and whether a running app can receive reset events", json!({})),
+        tool_def("helmor_ngrok_guide", "Show the Debug ingest ngrok process, ingest API, management commands, and stale-tunnel recovery steps", json!({})),
+        tool_def("helmor_ngrok_overview", "Show live Debug ingest instances and ingest URLs from the running Helmor app", json!({})),
         tool_def("helmor_ngrok_update", "Update Debug ingest ngrok forwarding settings", json!({
             "enabled": { "type": "boolean", "description": "Enable or disable public Debug ingest forwarding" },
             "domain": { "type": "string", "description": "Optional reserved ngrok domain. Empty string clears it." },
             "clear_domain": { "type": "boolean", "description": "Clear the reserved ngrok domain" }
         })),
         tool_def("helmor_ngrok_reset", "Disable Debug ingest ngrok forwarding, clear the domain, and close active tunnels in a running app", json!({})),
+        tool_def("helmor_debug_ingest_ensure", "Ensure a workspace Debug ingest server and ngrok tunnel are running in the Helmor app, then return its ingest URLs", json!({
+            "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" }
+        }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["workspace"] })).unwrap()),
+        tool_def("helmor_debug_ingest_stop", "Stop a workspace Debug ingest server in the running Helmor app", json!({
+            "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" }
+        }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["workspace"] })).unwrap()),
         tool_def("helmor_browser_list_tabs", "List durable browser tabs for a workspace", json!({
             "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" }
         }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["workspace"] })).unwrap()),
@@ -273,6 +281,32 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
             let status = crate::ngrok_config::status()?;
             Ok(serde_json::to_string_pretty(&status)?)
         }
+        "helmor_ngrok_guide" => {
+            let guide = crate::ngrok_config::management_guide();
+            Ok(serde_json::to_string_pretty(&guide)?)
+        }
+        "helmor_ngrok_overview" => {
+            let (overview, app_request_error) = if let Some(app) = MCP_APP_HANDLE.get() {
+                let manager = app.state::<crate::debug_ingest::DebugIngestManager>();
+                (
+                    Some(tauri::async_runtime::block_on(manager.overview())),
+                    None,
+                )
+            } else {
+                match crate::ui_sync::request_debug_ingest_overview() {
+                    Ok(overview) => (overview, None),
+                    Err(error) => (None, Some(format!("{error:#}"))),
+                }
+            };
+            let payload = json!({
+                "settings": crate::ngrok_config::status()?,
+                "liveOverviewAvailable": overview.is_some(),
+                "appRequestError": app_request_error,
+                "overview": overview,
+                "guide": crate::ngrok_config::management_guide(),
+            });
+            Ok(serde_json::to_string_pretty(&payload)?)
+        }
         "helmor_ngrok_update" => {
             let enabled = args.get("enabled").and_then(Value::as_bool);
             let domain = if args
@@ -300,6 +334,39 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
         "helmor_ngrok_reset" => {
             let status = crate::ngrok_config::reset()?;
             Ok(serde_json::to_string_pretty(&status)?)
+        }
+        "helmor_debug_ingest_ensure" => {
+            let ws_ref = args["workspace"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing required param: workspace"))?;
+            let ws_id = service::resolve_workspace_ref(ws_ref)?;
+            let public_forward = crate::ngrok_config::public_forward_config()?;
+            let status = if let Some(app) = MCP_APP_HANDLE.get() {
+                let manager = app.state::<crate::debug_ingest::DebugIngestManager>();
+                tauri::async_runtime::block_on(manager.ensure(&ws_id, Some(public_forward)))?
+            } else {
+                crate::ui_sync::ensure_running_app_debug_ingest(&ws_id, Some(public_forward))?
+                    .ok_or_else(|| anyhow::anyhow!("Helmor app is not running"))?
+            };
+            let payload = json!({
+                "settings": crate::ngrok_config::status()?,
+                "status": status,
+                "guide": crate::ngrok_config::management_guide(),
+            });
+            Ok(serde_json::to_string_pretty(&payload)?)
+        }
+        "helmor_debug_ingest_stop" => {
+            let ws_ref = args["workspace"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing required param: workspace"))?;
+            let ws_id = service::resolve_workspace_ref(ws_ref)?;
+            if let Some(app) = MCP_APP_HANDLE.get() {
+                let manager = app.state::<crate::debug_ingest::DebugIngestManager>();
+                manager.stop(&ws_id);
+            } else if !crate::ui_sync::stop_running_app_debug_ingest(&ws_id)? {
+                anyhow::bail!("Helmor app is not running");
+            }
+            Ok(serde_json::to_string_pretty(&json!({ "ok": true }))?)
         }
         "helmor_browser_list_tabs" => {
             let ws_ref = args["workspace"]
