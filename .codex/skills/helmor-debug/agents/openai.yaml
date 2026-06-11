@@ -1,4 +1,4 @@
 interface:
   display_name: "Helmor Debug"
-  short_description: "Evidence-first Helmor debugging workflow."
-  default_prompt: "Use $helmor-debug to investigate a Helmor bug with logs, reproduction, and verification."
+  short_description: "Evidence-first Helmor debugging, including app-closed Debug ingest."
+  default_prompt: "Use $helmor-debug to investigate a Helmor bug with logs, reproduction, standalone Debug ingest when needed, and verification."

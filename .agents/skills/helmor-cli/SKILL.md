@@ -1,6 +1,6 @@
 ---
 name: helmor-cli
-description: Use the Helmor CLI to remote-control Helmor from the terminal. Use when the user asks to inspect Helmor data/settings, manage repositories/workspaces/sessions/files, create Helmor-managed workspaces instead of manual git worktrees, import Helmor workspaces into agent linked-directory context, send prompts to agents, list models, use GitHub integration, inspect scripts, migrate from Conductor, run Helmor as an MCP server, generate shell completions, quit a running app, check/install/update the Helmor CLI beta, install/update Helmor skills through the beta app flow, or needs the Helmor command reference.
+description: Use the Helmor CLI to remote-control Helmor from the terminal. Use when the user asks to inspect Helmor data/settings, manage repositories/workspaces/sessions/files, create Helmor-managed workspaces instead of manual git worktrees, import Helmor workspaces into agent linked-directory context, send prompts to agents, list models, use GitHub integration, inspect scripts, use Helmor debug/Debug ingest, migrate from Conductor, run Helmor as an MCP server, generate shell completions, quit a running app, check/install/update the Helmor CLI beta, install/update Helmor skills through the beta app flow, or needs the Helmor command reference.
 ---
 
 # Helmor CLI
@@ -140,29 +140,37 @@ helmor --json send --help
 Use the relevant command group:
 
 ```bash
+helmor debug --help
 helmor github --help
 helmor ngrok --help
 helmor scripts --help
 helmor models --help
 ```
 
-Use `helmor ngrok` for Debug ingest public-forwarding config that should be
-available to workspace agents through Helmor MCP as well as the CLI. Debug
-ingest is workspace-scoped: only start, read, clear, or stop ingest for a
-resolved Helmor workspace. If the current directory is not inside a Helmor
-workspace, resolve one first with `helmor workspace list` or ask which
-workspace should be used.
+Use `helmor debug` for evidence-first Helmor debugging. It works even when the
+desktop app is closed:
 
 ```bash
-helmor ngrok status
-helmor ngrok enable --domain debug.example.ngrok.app
-helmor ngrok disable
-helmor ngrok domain clear
-helmor ngrok reset
+helmor debug status
+helmor debug ingest serve --workspace <workspace-ref>
 ```
 
-`reset` disables public forwarding, clears the reserved domain, and asks a
-running Helmor app to close active ngrok tunnels.
+The standalone ingest receiver prints a workspace-scoped local endpoint and
+keeps running until Ctrl-C. If public forwarding is needed, prefer the nested
+Debug ngrok commands. Check status first, and ask whether the user wants to
+reuse an existing ngrok domain before setting or replacing it:
+
+```bash
+helmor debug ngrok status
+helmor debug ngrok enable --domain debug.example.ngrok.app
+helmor debug ingest serve --workspace <workspace-ref> --public
+```
+
+`helmor ngrok ...` remains a compatibility alias for the same public-forwarding
+settings. Debug ingest is workspace-scoped: only start, read, clear, or stop
+ingest for a resolved Helmor workspace. If the current directory is not inside a
+Helmor workspace, resolve one first with `helmor workspace list` or ask which
+workspace should be used.
 
 ### MCP Server
 

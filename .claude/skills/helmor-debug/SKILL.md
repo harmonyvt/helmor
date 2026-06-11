@@ -16,12 +16,28 @@ Use this skill to debug Helmor repo and app issues from an agent session. Do not
 5. Rerun the relevant check and remove temporary probes before finishing.
 6. Keep the visible reply concise: observed failure, fix, verification, and any remaining risk.
 
+## CLI Entry Point
+
+Start with the dedicated Debug command group. It is designed to work even when the desktop app is closed:
+
+```bash
+helmor debug status
+```
+
+Use JSON when another tool will parse the result:
+
+```bash
+helmor --json debug status
+```
+
+If `helmor debug` is not available, the installed Helmor CLI is stale. Check the entrypoint with `helmor cli-status`, then use the app-managed CLI install/update flow or rebuild/install the CLI from the Helmor repo.
+
 ## App Startup
 
 Do not ask the user to open Helmor just to begin debugging.
 
 - For pure code, typecheck, or unit-test failures, debug from the terminal first and do not launch the app.
-- For live UI, IPC, Debug ingest, or runtime state, start a debug build yourself:
+- For live UI, IPC, or runtime state, start a debug build yourself:
 
 ```bash
 bun run dev
@@ -70,7 +86,28 @@ Use these sources before launching a window unless the bug is clearly runtime-on
 Use Debug ingest only when runtime ordering, browser state, or app behavior needs telemetry from a reproduced flow.
 
 - If the prompt already includes a Debug ingest endpoint, use that endpoint.
-- If no endpoint exists, do not require Helmor to be open. Debug from tests/logs first, then start `bun run dev` or `bun run dev:preview` only if live telemetry is necessary.
+- If no endpoint exists, do not require Helmor to be open. Debug from tests/logs first, then start a standalone receiver when live telemetry is necessary.
+- Resolve the target workspace with `helmor workspace list` if the workspace ref is unclear.
+- Start standalone ingest from a persistent terminal session:
+
+```bash
+helmor debug ingest serve --workspace <workspace-ref>
+```
+
+Use JSON when you need to capture the exact URL programmatically:
+
+```bash
+helmor --json debug ingest serve --workspace <workspace-ref>
+```
+
+The command prints a local ingest URL and stays running until Ctrl-C. If public forwarding is needed for a browser or external runtime, check the current ngrok config first and ask whether the user wants to reuse an existing ngrok domain before setting or replacing it:
+
+```bash
+helmor debug ngrok status
+helmor debug ngrok enable --domain debug.example.ngrok.app
+helmor debug ingest serve --workspace <workspace-ref> --public
+```
+
 - Treat the endpoint as a receiver for probe output, not a place to post your own analysis.
 - Clear stale entries with `DELETE <ingest-url>` before a fresh reproduction when appropriate.
 - Add focused temporary probes exactly where the hypothesis predicts signal.

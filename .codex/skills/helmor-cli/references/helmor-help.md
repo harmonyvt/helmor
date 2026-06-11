@@ -20,6 +20,7 @@ Commands:
   github       GitHub integration — auth, PR lookup, merge
   scripts      Inspect repo-level setup/run/archive scripts
   skills       Export bundled Helmor skills to local agent skill directories
+  debug        Evidence-first Helmor debugging tools
   ngrok        Manage Debug ingest ngrok forwarding
   conductor    Migrate from Helmor v1 (Conductor)
   completions  Shell completion scripts

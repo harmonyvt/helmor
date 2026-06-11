@@ -91,6 +91,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: SkillsAction,
     },
+    /// Evidence-first Helmor debugging tools.
+    Debug {
+        #[command(subcommand)]
+        action: DebugAction,
+    },
     /// Manage Debug ingest ngrok forwarding.
     Ngrok {
         #[command(subcommand)]
@@ -167,6 +172,48 @@ pub enum SkillExportTarget {
     Codex,
     Claude,
     Agents,
+}
+
+// ---------------------------------------------------------------------------
+// debug
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+pub enum DebugAction {
+    /// Show app reachability and Debug ingest configuration.
+    Status,
+    /// Run a standalone workspace-scoped Debug ingest receiver.
+    Ingest {
+        #[command(subcommand)]
+        action: DebugIngestAction,
+    },
+    /// Manage Debug ingest ngrok forwarding.
+    Ngrok {
+        #[command(subcommand)]
+        action: NgrokAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DebugIngestAction {
+    /// Serve an ingest endpoint until Ctrl-C, even when the desktop app is closed.
+    Serve(DebugIngestServeArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DebugIngestServeArgs {
+    /// Workspace UUID or repo-name/directory-name.
+    #[arg(long)]
+    pub workspace: String,
+    /// Force public ngrok forwarding for this receiver.
+    #[arg(long)]
+    pub public: bool,
+    /// Disable public forwarding for this receiver even when the saved setting is enabled.
+    #[arg(long, conflicts_with = "public")]
+    pub no_public: bool,
+    /// Reserved ngrok domain for this receiver. Implies --public.
+    #[arg(long, conflicts_with = "no_public")]
+    pub domain: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

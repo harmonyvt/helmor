@@ -14,6 +14,7 @@
 pub mod args;
 mod conductor;
 mod data;
+mod debug;
 mod files;
 mod github;
 mod goal;
@@ -106,6 +107,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
         C::Github { action } => github::dispatch(action, cli),
         C::Scripts { action } => scripts::dispatch(action, cli),
         C::Skills { action } => skills::dispatch(action, cli),
+        C::Debug { action } => debug::dispatch(action, cli),
         C::Ngrok { action } => ngrok::dispatch(action, cli),
         C::Conductor { action } => conductor::dispatch(action, cli),
         C::Mcp => crate::mcp::run_mcp_server(),

@@ -76,12 +76,21 @@ fn print_updated(cli: &Cli, status: &NgrokConfigStatus, message: &str) -> Result
 
 fn human_status(status: &NgrokConfigStatus) -> String {
     format!(
-        "Enabled:           {}\nDomain:            {}\nNGROK_AUTHTOKEN:   {}\nRunning app:       {}",
+        "Enabled:           {}\nDomain:            {}\nDomain hint:       {}\nNGROK_AUTHTOKEN:   {}\nRunning app:       {}",
         yes_no(status.enabled),
         status.domain.as_deref().unwrap_or("(dynamic)"),
+        domain_hint(status.domain.as_deref()),
         yes_no(status.ngrok_authtoken_present),
         yes_no(status.running_app_available),
     )
+}
+
+fn domain_hint(domain: Option<&str>) -> &'static str {
+    if domain.is_some() {
+        "Ask before reusing or replacing this domain; it may be used elsewhere."
+    } else {
+        "Ask whether the user already has an ngrok domain to reuse."
+    }
 }
 
 fn yes_no(value: bool) -> &'static str {
@@ -108,6 +117,7 @@ mod tests {
         let rendered = human_status(&status);
         assert!(rendered.contains("Enabled:           yes"));
         assert!(rendered.contains("Domain:            (dynamic)"));
+        assert!(rendered.contains("Ask whether the user already has an ngrok domain"));
         assert!(rendered.contains("NGROK_AUTHTOKEN:   no"));
         assert!(rendered.contains("Running app:       yes"));
     }
