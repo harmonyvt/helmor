@@ -3,6 +3,7 @@ import type { WorkspaceSessionSummary } from "@/lib/api";
 const GENERATED_TITLE_PREFIXES = [
 	"Claude · ",
 	"Codex · ",
+	"Cursor · ",
 	"OpenCode · ",
 	"Pi · ",
 	"Shell · ",
@@ -14,6 +15,7 @@ const GENERATED_TITLES = new Set([
 	"Agent Terminal",
 	"Claude Terminal",
 	"Codex Terminal",
+	"Cursor Terminal",
 	"OpenCode Terminal",
 	"Pi Terminal",
 	"Shell Terminal",
@@ -26,6 +28,8 @@ export function terminalRuntimeLabel(value?: string | null): string {
 			return "Claude";
 		case "codex":
 			return "Codex";
+		case "cursor":
+			return "Cursor";
 		case "opencode":
 			return "OpenCode";
 		case "pi":

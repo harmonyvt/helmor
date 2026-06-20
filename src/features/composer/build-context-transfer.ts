@@ -10,6 +10,7 @@ import type { AgentProvider, ThreadMessageLike } from "@/lib/api";
 const PROVIDER_LABELS: Record<AgentProvider, string> = {
 	claude: "Claude",
 	codex: "OpenAI Codex",
+	cursor: "Cursor",
 	pi: "Pi",
 };
 

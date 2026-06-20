@@ -34,6 +34,7 @@ type ProviderSwapDialogProps = {
 const PROVIDER_LABELS: Record<AgentProvider, string> = {
 	claude: "Claude",
 	codex: "OpenAI Codex",
+	cursor: "Cursor",
 	pi: "Pi",
 };
 
@@ -47,7 +48,7 @@ function ProviderIcon({
 	if (provider === "codex") {
 		return <OpenAIIcon className={cn("size-4 shrink-0", className)} />;
 	}
-	if (provider === "pi") {
+	if (provider === "cursor" || provider === "pi") {
 		return (
 			<Box className={cn("size-4 shrink-0", className)} strokeWidth={1.8} />
 		);

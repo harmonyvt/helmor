@@ -11,8 +11,10 @@ const PI_EFFORT_LEVELS_WITH_XHIGH = [
 	"xhigh",
 ] as const;
 
+const CURSOR_EFFORT_LEVELS = ["low", "medium", "high"] as const;
+
 const MODEL_CATALOG: Record<
-	"claude" | "codex" | "pi",
+	"claude" | "codex" | "cursor" | "pi",
 	readonly ProviderModelInfo[]
 > = {
 	claude: [
@@ -95,6 +97,20 @@ const MODEL_CATALOG: Record<
 			supportsFastMode: true,
 		},
 	],
+	cursor: [
+		{
+			id: "cursor:composer-2.5",
+			label: "Composer 2.5",
+			cliModel: "composer-2.5",
+			effortLevels: CURSOR_EFFORT_LEVELS,
+		},
+		{
+			id: "cursor:composer-latest",
+			label: "Composer Latest",
+			cliModel: "composer-latest",
+			effortLevels: CURSOR_EFFORT_LEVELS,
+		},
+	],
 	pi: [
 		{
 			id: "pi:anthropic/claude-opus-4-8",
@@ -142,13 +158,13 @@ const MODEL_CATALOG: Record<
 };
 
 export function listProviderModels(
-	provider: "claude" | "codex" | "pi",
+	provider: "claude" | "codex" | "cursor" | "pi",
 ): ProviderModelInfo[] {
 	return MODEL_CATALOG[provider].map((model) => ({ ...model }));
 }
 
 export function modelSupportsFastMode(
-	provider: "claude" | "codex" | "pi",
+	provider: "claude" | "codex" | "cursor" | "pi",
 	modelId: string | undefined | null,
 ): boolean {
 	if (!modelId) return false;
